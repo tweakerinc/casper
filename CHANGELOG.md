@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Dictionary selection opens more reliably under low memory (lighter word harvest, framebuffer snapshot fallback like clipping, and a toast when it still cannot start).
 - Customise Status Bar preview no longer stacks two battery icons when Battery is shown (header + status-bar draw).
 - Opening the dictionary with long-press Menu no longer starts multi-word selection immediately; you can move to a word first, then Select (long-press Select still starts a multi-word range).
 - Side-button page turns no longer fire after resting on a side button when Side Long-press Action is set to Ignore; only a short click turns the page.

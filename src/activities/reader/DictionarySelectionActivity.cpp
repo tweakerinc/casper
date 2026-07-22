@@ -128,8 +128,10 @@ void DictionarySelectionActivity::onExit() {
 }
 
 bool DictionarySelectionActivity::allocateSavedBuffer() {
+  // Match clipping: if the ~48KB snapshot cannot allocate, keep going and re-render pages.
   savedBufferSize = renderer.getBufferSize();
   const size_t chunkCount = (savedBufferSize + BUFFER_CHUNK_SIZE - 1) / BUFFER_CHUNK_SIZE;
+  savedBufferChunks.clear();
   savedBufferChunks.reserve(chunkCount);
 
   for (size_t i = 0; i < chunkCount; i++) {
@@ -137,10 +139,12 @@ bool DictionarySelectionActivity::allocateSavedBuffer() {
     const size_t chunkSize = std::min(BUFFER_CHUNK_SIZE, savedBufferSize - offset);
     auto chunk = makeUniqueNoThrow<uint8_t[]>(chunkSize);
     if (!chunk) {
-      LOG_ERR("DICT", "OOM: dictionary page snapshot chunk %u (%u bytes)", static_cast<unsigned>(i),
-              static_cast<unsigned>(chunkSize));
+      LOG_ERR("DICT", "OOM: dictionary page snapshot chunk %u (%u bytes); using rerender fallback",
+              static_cast<unsigned>(i), static_cast<unsigned>(chunkSize));
       savedBufferChunks.clear();
-      return false;
+      savedBufferSize = 0;
+      hasSavedBuffer = false;
+      return true;
     }
     savedBufferChunks.push_back(std::move(chunk));
   }
@@ -148,6 +152,10 @@ bool DictionarySelectionActivity::allocateSavedBuffer() {
 }
 
 void DictionarySelectionActivity::storeCurrentBuffer() {
+  if (savedBufferChunks.empty() || savedBufferSize == 0) {
+    hasSavedBuffer = false;
+    return;
+  }
   const uint8_t* frameBuffer = renderer.getFrameBuffer();
   for (size_t i = 0; i < savedBufferChunks.size(); i++) {
     const size_t offset = i * BUFFER_CHUNK_SIZE;
@@ -158,6 +166,7 @@ void DictionarySelectionActivity::storeCurrentBuffer() {
 }
 
 void DictionarySelectionActivity::restoreSavedBuffer() const {
+  if (!hasSavedBuffer || savedBufferChunks.empty()) return;
   uint8_t* frameBuffer = renderer.getFrameBuffer();
   for (size_t i = 0; i < savedBufferChunks.size(); i++) {
     const size_t offset = i * BUFFER_CHUNK_SIZE;
@@ -561,13 +570,14 @@ void DictionarySelectionActivity::loop() {
 }
 
 void DictionarySelectionActivity::render(RenderLock&&) {
-  if (!hasSavedBuffer) return;
-
+  // Snapshot path restores a stored frame; low-memory path re-renders the page like clipping.
   if (needsPageSwitch) {
-    switchToPage(words[readingOrder[cursorIdx]].pageIdx);
+    if (!switchToPage(words[readingOrder[cursorIdx]].pageIdx)) return;
     needsPageSwitch = false;
-  } else {
+  } else if (hasSavedBuffer) {
     restoreSavedBuffer();
+  } else if (!switchToPage(currentDisplayPage)) {
+    return;
   }
 
   if (!prewarmHighlightedWords() && renderer.isSdCardFont(renderFontId)) {

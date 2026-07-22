@@ -3107,28 +3107,33 @@ void EpubReaderActivity::openAutoPageTurnIntervalPicker(const bool ignoreInitial
 namespace {
 
 // Harvest page words for clip / dictionary selection. Returns false if nothing usable.
+// maxPages/maxWords/headroomBytes: dictionary uses a lighter budget so it still opens under low heap.
 bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub, const int currentSpineIndex,
                             const int activeSectionFontId, const bool automaticPageTurnActive,
                             ReaderViewportLayout& layout, int& readerFontId, int& startPage,
                             std::vector<WordRef>& words, std::string* bookTitle, std::string* author,
-                            std::string* chapterTitle, const char* logTag) {
+                            std::string* chapterTitle, const char* logTag, const int maxPages = 3,
+                            const size_t maxWordsCap = 240, const uint32_t headroomBytes = 16U * 1024U) {
   layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
   readerFontId = activeSectionFontId > 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
   const int lineHeight = renderer.getLineHeight(readerFontId);
   startPage = section.currentPage;
-  const int pagesToLoad = std::min(3, section.pageCount - startPage);
+  if (section.pageCount <= 0 || startPage < 0 || startPage >= section.pageCount) {
+    LOG_ERR(logTag, "No pages available for word selection (page=%d count=%d)", startPage, section.pageCount);
+    return false;
+  }
+  const int pagesToLoad = std::min(maxPages, section.pageCount - startPage);
   std::array<uint16_t, 3> pageWordCounts{};
   static constexpr size_t CLIP_SELECTION_WORDS_PER_PAGE = 80;
-  static constexpr size_t MAX_CLIP_SELECTION_WORDS = 240;
-  static constexpr uint32_t CLIP_SELECTION_WORD_RESERVE_HEADROOM = 16U * 1024U;
   const size_t maxSelectableWords =
-      std::min(MAX_CLIP_SELECTION_WORDS, static_cast<size_t>(pagesToLoad) * CLIP_SELECTION_WORDS_PER_PAGE);
-  const uint32_t wordReserveBytes = static_cast<uint32_t>(maxSelectableWords * sizeof(WordRef));
+      std::min(maxWordsCap, static_cast<size_t>(pagesToLoad) * CLIP_SELECTION_WORDS_PER_PAGE);
+  // WordRef contains std::string; sizeof underestimates heap, but we only need a modest contiguous block.
+  const uint32_t wordReserveBytes =
+      static_cast<uint32_t>(maxSelectableWords * (sizeof(WordRef) + 16U));  // small string slack
   const auto heapBeforeWords = MemoryBudget::snapshot();
-  if (heapBeforeWords.maxAllocHeap < wordReserveBytes + CLIP_SELECTION_WORD_RESERVE_HEADROOM) {
+  if (heapBeforeWords.maxAllocHeap < wordReserveBytes + headroomBytes) {
     LOG_ERR(logTag, "Low heap for word selection (%u free, %u max alloc, need block %u); skipping",
-            heapBeforeWords.freeHeap, heapBeforeWords.maxAllocHeap,
-            wordReserveBytes + CLIP_SELECTION_WORD_RESERVE_HEADROOM);
+            heapBeforeWords.freeHeap, heapBeforeWords.maxAllocHeap, wordReserveBytes + headroomBytes);
     section.currentPage = startPage;
     return false;
   }
@@ -3301,6 +3306,8 @@ void EpubReaderActivity::startClipSelection() {
 
 void EpubReaderActivity::startDictionarySelection() {
   if (!section || !epub) {
+    LOG_ERR("DICT", "Dictionary unavailable: no section/epub");
+    drawToast(renderer, tr(STR_MEMORY_ERROR));
     requestUpdate();
     return;
   }
@@ -3316,23 +3323,52 @@ void EpubReaderActivity::startDictionarySelection() {
       requestUpdate();
       return;
     }
+    // Lighter than clipping: current page only, smaller word cap + headroom so dictionary
+    // still opens when heap is fragmented after long reading sessions.
+    constexpr int kDictMaxPages = 1;
+    constexpr size_t kDictMaxWords = 100;
+    constexpr uint32_t kDictHeadroom = 4U * 1024U;
     if (!harvestSelectableWords(renderer, *section, *epub, currentSpineIndex, activeSectionFontId,
                                 automaticPageTurnActive, layout, readerFontId, startPage, words, nullptr, nullptr,
-                                nullptr, "DICT")) {
-      LOG_ERR("DICT", "No selectable words on current EPUB page");
-      requestUpdate();
-      return;
+                                nullptr, "DICT", kDictMaxPages, kDictMaxWords, kDictHeadroom)) {
+      // One more try after dropping optional SD font caches (same idea as other low-mem paths).
+      (void)releaseReaderSdFontCachesForLowMemory(renderer, "DICT", "dictionary_word_harvest");
+      words.clear();
+      if (!harvestSelectableWords(renderer, *section, *epub, currentSpineIndex, activeSectionFontId,
+                                  automaticPageTurnActive, layout, readerFontId, startPage, words, nullptr, nullptr,
+                                  nullptr, "DICT", kDictMaxPages, kDictMaxWords, kDictHeadroom)) {
+        LOG_ERR("DICT", "No selectable words on current EPUB page (heap or empty page)");
+        drawToast(renderer, tr(STR_MEMORY_ERROR));
+        delay(800);
+        requestUpdate();
+        return;
+      }
     }
   }
 
+  if (words.empty()) {
+    LOG_ERR("DICT", "Harvest returned empty word list");
+    drawToast(renderer, tr(STR_MEMORY_ERROR));
+    delay(800);
+    requestUpdate();
+    return;
+  }
+
   pauseReadingPaceTimer("dictionary_selection");
-  startActivityForResult(std::make_unique<DictionarySelectionActivity>(renderer, mappedInput, std::move(words),
-                                                                       readerFontId, *section, startPage,
-                                                                       layout.marginTop, layout.marginLeft),
-                         [this](const ActivityResult&) {
-                           resumeReadingPaceTimer("dictionary_selection_return");
-                           requestUpdate();
-                         });
+  auto dictSelection = makeUniqueNoThrow<DictionarySelectionActivity>(
+      renderer, mappedInput, std::move(words), readerFontId, *section, startPage, layout.marginTop, layout.marginLeft);
+  if (!dictSelection) {
+    LOG_ERR("DICT", "OOM: failed to allocate dictionary selection activity");
+    resumeReadingPaceTimer("dictionary_selection_alloc_failed");
+    drawToast(renderer, tr(STR_MEMORY_ERROR));
+    delay(800);
+    requestUpdate();
+    return;
+  }
+  startActivityForResult(std::move(dictSelection), [this](const ActivityResult&) {
+    resumeReadingPaceTimer("dictionary_selection_return");
+    requestUpdate();
+  });
 }
 
 void EpubReaderActivity::resetReadingPaceData() {

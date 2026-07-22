@@ -1102,25 +1102,26 @@ class ScopedReaderSettingsRestore {
 
 void formatCompactTimeLeft(const uint32_t seconds, char* out, const size_t outSize) {
   if (!out || outSize == 0) return;
+  // Duration only; callers append a short "left" (or localized) suffix for the status bar.
+  char duration[16];
   if (seconds < 60) {
-    snprintf(out, outSize, "<1m");
-    return;
-  }
-
-  const uint32_t minutes = (seconds + 30U) / 60U;
-  if (minutes < 60) {
-    snprintf(out, outSize, "%lum", static_cast<unsigned long>(minutes));
-    return;
-  }
-
-  const uint32_t hours = minutes / 60U;
-  const uint32_t remainingMinutes = minutes % 60U;
-  if (remainingMinutes == 0) {
-    snprintf(out, outSize, "%luh", static_cast<unsigned long>(hours));
+    snprintf(duration, sizeof(duration), "<1m");
   } else {
-    snprintf(out, outSize, "%luh %lum", static_cast<unsigned long>(hours),
-             static_cast<unsigned long>(remainingMinutes));
+    const uint32_t minutes = (seconds + 30U) / 60U;
+    if (minutes < 60) {
+      snprintf(duration, sizeof(duration), "%lum", static_cast<unsigned long>(minutes));
+    } else {
+      const uint32_t hours = minutes / 60U;
+      const uint32_t remainingMinutes = minutes % 60U;
+      if (remainingMinutes == 0) {
+        snprintf(duration, sizeof(duration), "%luh", static_cast<unsigned long>(hours));
+      } else {
+        snprintf(duration, sizeof(duration), "%luh %lum", static_cast<unsigned long>(hours),
+                 static_cast<unsigned long>(remainingMinutes));
+      }
+    }
   }
+  snprintf(out, outSize, "%s %s", duration, tr(STR_TIME_LEFT_SHORT));
 }
 
 // SD card folder finished books are moved into. Single source of truth for the path.
@@ -5150,7 +5151,7 @@ void EpubReaderActivity::renderStatusBar() const {
   const bool bookmarked =
       !activeFootnotePreview &&
       BOOKMARKS.hasBookmarkForPage(static_cast<uint16_t>(currentSpineIndex), rawProgress, bookmarkPageCount);
-  char timeLeftLabel[24] = {};
+  char timeLeftLabel[32] = {};
   const char* timeLeft =
       (!activeFootnotePreview && formatTimeLeftLabel(timeLeftLabel, sizeof(timeLeftLabel))) ? timeLeftLabel : nullptr;
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, bookmarked, timeLeft,

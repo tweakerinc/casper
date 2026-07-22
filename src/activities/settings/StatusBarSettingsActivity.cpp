@@ -362,10 +362,11 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   }
 
   const char* timeLeftPreview = nullptr;
+  // Match reader status bar: compact duration + short "left" suffix.
   if (SETTINGS.statusBarTimeLeft == CrossPointSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_CHAPTER) {
-    timeLeftPreview = "1h 20m";
+    timeLeftPreview = "1h 20m left";
   } else if (SETTINGS.statusBarTimeLeft == CrossPointSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_BOOK) {
-    timeLeftPreview = "3h 40m";
+    timeLeftPreview = "3h 40m left";
   }
   const int previewX = contentX + metrics.contentSidePadding;
   const int bottomPreviewTop = pageHeight - UITheme::getStatusBarHeight() - bottomPreviewPadding;

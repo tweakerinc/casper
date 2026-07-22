@@ -15,11 +15,14 @@ class IntervalSelectionActivity final : public Activity {
                                      int largeStep, StrId valueFormatId = StrId::STR_NONE_OPT,
                                      bool readerActivity = false, bool allowPowerAsConfirm = false,
                                      bool ignoreInitialConfirmRelease = false, bool showPercentValue = false,
-                                     StrId maxBoundaryLabelId = StrId::STR_NONE_OPT)
+                                     StrId maxBoundaryLabelId = StrId::STR_NONE_OPT,
+                                     bool showHoursMinutes = false,
+                                     StrId minBoundaryLabelId = StrId::STR_NONE_OPT)
       : Activity(activityName, renderer, mappedInput),
         titleId(titleId),
         valueFormatId(valueFormatId),
         maxBoundaryLabelId(maxBoundaryLabelId),
+        minBoundaryLabelId(minBoundaryLabelId),
         value(initialValue),
         minValue(minValue),
         maxValue(maxValue),
@@ -28,7 +31,8 @@ class IntervalSelectionActivity final : public Activity {
         readerActivity(readerActivity),
         allowPowerAsConfirm(allowPowerAsConfirm),
         ignoreConfirmRelease(ignoreInitialConfirmRelease),
-        showPercentValue(showPercentValue) {}
+        showPercentValue(showPercentValue),
+        showHoursMinutes(showHoursMinutes) {}
 
   void onEnter() override;
   void loop() override;
@@ -40,6 +44,7 @@ class IntervalSelectionActivity final : public Activity {
   StrId titleId;
   StrId valueFormatId;
   StrId maxBoundaryLabelId;
+  StrId minBoundaryLabelId;
   int value;
   int minValue;
   int maxValue;
@@ -49,9 +54,13 @@ class IntervalSelectionActivity final : public Activity {
   bool allowPowerAsConfirm;
   bool ignoreConfirmRelease;
   bool showPercentValue;
+  // When true, value is total minutes shown as "1 Hour 0 Minutes".
+  bool showHoursMinutes;
   ButtonNavigator buttonNavigator;
 
   void adjustValue(int delta);
   int clampedValue(int candidate) const;
   void drawStepHintLine(int y, StrId labelId, int step);
+  void formatValue(char* buf, size_t len) const;
+  void formatStepAmount(int step, char* buf, size_t len) const;
 };

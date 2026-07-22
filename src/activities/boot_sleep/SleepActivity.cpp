@@ -50,26 +50,21 @@ void hideOverlayBatteryStrip(const GfxRenderer& renderer) {
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
+  (void)orientedMarginBottom;
+  (void)orientedMarginLeft;
 
-  const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-  if (statusBarHeight <= 0) {
-    return;
-  }
-
-  const int textY = renderer.getScreenHeight() - statusBarHeight - orientedMarginBottom - 4;
+  // Reader battery is top-right (same corner as Home headers); clear that strip on sleep overlay.
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
-
-  // Reserve the full left-side status indicator lane used by bookmark + battery.
-  // This keeps chapter/progress text readable while removing the battery glance target.
-  static constexpr int bookmarkReserveWidth = 13;  // bookmark width + gap from BaseTheme::drawStatusBar()
   static constexpr int batteryPercentSpacing = 4;  // matches BaseTheme::batteryPercentSpacing
-  const int clearWidth =
-      bookmarkReserveWidth + metrics.batteryWidth +
-      (showBatteryPercentage ? batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0);
-  const int clearHeight = std::max(renderer.getTextHeight(SMALL_FONT_ID), metrics.batteryHeight + 6);
+  const int percentWidth =
+      showBatteryPercentage ? batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
+  const int clearWidth = 12 + metrics.batteryWidth + percentWidth + 8;
+  const int clearHeight = std::max(renderer.getTextHeight(SMALL_FONT_ID), metrics.batteryHeight + 10);
+  const int clearX = renderer.getScreenWidth() - orientedMarginRight - clearWidth;
+  const int clearY = orientedMarginTop + metrics.topPadding;
 
-  renderer.fillRect(metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, textY, clearWidth, clearHeight, false);
+  renderer.fillRect(clearX, clearY, clearWidth, clearHeight, false);
 }
 
 // Context passed through PNGdec's decode() user-pointer to the per-scanline draw callback.
@@ -521,9 +516,18 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  constexpr int kLogoSize = 120;
+  const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
+  renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
+#if !defined(OMIT_XLARGE_FONT)
+  const int wordFont = BITTER_18_FONT_ID;
+#elif !defined(OMIT_LARGE_FONT)
+  const int wordFont = BITTER_16_FONT_ID;
+#else
+  const int wordFont = UI_12_FONT_ID;
+#endif
+  renderer.drawCenteredText(wordFont, logoY + kLogoSize + 12, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(SMALL_FONT_ID, logoY + kLogoSize + 40, tr(STR_SLEEPING));
 
   // Make sleep screen dark unless light is selected in settings
   const bool lightSleepScreen = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT;
@@ -535,7 +539,8 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const std::string buildInfo = std::string(CROSSINK_BUILD_ENV) + " " + CROSSINK_VERSION;
   const std::string visibleBuildInfo =
       renderer.truncatedText(SMALL_FONT_ID, buildInfo.c_str(), pageWidth - sleepBuildInfoSideMargin * 2);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 118, visibleBuildInfo.c_str(), lightSleepScreen);
+  const int buildInfoY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
+  renderer.drawCenteredText(SMALL_FONT_ID, buildInfoY, visibleBuildInfo.c_str(), lightSleepScreen);
 #endif
 
   renderer.displayBuffer(HalDisplay::HALF_REFRESH, TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);

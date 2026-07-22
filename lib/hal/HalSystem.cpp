@@ -1,5 +1,9 @@
 #include "HalSystem.h"
 
+// Defined in src/activities/Activity.cpp — not a HAL dependency for normal
+// builds; crash reports only.
+extern const char* getLastActivityName();
+
 #include <string>
 
 #include "AppVersion.h"
@@ -116,8 +120,10 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "CrossInk version: " CROSSINK_VERSION;
-    info += "\nCrossInk variant: " CROSSINK_FIRMWARE_VARIANT;
+    info += "Casper version: " CROSSINK_VERSION;
+    info += "\nCasper variant: " CROSSINK_FIRMWARE_VARIANT;
+    info += "\nLast activity: ";
+    info += getLastActivityName() ? getLastActivityName() : "?";
     info += "\n\nPanic reason: " + std::string(panicMessage);
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";

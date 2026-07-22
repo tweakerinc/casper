@@ -1,10 +1,30 @@
 #include "Activity.h"
 
+#include "ActivityBreadcrumb.h"
 #include "ActivityManager.h"
 
-void Activity::onEnter() { LOG_DBG("ACT", "Entering activity: %s", name.c_str()); }
+#include <Esp.h>
 
-void Activity::onExit() { LOG_DBG("ACT", "Exiting activity: %s", name.c_str()); }
+namespace {
+char s_lastActivity[48] = "boot";
+}
+
+const char* getLastActivityName() { return s_lastActivity; }
+
+void Activity::onEnter() {
+  // Breadcrumb for freezes/panics: which screen was active + heap snapshot.
+  strncpy(s_lastActivity, name.c_str(), sizeof(s_lastActivity) - 1);
+  s_lastActivity[sizeof(s_lastActivity) - 1] = '\0';
+  LOG_INF("ACT", "enter %s free=%u maxAlloc=%u", name.c_str(), static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  LOG_DBG("ACT", "Entering activity: %s", name.c_str());
+}
+
+void Activity::onExit() {
+  LOG_INF("ACT", "exit %s free=%u maxAlloc=%u", name.c_str(), static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  LOG_DBG("ACT", "Exiting activity: %s", name.c_str());
+}
 
 void Activity::requestUpdate(bool immediate) { activityManager.requestUpdate(immediate); }
 

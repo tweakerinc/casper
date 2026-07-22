@@ -212,6 +212,9 @@ class EpubReaderActivity final : public Activity {
   // No-op while the section is still building or when the pagination is unchanged (plain resume).
   bool applyDeferredReposition();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
+  // If Auto Upload on Close is enabled, start KOReader upload then go home. Returns true if started.
+  bool tryStartAutoKoUpload();
+  void leaveReaderToHome();
   void cacheCurrentSectionPosition();
   void pauseReadingPaceTimer(const char* reason = "unknown");
   void resumeReadingPaceTimer(const char* reason = "unknown");
@@ -234,6 +237,7 @@ class EpubReaderActivity final : public Activity {
   void openFileTransfer();
   void openAutoPageTurnIntervalPicker(bool ignoreInitialConfirmRelease = false);
   void startClipSelection();
+  void startDictionarySelection();
   void resetReadingPaceData();
   void captureGlobalReaderSettings();
   void restoreGlobalReaderSettings();

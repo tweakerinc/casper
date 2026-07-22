@@ -10,7 +10,7 @@ class SimulatorDisplay {
 
   void begin() {
     SDL_Init(SDL_INIT_VIDEO);
-    window = SDL_CreateWindow("CrossInk Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 480, 800, 0);
+    window = SDL_CreateWindow("Casper Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 480, 800, 0);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     // Set background to e-ink white
     SDL_SetRenderDrawColor(renderer, 240, 240, 240, 255);

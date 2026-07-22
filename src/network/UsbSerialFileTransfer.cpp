@@ -14,6 +14,7 @@
 
 #include "CrossPointSettings.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookMoveUtils.h"
 
 namespace UsbSerialFileTransfer {
 namespace {
@@ -502,8 +503,10 @@ void handleRename() {
   }
 
   if (Storage.rename(src, dst)) {
-    clearCachesForPath(src);
-    clearCachesForPath(dst);
+    // Migrate stats/covers/bookmarks with the file instead of wiping caches.
+    if (!BookMoveUtils::migrateRenamedBook(src, dst, /*keepInRecents=*/true)) {
+      LOG_ERR("USBFT", "Rename ok but state migration incomplete: %s -> %s", src, dst);
+    }
     writeLine("OK\n");
   } else {
     writeLine("ERR:rename_failed\n");

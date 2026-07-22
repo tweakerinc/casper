@@ -31,7 +31,18 @@ Keep this file focused on repo-specific gotchas that are worth reusing in future
 - SD-font section builds cost ~38-50KB at cold start; the 4-style advance-table prewarm
   (~30KB incl. 16KB contiguous scratch) dominates and is skipped below 80KB free.
 
+## X3 Battery (BQ27220)
+
+- X3 SoC comes from the BQ27220 fuel gauge over I2C (shared with RTC + IMU), not ADC.
+- Unlearned / wrong design-capacity packs often stick near 100% until a full charge→empty→charge cycle.
+- `HalPowerManager` cross-checks SoC against gauge voltage (`percentageFromMillivolts`) when SoC is high but mV is not full; uses a longer Wire timeout (50 ms) and smooths display %.
+- Serial: look for `BAT` logs `gauge SoC=… V=… I=… Vmap=… -> show=…`.
+
 ## Misc Repo Gotchas
 
 - POSIX TZ signs are inverted from ISO 8601 in `TimeStore::applyTimezone()`: `"UTC-1"` means UTC+1.
 - `LyraTheme::drawHeader()` does not call `BaseTheme::drawHeader()`, so header changes in the base theme must be duplicated in Lyra if needed.
+- Dictionary packs: call `DictionaryLookup::beginSession()` / `endSession()` around dictionary UI only. Lookups reuse open files; never scan packs on Home.
+- Book rename/move: use `BookMoveUtils::migrateRenamedBook` (or `migrateMovedEpubState`) so `epub_<hash>` / stats / thumbs follow the file. Web rename used to `clearBookCache` first and wiped progress.
+- Serial freeze debug: `Activity` logs enter/exit free heap; panic dump includes `Last activity:` from `getLastActivityName()`.
+- Dashboard/Minimal covers: Home generates fixed-size adaptive thumbs (Dashboard `296x444_fit`, Minimal metrics). Draw must accept those files even when the live cover rect is smaller (title + lifetime reserve), then scale with `fittedBitmapRect`. After `loadRecentCovers`, always clear the home cover buffer snapshot or a “missing cover” frame sticks forever.

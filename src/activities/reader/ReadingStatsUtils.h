@@ -56,3 +56,5 @@ void mergeReadingHistory(uint32_t& targetAnchorDay, std::array<uint8_t, READING_
 uint16_t computeReadingHistoryLongestStreak(uint32_t anchorDay, const std::array<uint8_t, READING_HISTORY_BYTES>& bits);
 uint16_t computeReadingHistoryCurrentStreak(uint32_t anchorDay, const std::array<uint8_t, READING_HISTORY_BYTES>& bits,
                                             const ReadingStatsDate* today);
+// Count of distinct calendar days with any reading activity in the history window.
+uint16_t computeReadingHistoryDaysRead(const std::array<uint8_t, READING_HISTORY_BYTES>& bits);

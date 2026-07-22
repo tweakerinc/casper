@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -228,20 +229,40 @@ Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
   return Rect{target.x + (target.width - drawnW) / 2, target.y + (target.height - drawnH) / 2, drawnW, drawnH};
 }
 
+// Prefer full-bleed crop thumbs; adaptive _fit is fallback only (letterboxes).
 std::string coverPathForImageRect(const RecentBook& book, const Rect& imageRect) {
+  auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
+    for (const std::string& path : candidates) {
+      if (!path.empty() && Storage.exists(path.c_str())) {
+        return path;
+      }
+    }
+    return {};
+  };
+
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    Epub epub(book.path, "/.crosspoint");
+    const std::string found = firstExisting({
+        epub.getThumbBmpPath(imageRect.width, imageRect.height),
+        epub.getThumbBmpPath(MinimalMetrics::homeCoverImageWidth, MinimalMetrics::homeCoverImageHeight),
+        epub.getAdaptiveThumbBmpPath(imageRect.width, imageRect.height),
+        epub.getAdaptiveThumbBmpPath(MinimalMetrics::homeCoverImageWidth, MinimalMetrics::homeCoverImageHeight),
+    });
+    if (!found.empty()) {
+      return found;
+    }
+  }
+
   if (book.coverBmpPath.empty()) {
     return {};
   }
 
-  if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, "/.crosspoint").getAdaptiveThumbBmpPath(imageRect.width, imageRect.height);
-  }
-
-  std::string coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height);
-  if (coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) {
-    coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.height);
-  }
-  return coverBmpPath;
+  return firstExisting({
+      UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height),
+      UITheme::getCoverThumbPath(book.coverBmpPath, MinimalMetrics::homeCoverImageWidth,
+                                 MinimalMetrics::homeCoverImageHeight),
+      UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.height),
+  });
 }
 
 uint8_t selectedQuoteIndex() {
@@ -361,28 +382,27 @@ void drawMissingBookCover(const GfxRenderer& renderer, const Rect& coverRect, co
 void drawBookCover(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book,
                    const Color backgroundColor) {
   bool hasCover = false;
-  if (!book.coverBmpPath.empty()) {
-    const Rect imageRect = coverImageRectForFrame(coverRect);
-    const std::string coverBmpPath = coverPathForImageRect(book, imageRect);
-    if (!coverBmpPath.empty() && Storage.exists(coverBmpPath.c_str())) {
-      FsFile file;
-      if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
-        Bitmap bitmap(file);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          const Rect bitmapRect = fittedBitmapRect(bitmap, imageRect);
-          renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
-                                   backgroundColor);
-          renderer.fillRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, kCoverCornerRadius,
-                                   Color::White);
-          renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height);
-          renderer.maskRoundedRectOutsideCorners(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height,
-                                                 kCoverCornerRadius, backgroundColor);
-          renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1,
-                                   kCoverCornerRadius, true);
-          hasCover = true;
-        }
-        file.close();
+  const Rect imageRect = coverImageRectForFrame(coverRect);
+  // Resolve from book path even when coverBmpPath is empty (first-time home).
+  const std::string coverBmpPath = coverPathForImageRect(book, imageRect);
+  if (!coverBmpPath.empty() && Storage.exists(coverBmpPath.c_str())) {
+    FsFile file;
+    if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
+      Bitmap bitmap(file);
+      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
+                                 backgroundColor);
+        renderer.fillRoundedRect(imageRect.x, imageRect.y, imageRect.width, imageRect.height, kCoverCornerRadius,
+                                 Color::White);
+        // cropX/Y=0 → 1-bit path scales into the dest box (no dest clip bugs).
+        renderer.drawBitmap(bitmap, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+        renderer.maskRoundedRectOutsideCorners(imageRect.x, imageRect.y, imageRect.width, imageRect.height,
+                                               kCoverCornerRadius, backgroundColor);
+        renderer.drawRoundedRect(imageRect.x, imageRect.y, imageRect.width, imageRect.height, 1, kCoverCornerRadius,
+                                 true);
+        hasCover = true;
       }
+      file.close();
     }
   }
 

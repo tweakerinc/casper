@@ -3,7 +3,7 @@ const currentPath = decodeURIComponent(new URLSearchParams(window.location.searc
 
 if (currentPath !== "/") {
   const leaf = currentPath.split("/").filter(Boolean).pop();
-  if (leaf) document.title = leaf + " - Files - CrossInk Reader";
+  if (leaf) document.title = leaf + " - Files - TweakerInc";
 }
 
 // Network status monitoring
@@ -91,7 +91,7 @@ function formatFileSize(bytes) {
 }
 
 async function hydrate() {
-  // Fetch CrossInk version
+  // Fetch TweakerInc version
   fetchVersion();
 
   // Close modals when clicking overlay - call proper cleanup functions
@@ -1548,7 +1548,7 @@ const logSection = document.getElementById("log-section");
 const logContainer = document.getElementById("log-container");
 const exportLogCheckbox = document.getElementById("export-log-checkbox");
 
-// CrossInk version (fetched from API)
+// TweakerInc version (fetched from API)
 let crosspointVersion = "Unknown";
 
 // Fetch version from API
@@ -1955,7 +1955,7 @@ function exportLogToFile(filename = null, isBatch = false) {
   }
   // Extract text from log entries
   const entries = logContainer.querySelectorAll(".log-entry");
-  let logText = `CrossInk Reader ${crosspointVersion} - EPUB Conversion Log\n`;
+  let logText = `TweakerInc ${crosspointVersion} - EPUB Conversion Log\n`;
   logText += `Generated: ${new Date().toLocaleString()}\n`;
   logText += `${"=".repeat(60)}\n\n`;
 
@@ -2881,7 +2881,7 @@ function buildXLocationManifest(
   const manifest = {
     format: "x-locations",
     version: 1,
-    generator: "crossink-web-uploader",
+    generator: "tweakerinc-web-uploader",
     unit: "word",
     referencePageUnit: "character",
     wordsPerLocation: X_LOCATION_WORDS_PER_UNIT,
@@ -3951,7 +3951,7 @@ async function convertEpubFile(file, progressCallback) {
         let modified = false;
 
         // Remove width/height attributes from ALL img tags (dimensions may have changed)
-        // This prevents CrossInk and other readers from using wrong dimensions
+        // This prevents TweakerInc and other readers from using wrong dimensions
         const allImgElements = doc.querySelectorAll("img");
         for (const img of allImgElements) {
           if (img.hasAttribute("width")) {

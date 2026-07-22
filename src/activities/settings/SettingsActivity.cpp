@@ -76,8 +76,6 @@ void drawCenteredTextLine(const GfxRenderer& renderer, const int pageWidth, cons
   renderer.drawText(SMALL_FONT_ID, labelX, y, text.c_str());
 }
 
-bool isVersionBreakChar(const char c) { return c == ' ' || c == '-' || c == '+' || c == '.' || c == '_'; }
-
 std::string formatUtcOffset(uint8_t biasedQ) {
   if (biasedQ > 104) biasedQ = 48;
   const int totalMinutes = (static_cast<int>(biasedQ) - 48) * 15;
@@ -103,41 +101,14 @@ std::string formatCompactDuration(const uint32_t seconds) {
 
 void drawSystemVersionFooter(const GfxRenderer& renderer, const int pageWidth, const int pageHeight,
                              const ThemeMetrics& metrics) {
-  const std::string label = "CrossInk " CROSSINK_VERSION;
+  // Single line, e.g. "casper v0.1".
+  char label[48];
+  snprintf(label, sizeof(label), "%s %s", tr(STR_CROSSINK), CROSSINK_VERSION);
   const int maxWidth = pageWidth - systemVersionFooterSideMargin * 2;
   const int bottomLineY =
       pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - systemVersionFooterBottomInset;
-
-  if (renderer.getTextWidth(SMALL_FONT_ID, label.c_str()) <= maxWidth) {
-    drawCenteredTextLine(renderer, pageWidth, bottomLineY, label);
-    return;
-  }
-
-  size_t fallbackBreak = std::string::npos;
-  size_t preferredBreak = std::string::npos;
-  for (size_t i = 1; i < label.size(); i++) {
-    if (!isVersionBreakChar(label[i - 1])) continue;
-
-    const std::string firstLine = label.substr(0, i);
-    if (renderer.getTextWidth(SMALL_FONT_ID, firstLine.c_str()) > maxWidth) break;
-
-    fallbackBreak = i;
-    const std::string secondLine = label.substr(i);
-    if (renderer.getTextWidth(SMALL_FONT_ID, secondLine.c_str()) <= maxWidth) {
-      preferredBreak = i;
-    }
-  }
-
-  const size_t lineBreak = preferredBreak != std::string::npos ? preferredBreak : fallbackBreak;
-  const std::string firstLine = lineBreak == std::string::npos
-                                    ? renderer.truncatedText(SMALL_FONT_ID, label.c_str(), maxWidth)
-                                    : label.substr(0, lineBreak);
-  const std::string secondLine = lineBreak == std::string::npos
-                                     ? ""
-                                     : renderer.truncatedText(SMALL_FONT_ID, label.substr(lineBreak).c_str(), maxWidth);
-  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  drawCenteredTextLine(renderer, pageWidth, bottomLineY - lineHeight, firstLine);
-  drawCenteredTextLine(renderer, pageWidth, bottomLineY, secondLine);
+  const std::string line = renderer.truncatedText(SMALL_FONT_ID, label, maxWidth);
+  drawCenteredTextLine(renderer, pageWidth, bottomLineY, line);
 }
 
 std::string formatSettingValue(const SettingInfo& setting) {
@@ -939,7 +910,7 @@ void SettingsActivity::render(RenderLock&&) {
       },
       true, nullptr, [&settings](int i) { return settings[i].type == SettingType::SECTION_HEADER; });
 
-  // Draw CrossInk version label at the bottom of the System tab
+  // Draw firmware version label at the bottom of the System tab
   if (selectedCategoryIndex == 3) {
     drawSystemVersionFooter(renderer, pageWidth, pageHeight, metrics);
   }

@@ -3,7 +3,7 @@
 // PlatformIO normally supplies these through build_flags/extra_scripts. Keep
 // fallbacks here so editor indexers and simulator-like tools still parse files.
 #ifndef CROSSINK_VERSION
-#define CROSSINK_VERSION "dev"
+#define CROSSINK_VERSION "v0.1"
 #endif
 
 #ifndef CROSSINK_BUILD_ENV

@@ -34,6 +34,7 @@
 #include "html/StyleCss.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookMoveUtils.h"
 #include "util/StringUtils.h"
 
 namespace {
@@ -960,11 +961,17 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  clearBookCache(itemPath.c_str());
+  // Migrate cache/stats/covers with the file — do not clearBookCache first
+  // (that wiped progress and thumbs on every web rename).
+  const std::string oldPathStr = itemPath.c_str();
+  const std::string newPathStr = newPath.c_str();
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
+    if (!BookMoveUtils::migrateRenamedBook(oldPathStr, newPathStr, /*keepInRecents=*/true)) {
+      LOG_ERR("WEB", "Rename ok but state migration incomplete: %s -> %s", oldPathStr.c_str(), newPathStr.c_str());
+    }
     LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(200, "text/plain", "Renamed successfully");
   } else {

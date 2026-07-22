@@ -14,6 +14,7 @@
 
 #include "CrossPointSettings.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookMoveUtils.h"
 
 namespace {
 constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
@@ -546,11 +547,15 @@ void WebDAVHandler::handleMove(WebServer& s) {
     return;
   }
 
-  clearBookCache(srcPath.c_str());
+  const std::string oldPathStr = srcPath.c_str();
+  const std::string newPathStr = dstPath.c_str();
   bool success = file.rename(dstPath.c_str());
   file.close();
 
   if (success) {
+    if (!BookMoveUtils::migrateRenamedBook(oldPathStr, newPathStr, /*keepInRecents=*/true)) {
+      LOG_ERR("DAV", "Move ok but state migration incomplete: %s -> %s", oldPathStr.c_str(), newPathStr.c_str());
+    }
     s.send(dstExists ? 204 : 201);
   } else {
     s.send(500, "text/plain", "Move failed");

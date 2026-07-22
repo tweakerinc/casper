@@ -36,3 +36,9 @@ lib/EpdFont/scripts/output/
 /site/public/CNAME
 
 dist-publish/
+
+# Casper: dictionary build inputs / large packs live on disk, not in git.
+# Rebuild packs with scripts/build_en_dict.py; see docs/dictionary.md.
+scripts/data/
+docs/*.cxdict
+!docs/en.cxdict.sample

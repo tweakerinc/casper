@@ -244,9 +244,12 @@ void TxtReaderActivity::loop() {
   }
 
   auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
-  (void)fromSideBtn;
-  (void)fromTilt;
   if (!prevTriggered && !nextTriggered) {
+    return;
+  }
+  // When side long-press is disabled, ignore held side releases (resting a hand on the button).
+  if (fromSideBtn && !fromTilt && SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF &&
+      mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS) {
     return;
   }
 
@@ -313,6 +316,7 @@ bool TxtReaderActivity::executePowerButtonAction() {
         activityManager.goToFileBrowser(txt ? txt->getPath() : "");
         return true;
       case CrossPointSettings::SHORT_PWRBTN::CREATE_CLIPPING:
+      case CrossPointSettings::SHORT_PWRBTN::DICTIONARY:
         return false;
       default:
         return false;
@@ -364,6 +368,7 @@ bool TxtReaderActivity::executeLongPressBackAction() {
       activityManager.goToFileBrowser(txt ? txt->getPath() : "");
       return true;
     case CrossPointSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_CREATE_CLIPPING:
+    case CrossPointSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_DICTIONARY:
       return false;
     default:
       return false;

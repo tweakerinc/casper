@@ -4,7 +4,9 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 
 #include "HalGPIO.h"
 
@@ -28,6 +30,76 @@ void disableWiFiBeforeDeepSleep() {
   WiFi.mode(WIFI_OFF);
   delay(30);
 }
+
+// Little-endian 16-bit register read from BQ27220 (shared I2C bus with RTC/IMU).
+bool readBq27220Reg16(const uint8_t reg, uint16_t& out) {
+  Wire.beginTransmission(I2C_ADDR_BQ27220);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(static_cast<uint8_t>(I2C_ADDR_BQ27220), static_cast<uint8_t>(2),
+                       static_cast<uint8_t>(true)) < 2) {
+    while (Wire.available()) {
+      (void)Wire.read();
+    }
+    return false;
+  }
+  const uint8_t lo = Wire.read();
+  const uint8_t hi = Wire.read();
+  out = static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8);
+  return true;
+}
+
+// Reconcile fuel-gauge SoC with cell voltage. Unlearned / stuck BQ27220 units often
+// report 100% for a long time while the cell is clearly not full (~4.2 V).
+uint16_t reconcileSocWithVoltage(const bool socOk, uint16_t soc, const bool mvOk, const uint16_t mv,
+                                 const bool maOk, const int16_t ma) {
+  if (socOk && soc > 100) {
+    soc = 100;
+  }
+
+  uint16_t fromMv = 0;
+  const bool voltagePlausible = mvOk && mv >= 2500 && mv <= 5000;
+  if (voltagePlausible) {
+    fromMv = BatteryMonitor::percentageFromMillivolts(mv);
+  }
+
+  if (!socOk && voltagePlausible) {
+    return fromMv;
+  }
+  if (socOk && !voltagePlausible) {
+    return soc;
+  }
+  if (!socOk && !voltagePlausible) {
+    return 0;
+  }
+
+  // Both SoC and voltage available.
+  uint16_t reported = soc;
+
+  // Under charge (current into cell), open-circuit voltage mapping is less reliable — keep SoC
+  // unless voltage is wildly low for a "full" reading.
+  const bool charging = maOk && ma > 20;
+
+  if (soc >= 95 && mv < 4000) {
+    // Classic stuck-at-full: SoC near 100% but cell well below full charge voltage.
+    reported = fromMv;
+  } else if (soc >= 90 && mv < 3900) {
+    reported = static_cast<uint16_t>((static_cast<uint32_t>(fromMv) * 2 + soc) / 3);
+  } else if (soc + 25 < fromMv && !charging) {
+    // SoC lagging voltage (e.g. after charge, unlearned) — ease up.
+    reported = static_cast<uint16_t>((static_cast<uint32_t>(fromMv) + soc) / 2);
+  } else if (fromMv + 25 < soc && mv < 4050 && !charging) {
+    // SoC much higher than voltage implies — pull down toward voltage.
+    reported = static_cast<uint16_t>((static_cast<uint32_t>(fromMv) * 2 + soc) / 3);
+  }
+
+  if (reported > 100) {
+    reported = 100;
+  }
+  return reported;
+}
 }  // namespace
 
 void HalPowerManager::begin() {
@@ -35,8 +107,10 @@ void HalPowerManager::begin() {
     // X3 uses an I2C fuel gauge for battery monitoring.
     // I2C init must come AFTER gpio.begin() so early hardware detection/probes are finished.
     Wire.begin(X3_I2C_SDA, X3_I2C_SCL, X3_I2C_FREQ);
-    Wire.setTimeOut(4);
+    // Shared bus (gauge + RTC + IMU): 4 ms was too short and caused sticky last-% on timeouts.
+    Wire.setTimeOut(X3_I2C_TIMEOUT_MS);
     _batteryUseI2C = true;
+    LOG_INF("BAT", "X3 battery: BQ27220 gauge (I2C timeout %u ms)", static_cast<unsigned>(X3_I2C_TIMEOUT_MS));
   } else {
     pinMode(BAT_GPIO0, INPUT);
   }
@@ -116,42 +190,95 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   esp_deep_sleep_start();
 }
 
+uint16_t HalPowerManager::readX3BatteryPercentage() const {
+  const unsigned long now = millis();
+  if (_batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) {
+    return static_cast<uint16_t>((_batteryCachedPercent + 5) / 10);
+  }
+
+  uint16_t socRaw = 0;
+  uint16_t mv = 0;
+  uint16_t maRaw = 0;
+  const bool socOk = readBq27220Reg16(BQ27220_SOC_REG, socRaw);
+  const bool mvOk = readBq27220Reg16(BQ27220_VOLT_REG, mv);
+  const bool maOk = readBq27220Reg16(BQ27220_CUR_REG, maRaw);
+  const int16_t ma = static_cast<int16_t>(maRaw);
+
+  if (!socOk && !mvOk) {
+    ++_batteryI2cFailStreak;
+    _batteryLastPollMs = now;
+    if (_batteryI2cFailStreak == 1 || (_batteryI2cFailStreak % 30) == 0) {
+      LOG_ERR("BAT", "BQ27220 I2C read failed (streak=%u); keeping last %%",
+              static_cast<unsigned>(_batteryI2cFailStreak));
+    }
+    // Prefer last good display value; 0 only if we never had one.
+    if (_batteryCachedPercent > 0) {
+      return static_cast<uint16_t>((_batteryCachedPercent + 5) / 10);
+    }
+    return 0;
+  }
+  _batteryI2cFailStreak = 0;
+
+  const uint16_t soc = socOk ? (socRaw > 100 ? 100 : socRaw) : 0;
+  const uint16_t reported = reconcileSocWithVoltage(socOk, soc, mvOk, mv, maOk, ma);
+
+  // Log first sample and periodic diagnostics (helps field-debug stuck 100%).
+  const bool shouldLog = !_batteryLoggedOnce || (now - _batteryLastLogMs) >= BATTERY_LOG_INTERVAL_MS ||
+                         (socOk && mvOk && soc >= 90 && mv < 4000) || (socOk && mvOk && std::abs(static_cast<int>(soc) -
+                                                                                                static_cast<int>(
+                                                                                                    BatteryMonitor::percentageFromMillivolts(
+                                                                                                        mv))) > 20);
+  if (shouldLog) {
+    _batteryLoggedOnce = true;
+    _batteryLastLogMs = now;
+    const uint16_t fromMv = (mvOk && mv >= 2500 && mv <= 5000) ? BatteryMonitor::percentageFromMillivolts(mv) : 0;
+    LOG_INF("BAT", "gauge SoC=%u%% V=%umV I=%dmA Vmap=%u%% -> show=%u%%", static_cast<unsigned>(socOk ? soc : 0),
+            static_cast<unsigned>(mvOk ? mv : 0), maOk ? static_cast<int>(ma) : 0, static_cast<unsigned>(fromMv),
+            static_cast<unsigned>(reported));
+  }
+
+  // Smooth in tenths of a percent. Allow faster fall when voltage correction pulls SoC down hard
+  // (stuck-at-100 recovery); climb slowly so brief spikes don't jump the UI.
+  const int newTenths = static_cast<int>(reported) * 10;
+  if (_batteryCachedPercent <= 0) {
+    _batteryCachedPercent = newTenths;
+  } else {
+    const int delta = newTenths - _batteryCachedPercent;
+    if (delta <= -80) {
+      // Drop of 8%+ this sample (correction) — catch down quickly.
+      _batteryCachedPercent = (_batteryCachedPercent * 4 + newTenths * 6) / 10;
+    } else if (delta >= 50) {
+      // Climb of 5%+ — ease up (charge / noise).
+      _batteryCachedPercent = (_batteryCachedPercent * 8 + newTenths * 2) / 10;
+    } else {
+      _batteryCachedPercent = (_batteryCachedPercent * 7 + newTenths * 3) / 10;
+    }
+  }
+  if (_batteryCachedPercent < 0) {
+    _batteryCachedPercent = 0;
+  }
+  if (_batteryCachedPercent > 1000) {
+    _batteryCachedPercent = 1000;
+  }
+
+  _batteryLastPollMs = now;
+  return static_cast<uint16_t>((_batteryCachedPercent + 5) / 10);
+}
+
 uint16_t HalPowerManager::getBatteryPercentage() const {
   if (_batteryUseI2C) {
-    const unsigned long now = millis();
-    if (_batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) {
-      return _batteryCachedPercent;
-    }
-
-    // Read SOC directly from I2C fuel gauge (16-bit LE register).
-    // On I2C error, keep last known value to avoid UI jitter/slowdowns.
-    Wire.beginTransmission(I2C_ADDR_BQ27220);
-    Wire.write(BQ27220_SOC_REG);
-    if (Wire.endTransmission(false) != 0) {
-      _batteryLastPollMs = now;
-      return _batteryCachedPercent;
-    }
-    Wire.requestFrom(I2C_ADDR_BQ27220, (uint8_t)2);
-    if (Wire.available() < 2) {
-      _batteryLastPollMs = now;
-      return _batteryCachedPercent;
-    }
-    const uint8_t lo = Wire.read();
-    const uint8_t hi = Wire.read();
-    const uint16_t soc = (hi << 8) | lo;
-    _batteryCachedPercent = soc > 100 ? 100 : soc;
-    _batteryLastPollMs = now;
-    return _batteryCachedPercent;
+    return readX3BatteryPercentage();
   }
   static const BatteryMonitor battery = BatteryMonitor(BAT_GPIO0);
 
-  // smooth the battery %.
-  if (_batteryCachedPercent == 0) {
-    _batteryCachedPercent = 10 * battery.readPercentage();
+  // Smooth the battery % (tenths).
+  const int sample = static_cast<int>(battery.readPercentage()) * 10;
+  if (_batteryCachedPercent <= 0) {
+    _batteryCachedPercent = sample;
   } else {
-    _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
+    _batteryCachedPercent = (_batteryCachedPercent * 9 + sample) / 10;
   }
-  return _batteryCachedPercent / 10;
+  return static_cast<uint16_t>((_batteryCachedPercent + 5) / 10);
 }
 
 HalPowerManager::Lock::Lock() {

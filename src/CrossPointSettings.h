@@ -223,6 +223,7 @@ class CrossPointSettings {
     JOIN_NETWORK = 19,
     CREATE_HOTSPOT = 20,
     CREATE_CLIPPING = 21,
+    DICTIONARY = 22,
     SHORT_PWRBTN_COUNT
   };
 
@@ -286,6 +287,7 @@ class CrossPointSettings {
     LONG_MENU_JOIN_NETWORK = 18,
     LONG_MENU_CREATE_HOTSPOT = 19,
     LONG_MENU_CREATE_CLIPPING = 20,
+    LONG_MENU_DICTIONARY = 21,
     LONG_PRESS_MENU_ACTION_COUNT
   };
 
@@ -338,10 +340,10 @@ class CrossPointSettings {
   uint8_t forceParagraphIndents = 0;
   uint8_t textAntiAliasing = 1;
   uint8_t readerDarkMode = 0;
-  // Short power button action behaviour
-  uint8_t shortPwrBtn = IGNORE;
-  // Long power button action behaviour
-  uint8_t longPwrBtn = SLEEP;
+  // Short power button action behaviour (default: sleep)
+  uint8_t shortPwrBtn = SLEEP;
+  // Long power button action behaviour (default: force full screen refresh)
+  uint8_t longPwrBtn = FORCE_REFRESH;
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;
@@ -351,7 +353,8 @@ class CrossPointSettings {
   uint8_t frontButtonOrientationAware = FRONT_ORIENTATION_AWARE_OFF;
   uint8_t sideButtonOrientationAware = 0;
   // Action performed when side buttons are long-pressed in reader
-  uint8_t sideButtonLongPress = SIDE_LONG_CHAPTER_SKIP;
+  // Default off: long-hold must not multi-turn or chapter-skip unless the user enables it.
+  uint8_t sideButtonLongPress = SIDE_LONG_OFF;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.
   uint8_t frontButtonBack = FRONT_HW_BACK;
@@ -435,8 +438,8 @@ class CrossPointSettings {
   uint8_t readingIdleTimeThresholdUnits = 30;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
-  // Long-press Confirm (menu button) quick action in reader (0 = off)
-  uint8_t longPressMenuAction = LONG_MENU_OFF;
+  // Long-press Confirm (menu button) quick action in reader (default: dictionary)
+  uint8_t longPressMenuAction = LONG_MENU_DICTIONARY;
   // Long-press Back quick action in reader (defaults to the historical file browser shortcut)
   uint8_t longPressBackAction = LONG_MENU_FILE_BROWSER;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)

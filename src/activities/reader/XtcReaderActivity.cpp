@@ -177,15 +177,11 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  // Side buttons fire on press only when long-press action is OFF.
-  const bool sideUsePress = SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF;
-
+  // Side page turns always on release (same as EPUB) so a soft hold cannot multi-turn.
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool sidePrev = sideUsePress ? mappedInput.wasPressed(MappedInputManager::Button::PageBack)
-                                     : mappedInput.wasReleased(MappedInputManager::Button::PageBack);
-  const bool sideNext = sideUsePress ? mappedInput.wasPressed(MappedInputManager::Button::PageForward)
-                                     : mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+  const bool sidePrev = mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+  const bool sideNext = mappedInput.wasReleased(MappedInputManager::Button::PageForward);
   const bool frontPrev = mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool powerReleased = mappedInput.wasReleased(MappedInputManager::Button::Power);
   if (powerReleased && longPowerPageTurnHandled) {
@@ -210,6 +206,7 @@ void XtcReaderActivity::loop() {
         activityManager.goToFileBrowser(xtc ? xtc->getPath() : "");
         return true;
       case CrossPointSettings::SHORT_PWRBTN::CREATE_CLIPPING:
+      case CrossPointSettings::SHORT_PWRBTN::DICTIONARY:
         return false;
       default:
         return false;
@@ -324,10 +321,14 @@ void XtcReaderActivity::loop() {
     return;
   }
 
+  const bool longPress = !fromTilt && !powerPageTurn && mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
+  // When side long-press is disabled, ignore held side releases (resting a hand on the button).
+  if (fromSideBtn && SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF && longPress) {
+    return;
+  }
   const bool skipPages =
-      !fromTilt && !powerPageTurn && mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS &&
-      (fromSideBtn ? SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP
-                   : SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP);
+      longPress && (fromSideBtn ? SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP
+                                : SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP);
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {
@@ -654,6 +655,7 @@ bool XtcReaderActivity::executeLongPressBackAction() {
       activityManager.goToFileBrowser(xtc ? xtc->getPath() : "");
       return true;
     case CrossPointSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_CREATE_CLIPPING:
+    case CrossPointSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_DICTIONARY:
       return false;
     default:
       return false;

@@ -170,7 +170,7 @@ struct Sink {
 
 void setRequestHeaders(esp_http_client_handle_t client, const std::string& username, const std::string& password,
                        size_t resumeOffset, bool sendAuthorization) {
-  esp_http_client_set_header(client, "User-Agent", "CrossInk-ESP32-" CROSSINK_VERSION);
+  esp_http_client_set_header(client, "User-Agent", "Casper-ESP32-" CROSSINK_VERSION);
   esp_http_client_set_header(client, "Connection", "close");
   if (resumeOffset > 0) {
     char rangeHeader[40];

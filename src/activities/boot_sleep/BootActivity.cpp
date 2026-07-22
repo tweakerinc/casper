@@ -7,6 +7,21 @@
 #include "fontIds.h"
 #include "images/Logo120.h"
 
+namespace {
+// Prefer a soft serif for the brand wordmark; fall back when faces are omitted.
+int casperWordmarkFontId() {
+#if !defined(OMIT_XLARGE_FONT)
+  return BITTER_18_FONT_ID;
+#elif !defined(OMIT_LARGE_FONT)
+  return BITTER_16_FONT_ID;
+#elif !defined(OMIT_MEDIUM_FONT)
+  return BITTER_14_FONT_ID;
+#else
+  return UI_12_FONT_ID;
+#endif
+}
+}  // namespace
+
 void BootActivity::onEnter() {
   Activity::onEnter();
 
@@ -14,9 +29,20 @@ void BootActivity::onEnter() {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_BOOTING));
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, CROSSINK_VERSION);
+
+  // Centered Casper logo.
+  constexpr int kLogoSize = 120;
+  const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
+  renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
+
+  // "Casper" under the logo in a cute serif.
+  const int wordFont = casperWordmarkFontId();
+  const int wordY = logoY + kLogoSize + 12;
+  renderer.drawCenteredText(wordFont, wordY, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
+
+  // Build number pinned to the bottom of the page.
+  const int versionY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
+  renderer.drawCenteredText(SMALL_FONT_ID, versionY, CROSSINK_VERSION, true);
+
   renderer.displayBuffer();
 }

@@ -228,12 +228,16 @@ std::string getReusableCoverPath(const RecentBook& book) {
 }
 
 bool ensureReusableCoverPath(RecentBook& book) {
-  if (hasThumbnailPlaceholder(book.coverBmpPath)) {
+  // Always prefer the path-derived thumb template so renamed/migrated books and
+  // failed prior generates (coverBmpPath cleared to "") still retry.
+  const std::string reusablePath = getReusableCoverPath(book);
+  if (reusablePath.empty()) {
     return false;
   }
-
-  const std::string reusablePath = getReusableCoverPath(book);
-  if (reusablePath.empty() || reusablePath == book.coverBmpPath) {
+  if (hasThumbnailPlaceholder(book.coverBmpPath) && book.coverBmpPath == reusablePath) {
+    return false;
+  }
+  if (book.coverBmpPath == reusablePath) {
     return false;
   }
 
@@ -357,12 +361,13 @@ int minimalHomeCoverHeight(int coverHeight) {
 }
 
 std::string minimalHomeCoverPath(const RecentBook& book, int coverHeight) {
-  if (book.coverBmpPath.empty()) {
-    return {};
-  }
+  // Full-bleed crop thumbs (not adaptive _fit) so home covers fill the frame.
   if (FsHelpers::hasEpubExtension(book.path)) {
     return Epub(book.path, "/.crosspoint")
-        .getAdaptiveThumbBmpPath(minimalHomeCoverWidth(coverHeight), minimalHomeCoverHeight(coverHeight));
+        .getThumbBmpPath(minimalHomeCoverWidth(coverHeight), minimalHomeCoverHeight(coverHeight));
+  }
+  if (book.coverBmpPath.empty()) {
+    return {};
   }
   return UITheme::getCoverThumbPath(book.coverBmpPath, minimalHomeCoverWidth(coverHeight),
                                     minimalHomeCoverHeight(coverHeight));
@@ -379,12 +384,13 @@ int dashboardHomeCoverHeight(int coverHeight) {
 }
 
 std::string dashboardHomeCoverPath(const RecentBook& book, int coverHeight) {
-  if (book.coverBmpPath.empty()) {
-    return {};
-  }
+  // Full-bleed crop thumbs at fixed dashboard metrics (not adaptive _fit).
   if (FsHelpers::hasEpubExtension(book.path)) {
     return Epub(book.path, "/.crosspoint")
-        .getAdaptiveThumbBmpPath(dashboardHomeCoverWidth(coverHeight), dashboardHomeCoverHeight(coverHeight));
+        .getThumbBmpPath(dashboardHomeCoverWidth(coverHeight), dashboardHomeCoverHeight(coverHeight));
+  }
+  if (book.coverBmpPath.empty()) {
+    return {};
   }
   return UITheme::getCoverThumbPath(book.coverBmpPath, dashboardHomeCoverWidth(coverHeight),
                                     dashboardHomeCoverHeight(coverHeight));
@@ -684,8 +690,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressIncrement);
             if (!epub.load(true, true)) {
               LOG_ERR("HOME", "carousel: failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              // Keep a path-derived template so the next home enter can retry.
+              book.coverBmpPath = getReusableCoverPath(book);
+              updateRecentBookCoverPath(book, book.coverBmpPath);
               coverRendered = false;
               requestUpdate();
               progress++;
@@ -700,10 +707,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               success = epub.generateThumbBmp(LyraCarouselTheme::kSideCoverW, LyraCarouselTheme::kSideCoverH, &renderer,
                                               SETTINGS.getReaderFontId()) &&
                         success;
-            if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
-            } else {
+            book.coverBmpPath = getReusableCoverPath(book);
+            updateRecentBookCoverPath(book, book.coverBmpPath);
+            if (success) {
               if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
             }
             coverRendered = false;
@@ -723,10 +729,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               if (sideMissing)
                 success =
                     xtc.generateThumbBmp(LyraCarouselTheme::kSideCoverW, LyraCarouselTheme::kSideCoverH) && success;
-              if (!success) {
-                updateRecentBookCoverPath(book, "");
-                book.coverBmpPath = "";
-              } else {
+              book.coverBmpPath = getReusableCoverPath(book);
+              updateRecentBookCoverPath(book, book.coverBmpPath);
+              if (success) {
                 if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
               }
               coverRendered = false;
@@ -741,6 +746,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         const bool useDashboardThumb = isDashboard && supportsExactHomeThumb;
         const bool useMinimalThumb = isMinimal && supportsExactHomeThumb;
         const bool useExactHomeThumb = useDashboardThumb || useMinimalThumb;
+        // Path-derived adaptive/exact path (works even when coverBmpPath was cleared).
+        ensureReusableCoverPath(book);
         const std::string coverPath =
             useDashboardThumb ? dashboardHomeCoverPath(book, coverHeight)
                               : (useMinimalThumb ? minimalHomeCoverPath(book, coverHeight)
@@ -755,28 +762,30 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressIncrement);
             if (!epub.load(true, true)) {
               LOG_ERR("HOME", "failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              book.coverBmpPath = getReusableCoverPath(book);
+              updateRecentBookCoverPath(book, book.coverBmpPath);
               coverRendered = false;
               requestUpdate();
               progress++;
               continue;
             }
+            // Crop/fill thumbs (not adaptive contain) so the home frame is full-bleed
+            // without empty side gutters from letterboxed _fit assets.
             const bool success =
                 useDashboardThumb
-                    ? epub.generateAdaptiveThumbBmp(dashboardHomeCoverWidth(coverHeight),
-                                                    dashboardHomeCoverHeight(coverHeight), &renderer,
-                                                    SETTINGS.getReaderFontId())
+                    ? epub.generateThumbBmp(dashboardHomeCoverWidth(coverHeight), dashboardHomeCoverHeight(coverHeight),
+                                            &renderer, SETTINGS.getReaderFontId())
                     : (useExactHomeThumb
-                           ? epub.generateAdaptiveThumbBmp(minimalHomeCoverWidth(coverHeight),
-                                                           minimalHomeCoverHeight(coverHeight), &renderer,
-                                                           SETTINGS.getReaderFontId())
+                           ? epub.generateThumbBmp(minimalHomeCoverWidth(coverHeight),
+                                                   minimalHomeCoverHeight(coverHeight), &renderer,
+                                                   SETTINGS.getReaderFontId())
                            : epub.generateThumbBmp(0, coverHeight, &renderer, SETTINGS.getReaderFontId()));
-            if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+            book.coverBmpPath = getReusableCoverPath(book);
+            updateRecentBookCoverPath(book, book.coverBmpPath);
+            if (success) {
+              if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
             } else {
-              if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;  // non-carousel path reuses same tracking
+              LOG_ERR("HOME", "thumb generation failed: %s", book.path.c_str());
             }
             coverRendered = false;
             requestUpdate();
@@ -796,10 +805,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                              ? xtc.generateThumbBmp(static_cast<uint16_t>(minimalHomeCoverWidth(coverHeight)),
                                                     static_cast<uint16_t>(minimalHomeCoverHeight(coverHeight)))
                              : xtc.generateThumbBmp(coverHeight));
-              if (!success) {
-                updateRecentBookCoverPath(book, "");
-                book.coverBmpPath = "";
-              } else {
+              book.coverBmpPath = getReusableCoverPath(book);
+              updateRecentBookCoverPath(book, book.coverBmpPath);
+              if (success) {
                 if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
               }
               coverRendered = false;
@@ -814,6 +822,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   recentsLoaded = true;
   recentsLoading = false;
+
+  // First home paint often caches a "missing cover" placeholder before thumbs
+  // exist (or when draw used a different size than generation). Always drop that
+  // snapshot after the load pass so the next paint re-reads files from SD.
+  freeCoverBuffer();
+  coverRendered = false;
 
   // Re-render only the affected slots rather than rebuilding the entire cache.
   if (isCarouselTheme) {
@@ -852,9 +866,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           Storage.remove(CAROUSEL_CACHE_TMP_PATH);
         }
       }
-      requestUpdate();
     }
   }
+
+  // Dashboard/minimal and carousel: force a repaint so covers appear after gen.
+  requestUpdate();
 }
 
 void HomeActivity::onEnter() {
@@ -877,6 +893,8 @@ void HomeActivity::onEnter() {
   minimalHomeNavIndex = -1;
   carouselFramesReady = false;
   carouselWarmupPending = isCarouselTheme;
+  // Leaving grayscale reader pages with only FAST home paints leaves residue.
+  strongRefreshOnce = true;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int recentBooksToLoad =
@@ -1702,7 +1720,12 @@ void HomeActivity::render(RenderLock&&) {
           [&menuItems](int index) { return menuItems[index].icon; });
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      renderer.displayBuffer();
+      if (strongRefreshOnce) {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        strongRefreshOnce = false;
+      } else {
+        renderer.displayBuffer();
+      }
       return;
     }
 
@@ -1728,7 +1751,12 @@ void HomeActivity::render(RenderLock&&) {
     GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_SHORT),
                         recentBooks.empty() ? "" : tr(STR_READ));
 
-    renderer.displayBuffer();
+    if (strongRefreshOnce) {
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      strongRefreshOnce = false;
+    } else {
+      renderer.displayBuffer();
+    }
 
     if (!firstRenderDone) {
       firstRenderDone = true;
@@ -1778,7 +1806,12 @@ void HomeActivity::render(RenderLock&&) {
         }
       }
 
-      renderer.displayBuffer();
+      if (strongRefreshOnce) {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        strongRefreshOnce = false;
+      } else {
+        renderer.displayBuffer();
+      }
       // E-ink refresh complete — pre-render the missing adjacent frame while idle.
       updateSlidingWindowCache(centerIdx, bookCount);
       // Mirror the slow-path trigger: generate missing thumbnails on the second
@@ -1834,7 +1867,12 @@ void HomeActivity::render(RenderLock&&) {
                           : mappedInput.mapLabels(readLabel, tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  if (strongRefreshOnce) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    strongRefreshOnce = false;
+  } else {
+    renderer.displayBuffer();
+  }
 
   if (!firstRenderDone) {
     firstRenderDone = true;

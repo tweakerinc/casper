@@ -21,6 +21,15 @@ void formatCompactSeconds(const int seconds, char* buf, const size_t len) {
     snprintf(buf, len, "%dm %ds", seconds / 60, seconds % 60);
   }
 }
+
+// totalMinutes → "1 Hour 0 Minutes" / "2 Hours 15 Minutes"
+void formatHoursAndMinutes(const int totalMinutes, char* buf, const size_t len) {
+  const unsigned h = static_cast<unsigned>(std::max(0, totalMinutes)) / 60u;
+  const unsigned m = static_cast<unsigned>(std::max(0, totalMinutes)) % 60u;
+  const char* hourUnit = (h == 1) ? tr(STR_HOUR) : tr(STR_HOURS);
+  const char* minUnit = (m == 1) ? tr(STR_MINUTE) : tr(STR_MINUTES);
+  snprintf(buf, len, "%u %s %u %s", h, hourUnit, m, minUnit);
+}
 }  // namespace
 
 int IntervalSelectionActivity::clampedValue(const int candidate) const {
@@ -38,14 +47,55 @@ void IntervalSelectionActivity::adjustValue(const int delta) {
   requestUpdate();
 }
 
-void IntervalSelectionActivity::drawStepHintLine(const int y, const StrId labelId, const int step) {
-  char stepText[24];
-  if (valueFormatId != StrId::STR_NONE_OPT) {
-    snprintf(stepText, sizeof(stepText), I18N.get(valueFormatId), static_cast<unsigned int>(step));
+void IntervalSelectionActivity::formatValue(char* buf, const size_t len) const {
+  if (minBoundaryLabelId != StrId::STR_NONE_OPT && value == minValue) {
+    snprintf(buf, len, "%s", I18N.get(minBoundaryLabelId));
+  } else if (maxBoundaryLabelId != StrId::STR_NONE_OPT && value == maxValue) {
+    snprintf(buf, len, "%s", I18N.get(maxBoundaryLabelId));
+  } else if (showPercentValue) {
+    snprintf(buf, len, "%d%%", value);
+  } else if (showHoursMinutes) {
+    formatHoursAndMinutes(value, buf, len);
+  } else if (valueFormatId == StrId::STR_SECONDS_VALUE_FORMAT) {
+    formatCompactSeconds(value, buf, len);
+  } else if (valueFormatId != StrId::STR_NONE_OPT) {
+    snprintf(buf, len, I18N.get(valueFormatId), static_cast<unsigned int>(value));
   } else {
-    snprintf(stepText, sizeof(stepText), "%d", step);
+    snprintf(buf, len, "%d", value);
   }
-  char line[64];
+}
+
+void IntervalSelectionActivity::formatStepAmount(const int step, char* buf, const size_t len) const {
+  if (showHoursMinutes) {
+    if (step >= 60 && step % 60 == 0) {
+      const unsigned h = static_cast<unsigned>(step) / 60u;
+      const char* unit = (h == 1) ? tr(STR_HOUR) : tr(STR_HOURS);
+      snprintf(buf, len, "%u %s", h, unit);
+    } else {
+      const char* unit = (step == 1) ? tr(STR_MINUTE) : tr(STR_MINUTES);
+      snprintf(buf, len, "%d %s", step, unit);
+    }
+    return;
+  }
+  if (showPercentValue) {
+    snprintf(buf, len, "%d%%", step);
+    return;
+  }
+  if (valueFormatId == StrId::STR_SECONDS_VALUE_FORMAT) {
+    formatCompactSeconds(step, buf, len);
+    return;
+  }
+  if (valueFormatId != StrId::STR_NONE_OPT) {
+    snprintf(buf, len, I18N.get(valueFormatId), static_cast<unsigned int>(step));
+    return;
+  }
+  snprintf(buf, len, "%d", step);
+}
+
+void IntervalSelectionActivity::drawStepHintLine(const int y, const StrId labelId, const int step) {
+  char stepText[32];
+  formatStepAmount(step, stepText, sizeof(stepText));
+  char line[72];
   snprintf(line, sizeof(line), "%s %s", I18N.get(labelId), stepText);
   renderer.drawCenteredText(SMALL_FONT_ID, y, line, true);
 }
@@ -95,18 +145,8 @@ void IntervalSelectionActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, screenWidth, metrics.headerHeight}, I18N.get(titleId), nullptr,
                  readerActivity);
 
-  char formattedValue[32];
-  if (maxBoundaryLabelId != StrId::STR_NONE_OPT && value == maxValue) {
-    snprintf(formattedValue, sizeof(formattedValue), "%s", I18N.get(maxBoundaryLabelId));
-  } else if (showPercentValue) {
-    snprintf(formattedValue, sizeof(formattedValue), "%d%%", value);
-  } else if (valueFormatId == StrId::STR_SECONDS_VALUE_FORMAT) {
-    formatCompactSeconds(value, formattedValue, sizeof(formattedValue));
-  } else if (valueFormatId != StrId::STR_NONE_OPT) {
-    snprintf(formattedValue, sizeof(formattedValue), I18N.get(valueFormatId), static_cast<unsigned int>(value));
-  } else {
-    snprintf(formattedValue, sizeof(formattedValue), "%d", value);
-  }
+  char formattedValue[48];
+  formatValue(formattedValue, sizeof(formattedValue));
   renderer.drawCenteredText(UI_12_FONT_ID, 90, formattedValue, true, EpdFontFamily::BOLD);
 
   const int barWidth = std::min(360, std::max(0, screenWidth - 40));

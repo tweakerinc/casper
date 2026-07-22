@@ -44,6 +44,11 @@ inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
 
 inline bool shouldShowTopClockStatusBar() { return halClock.isAvailable() && SETTINGS.shouldShowClockInReader(); }
 
+// Reader battery sits top-right (matching Home/Dashboard); reserve the same top strip as the clock.
+inline bool shouldShowTopReaderBattery() { return SETTINGS.statusBarBattery != 0; }
+
+inline bool shouldShowTopReaderChrome() { return shouldShowTopClockStatusBar() || shouldShowTopReaderBattery(); }
+
 inline bool readerDarkModeEnabled() { return SETTINGS.readerDarkMode != 0; }
 
 inline uint8_t readerBackgroundColor() { return readerDarkModeEnabled() ? 0x00 : 0xFF; }
@@ -51,12 +56,14 @@ inline uint8_t readerBackgroundColor() { return readerDarkModeEnabled() ? 0x00 :
 inline bool readerForegroundBlack() { return !readerDarkModeEnabled(); }
 
 inline int getTopClockStatusBarHeight() {
-  if (!shouldShowTopClockStatusBar()) {
+  if (!shouldShowTopReaderChrome()) {
     return 0;
   }
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  return std::max(UITheme::getStatusBarHeight(), metrics.statusBarVerticalMargin);
+  // Prefer a compact strip tall enough for SMALL_FONT / battery icon when bottom status bar is off.
+  const int minChrome = std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
+  return std::max({UITheme::getStatusBarHeight(), metrics.statusBarVerticalMargin, minChrome});
 }
 
 inline int getTopClockStatusBarReservedHeight() {
@@ -81,15 +88,13 @@ struct PageTurnResult {
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  // Side buttons fire on press only when long-press action is OFF (nothing to detect).
-  const bool sideUsePress = SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF;
-
+  // Always use release for side page turns so a soft/held press cannot fire multiple
+  // turns (ADC chatter or resting a hand). Long-press chapter/font/orient is handled
+  // separately while the button is still held (held-time check on isPressed).
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool sidePrev = sideUsePress ? input.wasPressed(MappedInputManager::Button::PageBack)
-                                     : input.wasReleased(MappedInputManager::Button::PageBack);
-  const bool sideNext = sideUsePress ? input.wasPressed(MappedInputManager::Button::PageForward)
-                                     : input.wasReleased(MappedInputManager::Button::PageForward);
+  const bool sidePrev = input.wasReleased(MappedInputManager::Button::PageBack);
+  const bool sideNext = input.wasReleased(MappedInputManager::Button::PageForward);
 
   const bool frontPrev = input.wasReleased(MappedInputManager::Button::Left);
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);

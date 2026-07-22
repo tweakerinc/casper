@@ -187,12 +187,15 @@ std::string getReusableCoverPath(const RecentBook& book) {
 }
 
 void ensureReusableCoverPath(RecentBook& book) {
-  if (hasThumbnailPlaceholder(book.coverBmpPath)) {
+  // Always prefer path-derived template so cleared/migrated books retry generation.
+  const std::string reusablePath = getReusableCoverPath(book);
+  if (reusablePath.empty()) {
     return;
   }
-
-  const std::string reusablePath = getReusableCoverPath(book);
-  if (reusablePath.empty() || reusablePath == book.coverBmpPath) {
+  if (hasThumbnailPlaceholder(book.coverBmpPath) && book.coverBmpPath == reusablePath) {
+    return;
+  }
+  if (book.coverBmpPath == reusablePath) {
     return;
   }
 
@@ -268,8 +271,10 @@ void RecentBooksGridActivity::loadPageCovers(int pageStart) {
             book.coverBmpPath = reusablePath;
             updateRecentBookCoverPath(book, reusablePath);
           } else {
-            updateRecentBookCoverPath(book, "");
-            book.coverBmpPath = "";
+            // Keep template path so the next open can retry (do not clear permanently).
+            const std::string reusablePath = getReusableCoverPath(book);
+            book.coverBmpPath = reusablePath;
+            updateRecentBookCoverPath(book, reusablePath);
           }
         }
       } else if (FsHelpers::hasXtcExtension(book.path)) {
@@ -285,8 +290,9 @@ void RecentBooksGridActivity::loadPageCovers(int pageStart) {
             book.coverBmpPath = reusablePath;
             updateRecentBookCoverPath(book, reusablePath);
           } else {
-            updateRecentBookCoverPath(book, "");
-            book.coverBmpPath = "";
+            const std::string reusablePath = getReusableCoverPath(book);
+            book.coverBmpPath = reusablePath;
+            updateRecentBookCoverPath(book, reusablePath);
           }
         }
       }

@@ -12,19 +12,26 @@
 /**
  * Activity for syncing reading progress with KOReader sync server.
  *
- * Flow:
+ * Interactive flow:
  * 1. Connect to WiFi (if not connected)
  * 2. Calculate document hash
  * 3. Fetch remote progress
  * 4. Show comparison and options (Apply/Upload)
  * 5. Apply or upload progress
+ *
+ * Auto-upload flow (book close with setting enabled):
+ * 1. Connect to WiFi (auto-connect when possible)
+ * 2. Calculate document hash
+ * 3. Upload local progress only
+ * 4. Silent-restart to home
  */
 class KOReaderSyncActivity final : public Activity {
  public:
   explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
                                 int currentSpineIndex, int currentPage, int totalPagesInSpine,
                                 KOReaderPosition localKoPos, std::string localChapterName,
-                                std::optional<uint16_t> currentParagraphIndex = std::nullopt)
+                                std::optional<uint16_t> currentParagraphIndex = std::nullopt,
+                                bool autoUploadOnly = false, float autoUploadBookPercent = -1.0f)
       : Activity("KOReaderSync", renderer, mappedInput),
         epubPath(epubPath),
         currentSpineIndex(currentSpineIndex),
@@ -34,7 +41,10 @@ class KOReaderSyncActivity final : public Activity {
         localChapterName(std::move(localChapterName)),
         remoteProgress{},
         remotePosition{},
-        localProgress(std::move(localKoPos)) {}
+        localProgress(std::move(localKoPos)),
+        autoUploadOnly(autoUploadOnly),
+        autoUploadBookPercent(autoUploadBookPercent) {}
+  // epubPath is already stored; used when stamping auto-upload success.
 
   void onEnter() override;
   void onExit() override;
@@ -78,6 +88,11 @@ class KOReaderSyncActivity final : public Activity {
   // Local progress as KOReader format (pre-computed before Epub was released)
   KOReaderPosition localProgress;
 
+  // When true: skip compare UI, upload local progress, restart to home.
+  bool autoUploadOnly = false;
+  // Book progress percent at auto-upload start (for percent-threshold baseline).
+  float autoUploadBookPercent = -1.0f;
+
   // Selection in result screen (0=Apply, 1=Upload)
   int selectedOption = 0;
 
@@ -91,10 +106,14 @@ class KOReaderSyncActivity final : public Activity {
   // which makes WiFi.getMode() return WIFI_MODE_NULL.
   bool wifiActivated = false;
   bool lockInitialConfirmRelease = false;
+  // When true, onExit must not silent-restart (exit destination already handled).
+  bool exitHandled = false;
 
   void onWifiSelectionComplete(bool success);
   void performSync();
+  void performAutoUpload();
   void performUpload();
+  void finishAutoMode();
   bool consumeInitialConfirmRelease();
   bool smartSyncEnabled() const;
   void markAutoReturn();

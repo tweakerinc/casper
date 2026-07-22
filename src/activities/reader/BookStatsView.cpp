@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "MappedInputManager.h"
+#include "ReadingStatsUtils.h"
 #include "components/CompactHeader.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -382,54 +383,83 @@ void drawPerBookStatsCard(GfxRenderer& renderer, const int x, const int y, const
 
 void drawGlobalStatsCard(GfxRenderer& renderer, const int x, const int y, const int w, const int h, const char* title,
                          const GlobalReadingStats& stats, const StatsLayout& layout) {
+  // Match dashboard Lifetime Stats 2x4 grid:
+  //   Sessions | Reading Time | Pages/Min | Pages Turned
+  //   Avg. Session | Books Read | Streak | Days Read
+  // Streak / Days Read values include the unit ("11 Days") in the value font.
   renderer.drawRect(x, y, w, h);
   renderer.drawLine(x, y + layout.topCardTitleH, x + w, y + layout.topCardTitleH);
-  const bool showRtcStats = shouldShowRtcBasedStats();
   drawCenteredLabel(renderer, UI_10_FONT_ID, x, w,
                     y + (layout.topCardTitleH - renderer.getLineHeight(UI_10_FONT_ID)) / 2, title, true);
 
-  const int thirdW = w / 3;
-  const int halfW = w / 2;
-  const int rowH = (h - layout.topCardTitleH) / 2;
-  char buf[40];
+  constexpr int kColCount = 4;
+  constexpr int kBodyInsetX = 2;
+  const int bodyY = y + layout.topCardTitleH;
+  const int bodyH = h - layout.topCardTitleH;
+  const int gridW = std::max(kColCount, w - kBodyInsetX * 2);
+  const int baseColW = gridW / kColCount;
+  const int colRem = gridW % kColCount;
+  int colW[kColCount];
+  int colX[kColCount];
+  int cx = x + kBodyInsetX;
+  for (int i = 0; i < kColCount; ++i) {
+    colW[i] = baseColW + (i < colRem ? 1 : 0);
+    colX[i] = cx;
+    cx += colW[i];
+  }
+  const int baseRowH = bodyH / 2;
+  const int rowRem = bodyH % 2;
+  const int rowH0 = baseRowH + (rowRem > 0 ? 1 : 0);
+  const int rowH1 = baseRowH + (rowRem > 1 ? 1 : 0);
+  const int rowY0 = bodyY;
+  const int rowY1 = bodyY + rowH0;
 
+  char buf[40];
+  auto cell = [&](const int col, const int rowY, const int rowH, const char* value, const char* label) {
+    drawStatCell(renderer, colX[col], colW[col], rowY, rowH, value, label);
+  };
+
+  // Row 1
   snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalSessions));
-  drawStatCell(renderer, x, thirdW, y + layout.topCardTitleH, rowH, buf, tr(STR_STATS_SESSIONS_LBL));
+  cell(0, rowY0, rowH0, buf, tr(STR_STATS_SESSIONS_LBL));
 
   BookReadingStats::formatDuration(stats.totalReadingSeconds, buf, sizeof(buf));
-  drawStatCell(renderer, x + thirdW, thirdW, y + layout.topCardTitleH, rowH, buf, tr(STR_STATS_TIME_LBL));
+  cell(1, rowY0, rowH0, buf, tr(STR_STATS_TIME_LBL));
 
   snprintf(buf, sizeof(buf), "%.1f", pagesPerMinute(stats.totalPagesTurned, stats.totalReadingSeconds));
-  drawStatCell(renderer, x + thirdW * 2, thirdW, y + layout.topCardTitleH, rowH, buf, tr(STR_STATS_PAGES_PER_MIN));
+  cell(2, rowY0, rowH0, buf, tr(STR_STATS_PAGES_PER_MIN));
 
+  snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalPagesTurned));
+  cell(3, rowY0, rowH0, buf, tr(STR_STATS_PAGES_LBL));
+
+  // Row 2
   const uint32_t avgSecs = stats.totalSessions > 0 ? stats.totalReadingSeconds / stats.totalSessions : 0;
   BookReadingStats::formatDuration(avgSecs, buf, sizeof(buf));
-  if (showRtcStats) {
-    drawStatCell(renderer, x, thirdW, y + layout.topCardTitleH + rowH, rowH, buf, tr(STR_STATS_AVG_SESSION_LBL));
-  } else {
-    drawStatCell(renderer, x, halfW, y + layout.topCardTitleH + rowH, rowH, buf, tr(STR_STATS_AVG_SESSION_LBL));
-  }
-
-  if (showRtcStats) {
-    ReadingStatsDateTime today;
-    const bool hasToday = getCurrentLocalReadingStatsDateTime(today);
-    const uint16_t currentStreak = hasToday ? stats.currentReadingStreak(&today.date) : 0;
-    if (currentStreak > 0) {
-      snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(currentStreak), dayCountText(currentStreak));
-    } else {
-      snprintf(buf, sizeof(buf), "-");
-    }
-    drawStatCell(renderer, x + thirdW, thirdW, y + layout.topCardTitleH + rowH, rowH, buf,
-                 tr(STR_STATS_READING_STREAK_LBL));
-  }
+  cell(0, rowY1, rowH1, buf, tr(STR_STATS_AVG_SESSION_LBL));
 
   if (stats.completedBooks > 0) {
     snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.completedBooks));
   } else {
     snprintf(buf, sizeof(buf), "-");
   }
-  drawStatCell(renderer, showRtcStats ? x + thirdW * 2 : x + halfW, showRtcStats ? thirdW : halfW,
-               y + layout.topCardTitleH + rowH, rowH, buf, tr(STR_STATS_COMPLETED_LBL));
+  cell(1, rowY1, rowH1, buf, tr(STR_STATS_COMPLETED_LBL));
+
+  const uint16_t longest = stats.displayLongestReadingStreak();
+  if (longest > 0) {
+    // Unit in the same bold value font as the number: "11 Days".
+    snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(longest), dayCountText(longest));
+  } else {
+    snprintf(buf, sizeof(buf), "-");
+  }
+  cell(2, rowY1, rowH1, buf, tr(STR_STATS_LONGEST_STREAK_LBL));
+
+  const uint16_t daysRead = computeReadingHistoryDaysRead(stats.readingHistoryBits);
+  if (daysRead > 0) {
+    snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(daysRead), dayCountText(daysRead));
+  } else {
+    snprintf(buf, sizeof(buf), "-");
+  }
+  cell(3, rowY1, rowH1, buf, tr(STR_STATS_DAYS_READ_LBL));
 }
 
 void drawDateField(const GfxRenderer& renderer, const int x, const int y, const int w, const char* text,

@@ -19,19 +19,28 @@ class HalPowerManager {
   bool isLowPower = false;
 
   // I2C fuel gauge configuration for X3 battery monitoring
-  bool _batteryUseI2C = false;            // True if using I2C fuel gauge (X3), false for ADC (X4)
-  mutable int _batteryCachedPercent = 0;  // Last read battery percentage * 10 (0-1000); callers divide by 10 (ADC/X4
-                                          // path only — I2C/X3 path stores 0-100 directly)
-  mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
+  bool _batteryUseI2C = false;  // True if using I2C fuel gauge (X3), false for ADC (X4)
+  // Cached display percentage in tenths of a percent (0–1000). Callers divide by 10.
+  mutable int _batteryCachedPercent = 0;
+  mutable unsigned long _batteryLastPollMs = 0;
+  mutable unsigned long _batteryLastLogMs = 0;
+  mutable uint8_t _batteryI2cFailStreak = 0;
+  mutable bool _batteryLoggedOnce = false;
 
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
   SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
 
+  // X3: read BQ27220 SoC + voltage (+ optional current) and reconcile stuck gauges.
+  uint16_t readX3BatteryPercentage() const;
+
  public:
-  static constexpr int LOW_POWER_FREQ = 10;                    // MHz
-  static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;  // ms
-  static constexpr unsigned long BATTERY_POLL_MS = 1500;       // ms
+  static constexpr int LOW_POWER_FREQ = 10;                     // MHz
+  static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;   // ms
+  static constexpr unsigned long BATTERY_POLL_MS = 2000;        // ms — gauge + bus are slow; don't thrash I2C
+  static constexpr unsigned long BATTERY_LOG_INTERVAL_MS = 60000;  // ms
+  // Wire timeout was 4 ms — too short on the shared RTC/IMU/gauge bus and caused sticky % on fail.
+  static constexpr uint16_t X3_I2C_TIMEOUT_MS = 50;
 
   void begin();
 

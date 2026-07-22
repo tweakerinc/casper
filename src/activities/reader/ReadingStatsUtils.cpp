@@ -445,3 +445,20 @@ uint16_t computeReadingHistoryCurrentStreak(uint32_t anchorDay, const std::array
   }
   return streak;
 }
+
+uint16_t computeReadingHistoryDaysRead(const std::array<uint8_t, READING_HISTORY_BYTES>& bits) {
+  // Popcount over history bytes — cheap enough for paint paths, no per-bit loop.
+  uint16_t days = 0;
+  for (const uint8_t byte : bits) {
+#if defined(__GNUC__) || defined(__clang__)
+    days = static_cast<uint16_t>(days + static_cast<uint16_t>(__builtin_popcount(static_cast<unsigned>(byte))));
+#else
+    uint8_t v = byte;
+    while (v) {
+      days = static_cast<uint16_t>(days + (v & 1u));
+      v = static_cast<uint8_t>(v >> 1);
+    }
+#endif
+  }
+  return days;
+}

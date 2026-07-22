@@ -28,6 +28,9 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
+  // First paint after onEnter uses HALF_REFRESH to clear reader grayscale residue
+  // (fast home paints alone leave gray ghosts when leaving a book).
+  bool strongRefreshOnce = true;
   bool hasReadingStats = false;
   bool hasBookmarks = false;
   bool hasClippings = false;

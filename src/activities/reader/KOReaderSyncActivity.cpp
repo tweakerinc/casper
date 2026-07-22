@@ -142,9 +142,21 @@ void KOReaderSyncActivity::completeAlreadySynced() {
   requestUpdate(true);
 }
 
+void KOReaderSyncActivity::finishAutoMode() {
+  exitHandled = true;
+  wifiOff();
+  wifiActivated = false;
+  LOG_DBG("KOSync", "Auto-upload finished, restarting to home");
+  silentRestart();
+}
+
 void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
     LOG_DBG("KOSync", "WiFi connection failed, exiting");
+    if (autoUploadOnly) {
+      finishAutoMode();
+      return;
+    }
     returnToReader();
     return;
   }
@@ -168,7 +180,33 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdate(true);
 
-  performSync();
+  if (autoUploadOnly) {
+    performAutoUpload();
+  } else {
+    performSync();
+  }
+}
+
+void KOReaderSyncActivity::performAutoUpload() {
+  if (KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME) {
+    documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
+  } else {
+    documentHash = KOReaderDocumentId::calculate(epubPath);
+  }
+  if (documentHash.empty()) {
+    {
+      RenderLock lock(*this);
+      state = SYNC_FAILED;
+      statusMessage = tr(STR_HASH_FAILED);
+    }
+    requestUpdate(true);
+    delay(1500);
+    finishAutoMode();
+    return;
+  }
+
+  LOG_DBG("KOSync", "Auto-upload document hash: %s", documentHash.c_str());
+  performUpload();
 }
 
 void KOReaderSyncActivity::performSync() {
@@ -381,6 +419,10 @@ void KOReaderSyncActivity::performUpload() {
       statusMessage = tr(STR_SYNC_FAILED_MSG);
     }
     requestUpdate(true);
+    if (autoUploadOnly) {
+      delay(1000);
+      finishAutoMode();
+    }
     return;
   }
 
@@ -431,7 +473,21 @@ void KOReaderSyncActivity::performUpload() {
       statusMessage = KOReaderSyncClient::errorString(result);
     }
     requestUpdate();
+    if (autoUploadOnly) {
+      delay(1500);
+      finishAutoMode();
+    }
     return;
+  }
+
+  // Stamp per-book baseline after any successful upload so auto-upload on close
+  // does not immediately re-upload after a manual Sync Progress upload.
+  {
+    float stampPercent = autoUploadBookPercent;
+    if (stampPercent < 0.0f && localProgress.percentage >= 0.0f) {
+      stampPercent = localProgress.percentage * 100.0f;
+    }
+    KOREADER_STORE.markAutoUploadSucceeded(epubPath.c_str(), stampPercent);
   }
 
   {
@@ -442,6 +498,11 @@ void KOReaderSyncActivity::performUpload() {
     markAutoReturn();
   }
   requestUpdate(true);
+
+  if (autoUploadOnly) {
+    delay(800);
+    finishAutoMode();
+  }
 }
 
 void KOReaderSyncActivity::onEnter() {
@@ -476,9 +537,17 @@ void KOReaderSyncActivity::onEnter() {
 void KOReaderSyncActivity::onExit() {
   Activity::onExit();
 
+  if (exitHandled) {
+    return;
+  }
+
   if (wifiActivated) {
     wifiOff();
-    silentRestartToReader();
+    if (autoUploadOnly) {
+      silentRestart();
+    } else {
+      silentRestartToReader();
+    }
   }
 }
 
@@ -621,12 +690,20 @@ void KOReaderSyncActivity::loop() {
 
   if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE || state == SYNC_COMPLETE) {
     if (autoReturnAt != 0 && millis() >= autoReturnAt) {
-      returnToReader();
+      if (autoUploadOnly) {
+        finishAutoMode();
+      } else {
+        returnToReader();
+      }
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      returnToReader();
+      if (autoUploadOnly) {
+        finishAutoMode();
+      } else {
+        returnToReader();
+      }
     }
     return;
   }

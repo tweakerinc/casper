@@ -604,7 +604,7 @@ Please note that this firmware is currently in active development. The following
 
 - **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
 - **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs and progressive JPEGs are not supported and will fall back to an `[Image]` placeholder.
-- **Dictionary Lookup:** Inline word lookup is not yet implemented.
+- **Dictionary Lookup:** From the reader menu choose **Dictionary** (above Select Chapter), or assign it to the power button under Settings → Controls. Move the cursor to a word, press Select for the definition (page text stays visible around the card), Select again to close, Back to exit. Requires dictionary packs under `/.crosspoint/dict/` (see `docs/dictionary.md`).
 
 ---
 

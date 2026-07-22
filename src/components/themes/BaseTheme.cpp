@@ -818,8 +818,19 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                       foregroundBlack);
   }
 
-  // Bookmark icon: drawn at the far left of the status bar when the current page is bookmarked.
-  // Battery (and future left-side indicators) are offset to the right of it.
+  // Battery sits top-right (same corner as Home/Dashboard headers), not in the bottom bar.
+  // Bookmark + time-left stay on the bottom-left cluster; page progress stays bottom-right.
+  const bool showBatteryPercentage =
+      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
+  if (SETTINGS.statusBarBattery) {
+    // Match drawHeader(): icon at right edge; drawBatteryRight places the % to the left of it.
+    const int batteryX = renderer.getScreenWidth() - orientedMarginRight - 12 - metrics.batteryWidth;
+    const int batteryY = orientedMarginTop + metrics.topPadding + homeHeaderTopInset;
+    drawBatteryRight(renderer, Rect{batteryX, batteryY, metrics.batteryWidth, metrics.batteryHeight},
+                     showBatteryPercentage, foregroundBlack);
+  }
+
+  // Bookmark icon: far left of the bottom status bar when the current page is bookmarked.
   static constexpr int bmIconW = 9;
   static constexpr int bmIconH = 14;
   static constexpr int bmIconGap = 4;
@@ -830,8 +841,6 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   if (isPageBookmarked) {
     const int bmX = leftClusterX;
-    // +5 compensates for the battery nub drawn above the rect origin by drawBatteryLeft,
-    // which shifts the battery body's visual center below the mathematical rect center.
     const int bmY = textY + (metrics.batteryHeight - bmIconH) / 2 + 5;
     renderer.fillRect(bmX, bmY, bmIconW, bmIconH, foregroundBlack);
     const int xNotch[3] = {bmX, bmX + bmIconW, bmX + bmIconW / 2};
@@ -839,22 +848,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     renderer.fillPolygon(xNotch, yNotch, 3, darkMode);
   }
 
-  // Draw Battery
-  const bool showBatteryPercentage =
-      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
   int leftClusterWidth = bmTotalWidth;
-  if (SETTINGS.statusBarBattery) {
-    GUI.drawBatteryLeft(renderer, Rect{leftClusterX + bmTotalWidth, textY, metrics.batteryWidth, metrics.batteryHeight},
-                        showBatteryPercentage, foregroundBlack);
-    int batteryWidth = metrics.batteryWidth;
-    if (showBatteryPercentage) {
-      char batteryPercent[8];
-      snprintf(batteryPercent, sizeof(batteryPercent), "%u%%",
-               static_cast<unsigned>(powerManager.getBatteryPercentage()));
-      batteryWidth += batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, batteryPercent);
-    }
-    leftClusterWidth += batteryWidth;
-  }
 
   const bool hasTimeLeftLabel = timeLeftLabel != nullptr && timeLeftLabel[0] != '\0';
   if (hasTimeLeftLabel) {

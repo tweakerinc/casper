@@ -1,4 +1,4 @@
-/* Shared chrome for all CrossInk web portal pages.
+/* Shared chrome for all TweakerInc web portal pages.
    Page-specific rules live in each page's own inline <style>. */
 :root {
   --font-color: #1f2933;

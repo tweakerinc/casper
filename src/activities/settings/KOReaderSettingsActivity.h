@@ -5,7 +5,6 @@
 
 /**
  * Submenu for KOReader Sync settings.
- * Shows username, password, and authenticate options.
  */
 class KOReaderSettingsActivity final : public Activity {
  public:
@@ -19,8 +18,9 @@ class KOReaderSettingsActivity final : public Activity {
 
  private:
   ButtonNavigator buttonNavigator;
-
   size_t selectedIndex = 0;
 
   void handleSelection();
+  void openTimeIntervalPicker();
+  void openPercentThresholdPicker();
 };

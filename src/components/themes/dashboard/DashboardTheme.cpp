@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -32,61 +33,194 @@
 namespace {
 constexpr int kContentInsetX4 = 20;
 constexpr int kContentInsetX3 = 75;
-constexpr int kTopInset = 20;
+constexpr int kTopInset = 8;
 constexpr int kCoverCornerRadius = 8;
 constexpr int kStatsColumnWidth = 105;
 constexpr int kStatsColumnWidthWide = 120;
-constexpr int kCoverStatsGap = 15;
-constexpr int kPairInwardShiftX3 = 15;
-constexpr int kTitleTopGap = 28;
-constexpr int kTitleChapterGap = 8;
-constexpr int kBookTitleMaxLines = 2;
-constexpr int kBookChapterMaxLines = 2;
+constexpr int kCoverStatsGap = 12;
+// Title sits above cover; cover/stats shift down by this band.
+constexpr int kTitleTopPad = 2;
+constexpr int kTitleCoverGap = 8;
+constexpr int kCoverMetaGap = 12;  // streak / reader-type row under cover
 constexpr int kFooterIconSize = 24;
-constexpr int kFooterIconTextGap = 18;
-constexpr int kFooterBottomGap = 57;
-constexpr int kStatsRowCount = 7;
-constexpr int kStatsRowCountX4 = 6;
+constexpr int kFooterIconTextGap = 8;
+// X3: Time, Time Left, Progress, Daily Avg, Pages/Min, Pages Turned, Started, Finish
+// X4: Time, Time Left, Progress, Pages/Min, Pages Turned, Sessions, Avg Session
+// Pages Turned stays in the book column (not the lifetime card — no room there).
+constexpr int kStatsRowCount = 8;
+constexpr int kStatsRowCountX4 = 7;
 constexpr int kStatsValueLabelGap = 1;
+// Spacing under meta row for lifetime stats card (keep clear of achievements).
+constexpr int kLifetimeStatsMetaGap = 10;
+constexpr int kLifetimeStatsBottomPad = 4;
+// Meta band (day streak + reader type) under the cover.
+constexpr int kMetaBandH = kFooterIconSize + 6;
+// Lifetime card: roomy title band so "Lifetime Stats" is not tight, then two body rows.
+constexpr int kLifetimeTitleH = 30;
+constexpr int kLifetimeCellPadY = 4;
+// Floor height for the lifetime card when reserving space under the cover.
+constexpr int kLifetimeMinCardH = 110;
 
 bool isWideScreen(const GfxRenderer& renderer) { return renderer.getScreenWidth() >= 560; }
 
 int contentInset(const GfxRenderer& renderer) { return isWideScreen(renderer) ? kContentInsetX3 : kContentInsetX4; }
 
-Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect) {
-  const int inset = contentInset(renderer);
-  const int statsW = isWideScreen(renderer) ? kStatsColumnWidthWide : kStatsColumnWidth;
-  const int maxCoverW = renderer.getScreenWidth() - inset * 2 - statsW - kCoverStatsGap;
-  const int coverW = std::min(DashboardMetrics::homeCoverImageWidth, maxCoverW);
-  const int coverH = std::min(DashboardMetrics::homeCoverImageHeight, (coverW * 3) / 2);
-  return Rect{inset + (gpio.deviceIsX3() ? kPairInwardShiftX3 : 0), rect.y + kTopInset, coverW, coverH};
+// Minimum lifetime card height for cover layout reserve (header + two value/label rows).
+int minLifetimeCardHeight(const GfxRenderer& renderer) {
+  const int valueH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int labelH = renderer.getLineHeight(SMALL_FONT_ID);
+  const int rowH = valueH + 2 + labelH + kLifetimeCellPadY * 2;
+  return std::max(kLifetimeMinCardH, kLifetimeTitleH + rowH * 2);
 }
 
-Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
-  if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || target.width <= 0 || target.height <= 0) {
-    return target;
+// Space reserved under the cover for meta row + lifetime card (no overlap).
+int lowerDashboardReserve(const GfxRenderer& renderer) {
+  return kCoverMetaGap + kMetaBandH + kLifetimeStatsMetaGap + minLifetimeCardHeight(renderer) +
+         kLifetimeStatsBottomPad;
+}
+
+// Shared horizontal frame for title, cover, right stats, achievements, lifetime card.
+// One left edge + one right edge across the whole dashboard.
+struct ContentFrame {
+  int left = 0;
+  int width = 0;
+  int right() const { return left + width; }  // exclusive right (x of first pixel past content)
+};
+
+ContentFrame contentFrame(const GfxRenderer& renderer) {
+  const int inset = contentInset(renderer);
+  ContentFrame f;
+  f.left = inset;
+  f.width = std::max(1, renderer.getScreenWidth() - inset * 2);
+  return f;
+}
+
+// Largest bold face that still fits one line. Candidates respect OMIT_* font flags
+// (e.g. tiny omits 18/20). Missing faces report width 0 and must be skipped.
+// Prefer faces that have a real Bold cut; SMALL_FONT has only Regular.
+int pickSingleLineTitleFont(const GfxRenderer& renderer, const char* title, const int maxWidth) {
+  static constexpr int kCandidates[] = {
+#ifndef OMIT_HUGE_FONT
+      LEXENDDECA_20_FONT_ID,
+#endif
+#ifndef OMIT_XLARGE_FONT
+      LEXENDDECA_18_FONT_ID,
+#endif
+#ifndef OMIT_LARGE_FONT
+      LEXENDDECA_16_FONT_ID,
+#endif
+#ifndef OMIT_MEDIUM_FONT
+      LEXENDDECA_14_FONT_ID,
+#endif
+#ifndef OMIT_SMALL_FONT
+      LEXENDDECA_12_FONT_ID,
+#endif
+#ifndef OMIT_TINY_FONT
+      LEXENDDECA_10_FONT_ID,
+#endif
+      UI_12_FONT_ID,
+      UI_10_FONT_ID,
+  };
+  for (const int fontId : kCandidates) {
+    const int w = renderer.getTextWidth(fontId, title, EpdFontFamily::BOLD);
+    // Width 0 means empty text or unregistered font — never treat as "fits".
+    if (w > 0 && w <= maxWidth) {
+      return fontId;
+    }
+  }
+  return UI_10_FONT_ID;
+}
+
+// Centered bold title within a content frame. Reading faces are 2-bit AA and look
+// thin on pure-BW home; a 1px horizontal second pass adds stroke weight.
+void drawCenteredBoldTitleInFrame(const GfxRenderer& renderer, const ContentFrame& frame, const int fontId,
+                                  const int y, const char* text, const bool black) {
+  constexpr auto kStyle = EpdFontFamily::BOLD;
+  const int textW = renderer.getTextWidth(fontId, text, kStyle);
+  // Leave 1px for the embolden pass so long titles do not clip the right edge.
+  const int x = frame.left + std::max(0, (frame.width - textW - 1) / 2);
+  renderer.drawText(fontId, x, y, text, black, kStyle);
+  renderer.drawText(fontId, x + 1, y, text, black, kStyle);
+}
+
+// Draws a single-line, centered, bold book title at the top. Returns Y just below the title band.
+// Title is constrained to the same horizontal frame as cover + lifetime card.
+int drawTopBookTitle(const GfxRenderer& renderer, const Rect& contentRect, const RecentBook& book,
+                     const bool black = true) {
+  const ContentFrame frame = contentFrame(renderer);
+  const int maxTextW = std::max(1, frame.width - 1);
+  const char* rawTitle = book.title.empty() ? book.path.c_str() : book.title.c_str();
+  const int fontId = pickSingleLineTitleFont(renderer, rawTitle, maxTextW);
+  const std::string line = renderer.truncatedText(fontId, rawTitle, maxTextW, EpdFontFamily::BOLD);
+  const int titleY = contentRect.y + kTitleTopPad;
+  drawCenteredBoldTitleInFrame(renderer, frame, fontId, titleY, line.c_str(), black);
+  return titleY + renderer.getLineHeight(fontId) + kTitleCoverGap;
+}
+
+// Cover sits on the shared left edge; width leaves room for the right stats column
+// so the stats' right edge matches the lifetime card / title frame right edge.
+// Height stops above meta + lifetime so those rows never overlap the cover stats.
+//
+// Aspect is locked to the generated home thumb ratio (homeCoverImage W:H, ~2:3).
+// If layout only shrinks height, a non-matching frame makes 1-bit contain-scale
+// shrink width and left-align the art — a large empty band on the right.
+Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect, const int coverTopY) {
+  const ContentFrame frame = contentFrame(renderer);
+  const int statsW = isWideScreen(renderer) ? kStatsColumnWidthWide : kStatsColumnWidth;
+  const int maxCoverW = std::max(80, frame.width - statsW - kCoverStatsGap);
+  const int maxCoverH = std::max(120, rect.y + rect.height - coverTopY - lowerDashboardReserve(renderer));
+
+  constexpr int kThumbW = DashboardMetrics::homeCoverImageWidth;
+  constexpr int kThumbH = DashboardMetrics::homeCoverImageHeight;
+
+  int coverW = std::min(kThumbW, maxCoverW);
+  int coverH = (coverW * kThumbH + kThumbW / 2) / kThumbW;
+  if (coverH > maxCoverH) {
+    coverH = maxCoverH;
+    coverW = std::max(1, (coverH * kThumbW + kThumbH / 2) / kThumbH);
+    if (coverW > maxCoverW) {
+      coverW = maxCoverW;
+      coverH = std::max(1, (coverW * kThumbH + kThumbW / 2) / kThumbW);
+    }
+  }
+  return Rect{frame.left, coverTopY, coverW, coverH};
+}
+
+// Prefer full-bleed crop thumbs (no _fit letterboxing). Adaptive _fit files are a
+// fallback only — they are often narrower than the frame and look like side bars.
+std::string coverPathForRect(const RecentBook& book, const Rect& imageRect) {
+  auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
+    for (const std::string& path : candidates) {
+      if (!path.empty() && Storage.exists(path.c_str())) {
+        return path;
+      }
+    }
+    return {};
+  };
+
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    Epub epub(book.path, "/.crosspoint");
+    const std::string found = firstExisting({
+        epub.getThumbBmpPath(imageRect.width, imageRect.height),
+        epub.getThumbBmpPath(DashboardMetrics::homeCoverImageWidth, DashboardMetrics::homeCoverImageHeight),
+        epub.getAdaptiveThumbBmpPath(imageRect.width, imageRect.height),
+        epub.getAdaptiveThumbBmpPath(DashboardMetrics::homeCoverImageWidth, DashboardMetrics::homeCoverImageHeight),
+    });
+    if (!found.empty()) {
+      return found;
+    }
   }
 
-  const float widthScale = static_cast<float>(target.width) / static_cast<float>(bitmap.getWidth());
-  const float heightScale = static_cast<float>(target.height) / static_cast<float>(bitmap.getHeight());
-  const float scale = std::min(1.0f, std::min(widthScale, heightScale));
-  const int drawnW = std::min(target.width, std::max(1, static_cast<int>(std::ceil(bitmap.getWidth() * scale))));
-  const int drawnH = std::min(target.height, std::max(1, static_cast<int>(std::ceil(bitmap.getHeight() * scale))));
-  return Rect{target.x + (target.width - drawnW) / 2, target.y + (target.height - drawnH) / 2, drawnW, drawnH};
-}
-
-std::string coverPathForRect(const RecentBook& book, const Rect& imageRect) {
   if (book.coverBmpPath.empty()) {
     return {};
   }
-  if (FsHelpers::hasEpubExtension(book.path)) {
-    const std::string adaptivePath =
-        Epub(book.path, "/.crosspoint").getAdaptiveThumbBmpPath(imageRect.width, imageRect.height);
-    if (Storage.exists(adaptivePath.c_str())) {
-      return adaptivePath;
-    }
-  }
-  return UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height);
+
+  return firstExisting({
+      UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height),
+      UITheme::getCoverThumbPath(book.coverBmpPath, DashboardMetrics::homeCoverImageWidth,
+                                 DashboardMetrics::homeCoverImageHeight),
+      UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.height),
+  });
 }
 
 void drawMissingBookCover(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book) {
@@ -120,15 +254,40 @@ void drawBookCover(const GfxRenderer& renderer, const Rect& coverRect, const Rec
     if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
       Bitmap bitmap(file);
       if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        const Rect bitmapRect = fittedBitmapRect(bitmap, coverRect);
+        const int bw = bitmap.getWidth();
+        const int bh = bitmap.getHeight();
+        // Page underlay (shows through rounded corners after mask).
         renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
                                  backgroundColor);
-        renderer.fillRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, kCoverCornerRadius,
+        renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
                                  Color::White);
-        renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height);
-        renderer.maskRoundedRectOutsideCorners(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height,
+
+        // 1-bit path only downscales and draws top-left aligned. Center a
+        // contain-fit so leftover band is equal L/R (or none when aspect matches).
+        int drawX = coverRect.x;
+        int drawY = coverRect.y;
+        int drawW = coverRect.width;
+        int drawH = coverRect.height;
+        if (bw > 0 && bh > 0) {
+          const float scale =
+              std::min(static_cast<float>(coverRect.width) / static_cast<float>(bw),
+                       static_cast<float>(coverRect.height) / static_cast<float>(bh));
+          // drawBitmap1Bit will not upscale; when thumb is smaller, use native size centered.
+          if (scale < 1.0f) {
+            drawW = std::max(1, static_cast<int>(std::floor(static_cast<float>(bw) * scale)));
+            drawH = std::max(1, static_cast<int>(std::floor(static_cast<float>(bh) * scale)));
+          } else {
+            drawW = bw;
+            drawH = bh;
+          }
+          drawX = coverRect.x + (coverRect.width - drawW) / 2;
+          drawY = coverRect.y + (coverRect.height - drawH) / 2;
+        }
+        renderer.drawBitmap(bitmap, drawX, drawY, drawW, drawH);
+
+        renderer.maskRoundedRectOutsideCorners(coverRect.x, coverRect.y, coverRect.width, coverRect.height,
                                                kCoverCornerRadius, backgroundColor);
-        renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1, kCoverCornerRadius,
+        renderer.drawRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, 1, kCoverCornerRadius,
                                  true);
         hasCover = true;
       }
@@ -229,12 +388,24 @@ int statsBlockHeight(const GfxRenderer& renderer) {
   return valueLineH + kStatsValueLabelGap + labelLineH;
 }
 
-int statsBlockTop(const Rect& coverRect, const int index, const int blockH, const int rowCount) {
-  const int remainingH = std::max(0, coverRect.height - blockH * rowCount);
-  const int gapCount = rowCount - 1;
-  const int gap = gapCount > 0 ? remainingH / gapCount : 0;
-  const int remainder = gapCount > 0 ? remainingH % gapCount : 0;
-  return coverRect.y + index * (blockH + gap) + std::min(index, remainder);
+// Place book-column stat rows so they span the cover box exactly:
+// - first row top == cover top pixel
+// - last row bottom == cover bottom pixel (exclusive end = topY + spanH)
+// - intermediate row tops are evenly spaced
+int statsBlockTop(const int topY, const int spanH, const int index, const int blockH, const int rowCount) {
+  if (rowCount <= 1) {
+    return topY;
+  }
+  // Last row's top so its value+label block ends on the cover bottom edge.
+  const int lastTop = topY + std::max(0, spanH - blockH);
+  if (index <= 0) {
+    return topY;
+  }
+  if (index >= rowCount - 1) {
+    return lastTop;
+  }
+  // Even steps between first and last tops (at most 1px variance from integer math).
+  return topY + (index * (lastTop - topY)) / (rowCount - 1);
 }
 
 void drawStatsRow(const GfxRenderer& renderer, const int rightX, const int y, const char* value, const char* label,
@@ -246,8 +417,12 @@ void drawStatsRow(const GfxRenderer& renderer, const int rightX, const int y, co
 
 void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, const BookReadingStats* stats,
                         const float progressPercent, const bool black = true) {
-  const int rightX = renderer.getScreenWidth() - contentInset(renderer) - (gpio.deviceIsX3() ? kPairInwardShiftX3 : 0);
+  // Right-align to the content frame. Vertical span matches the cover layout rect
+  // exactly (same box as drawBookCover's rounded frame).
+  const int rightX = contentFrame(renderer).right() - 1;
   const int blockH = statsBlockHeight(renderer);
+  // Use the cover box edges as the hard top/bottom of the stats column.
+  const int spanH = std::max(blockH, coverRect.height);
   const bool showRtcStats = gpio.deviceIsX3();
   const int rowCount = showRtcStats ? kStatsRowCount : kStatsRowCountX4;
   const BookReadingStats emptyStats{};
@@ -267,11 +442,11 @@ void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, cons
   const uint16_t daysReading = hasDaySpan ? readingSpanDaysElapsed(bookStats.startDate, endDate) : 0;
 
   int rowIndex = 0;
-  int rowY = statsBlockTop(coverRect, rowIndex, blockH, rowCount);
+  int rowY = statsBlockTop(coverRect.y, spanH, rowIndex, blockH, rowCount);
   BookReadingStats::formatDuration(bookStats.totalReadingSeconds, value, sizeof(value));
   drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_TIME_LBL), black);
 
-  rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
   if (hasEstimate && !bookStats.isCompleted) {
     formatCompactDuration(estimatedSeconds, value, sizeof(value));
   } else {
@@ -279,7 +454,7 @@ void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, cons
   }
   drawStatsRow(renderer, rightX, rowY, value, tr(STR_TIME_LEFT), black);
 
-  rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
   if (progressPercent >= 0.0f) {
     snprintf(value, sizeof(value), "%d%%", static_cast<int>(progressPercent + 0.5f));
   } else {
@@ -288,7 +463,7 @@ void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, cons
   drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_PROGRESS_LBL), black);
 
   if (showRtcStats) {
-    rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+    rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
     if (hasDaySpan) {
       const uint16_t dailyAverageDays = std::max<uint16_t>(1, daysReading);
       BookReadingStats::formatDuration(bookStats.totalReadingSeconds / dailyAverageDays, value, sizeof(value));
@@ -298,23 +473,29 @@ void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, cons
     drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_DAILY_AVG_LBL), black);
   }
 
-  rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
   snprintf(value, sizeof(value), "%.1f", pagesPerMinute(bookStats.totalPagesTurned, bookStats.totalReadingSeconds));
   drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_PAGES_PER_MIN), black);
 
+  // Pages Turned sits under Pages/Min (book column, not the lifetime card).
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
+  snprintf(value, sizeof(value), "%lu", static_cast<unsigned long>(bookStats.totalPagesTurned));
+  drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_PAGES_LBL), black);
+
   if (!showRtcStats) {
-    rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+    rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
     snprintf(value, sizeof(value), "%u", static_cast<unsigned>(bookStats.sessionCount));
     drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_SESSIONS_LBL), black);
 
-    rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+    rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
     const uint32_t avgSeconds = bookStats.sessionCount > 0 ? bookStats.totalReadingSeconds / bookStats.sessionCount : 0;
     BookReadingStats::formatDuration(avgSeconds, value, sizeof(value));
     drawStatsRow(renderer, rightX, rowY, value, tr(STR_STATS_AVG_SESSION_LBL), black);
     return;
   }
 
-  rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+  // Started / days reading — below Pages Turned.
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
   if (hasDaySpan) {
     snprintf(value, sizeof(value), "%u %s", static_cast<unsigned>(daysReading), dayCountText(daysReading));
   } else {
@@ -324,7 +505,7 @@ void drawDashboardStats(const GfxRenderer& renderer, const Rect& coverRect, cons
   snprintf(label, sizeof(label), "%s %s", tr(STR_STATS_STARTED), startedDate);
   drawStatsRow(renderer, rightX, rowY, value, label, black);
 
-  rowY = statsBlockTop(coverRect, ++rowIndex, blockH, rowCount);
+  rowY = statsBlockTop(coverRect.y, spanH, ++rowIndex, blockH, rowCount);
   ReadingStatsDate finishDisplayDate;
   if (bookStats.isCompleted) {
     finishDisplayDate = bookStats.finishedDate;
@@ -474,65 +655,189 @@ void drawRightAnchoredFooterStat(const GfxRenderer& renderer, const int labelRig
   renderer.drawText(UI_10_FONT_ID, labelX, topY + valueLineH + kStatsValueLabelGap, visibleLabel.c_str(), !inverted);
 }
 
-void drawFooterStats(const GfxRenderer& renderer, const Rect& coverRect, const GlobalReadingStats* globalStats,
-                     const bool inverted = false) {
-  const int inset = contentInset(renderer);
-  const int footerY = renderer.getScreenHeight() - DashboardMetrics::values.buttonHintsHeight - kFooterBottomGap;
-  const int centerY = std::max(coverRect.y + coverRect.height + 120, footerY);
-
-  if (gpio.deviceIsX4()) {
-    char totalTime[40];
-    char booksRead[16];
-    const uint32_t totalReadingSeconds = globalStats != nullptr ? globalStats->totalReadingSeconds : 0;
-    const uint32_t completedBooks = globalStats != nullptr ? globalStats->completedBooks : 0;
-    BookReadingStats::formatDuration(totalReadingSeconds, totalTime, sizeof(totalTime));
-    snprintf(booksRead, sizeof(booksRead), "%lu", static_cast<unsigned long>(completedBooks));
-
-    const int halfW = renderer.getScreenWidth() / 2;
-    const int maxTextW = std::max(1, halfW - inset * 2);
-    drawLeftAnchoredFooterStat(renderer, coverRect.x, centerY, maxTextW, totalTime,
-                               tr(STR_STATS_TOTAL_READING_TIME_LBL), inverted);
-    const int rightX = renderer.getScreenWidth() - inset;
-    drawRightAnchoredFooterStat(renderer, rightX, centerY, maxTextW, booksRead, tr(STR_STATS_COMPLETED_LBL), inverted);
-    return;
-  }
+// Achievements under the cover: day streak + reader type evenly across the full
+// content width (two equal halves; each group centered in its half).
+// Returns Y just below this band for the lifetime card.
+int drawMetaStatsUnderCover(const GfxRenderer& renderer, const Rect& coverRect, const GlobalReadingStats* globalStats,
+                            const bool inverted = false) {
+  const ContentFrame frame = contentFrame(renderer);
+  const int bandH = kMetaBandH;
+  const int topY = coverRect.y + coverRect.height + kCoverMetaGap;
+  const int centerY = topY + bandH / 2;
+  constexpr int kAchGap = 6;  // space between icon and text
 
   char streakBuf[48];
   formatStreakStat(globalStats, streakBuf, sizeof(streakBuf));
-
-  const int leftTextW = renderer.getScreenWidth() / 2 - inset - kFooterIconSize - kFooterIconTextGap;
-  drawIconLabel(renderer, StreakIcon, coverRect.x, centerY, streakBuf, leftTextW, inverted);
-
   const char* readerLabel = readerTypeLabel(globalStats);
-  const int rightX = renderer.getScreenWidth() - inset - kPairInwardShiftX3;
-  const int maxReaderTextW = std::max(1, renderer.getScreenWidth() / 2 - inset - kFooterIconSize - kFooterIconTextGap);
-  drawRightAlignedIconLabel(renderer, readerTypeIcon(globalStats), rightX, centerY, readerLabel, maxReaderTextW,
-                            inverted);
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+  const int textY = centerY - lineH / 2;
+  const int iconY = centerY - kFooterIconSize / 2;
+
+  // Full content frame, split into two equal columns so items are centered
+  // left/right of screen center and neither is cramped into a thin third.
+  const int half0 = frame.width / 2;
+  const int half1 = frame.width - half0;
+  const int col0X = frame.left;
+  const int col1X = frame.left + half0;
+
+  auto drawCenteredAchievement = [&](const int colX, const int colW, const uint8_t* icon, const char* label) {
+    const int maxTextW = std::max(1, colW - kFooterIconSize - kAchGap - 8);
+    const std::string visible = renderer.truncatedText(UI_10_FONT_ID, label, maxTextW);
+    const int textW = renderer.getTextWidth(UI_10_FONT_ID, visible.c_str());
+    const int groupW = kFooterIconSize + kAchGap + textW;
+    const int groupX = colX + std::max(0, (colW - groupW) / 2);
+    if (inverted) {
+      renderer.drawIconInverted(icon, groupX, iconY, kFooterIconSize, kFooterIconSize);
+    } else {
+      renderer.drawIcon(icon, groupX, iconY, kFooterIconSize, kFooterIconSize);
+    }
+    renderer.drawText(UI_10_FONT_ID, groupX + kFooterIconSize + kAchGap, textY, visible.c_str(), !inverted);
+  };
+
+  drawCenteredAchievement(col0X, half0, StreakIcon, streakBuf);
+  drawCenteredAchievement(col1X, half1, readerTypeIcon(globalStats), readerLabel);
+
+  return topY + bandH + 1;
 }
 
-void drawBookText(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book,
-                  const char* currentChapterTitle, const bool black = true) {
-  const int inset = contentInset(renderer);
-  const int textW = renderer.getScreenWidth() - inset * 2;
-  const char* title = book.title.empty() ? book.path.c_str() : book.title.c_str();
-  auto titleLines = renderer.wrappedText(UI_12_FONT_ID, title, textW, kBookTitleMaxLines, EpdFontFamily::BOLD);
-  int textY = coverRect.y + coverRect.height + kTitleTopGap;
-  const int titleLineH = renderer.getLineHeight(UI_12_FONT_ID);
-  for (const auto& line : titleLines) {
-    renderer.drawText(UI_12_FONT_ID, coverRect.x, textY, line.c_str(), black, EpdFontFamily::BOLD);
-    textY += titleLineH;
-  }
+// Lifetime value+label cell: value and label each centered in the cell.
+// Values use UI_10 (one step under the book-column UI_12). Long labels are
+// truncated by draw path if a column is too narrow.
+void drawDashboardLifetimeStatCell(const GfxRenderer& renderer, const int x, const int w, const int y, const int h,
+                                 const char* value, const char* label, const bool black) {
+  constexpr int kValueFont = UI_10_FONT_ID;
+  constexpr int kLabelFont = SMALL_FONT_ID;
+  constexpr int kPadX = 2;
+  constexpr int kValueLabelGap = 1;
+  const int textW = std::max(1, w - kPadX * 2);
+  const int valueLineH = renderer.getLineHeight(kValueFont);
+  const int labelLineH = renderer.getLineHeight(kLabelFont);
+  const int totalTextH = valueLineH + kValueLabelGap + labelLineH;
+  const int textY = y + std::max(0, (h - totalTextH) / 2);
+  const std::string visValue = renderer.truncatedText(kValueFont, value, textW, EpdFontFamily::BOLD);
+  const std::string visLabel = renderer.truncatedText(kLabelFont, label, textW);
+  const int valueW = renderer.getTextWidth(kValueFont, visValue.c_str(), EpdFontFamily::BOLD);
+  const int labelW = renderer.getTextWidth(kLabelFont, visLabel.c_str());
+  renderer.drawText(kValueFont, x + (w - valueW) / 2, textY, visValue.c_str(), black, EpdFontFamily::BOLD);
+  renderer.drawText(kLabelFont, x + (w - labelW) / 2, textY + valueLineH + kValueLabelGap, visLabel.c_str(), black);
+}
 
-  const char* subtitle =
-      (currentChapterTitle != nullptr && currentChapterTitle[0] != '\0') ? currentChapterTitle : book.author.c_str();
-  if (subtitle != nullptr && subtitle[0] != '\0') {
-    auto subtitleLines = renderer.wrappedText(UI_12_FONT_ID, subtitle, textW, kBookChapterMaxLines);
-    int subtitleY = textY + kTitleChapterGap;
-    for (const auto& line : subtitleLines) {
-      renderer.drawText(UI_12_FONT_ID, coverRect.x, subtitleY, line.c_str(), black);
-      subtitleY += titleLineH;
-    }
+// Lifetime stats card.
+// Header: centered "Lifetime Stats".
+// Body 2x4, four equal-width columns centered in the card.
+// Labels: Reading Time / Pages Turned / Streak / Avg. Session.
+// Streak and Days Read values include the unit ("11 Days") in the value font.
+// Days Read = distinct calendar days with reading activity (not hours/24).
+void drawLifetimeStatsCard(const GfxRenderer& renderer, const Rect& cardRect, const GlobalReadingStats* globalStats,
+                         const bool black = true) {
+  if (cardRect.width < 80 || cardRect.height < 60) return;
+
+  const GlobalReadingStats empty{};
+  const GlobalReadingStats& stats = globalStats != nullptr ? *globalStats : empty;
+
+  constexpr int kTitlePadX = 8;
+  constexpr int kBodyInsetX = 2;  // equal left/right inset so the grid sits centered
+  constexpr int kColCount = 4;
+  constexpr int kRowCount = 2;
+  // Prefer a taller header; never steal more than half the card from the 2-row body.
+  const int titleH = std::min(kLifetimeTitleH, std::max(24, cardRect.height / 3));
+  const int titleTextY = cardRect.y + (titleH - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+
+  // Card chrome
+  renderer.drawRect(cardRect.x, cardRect.y, cardRect.width, cardRect.height, black);
+  renderer.drawLine(cardRect.x, cardRect.y + titleH, cardRect.x + cardRect.width - 1, cardRect.y + titleH, black);
+
+  // Header: single centered title.
+  const int titleMaxW = std::max(1, cardRect.width - kTitlePadX * 2);
+  const std::string titleVis =
+      renderer.truncatedText(UI_10_FONT_ID, tr(STR_STATS_ALL_TIME), titleMaxW, EpdFontFamily::BOLD);
+  const int titleW = renderer.getTextWidth(UI_10_FONT_ID, titleVis.c_str(), EpdFontFamily::BOLD);
+  renderer.drawText(UI_10_FONT_ID, cardRect.x + (cardRect.width - titleW) / 2, titleTextY, titleVis.c_str(), black,
+                    EpdFontFamily::BOLD);
+
+  const int bodyY = cardRect.y + titleH;
+  const int bodyH = cardRect.height - titleH;
+  // Centered grid: equal side insets, then remainder pixels spread across columns
+  // so no column is wider than the others by more than 1px.
+  const int gridW = std::max(kColCount, cardRect.width - kBodyInsetX * 2);
+  const int baseColW = gridW / kColCount;
+  const int colRem = gridW % kColCount;
+  int colW[kColCount];
+  int colX[kColCount];
+  int x = cardRect.x + kBodyInsetX;
+  for (int i = 0; i < kColCount; ++i) {
+    colW[i] = baseColW + (i < colRem ? 1 : 0);
+    colX[i] = x;
+    x += colW[i];
   }
+  // Equal row heights; leftover body pixels split top/bottom for vertical centering.
+  const int baseRowH = bodyH / kRowCount;
+  const int rowRem = bodyH % kRowCount;
+  const int rowH0 = baseRowH + (rowRem > 0 ? 1 : 0);
+  const int rowH1 = baseRowH + (rowRem > 1 ? 1 : 0);
+  // If bodyH % 2 == 1, first row got the extra pixel; grid still fills the body.
+  const int rowY0 = bodyY;
+  const int rowY1 = bodyY + rowH0;
+
+  char buf[40];
+
+  auto cell = [&](const int col, const int rowY, const int rowH, const char* value, const char* label) {
+    drawDashboardLifetimeStatCell(renderer, colX[col], colW[col], rowY, rowH, value, label, black);
+  };
+
+  // Row 1
+  snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalSessions));
+  cell(0, rowY0, rowH0, buf, tr(STR_STATS_SESSIONS_LBL));
+
+  BookReadingStats::formatDuration(stats.totalReadingSeconds, buf, sizeof(buf));
+  cell(1, rowY0, rowH0, buf, tr(STR_STATS_TIME_LBL));
+
+  snprintf(buf, sizeof(buf), "%.1f", pagesPerMinute(stats.totalPagesTurned, stats.totalReadingSeconds));
+  cell(2, rowY0, rowH0, buf, tr(STR_STATS_PAGES_PER_MIN));
+
+  snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalPagesTurned));
+  cell(3, rowY0, rowH0, buf, tr(STR_STATS_PAGES_LBL));
+
+  // Row 2
+  const uint32_t avgSecs = stats.totalSessions > 0 ? stats.totalReadingSeconds / stats.totalSessions : 0;
+  BookReadingStats::formatDuration(avgSecs, buf, sizeof(buf));
+  cell(0, rowY1, rowH1, buf, tr(STR_STATS_AVG_SESSION_LBL));
+
+  if (stats.completedBooks > 0) {
+    snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.completedBooks));
+  } else {
+    snprintf(buf, sizeof(buf), "-");
+  }
+  cell(1, rowY1, rowH1, buf, tr(STR_STATS_COMPLETED_LBL));
+
+  const uint16_t longest = stats.displayLongestReadingStreak();
+  if (longest > 0) {
+    // Unit in the same bold value font as the number: "11 Days".
+    snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(longest), dayCountText(longest));
+  } else {
+    snprintf(buf, sizeof(buf), "-");
+  }
+  cell(2, rowY1, rowH1, buf, tr(STR_STATS_LONGEST_STREAK_LBL));
+
+  const uint16_t daysRead = computeReadingHistoryDaysRead(stats.readingHistoryBits);
+  if (daysRead > 0) {
+    snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(daysRead), dayCountText(daysRead));
+  } else {
+    snprintf(buf, sizeof(buf), "-");
+  }
+  cell(3, rowY1, rowH1, buf, tr(STR_STATS_DAYS_READ_LBL));
+}
+void drawLifetimeStatsUnderMeta(const GfxRenderer& renderer, const Rect& contentRect, const int metaBottomY,
+                              const GlobalReadingStats* globalStats, const bool black = true) {
+  const ContentFrame frame = contentFrame(renderer);
+  const int availableBottom = contentRect.y + contentRect.height - kLifetimeStatsBottomPad;
+  // Sit clearly below the achievements row and use the remaining tile height
+  // so the 2x4 grid is readable (not crushed against meta).
+  const int cardTop = metaBottomY + kLifetimeStatsMetaGap;
+  if (availableBottom - cardTop < 60) return;
+
+  const Rect cardRect{frame.left, cardTop, frame.width, availableBottom - cardTop};
+  drawLifetimeStatsCard(renderer, cardRect, globalStats, black);
 }
 }  // namespace
 
@@ -543,14 +848,18 @@ void DashboardTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const
                                          const GlobalReadingStats* globalStats, const char* currentChapterTitle) const {
   (void)selectorIndex;
   (void)bufferRestored;
+  (void)currentChapterTitle;  // Progress % is shown in the stats column; chapter title omitted.
 
-  const Rect coverRect = coverRectForScreen(renderer, rect);
   if (recentBooks.empty()) {
+    const Rect coverRect = coverRectForScreen(renderer, rect, rect.y + kTopInset);
     renderer.drawRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, 1, kCoverCornerRadius, true);
     coverRendered = false;
     coverBufferStored = false;
     return;
   }
+
+  const int coverTopY = drawTopBookTitle(renderer, rect, recentBooks[0], /*black=*/true);
+  const Rect coverRect = coverRectForScreen(renderer, rect, coverTopY);
 
   if (!coverRendered) {
     drawBookCover(renderer, coverRect, recentBooks[0], Color::White);
@@ -559,20 +868,22 @@ void DashboardTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const
   }
 
   drawDashboardStats(renderer, coverRect, stats, progressPercent);
-  drawBookText(renderer, coverRect, recentBooks[0], currentChapterTitle);
-  drawFooterStats(renderer, coverRect, globalStats);
+  const int metaBottomY = drawMetaStatsUnderCover(renderer, coverRect, globalStats);
+  drawLifetimeStatsUnderMeta(renderer, rect, metaBottomY, globalStats, /*black=*/true);
 }
 
 void DashboardTheme::drawSleepScreen(const GfxRenderer& renderer, const RecentBook& book, const BookReadingStats* stats,
                                      const GlobalReadingStats* globalStats, const float progressPercent,
                                      const char* currentChapterTitle, const bool inverted) const {
+  (void)currentChapterTitle;
   renderer.clearScreen(inverted ? 0xFF : 0x00);
 
   const Rect contentRect{0, DashboardMetrics::values.homeTopPadding, renderer.getScreenWidth(),
                          DashboardMetrics::values.homeCoverTileHeight};
-  const Rect coverRect = coverRectForScreen(renderer, contentRect);
+  const int coverTopY = drawTopBookTitle(renderer, contentRect, book, /*black=*/!inverted);
+  const Rect coverRect = coverRectForScreen(renderer, contentRect, coverTopY);
   drawBookCover(renderer, coverRect, book, inverted ? Color::White : Color::Black);
   drawDashboardStats(renderer, coverRect, stats, progressPercent, inverted);
-  drawBookText(renderer, coverRect, book, currentChapterTitle, inverted);
-  drawFooterStats(renderer, coverRect, globalStats, !inverted);
+  const int metaBottomY = drawMetaStatsUnderCover(renderer, coverRect, globalStats, !inverted);
+  drawLifetimeStatsUnderMeta(renderer, contentRect, metaBottomY, globalStats, /*black=*/!inverted);
 }

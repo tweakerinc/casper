@@ -11,15 +11,20 @@
 - EPUB readers can now choose from five word-spacing levels, from normal through extra-wide.
 - EPUB inline-image pages on X3 now use the grayscale-aware display base before the image grayscale overlay, reducing the moment where images appear too dark before settling.
 - EPUB publisher small-caps styling now renders ASCII lowercase text as smaller capital letters without needing extra font files.
+- Dictionary selection long-press Select starts a multi-word range so phrases can be looked up, not only single words.
 
 ### Changed
 
 - The web file manager can now delete non-empty folders recursively and, when hidden files are shown, remove hidden or system-managed SD card items after confirmation.
 - Large EPUB indexing now borrows temporary display memory and uses faster ZIP/PNG decompression to reduce memory pressure while opening or rebuilding chapters.
 - EPUB books can now keep more saved clippings without loading every clipping's text into memory while reading.
+- Controls settings list Power Button options first, with Side and Front button settings still available under their submenus.
+- Dictionary lookup keeps hyphens and spaces in normalized keys and retries compound segments (for example `fetid-smelling` falls back to `fetid`).
+- Reader battery percentage now sits at the top right, matching Home and Dashboard, instead of the bottom-left status bar.
 
 ### Fixed
 
+- Side-button page turns no longer fire after resting on a side button when Side Long-press Action is set to Ignore; only a short click turns the page.
 - EPUB books with an image as the first content in a chapter heading no longer reboot while indexing.
 - CSS-heavy EPUB chapters now use less temporary memory while parsing, reducing failures when opening them.
 - EPUB chapter headings with several images now continue onto the next page instead of dropping images or clipping them behind the status bar.

@@ -260,7 +260,9 @@ class BaseTheme {
                              const int textYOffset = 0, const bool isPageBookmarked = false,
                              const char* timeLeftLabel = nullptr, bool darkMode = false,
                              float chapterProgressPercent = -1.0f, int stableCurrentPage = 0, int stablePageCount = 0,
-                             bool showProgress = true, bool pageCountEstimated = false) const;
+                             bool showProgress = true, bool pageCountEstimated = false,
+                             // When false, skip top-right battery (e.g. settings preview that already has a header battery).
+                             bool drawTopBattery = true) const;
   virtual void drawTopStatusBarClock(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr,
                                      bool readerContext = true, int textYOffset = 0, bool darkMode = false) const;
   virtual void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const;

@@ -361,20 +361,34 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
     bottomPreviewPadding = 0;
   }
 
+  // Match reader status bar: duration + chapter/book scope (localized suffix).
+  char timeLeftPreviewBuf[40] = {};
   const char* timeLeftPreview = nullptr;
-  // Match reader status bar: duration + chapter/book scope.
   if (SETTINGS.statusBarTimeLeft == CrossPointSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_CHAPTER) {
-    timeLeftPreview = "1h 20m in chapter";
+    snprintf(timeLeftPreviewBuf, sizeof(timeLeftPreviewBuf), "1h 20m %s", tr(STR_TIME_LEFT_IN_CHAPTER));
+    timeLeftPreview = timeLeftPreviewBuf;
   } else if (SETTINGS.statusBarTimeLeft == CrossPointSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_BOOK) {
-    timeLeftPreview = "3h 40m in book";
+    snprintf(timeLeftPreviewBuf, sizeof(timeLeftPreviewBuf), "3h 40m %s", tr(STR_TIME_LEFT_IN_BOOK));
+    timeLeftPreview = timeLeftPreviewBuf;
   }
   const int previewX = contentX + metrics.contentSidePadding;
   const int bottomPreviewTop = pageHeight - UITheme::getStatusBarHeight() - bottomPreviewPadding;
   const int previewLabelY = bottomPreviewTop - previewLabelLineHeight - previewLabelGap;
 
   renderer.drawText(UI_10_FONT_ID, previewX, previewLabelY, tr(STR_PREVIEW));
+
+  // Header already draws a top-right battery. drawStatusBar would draw another (slightly offset)
+  // and stack icons — skip it here. When reader status-bar battery is off, clear the header battery
+  // so the preview matches the toggle.
+  if (!SETTINGS.statusBarBattery) {
+    constexpr int maxBatteryWidth = 80;
+    renderer.fillRect(contentX + contentWidth - maxBatteryWidth, metrics.topPadding + BaseTheme::homeHeaderTopInset,
+                      maxBatteryWidth, BaseMetrics::values.batteryHeight + 12, false);
+  }
+
   GUI.drawStatusBar(renderer, 75, 8, 32, title, bottomPreviewPadding, 0, false, timeLeftPreview, false, -1.0f,
-                    stablePageNumbersAvailable ? 120 : 0, stablePageNumbersAvailable ? 540 : 0);
+                    stablePageNumbersAvailable ? 120 : 0, stablePageNumbersAvailable ? 540 : 0, true, false,
+                    /*drawTopBattery=*/false);
 
   renderer.displayBuffer();
 }

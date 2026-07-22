@@ -753,7 +753,8 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
                               const bool isPageBookmarked, const char* timeLeftLabel, const bool darkMode,
                               const float chapterProgressPercent, const int stableCurrentPage,
-                              const int stablePageCount, const bool showProgress, const bool pageCountEstimated) const {
+                              const int stablePageCount, const bool showProgress, const bool pageCountEstimated,
+                              const bool drawTopBattery) const {
   const bool foregroundBlack = !darkMode;
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -820,12 +821,15 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // Battery sits top-right (same corner as Home/Dashboard headers), not in the bottom bar.
   // Bookmark + time-left stay on the bottom-left cluster; page progress stays bottom-right.
+  // drawTopBattery=false on screens that already drew a header battery (avoids stacked icons).
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
-  if (SETTINGS.statusBarBattery) {
+  if (drawTopBattery && SETTINGS.statusBarBattery) {
     // Match drawHeader(): icon at right edge; drawBatteryRight places the % to the left of it.
     const int batteryX = renderer.getScreenWidth() - orientedMarginRight - 12 - metrics.batteryWidth;
-    const int batteryY = orientedMarginTop + metrics.topPadding + homeHeaderTopInset;
+    // Align with header battery Y (topPadding + inset). Do not add orientedMarginTop here or the
+    // icon sits a few pixels lower than a header battery and looks like a double-drawn glitch.
+    const int batteryY = metrics.topPadding + homeHeaderTopInset;
     drawBatteryRight(renderer, Rect{batteryX, batteryY, metrics.batteryWidth, metrics.batteryHeight},
                      showBatteryPercentage, foregroundBlack);
   }

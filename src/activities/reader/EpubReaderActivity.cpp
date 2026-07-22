@@ -1100,28 +1100,37 @@ class ScopedReaderSettingsRestore {
   EpubReaderActivity::ReaderSettingsSnapshot snapshot;
 };
 
-void formatCompactTimeLeft(const uint32_t seconds, char* out, const size_t outSize) {
+// Compact duration only (e.g. "2h 15m"). Callers add chapter/book scope for the status bar.
+void formatCompactTimeLeftDuration(const uint32_t seconds, char* out, const size_t outSize) {
   if (!out || outSize == 0) return;
-  // Duration only; callers append a short "left" (or localized) suffix for the status bar.
-  char duration[16];
   if (seconds < 60) {
-    snprintf(duration, sizeof(duration), "<1m");
-  } else {
-    const uint32_t minutes = (seconds + 30U) / 60U;
-    if (minutes < 60) {
-      snprintf(duration, sizeof(duration), "%lum", static_cast<unsigned long>(minutes));
-    } else {
-      const uint32_t hours = minutes / 60U;
-      const uint32_t remainingMinutes = minutes % 60U;
-      if (remainingMinutes == 0) {
-        snprintf(duration, sizeof(duration), "%luh", static_cast<unsigned long>(hours));
-      } else {
-        snprintf(duration, sizeof(duration), "%luh %lum", static_cast<unsigned long>(hours),
-                 static_cast<unsigned long>(remainingMinutes));
-      }
-    }
+    snprintf(out, outSize, "<1m");
+    return;
   }
-  snprintf(out, outSize, "%s %s", duration, tr(STR_TIME_LEFT_SHORT));
+
+  const uint32_t minutes = (seconds + 30U) / 60U;
+  if (minutes < 60) {
+    snprintf(out, outSize, "%lum", static_cast<unsigned long>(minutes));
+    return;
+  }
+
+  const uint32_t hours = minutes / 60U;
+  const uint32_t remainingMinutes = minutes % 60U;
+  if (remainingMinutes == 0) {
+    snprintf(out, outSize, "%luh", static_cast<unsigned long>(hours));
+  } else {
+    snprintf(out, outSize, "%luh %lum", static_cast<unsigned long>(hours),
+             static_cast<unsigned long>(remainingMinutes));
+  }
+}
+
+// Status bar: "2h 15m in chapter" / "45m in book" so the estimate scope is obvious.
+void formatCompactTimeLeft(const uint32_t seconds, const bool bookEstimate, char* out, const size_t outSize) {
+  if (!out || outSize == 0) return;
+  char duration[16];
+  formatCompactTimeLeftDuration(seconds, duration, sizeof(duration));
+  snprintf(out, outSize, "%s %s", duration,
+           bookEstimate ? tr(STR_TIME_LEFT_IN_BOOK) : tr(STR_TIME_LEFT_IN_CHAPTER));
 }
 
 // SD card folder finished books are moved into. Single source of truth for the path.
@@ -1505,7 +1514,7 @@ bool EpubReaderActivity::formatTimeLeftLabel(char* buf, const size_t len) const 
   const bool bookEstimate = SETTINGS.statusBarTimeLeft == CrossPointSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_BOOK;
   uint32_t seconds = 0;
   if (estimateTimeLeftSeconds(bookEstimate, seconds)) {
-    formatCompactTimeLeft(seconds, buf, len);
+    formatCompactTimeLeft(seconds, bookEstimate, buf, len);
     return true;
   }
 

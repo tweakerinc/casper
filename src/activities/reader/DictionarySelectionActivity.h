@@ -51,6 +51,9 @@ class DictionarySelectionActivity final : public Activity {
   // -1 = single-word mode; otherwise multi-word range anchor in readingOrder.
   int startMarkIdx = -1;
   bool multiSelectHoldArmed = false;
+  // True until Confirm/Power are fully released after open. Prevents long-press Menu
+  // (which uses Confirm) from immediately arming multi-word selection mode.
+  bool ignoreConfirmUntilReleased = true;
   bool needsPageSwitch = false;
   bool hasSavedBuffer = false;
   bool usingFallbackFont = false;

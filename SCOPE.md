@@ -1,8 +1,8 @@
-# Project Vision & Scope: CrossInk
+# Project Vision & Scope: Casper
 
 The goal of this CrossPoint fork is to provide useful enhancements while still adhering to the core principles of Crosspoint. If you have a major feature request, it should first be directed at the main project since this is a downstream project that consumes their updates.
 
-The content below is taken directly from Crosspoint and aligns with CrossInk's vision as well.
+The content below is taken directly from Crosspoint and aligns with Casper's vision as well.
 
 ## 1. Core Mission
 

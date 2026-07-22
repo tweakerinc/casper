@@ -1,68 +1,68 @@
 # Casper
 
-Personal firmware project based on CrossInk / CrossPoint Reader for Xteink X3/X4 (ESP32-C3).
+Personal firmware project based on **CrossPoint Reader** for Xteink X3/X4 (ESP32-C3).
 
-This repo at `E:\casper` is the **Casper reference tree**: branding, defaults, dashboard, dictionary, KOReader sync improvements, and UI tweaks we want to keep when rebasing onto new CrossPoint releases.
+**Product branding is Casper only** — no CrossInk user-facing names or logos in UI, boot, web, or docs.
 
-## Why this folder exists
+This repo at `E:\casper` is the **Casper reference tree**: branding, defaults, dashboard, dictionary, KOReader sync, and UI tweaks to keep when rebasing onto new CrossPoint releases.
 
-CrossPoint ships new firmware periodically. When that happens we want a clean merge path:
-
-1. Take the **new CrossPoint (or CrossInk) base**
-2. Re-apply **Casper deltas** from this tree (not a blind full overwrite)
-3. Build and flash Casper
-
-Use this project as the source of truth for “what is Casper,” not as the only place you ever edit.
+## Dual-tree sync (always)
 
 | Path | Role |
 |------|------|
-| `C:\Users\m\CrossInk` | Day-to-day work / experiment tree (may drift) |
-| `E:\casper` | Frozen-ish Casper reference + merge playbook |
-| CrossPoint upstream | Fresh base when a release lands |
+| `C:\Users\m\CrossInk` | Daily worktree (legacy folder name only) |
+| `E:\casper` | Reference for CrossPoint rebases |
+
+After any product change:
+
+```bat
+robocopy C:\Users\m\CrossInk E:\casper /E /XD .git .pio /XF tmp_title_chunk.txt /NFL /NDL /NJH /NJS
+```
+
+Then commit here on `casper/reference` when the change should be in the merge baseline.
+
+## Why this folder exists
+
+CrossPoint ships new firmware periodically. Merge path:
+
+1. Take the **new CrossPoint base**
+2. Re-apply **Casper deltas** from this tree (not a blind full overwrite)
+3. Build and flash Casper
+
+See **[docs/CASPER_MERGE.md](docs/CASPER_MERGE.md)**.
 
 ## Must-keep Casper features
 
 ### Branding
 - Product name **Casper** (boot logo, serial, web titles, device name defaults, User-Agent)
-- Boot logo assets under `src/images/` (`casper.png`, `Logo120.h`)
-- Web chrome titles via `scripts/build_web.py` / `web/`
+- Boot logo under `src/images/`
+- Web chrome via `scripts/build_web.py` / `web/`
 
-### Defaults (factory-ish settings)
-Defined mainly in `src/CrossPointSettings.h`:
-
-| Setting | Casper default | Intent |
-|---------|----------------|--------|
+### Defaults (`src/CrossPointSettings.h`)
+| Setting | Default | Intent |
+|---------|---------|--------|
 | `shortPwrBtn` | `SLEEP` | Short power = sleep |
-| `longPressMenuAction` | `LONG_MENU_DICTIONARY` | Long-press menu opens dictionary |
-| `sideButtonLongPress` | `SIDE_LONG_OFF` | No accidental multi-page on side hold |
-| Dashboard theme / sleep | available | Home dashboard UI |
-
-Confirm these after any merge; upstream defaults often differ.
+| `longPressMenuAction` | `LONG_MENU_DICTIONARY` | Long-press menu → dictionary |
+| `sideButtonLongPress` | `SIDE_LONG_OFF` | No multi-page on side hold |
 
 ### Dashboard
-- Theme: `src/components/themes/dashboard/DashboardTheme.cpp`
-- Registration / metrics in `UITheme` + settings enums (`UI_THEME::DASHBOARD`, sleep modes)
-- Cover thumbnail sizing / home layout in `HomeActivity*`
+- `src/components/themes/dashboard/`
+- Home integration in `HomeActivity*`
 
 ### Dictionary
-- Library: `lib/Dictionary/`
-- UI: `DictionarySelectionActivity`, `DictionaryLookupActivity`
-- Reader entry: long-press menu / power shortcuts → dictionary selection
-- Hyphen / multi-word lookup, top-right battery unrelated but often co-shipped
+- `lib/Dictionary/`
+- `DictionarySelectionActivity` / `DictionaryLookupActivity`
+- Opens in **word cursor mode** (Up/Down/Left/Right to find a word; short Select looks up)
+- Long-press Select starts multi-word range (only after opening long-press is released)
 - Docs: `docs/dictionary.md`
-- Packs: build with `scripts/build_en_dict.py` → install under `/.crosspoint/dict/` on SD
 
 ### KOReader Sync
 - `lib/KOReaderSync/`
-- `KOReaderSyncActivity`, `KOReaderSettingsActivity`, credential store
-- Adaptive / furthest-ahead sync behavior and settings labels
-- Defaults and web settings keys as customized in Casper
+- Reader + settings activities
 
-### Reader / controls UI tweaks
-- Side long-press **Ignore** does not page-turn on held release (`ReaderUtils`, EPUB/XTC/TXT)
-- Reader battery **top-right** (matches dashboard header)
-- Dictionary selection: short select = word; long-press select = multi-word range
-- Related status-bar / controls settings layout
+### Reader polish
+- Side long-press Ignore ignores held releases
+- Reader battery top-right
 
 ## Build
 
@@ -73,44 +73,18 @@ cd /d E:\casper
 
 Output: `.pio\build\default\firmware-default.bin`
 
-Simulator (if configured):
+## Remotes
 
 ```bat
-pio run -e simulator
-```
-
-## When new CrossPoint firmware lands
-
-See **[docs/CASPER_MERGE.md](docs/CASPER_MERGE.md)** for the step-by-step rebase/merge checklist.
-
-Quick version:
-
-1. Add/fetch the new upstream tag or branch into a worktree
-2. Diff this Casper tree against the pre-merge base to list deltas
-3. Re-apply Casper patches feature-by-feature (branding → defaults → dictionary → KOReader → dashboard → controls)
-4. Build `default`, flash, verify the checklist in `CASPER_MERGE.md`
-
-## Git remotes (suggested)
-
-```bat
-cd /d E:\casper
 git remote -v
-rem crossink-local  -> C:\Users\m\CrossInk   (optional daily tree)
+rem crossink-local  -> C:\Users\m\CrossInk
 rem crossink        -> https://github.com/uxjulia/CrossInk.git
 rem upstream        -> https://github.com/crosspoint-reader/crosspoint-reader.git
 ```
 
-Point `upstream` at whatever official repo/tag you use for the new release.
-
 ## Do not commit
 
 - `.pio/`
-- `scripts/data/` (huge dictionary source dumps)
-- `docs/*.cxdict` (built packs; keep sample only)
+- `scripts/data/`
+- `docs/*.cxdict` (except sample)
 - `platformio.local.ini` / secrets
-
-## Related docs
-
-- `docs/CASPER_MERGE.md` — merge procedure
-- `docs/dictionary.md` — dictionary format and packs
-- `AGENTS.md` — firmware engineering rules (shared with CrossInk)

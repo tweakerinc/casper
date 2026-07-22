@@ -1,55 +1,50 @@
 # Casper
 
-Casper is a personal e-reader firmware for **Xteink X3/X4** (ESP32-C3), based on [CrossInk](https://github.com/uxjulia/CrossInk) / [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
+Casper is personal e-reader firmware for **Xteink X3/X4** (ESP32-C3), built cleanly on top of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
 
-This tree at `E:\casper` is the **Casper reference project**: keep branding, dashboard, dictionary, KOReader sync, and control defaults here so they can be re-applied cleanly when CrossPoint ships a new base firmware.
+**Product branding is Casper only** (boot, UI, web, docs). This folder may still be named `CrossInk` on disk for historical reasons; the reference merge tree is `E:\casper`.
 
-## Highlights (Casper)
+## Highlights
 
-- **Casper branding** — boot logo, device names, web portal, serial version strings
-- **Dashboard** home theme (cover + reading stats)
-- **Offline dictionary** — word selection, hyphen compounds, multi-word phrases
-- **KOReader Sync** — credentials + adaptive progress options
-- **Defaults**
-  - Short power button → **Sleep**
-  - Long-press menu → **Dictionary**
-  - Side long-press → **Ignore** (no accidental multi-page while resting a finger)
-- **Reader battery** top-right (matches dashboard)
+- Casper branding (logo, device names, web portal, serial)
+- Dashboard home theme (cover + reading stats)
+- Offline dictionary (word cursor, hyphen compounds, multi-word phrases)
+- KOReader Sync with adaptive options
+- Defaults: short power → sleep, long-press menu → dictionary, side long-press → ignore
+- Reader battery percentage top-right (matches dashboard)
 
 ## Docs
 
 | Doc | Purpose |
 |-----|---------|
-| [CASPER.md](./CASPER.md) | What this project is and what must survive merges |
-| [docs/CASPER_MERGE.md](./docs/CASPER_MERGE.md) | How to rebase Casper onto a new CrossPoint release |
-| [docs/dictionary.md](./docs/dictionary.md) | Dictionary packs and format |
-| [AGENTS.md](./AGENTS.md) | Engineering rules for ESP32-C3 firmware work |
+| [USER_GUIDE.md](./USER_GUIDE.md) | End-user guide |
+| [CASPER.md](./CASPER.md) | Dual-tree sync note |
+| [docs/DEV_NOTES.md](./docs/DEV_NOTES.md) | Engineering gotchas |
+| [AGENTS.md](./AGENTS.md) | Firmware engineering rules |
+| `E:\casper\docs\CASPER_MERGE.md` | Rebase onto new CrossPoint releases |
 
 ## Build
 
-PlatformIO, `default` env:
-
 ```bat
-cd /d E:\casper
 "%USERPROFILE%\.platformio\penv\Scripts\pio.exe" run -e default
 ```
 
-Firmware binary: `.pio\build\default\firmware-default.bin`
+Firmware: `.pio\build\default\firmware-default.bin`
 
-## Relationship to other trees
+## Sync to Casper reference
 
-| Location | Use |
-|----------|-----|
-| `E:\casper` | Casper reference / merge source of truth |
-| `C:\Users\m\CrossInk` | Optional daily worktree (may be ahead or messy) |
-| New CrossPoint tag | Fresh base for the next Casper build |
+After product changes:
 
-When a new CrossPoint firmware is available, follow **[docs/CASPER_MERGE.md](./docs/CASPER_MERGE.md)**.
+```bat
+robocopy C:\Users\m\CrossInk E:\casper /E /XD .git .pio .claude /XF tmp_title_chunk.txt /NFL /NDL /NJH /NJS
+```
+
+Then commit on `E:\casper` branch `casper/reference` when you want the change in the merge baseline.
 
 ## Upstream
 
-Casper is not a clean-room rewrite. It layers product choices on open CrossPoint/CrossInk work. Respect upstream licenses (`LICENSE`) and attribute CrossPoint/CrossInk as required.
+Casper layers product choices on CrossPoint/CrossInk open work. Respect `LICENSE` and attribute upstream as required.
 
 ## Hardware
 
-Confirmed target class: Xteink X3 and X4. ESP32-C3 constraints apply (no PSRAM, tight heap) — see `AGENTS.md`.
+Xteink X3 and X4. ESP32-C3 constraints apply — see `AGENTS.md`.

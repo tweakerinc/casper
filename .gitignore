@@ -23,11 +23,6 @@ release.md
 lib/EpdFont/scripts/downloaded_fonts/
 lib/EpdFont/scripts/instanced_fonts/
 lib/EpdFont/scripts/output/
-# Claude Code: share project skills with the team, keep local agent state
-# (worktrees, scheduled-task locks, settings.local, scout CLEANUP.md) out.
-.claude/*
-!.claude/skills/
-
 /site/node_modules/
 /site/dist/
 /site/.astro/
@@ -37,8 +32,7 @@ lib/EpdFont/scripts/output/
 
 dist-publish/
 
-# Casper: dictionary build inputs / large packs live on disk, not in git.
-# Rebuild packs with scripts/build_en_dict.py; see docs/dictionary.md.
+# Dictionary build inputs / large packs (build with scripts/build_en_dict.py)
 scripts/data/
 docs/*.cxdict
 !docs/en.cxdict.sample

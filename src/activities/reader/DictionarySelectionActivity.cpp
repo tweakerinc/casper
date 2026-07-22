@@ -88,6 +88,13 @@ void DictionarySelectionActivity::onEnter() {
     return;
   }
   cursorIdx = pickInitialCursorIdx();
+  startMarkIdx = -1;
+  multiSelectHoldArmed = false;
+  // Long-press Menu opens dictionary while Confirm is still held — do not treat that
+  // residual hold as multi-word selection. Wait for a full release first.
+  ignoreConfirmUntilReleased = true;
+  mappedInput.suppressNextConfirmRelease();
+  mappedInput.suppressNextPowerConfirmRelease();
 
   // Keep dictionary packs open for the whole selection session (multi-word looks).
   DictionaryLookup::beginSession();
@@ -495,15 +502,28 @@ void DictionarySelectionActivity::loop() {
   };
 
   // Stay on the page where dictionary was opened: wrap within that page only.
+  // Up/Down and Left/Right always move the word cursor so the user can find a word first.
   buttonNavigator.onRelease({Button::Left}, [this, &moveCursor] { moveCursor(moveHorizontal(cursorIdx, -1)); });
   buttonNavigator.onContinuous({Button::Left}, [this, &moveCursor] { moveCursor(moveHorizontal(cursorIdx, -1)); });
   buttonNavigator.onRelease({Button::Right}, [this, &moveCursor] { moveCursor(moveHorizontal(cursorIdx, +1)); });
   buttonNavigator.onContinuous({Button::Right}, [this, &moveCursor] { moveCursor(moveHorizontal(cursorIdx, +1)); });
-  // Up/down: stay in column on next/prev line; wrap first↔last line of this page.
   buttonNavigator.onRelease({Button::Down}, [this, &moveCursor] { moveCursor(moveVertical(cursorIdx, +1)); });
   buttonNavigator.onContinuous({Button::Down}, [this, &moveCursor] { moveCursor(moveVertical(cursorIdx, +1)); });
   buttonNavigator.onRelease({Button::Up}, [this, &moveCursor] { moveCursor(moveVertical(cursorIdx, -1)); });
   buttonNavigator.onContinuous({Button::Up}, [this, &moveCursor] { moveCursor(moveVertical(cursorIdx, -1)); });
+
+  // Swallow Confirm/Power until the opening long-press (Menu → dictionary) is fully released.
+  if (ignoreConfirmUntilReleased) {
+    const bool confirmDown = mappedInput.isPressed(Button::Confirm) || mappedInput.isPressed(Button::Power);
+    if (!confirmDown) {
+      ignoreConfirmUntilReleased = false;
+    }
+    // Still allow Back to exit; never arm multi-select or open a definition yet.
+    if (mappedInput.wasReleased(Button::Back)) {
+      exitDictionaryMode();
+    }
+    return;
+  }
 
   // Long-press Select starts multi-word range selection (clipping-style).
   const bool confirmHeld = mappedInput.isPressed(Button::Confirm) || mappedInput.isPressed(Button::Power);

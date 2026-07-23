@@ -22,14 +22,12 @@ Copy any of these files into it (use these exact names):
 | `en.cxdict` | English **reader pack** (~150–250k headwords; Wiktionary-first, enPR, 2 senses) | `docs/en.cxdict` |
 | `es-en.cxdict` | Spanish → English | `docs/es-en.cxdict` |
 | `en-es.cxdict` | English → Spanish | `docs/en-es.cxdict` |
-| `es.cxdict` | Spanish → Spanish (optional; not shipped yet) | build yourself |
 
 You can install **one or more**. Lookup auto-tries installed packs in this order:
 
 1. `en.cxdict` (EN)
 2. `es.cxdict` (ES)
 3. `es-en.cxdict` (ES→EN)
-4. `en-es.cxdict` (EN→ES)
 
 The popup shows which pack answered, e.g. `casa  [ES->EN]`.
 

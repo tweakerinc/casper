@@ -5,19 +5,6 @@
 
 Casper keeps CrossInks’s solid reading core and layers on a small set of product choices: offline dictionary, refined dashboard home, Auto Upload Options for KOReader Sync, and control defaults tuned for everyday use.
 
-<table>
-  <tr>
-    <td align="center">
-      <img src="./docs/images/bitter-small-15-margin.jpg" alt="Reader with Bitter font" /><br/>
-      <em>Reader (Bitter, comfortable e-ink text)</em>
-    </td>
-    <td align="center">
-      <img src="./docs/images/reading-stats.jpg" alt="Reading stats" /><br/>
-      <em>Reading stats and flexible controls</em>
-    </td>
-  </tr>
-</table>
-
 ---
 
 **Note**: Target hardware is the **Xteink X3** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.

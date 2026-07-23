@@ -3,7 +3,7 @@
 
 ## What's different in Casper
 
-Casper keeps CrossInks’s solid reading core and layers on a small set of product choices: offline dictionary, refined dashboard home, Auto Upload Options for KOReader Sync, and control defaults tuned for everyday use.
+Casper is a personal build of CrossInk (https://github.com/uxjulia/CrossInk), rebranded and tuned for how I actually use the Xteink X3 day to day. On top of CrossInk’s reading stack I added offline dictionary lookup (hyphenated words, multi-word selection, menu long-press to open it), tightened the Dashboard home experience, and improved KOReader Sync with clearer Auto Upload Options. Defaults are set for fewer surprises: short power sleeps the device, side long-press does nothing until you enable it, the status bar shows book progress and time left in Book, the clock stays visible, sleep wallpaper starts light (dark mode inverts the logo cleanly), and the reader opens at 12 pt with left-aligned paragraphs.
 
 ---
 
@@ -13,7 +13,7 @@ Casper keeps CrossInks’s solid reading core and layers on a small set of produ
 
 - **Casper branding** — boot logo, device names, web portal, serial version strings.
 - **Dashboard** home theme (current book cover + reading stats) and related sleep options.
-- **Offline dictionary** — in-reader word selection, hyphen compounds, multi-word phrases; long-press Menu defaults to dictionary.
+- **Offline dictionary** — in-reader word selection, hyphen compounds, multi-word phrases; long-press Menu defaults to dictionary. It opens word selection on the page; move to a word and press Select to look it up (hyphenated compounds are handled). Press and hold Select to mark a range, move to extend it, then Select again to look up multiple words.
 - **KOReader Sync** — credentials + adaptive / furthest-ahead style options.
 - **Control defaults**
   - Short power → **Sleep**
@@ -26,16 +26,6 @@ Casper keeps CrossInks’s solid reading core and layers on a small set of produ
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
 ---
-
-### Reader fonts
-
-Default reader fonts are **Lexend Deca** and **Bitter** — chosen for e-ink contrast and reduced ghosting. UI uses **Inter**.
-
-- [Lexend Deca](https://fonts.google.com/specimen/Lexend+Deca)
-- [Bitter](https://fonts.google.com/specimen/Bitter)
-- [Inter](https://fonts.google.com/specimen/Inter)
-
-See [Font Build Variants](./docs/font-build-variants.md) for `tiny` / `xlarge` point-size matrices.
 
 ### Dictionary
 

@@ -1,5 +1,5 @@
-> **This is a personal firmware project built on [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** for the Xteink X3/X4.  
-> Product name: **Casper** (not CrossInk / CrossPoint branding).
+> **This is a personal firmware project built on [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) & [CrossInk](https://github.com/uxjulia/crossink)** for the Xteink X3.  
+> Product name: **Casper**).
 
 ## What's different in Casper
 

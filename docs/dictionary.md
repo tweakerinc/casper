@@ -1,6 +1,11 @@
+---
+title: Dictionary
+nav_order: 5
+---
+
 # Dictionary (English + Spanish)
 
-CrossInk can look up words offline from dictionary packs on the SD card.
+Casper can look up words offline from dictionary packs on the SD card.
 
 ## Install dictionary files
 

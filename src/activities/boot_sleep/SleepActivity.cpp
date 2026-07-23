@@ -515,6 +515,8 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  // Match boot chrome: white background, centered logo + product name. No "Sleeping"
+  // caption and no full-screen invert (Dark wallpaper mode used to flip this to black).
   renderer.clearScreen();
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
@@ -527,20 +529,13 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const int wordFont = UI_12_FONT_ID;
 #endif
   renderer.drawCenteredText(wordFont, logoY + kLogoSize + 12, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, logoY + kLogoSize + 40, tr(STR_SLEEPING));
-
-  // Make sleep screen dark unless light is selected in settings
-  const bool lightSleepScreen = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT;
-  if (!lightSleepScreen) {
-    renderer.invertScreen();
-  }
 
 #ifdef CROSSINK_SHOW_SLEEP_BUILD_INFO
   const std::string buildInfo = std::string(CROSSINK_BUILD_ENV) + " " + CROSSINK_VERSION;
   const std::string visibleBuildInfo =
       renderer.truncatedText(SMALL_FONT_ID, buildInfo.c_str(), pageWidth - sleepBuildInfoSideMargin * 2);
   const int buildInfoY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
-  renderer.drawCenteredText(SMALL_FONT_ID, buildInfoY, visibleBuildInfo.c_str(), lightSleepScreen);
+  renderer.drawCenteredText(SMALL_FONT_ID, buildInfoY, visibleBuildInfo.c_str(), true);
 #endif
 
   renderer.displayBuffer(HalDisplay::HALF_REFRESH, TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);

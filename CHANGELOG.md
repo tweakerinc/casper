@@ -23,6 +23,10 @@
 - Dictionary lookup keeps hyphens and spaces in normalized keys and retries compound segments (for example `fetid-smelling` falls back to `fetid`).
 - Reader battery percentage now sits at the top right, matching Home and Dashboard, instead of the bottom-left status bar.
 
+### Changed
+
+- Default sleep screen (no custom wallpaper) keeps a white background with logo and name only — no inverted black fill and no “Sleeping” caption.
+
 ### Fixed
 
 - Dictionary selection opens more reliably under low memory (lighter word harvest, framebuffer snapshot fallback like clipping, and a toast when it still cannot start).

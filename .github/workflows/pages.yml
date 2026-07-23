@@ -2,7 +2,7 @@ name: Deploy Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, casper/reference]
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"

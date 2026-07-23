@@ -1,5 +1,7 @@
 remote_theme: just-the-docs/just-the-docs
-title: CrossInk
-description: Personal fork of CrossPoint Reader
+title: Casper
+description: Personal Xteink X3/X4 firmware built on CrossPoint Reader
+# Optional custom domain later:
+# url: https://your-domain.example
 mermaid:
   version: "10.9.0"

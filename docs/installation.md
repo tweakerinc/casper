@@ -7,11 +7,9 @@ nav_order: 2
 
 Flash **Casper** onto an Xteink X3 or X4. You can always reinstall official CrossPoint firmware afterward.
 
-Replace `YOUR_GITHUB_USERNAME/casper` with your published repo URL.
-
 ## Web installer (recommended)
 
-1. Download the `firmware-*.bin` for your build from the [releases page](https://github.com/YOUR_GITHUB_USERNAME/casper/releases).
+1. Download the `firmware-*.bin` for your build from the [releases page](https://github.com/TweakerInc/casper/releases).
 2. Connect your Xteink X3 or X4 via USB-C and wake/unlock the device.
 3. Open <https://crosspointreader.com/#flash-tools> and choose your device.
 4. Select **Custom .bin**.
@@ -31,7 +29,7 @@ Install `esptool`:
 pip3 install esptool
 ```
 
-Download the firmware from [Releases](https://github.com/YOUR_GITHUB_USERNAME/casper/releases), connect USB-C, then find the port:
+Download the firmware from [Releases](https://github.com/TweakerInc/casper/releases), connect USB-C, then find the port:
 
 ```sh
 # Linux

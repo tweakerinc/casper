@@ -22,11 +22,11 @@ Casper is set up the same way. Follow this once.
 ```bat
 cd /d E:\casper
 git remote remove origin 2>nul
-git remote add origin https://github.com/YOUR_GITHUB_USERNAME/casper.git
+git remote add origin https://github.com/TweakerInc/casper.git
 ```
 
 4. Search/replace in the repo:
-   - `YOUR_GITHUB_USERNAME/casper` → your real `user/repo`
+   - `TweakerInc/casper` → your real `user/repo`
    - Files: `README.md`, `docs/index.md`, `docs/installation.md`
 
 5. Push:
@@ -54,7 +54,7 @@ Remove `docs/CNAME` unless you own that domain (CrossInk’s CNAME must not ship
 1. Repo **Settings → Pages**
 2. Source: **GitHub Actions**
 3. Push to `main` touching `docs/**` or run workflow **Deploy Pages** manually
-4. Site URL will look like: `https://YOUR_GITHUB_USERNAME.github.io/casper/`
+4. Site URL will look like: `https://TweakerInc.github.io/casper/`
 
 Optional custom domain: set `url` / `CNAME` later (see Just the Docs docs).
 
@@ -96,7 +96,7 @@ On the GitHub repo home:
 
 ## Checklist before sharing
 
-- [ ] `YOUR_GITHUB_USERNAME` replaced everywhere
+- [ ] `TweakerInc` replaced everywhere
 - [ ] No CrossInk product branding in UI strings you care about
 - [ ] LICENSE present; CrossPoint credited in README
 - [ ] At least one Release with a `.bin`

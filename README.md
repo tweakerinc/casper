@@ -36,7 +36,7 @@ Casper keeps CrossPoint’s solid reading core and layers on a small set of prod
 - Lexend Deca + Bitter reader fonts, Inter UI (from the CrossPoint/CrossInk font work).
 - Minimal theme, bookmarks, clippings, bionic reading, guide dots, auto page turn, recent books grid, and the usual CrossPoint reading pipeline.
 
-For version-by-version notes, see [Releases](https://github.com/YOUR_GITHUB_USERNAME/casper/releases) (replace with your repo URL after publish).
+For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
 ---
 
@@ -78,7 +78,7 @@ Casper runs on an ESP32-C3 with limited RAM (~380 KB usable). Large folders or c
 
 ## Installation
 
-1. Download a `firmware-*.bin` from the [releases page](https://github.com/YOUR_GITHUB_USERNAME/casper/releases).
+1. Download a `firmware-*.bin` from the [releases page](https://github.com/TweakerInc/casper/releases).
 2. Flash with the CrossPoint web installer (**Custom .bin**) or `esptool`.
 
 Step-by-step: **[Installation](./docs/installation.md)**  

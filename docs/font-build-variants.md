@@ -32,7 +32,7 @@ No 18 pt or 20 pt font size. This is the preferred general-purpose build.
 
 ## Flashing A Variant
 
-Download the matching `firmware-*.bin` from the [releases page](https://github.com/uxjulia/CrossInk/releases), or build and upload locally with PlatformIO:
+Download the matching `firmware-*.bin` from the [releases page](https://github.com/TweakerInc/casper/releases), or build and upload locally with PlatformIO:
 
 ```sh
 pio run -e tiny --target upload

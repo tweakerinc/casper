@@ -7,13 +7,11 @@ nav_order: 1
 
 Personal e-reader firmware for **Xteink X3/X4**, built on [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
 
-[View on GitHub](https://github.com/YOUR_GITHUB_USERNAME/casper) · [Releases](https://github.com/YOUR_GITHUB_USERNAME/casper/releases)
-
-> Replace `YOUR_GITHUB_USERNAME/casper` with your real repo URL after you publish.
+[View on GitHub](https://github.com/TweakerInc/casper) · [Releases](https://github.com/TweakerInc/casper/releases)
 
 ## Get firmware
 
-1. Open **[Releases](https://github.com/YOUR_GITHUB_USERNAME/casper/releases)**
+1. Open **[Releases](https://github.com/TweakerInc/casper/releases)**
 2. Download `firmware-default.bin` (or `tiny` / `xlarge` if you publish those)
 3. Follow **[Installation](./installation.md)**
 

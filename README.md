@@ -3,7 +3,7 @@
 
 ## What's different in Casper
 
-Casper keeps CrossPoint’s solid reading core and layers on a small set of product choices: offline dictionary, Dashboard home, KOReader sync polish, and control defaults tuned for everyday use.
+Casper keeps CrossInks’s solid reading core and layers on a small set of product choices: offline dictionary, refined dashboard home, Auto Upload Options for KOReader Sync, and control defaults tuned for everyday use.
 
 <table>
   <tr>
@@ -20,7 +20,7 @@ Casper keeps CrossPoint’s solid reading core and layers on a small set of prod
 
 ---
 
-**Note**: Target hardware is the **Xteink X3 and X4** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
+**Note**: Target hardware is the **Xteink X3** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
 
 ### Casper highlights
 

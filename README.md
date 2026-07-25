@@ -11,32 +11,33 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 
 <p align="center"><em>Dashboard Home Screen — Current Book, Reading Stats for Book & Lifetime Device, Streak</em></p>
 
+<!-- valign=top so short captions (e.g. "Reader UI") don't sink lower than longer ones on mobile -->
 <table>
   <tr>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/reading-view.jpg" alt="Reading view" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/reading-view.jpg" alt="Reading view" width="280" /><br/>
       <em>Reader UI</em>
     </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" width="280" /><br/>
       <em>Reading Stats Per Book</em>
     </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime stats" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/lifetime-stats.jpg" alt="Device stats" width="280" /><br/>
       <em>Device Lifetime Stats</em>
     </td>
   </tr>
   <tr>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" width="280" /><br/>
       <em>Dictionary Lookup</em>
     </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" width="280" /><br/>
       <em>Multi-Word Lookup</em>
     </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" /><br/>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" width="280" /><br/>
       <em>Spanish Translation</em>
     </td>
   </tr>

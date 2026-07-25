@@ -53,7 +53,7 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 
 ---
 
-**Note**: Target hardware is the **Xteink X3** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
+**Note**: Target hardware is the **Xteink X3 & X4** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
 
 ### Casper highlights
 

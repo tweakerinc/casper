@@ -50,17 +50,15 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 
 ### Casper highlights
 
-- **Casper branding** — boot logo, device names, web portal, serial version strings.
-- **Dashboard** home theme (current book cover + reading stats) and related sleep options.
-- **Offline dictionary** — in-reader word selection, hyphen compounds, multi-word phrases; long-press Menu defaults to dictionary. It opens word selection on the page; move to a word and press Select to look it up (hyphenated compounds are handled). Press and hold Select to mark a range, move to extend it, then Select again to look up multiple words.
+- **Casper Branding** — Custom boot logo of a cute ghost, web portal, serial version strings.
+- **Dashboard** - Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink) All I did was add lifetime stats and rearrange things a bit to make the most out of the space we have.
+- **Offline Dictionary** — in-reader word selection, hyphen compounds, multi-word phrases; long-press Menu defaults to dictionary. It opens word selection on the page; move to a word and press Select to look it up (hyphenated compounds are handled). Press and hold Select to mark a range, move to extend it, then Select again to look up multiple words.
 - **KOReader Sync** — credentials + adaptive / furthest-ahead style options.
 - **Control defaults**
-  - Short power → **Sleep**
-  - Long-press Menu → **Dictionary**
+  - Short-Press Power → **Sleep**
+  - Long-Press Menu → **Dictionary**
   - Side long-press → **Ignore** (no multi-page when resting a finger)
-- **Reader status bar** — battery top-right; time remaining shows scope (`in Chapter` / `in Book`).
-- Lexend Deca + Bitter reader fonts, Inter UI (from the CrossPoint/CrossInk font work).
-- Minimal theme, bookmarks, clippings, bionic reading, guide dots, auto page turn, recent books grid, and the usual CrossPoint reading pipeline.
+- **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`), Percent Complete moved to top-right, pages are still bottom right but "Pg." has been added for aesthetics.
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
@@ -68,7 +66,7 @@ For version-by-version notes, see [Releases](https://github.com/TweakerInc/caspe
 
 ### Dictionary
 
-Casper can look up words offline from packs on the SD card (`/.crosspoint/dict/`).
+Casper can look up words offline from packs on the SD card (`/dictionaries/`).
 
 See [Dictionary](./docs/dictionary.md) for pack layout and install notes.
 

@@ -3,7 +3,7 @@
 
 ## What's different in Casper
 
-Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. On top of CrossInk’s reading stack I added offline dictionary lookup (hyphenated words, multi-word selection, menu long-press to open it), tightened the Dashboard home experience, and improved KOReader Sync with clearer Auto Upload Options. Defaults are set for fewer surprises: short power sleeps the device, side long-press does nothing until you enable it, the status bar shows book progress and time left in Book, the clock stays visible, sleep wallpaper starts light (dark mode inverts the logo cleanly), and the reader opens at 12 pt with left-aligned paragraphs.
+Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. On top of CrossInk’s reading stack: offline dictionary, a Dashboard-first home, KOReader Sync polish, and calmer factory defaults. Details are in the features below.
 
 <p align="center">
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
@@ -41,7 +41,14 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
     </td>
   </tr>
   <tr>
-      </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary packs" /><br/>
+      <em>Dictionary Packs</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/controls.jpg" alt="Controls settings" /><br/>
+      <em>Controls Defaults</em>
+    </td>
     <td></td>
   </tr>
 </table>

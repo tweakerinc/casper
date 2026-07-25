@@ -1,21 +1,14 @@
 name: Deploy Pages
 
-# Auto-deploy is off by default: private repos on free GitHub plans cannot use
-# Pages (API 422: "Your current plan does not support GitHub Pages for this
-# repository"). The README + docs/*.md still render on github.com without Pages.
-#
-# To enable the docs site (https://tweakerinc.github.io/casper/):
-#   1. Make the repo Public (Settings → General → Danger Zone), OR upgrade to
-#      GitHub Pro / Team so private Pages is allowed.
-#   2. Settings → Pages → Source: GitHub Actions
-#   3. Uncomment the `push:` trigger below (or run this workflow manually).
+# Repo is public — GitHub Pages is available on the free plan.
+# Settings → Pages → Source: GitHub Actions (required once).
 
 on:
-  # push:
-  #   branches: [main, casper/reference]
-  #   paths:
-  #     - "docs/**"
-  #     - ".github/workflows/pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -36,25 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify Pages is available for this repo
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          code=$(curl -sS -o /tmp/pages.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pages" || true)
-          if [ "$code" = "404" ] || [ "$code" = "422" ]; then
-            echo "::error::GitHub Pages is not enabled/available for this repository (HTTP ${code})."
-            echo "Private + free plan cannot host Pages. Make the repo public or upgrade the plan,"
-            echo "then Settings → Pages → Source: GitHub Actions, and re-run this workflow."
-            cat /tmp/pages.json || true
-            exit 1
-          fi
-          echo "Pages site present (HTTP ${code})."
-
-      # enablement: true creates the Pages site when allowed by plan
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5

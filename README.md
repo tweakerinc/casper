@@ -1,9 +1,15 @@
+> Project Name: **Casper**
+> 
 > **This is a personal firmware project built on [Crosspoint Reader 1.5](https://github.com/crosspoint-reader/crosspoint-reader) & [CrossInk](https://github.com/uxjulia/crossink)** for the Xteink X3.  
-> Product name: **Casper**).
+
 
 ## What's different in Casper?
 
 Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. My goal was to maximize the usable space on the dashboard. I was able to fit lifetime stats at the bottom by rearranging things a bit. I made many minor changes to spelling, punctuation, and verbiage, in various menus. I also added the ability for you to select what appears in the four corners of your screen when you are reading a book. You could disable everything for a minimalist experience, or you can choose from Hide, Battery, Page Counter, Progress Percentage, Time left in Book or Chapter. There are a dozen or more other tiny changes like those throughout. The last big one is an auto upload feature for KoReader Sync.
+
+---
+
+Below Images are all from an XTEINK X3. I am still working on a custom Dashboard for the X4 that does not feel empty, since it lacks a real time clock certain stats won't track properly.
 
 <p align="center">
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />

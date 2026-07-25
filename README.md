@@ -5,6 +5,35 @@
 
 Casper is a personal build of CrossInk (https://github.com/uxjulia/CrossInk), rebranded and tuned for how I actually use the Xteink X3 day to day. On top of CrossInk’s reading stack I added offline dictionary lookup (hyphenated words, multi-word selection, menu long-press to open it), tightened the Dashboard home experience, and improved KOReader Sync with clearer Auto Upload Options. Defaults are set for fewer surprises: short power sleeps the device, side long-press does nothing until you enable it, the status bar shows book progress and time left in Book, the clock stays visible, sleep wallpaper starts light (dark mode inverts the logo cleanly), and the reader opens at 12 pt with left-aligned paragraphs.
 
+<p align="center">
+  <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
+</p>
+
+<p align="center"><em>Dashboard — current book, reading stats, lifetime totals, streak</em></p>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/reader-view.jpg" alt="Reader view" /><br/>
+      <em>Reader chrome</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word dictionary" /><br/>
+      <em>Multi-word lookup</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/dictionary-english.jpg" alt="English dictionary" /><br/>
+      <em>Dictionary card</em>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="./docs/images/casper/dictionary-spanish.jpg" alt="Spanish dictionary" width="280" />
+</p>
+
+**Full photo tour with captions:** **[docs/casper.md](./docs/casper.md)**
+
 ---
 
 **Note**: Target hardware is the **Xteink X3** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
@@ -65,6 +94,7 @@ To go back to official firmware, reflash from [crosspointreader.com](https://cro
 
 ## Documentation
 
+- [**Casper tour (photos)**](./docs/casper.md)
 - [User Guide](./USER_GUIDE.md)
 - [Installation](./docs/installation.md)
 - [Dictionary](./docs/dictionary.md)

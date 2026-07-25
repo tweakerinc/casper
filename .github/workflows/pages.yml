@@ -29,11 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pages site must already exist (Settings → Pages → GitHub Actions).
+      # Do not use enablement: true — GITHUB_TOKEN often cannot create the site.
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Build with Jekyll
         uses: actions/jekyll-build-pages@v1

@@ -9,7 +9,7 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 
 ---
 
-Below Images are all from an XTEINK X3. This firmware will work with the X4 but some of the features will be gated, simply becaue the X4 does not have a RTC (Real Time Clock). My main focus thus far has been the X3 but I will be spending a bit more time on the X4 interface once I have brainstormed more.
+Below Images are all from an XTEINK X3. This firmware will work with the X4 but some of the features will be gated, simply becaue the X4 does not have a RTC (Real Time Clock). My main focus thus far has been the X3 but I will be spending a bit more time on the X4.
 
 <p align="center">
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />

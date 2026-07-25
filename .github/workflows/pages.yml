@@ -24,19 +24,26 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/configure-pages@v6
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
 
-      - uses: actions/jekyll-build-pages@v1
+      # remote_theme (just-the-docs) needs a token so the build can fetch the theme,
+      # especially when the repo is private or rate-limited as anonymous.
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
         with:
           source: ./docs
           destination: ./_site
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/upload-pages-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./_site
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v4

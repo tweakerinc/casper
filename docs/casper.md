@@ -48,7 +48,7 @@ Reading view keeps chrome small so the page stays the focus.
 
 | Position | Content |
 |----------|---------|
-| Top | Battery, clock, book progress (`% Complete`) |
+| Top | Battery, clock, book progress (percent complete) |
 | Bottom-left | Time left (`3h 51m in Book`) |
 | Bottom-center | Chapter title |
 | Bottom-right | Chapter pages as `Pg. 1/23` |

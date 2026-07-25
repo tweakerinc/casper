@@ -27,7 +27,7 @@ Personal e-reader firmware for **Xteink X3/X4**, built on
 | | |
 |---|---|
 | **Dashboard** | Cover + book metrics + lifetime stats |
-| **Reader chrome** | Battery, clock, % complete, time left, `Pg. n/m` |
+| **Reader chrome** | Battery, clock, percent complete, time left, `Pg. n/m` |
 | **Dictionary** | Offline lookup, multi-word selection, bilingual packs |
 | **Stats** | Per-book and lifetime reading stats |
 | **Controls** | Short power = sleep · long-press menu = dictionary |

@@ -1,7 +1,51 @@
-remote_theme: just-the-docs/just-the-docs
+# Just the Docs — built by .github/workflows/pages.yml (actions/jekyll-build-pages)
 title: Casper
 description: Personal Xteink X3/X4 firmware built on CrossPoint Reader
-# Optional custom domain later:
-# url: https://your-domain.example
+# Project site: https://tweakerinc.github.io/casper/
+url: https://tweakerinc.github.io
+baseurl: /casper
+
+# Pin theme version so deploys don't break on remote default-branch churn
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+  - jekyll-include-cache
+
+# Do not ship dictionary blobs or non-site files through Pages
+exclude:
+  - "*.cxdict"
+  - "*.cxdict.sample"
+  - en.cxdict
+  - en.cxdict.sample
+  - en-es.cxdict
+  - es-en.cxdict
+  - Gemfile
+  - Gemfile.lock
+  - vendor
+  - node_modules
+
+# Optional: keep search on for the small doc set
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 2
+  preview_words_before: 3
+  preview_words_after: 3
+
+# Aux links in the top-right (theme chrome)
+aux_links:
+  "GitHub":
+    - "https://github.com/tweakerinc/casper"
+  "Releases":
+    - "https://github.com/tweakerinc/casper/releases"
+
+aux_links_new_tab: true
+
+# Heading anchors
+heading_anchors: true
+
+# Callouts etc. left at theme defaults
 mermaid:
   version: "10.9.0"

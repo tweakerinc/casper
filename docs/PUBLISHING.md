@@ -51,10 +51,29 @@ Remove `docs/CNAME` unless you own that domain (CrossInk’s CNAME must not ship
 
 ## 3. Enable GitHub Pages
 
+**Plan limit:** GitHub Pages for **private** repos requires **GitHub Pro / Team /
+Enterprise**. On a free plan, Pages only works if the repository is **public**.
+Otherwise the Deploy Pages workflow fails with:
+
+`Your current plan does not support GitHub Pages for this repository.`
+
+### If the repo is private (free plan)
+
+1. Either **make the repo public** (Settings → General → Danger Zone), or upgrade the plan.
+2. Settings → **Pages** → Source: **GitHub Actions**
+3. In `.github/workflows/pages.yml`, uncomment the `push:` trigger (or run
+   **Deploy Pages** manually via Actions → workflow_dispatch).
+4. Site URL: `https://tweakerinc.github.io/casper/`
+
+Until then, the **README** and `docs/*.md` still show with images on
+`https://github.com/tweakerinc/casper` — no Pages required.
+
+### If Pages is allowed
+
 1. Repo **Settings → Pages**
 2. Source: **GitHub Actions**
 3. Push to `main` touching `docs/**` or run workflow **Deploy Pages** manually
-4. Site URL will look like: `https://TweakerInc.github.io/casper/`
+4. Site URL will look like: `https://tweakerinc.github.io/casper/`
 
 Optional custom domain: set `url` / `CNAME` later (see Just the Docs docs).
 

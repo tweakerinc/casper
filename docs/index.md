@@ -8,8 +8,8 @@ nav_order: 1
 Personal e-reader firmware for **Xteink X3/X4**, built on
 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
 
-[View on GitHub](https://github.com/TweakerInc/casper) ·
-[Releases](https://github.com/TweakerInc/casper/releases) ·
+[View on GitHub](https://github.com/tweakerinc/casper) ·
+[Releases](https://github.com/tweakerinc/casper/releases) ·
 [Photo tour](./casper.md)
 
 <p align="center">
@@ -18,7 +18,7 @@ Personal e-reader firmware for **Xteink X3/X4**, built on
 
 ## Get firmware
 
-1. Open **[Releases](https://github.com/TweakerInc/casper/releases)**
+1. Open **[Releases](https://github.com/tweakerinc/casper/releases)**
 2. Download `firmware-default.bin` (or `tiny` / `xlarge` if you publish those)
 3. Follow **[Installation](./installation.md)**
 
@@ -27,19 +27,27 @@ Personal e-reader firmware for **Xteink X3/X4**, built on
 | | |
 |---|---|
 | **Dashboard** | Cover + book metrics + lifetime stats |
-| **Reader chrome** | Battery, clock, percent complete, time left, `Pg. n/m` |
-| **Dictionary** | Offline lookup, multi-word selection, bilingual packs |
-| **Stats** | Per-book and lifetime reading stats |
+| **Reader chrome** | Battery, clock, progress, time left, `Pg. n/m` |
+| **Reading stats** | Per-book and device lifetime with habit charts |
+| **Dictionary** | Multi-pack offline lookup, multi-word selection |
 | **Controls** | Short power = sleep · long-press menu = dictionary |
 
 ### Screenshots
 
 <p align="center">
-  <img src="./images/casper/reader-view.jpg" alt="Reader view" width="200" />
+  <img src="./images/casper/reading-view.jpg" alt="Reading view" width="180" />
   &nbsp;
-  <img src="./images/casper/multi-word-selection.jpg" alt="Multi-word dictionary" width="200" />
+  <img src="./images/casper/reading-stats.jpg" alt="Reading stats" width="180" />
   &nbsp;
-  <img src="./images/casper/dictionary-english.jpg" alt="English dictionary" width="200" />
+  <img src="./images/casper/english-definition.jpg" alt="Dictionary" width="180" />
+</p>
+
+<p align="center">
+  <img src="./images/casper/multi-word-selection.jpg" alt="Multi-word selection" width="180" />
+  &nbsp;
+  <img src="./images/casper/spanish-english.jpg" alt="Spanish-English" width="180" />
+  &nbsp;
+  <img src="./images/casper/controls.jpg" alt="Controls settings" width="180" />
 </p>
 
 **Full photo tour with captions:** **[Casper tour](./casper.md)**

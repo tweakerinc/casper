@@ -14,23 +14,44 @@ Casper is a personal build of CrossInk (https://github.com/uxjulia/CrossInk), re
 <table>
   <tr>
     <td align="center" width="33%">
-      <img src="./docs/images/casper/reader-view.jpg" alt="Reader view" /><br/>
+      <img src="./docs/images/casper/reading-view.jpg" alt="Reading view" /><br/>
       <em>Reader chrome</em>
     </td>
     <td align="center" width="33%">
-      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word dictionary" /><br/>
+      <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" /><br/>
+      <em>Book reading stats</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime stats" /><br/>
+      <em>Device lifetime stats</em>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" /><br/>
+      <em>Dictionary card</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" /><br/>
       <em>Multi-word lookup</em>
     </td>
     <td align="center" width="33%">
-      <img src="./docs/images/casper/dictionary-english.jpg" alt="English dictionary" /><br/>
-      <em>Dictionary card</em>
+      <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" /><br/>
+      <em>Spanish clitics</em>
     </td>
   </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary packs" /><br/>
+      <em>Dictionary packs</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="./docs/images/casper/controls.jpg" alt="Controls settings" /><br/>
+      <em>Controls defaults</em>
+    </td>
+    <td></td>
+  </tr>
 </table>
-
-<p align="center">
-  <img src="./docs/images/casper/dictionary-spanish.jpg" alt="Spanish dictionary" width="280" />
-</p>
 
 **Full photo tour with captions:** **[docs/casper.md](./docs/casper.md)**
 

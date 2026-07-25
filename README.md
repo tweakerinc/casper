@@ -51,7 +51,7 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 
 ### Casper highlights
 
-- **Casper Branding** — Custom boot logo of a cute ghost, web portal, serial version strings.
+- **Casper Branding** — Custom boot logo, web portal, serial version strings.
 - **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink). Lifetime stats were added and the layout was rearranged to make the most of the space.
 - **Offline Dictionary** — I spent a lot of time trying to get the look right. I wanted a pop up window with pronunciation, and numbered definitions. Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press Select while in the dictionary tool starts multi-word selection; extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match. Multiple **StarDict** packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
 - **Control defaults**

@@ -101,7 +101,7 @@ To go back to official firmware, reflash from [crosspointreader.com](https://cro
 
 ## Documentation
 
-- [**Casper tour (photos)**](./docs/casper.md)
+- [**Casper Tour (photos)**](./docs/casper.md)
 - [User Guide](./USER_GUIDE.md)
 - [Installation](./docs/installation.md)
 - [Dictionary](./docs/dictionary.md)

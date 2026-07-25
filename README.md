@@ -5,7 +5,10 @@
 
 ## What's different in Casper?
 
-Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. My goal was to maximize the usable space on the dashboard. I was able to fit lifetime stats at the bottom by rearranging things a bit. I made many minor changes to spelling, punctuation, and verbiage, in various menus. I also added the ability for you to select what appears in the four corners of your screen when you are reading a book. You could disable everything for a minimalist experience, or you can choose from Hide, Battery, Page Counter, Progress Percentage, Time left in Book or Chapter. There are a dozen or more other tiny changes like those throughout. The last big one is an auto upload feature for KoReader Sync.
+Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. This will flash to both the X3 and X4, however the dashboard is a little different for the X4 as it lacks a Real Time Clock for the date tracking.
+
+My goal was to maximize the usable space on the dashboard as well as implement a dictionary. I was able to fit lifetime stats at the bottom with some rearranging. I personally enjoy looking at them, but did not like having to go into the menu to get to them. I made many minor changes to spelling, punctuation, and verbiage, in various menus. I also added the ability for you to select what appears in the four corners of your screen when you are reading a book for the ultimate personalization. You could disable everything for a minimalist experience, or you could choose between Hide, Battery, Page Counter, Progress Percentage, Time left in Book, or Time left in Chapter for each corner. There are a dozen or more other tiny changes like those throughout. The other notable additions are an offline dictionary, and an auto upload feature for KoReader Sync. I am really happy with how the dictionary looks and produces information, but I am always open to suggestions and improvements.
+
 
 ---
 

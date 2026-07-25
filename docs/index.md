@@ -6,7 +6,7 @@ nav_order: 1
 # Casper
 
 Personal e-reader firmware for **Xteink X3/X4**, built on
-[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
+[CrossPoint Reader 1.5](https://github.com/crosspoint-reader/crosspoint-reader).
 
 [View on GitHub](https://github.com/tweakerinc/casper) ·
 [Releases](https://github.com/tweakerinc/casper/releases) ·

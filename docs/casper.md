@@ -7,10 +7,11 @@ description: Visual tour of Casper home, reader, stats, controls, and dictionary
 # Casper tour
 
 **Casper** is personal firmware for the **Xteink X3/X4**, built on
-[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
+[CrossPoint Reader 1.5](https://github.com/crosspoint-reader/crosspoint-reader).
 It keeps a solid EPUB/TXT reading core, then layers Casper branding and a
 reading-first UI: Dashboard home, redesigned reader chrome, reading stats,
-flexible controls, and offline dictionary lookup with multi-word selection.
+flexible controls, and offline StarDict dictionary lookup with multi-word
+selection. (KOReader Sync is **not** part of the current build.)
 
 [View on GitHub](https://github.com/tweakerinc/casper) ·
 [Releases](https://github.com/tweakerinc/casper/releases) ·
@@ -67,7 +68,8 @@ long-press menu opens the dictionary.
 
 ## Dictionary
 
-Offline packs on the SD card. Multi-select which dictionaries cascade on lookup.
+Offline **StarDict** folders under `/dictionaries/` (one folder per pack). Multi-select
+which packs cascade on lookup. Install notes: [Dictionary](./dictionary.md).
 
 ### Pack selection
 
@@ -101,8 +103,6 @@ look up the phrase (e.g. collocations like `por favor`).
 
 *Multi-word selection — `por favor` → “please”.*
 
-More install detail: [Dictionary](./dictionary.md).
-
 ---
 
 ## Highlights at a glance
@@ -111,7 +111,8 @@ More install detail: [Dictionary](./dictionary.md).
 - **Dashboard** home + quiet reader chrome
 - **Reading stats** per book and this device (with charts)
 - **Controls** defaults: sleep / refresh / dictionary
-- **Offline dictionary** with multi-pack cascade and multi-word selection
+- **Offline StarDict dictionary** with multi-pack cascade and multi-word selection
+- **Not current:** KOReader Sync
 
 ---
 

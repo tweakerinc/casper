@@ -3,7 +3,7 @@
 
 ## What's different in Casper
 
-Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. On top of CrossInk’s reading stack: offline dictionary, a Dashboard-first home, KOReader Sync polish, and calmer factory defaults. Details are in the features below.
+Casper is a personal build on [CrossPoint Reader 1.5](https://github.com/crosspoint-reader/crosspoint-reader), rebranded and tuned for how I actually use the Xteink X3 day to day. On top of that reading stack: offline dictionary, a Dashboard-first home, reading stats, and calmer factory defaults. Details are in the features below.
 
 <p align="center">
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
@@ -51,13 +51,16 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 ### Casper highlights
 
 - **Casper Branding** — Custom boot logo of a cute ghost, web portal, serial version strings.
-- **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink) All I did was add lifetime stats and rearrange things a bit to make the most out of the space we have.
-- **Offline Dictionary** — Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press while in Dictionary Tool will open multi-word selection, extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match.  Multiple packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
+- **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink). Lifetime stats were added and the layout was rearranged to make the most of the space.
+- **Offline Dictionary** — Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press Select while in the dictionary tool starts multi-word selection; extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match. Multiple **StarDict** packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
 - **Control defaults**
   - Short-Press Power → **Sleep**
+  - Long-Press Power → **Force refresh**
   - Long-Press Menu → **Dictionary**
-  - Side long-press → **Ignore** (no multi-page when resting a finger)
-- **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`), Percent Complete moved to top-right, pages are still bottom right but "Pg." has been added for aesthetics.
+  - Side long-press → **Off** (no multi-page when resting a finger)
+- **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`); percent complete top-right; pages bottom-right with a `Pg.` prefix.
+
+**Not currently available:** KOReader Sync (and related Auto Upload Options) are not working in this build.
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
@@ -65,14 +68,16 @@ For version-by-version notes, see [Releases](https://github.com/TweakerInc/caspe
 
 ### Dictionary
 
-Casper can look up words offline from packs on the SD card (`/dictionaries/`).
+Casper looks up words offline from **StarDict** folders on the SD card under `/dictionaries/` (or `/.dictionaries/`). One folder per pack (e.g. `English/`, `Spanish-English/`).
 
 See [Dictionary](./docs/dictionary.md) for pack layout and install notes.
 
 ### Reader features & controls
 
-- [Reader Features](./docs/reader-features.md) — options, stats, finished books, reading aids  
+- [Reader Features](./docs/reader-features.md) — options, stats, and related notes (some older CrossInk items are marked there)  
 - [Controls](./docs/controls.md) — shortcuts and remapping  
+
+
 
 ---
 

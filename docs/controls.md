@@ -45,12 +45,14 @@ When set to `Orientation Change`, hold a side button for about 2 seconds:
 
 ## Power, Back, and Menu Button Actions
 
-Defaults:
+Casper factory defaults:
 
-- Short-press Power Button Action: Ignore
-- Long-press Power Button Action: Sleep
-- Long-press Back Button Action: Browse Files
-- Long Press Menu Button Action: Ignore
+- Short-press Power Button Action: **Sleep**
+- Long-press Power Button Action: **Force refresh** / Refresh Screen
+- Long Press Menu Button Action: **Dictionary**
+- Side long-press: **Off** (no multi-page skip while resting a finger)
+
+Other builds or older CrossInk docs may list different defaults.
 
 Available actions include:
 

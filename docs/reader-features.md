@@ -5,177 +5,85 @@ nav_order: 17
 
 # Reader Features
 
-This page covers a subset of CrossInk reader features that go beyond basic page turning. It is not a complete list of every reader setting or action. For a more complete list of features as they were released, see the [releases page](https://github.com/TweakerInc/casper/releases).
+Casper is built on **CrossPoint Reader 1.5** with Casper UI and dictionary work on top. This page is a practical overview of reader-related behavior. Some older docs in this repo still describe **CrossInk-era** experiments; where those are **not** part of the current Casper build, they are marked below.
 
-The sections here focus on larger CrossInk-specific reader features. Small fixes, implementation details, and features that only arrived from upstream CrossPoint are intentionally left out.
+For release notes as published, see [Releases](https://github.com/TweakerInc/casper/releases). For screenshots, see [Casper tour](./casper.md).
 
-## In-book Reader Options
+---
 
-Reader settings are available directly from the in-book menu without leaving the book.
+## In-book and Settings options
 
-Open the reader menu and select **Reader Options** to adjust settings such as:
+Reader-facing options live under **Settings → Reader** (and related menus), for example:
 
-- Font family
-- Font size
-- Line spacing
-- Margins
-- Alignment
-- Image rendering
-- Bionic Reading / Guide Dots
-- Dark Reader Mode
+- Font family / size  
+- Line spacing  
+- Margins  
+- Paragraph alignment (Casper default: **left**)  
+- Image rendering  
+- Embedded book styles  
+- Hyphenation / Focus Reading (when present in the build)
 
-Changes take effect immediately.
+Changes apply on the next layout pass for the book.
 
-For books that are slow to index or fail because of complex publisher styling,
-see [EPUB Render Modes](./epub-render-modes.md).
+For books that are slow to index or fail because of complex publisher styling, see [EPUB Render Modes](./epub-render-modes.md) if that page still applies to your build.
 
-## Font Sizes And Downloadable Font Ranges
+---
 
-CrossInk adds a wider range of reader font-sizes, including smaller and larger point sizes for users who want denser pages or much larger text.
+## Fonts
 
-The reader can also use SD-card font packs with selectable font-size ranges. This lets you keep the installed firmware smaller while still using extra sizes or custom fonts from the SD card.
+Casper aims for comfortable e-ink type (Lexend Deca / Bitter in builds that include those packs; otherwise the firmware’s built-in families). SD-card font packs may still be supported via CrossPoint’s SD font system — see [SD Card Fonts](./sd-card-fonts.md) and [Font Build Variants](./font-build-variants.md).
 
-Related docs:
+---
 
-- [SD Card Fonts](./sd-card-fonts.md)
-- [Font Build Variants](./font-build-variants.md)
+## Time left and status bar
 
-## Dark Reader Mode
+The reader can show estimated time left **in book** or **in chapter**, plus battery, clock (when RTC is present), book progress %, chapter page counts (`Pg. n/m`), and an optional thin progress bar. Casper defaults lean toward book-scoped time left and a thin book progress bar.
 
-Dark Reader Mode reverses the reader colors so text is shown light-on-dark.
+Pace is learned from normal forward page turns. Use any **Reset reading pace** control in settings/stats if the estimate was trained by unusual navigation.
 
-Toggle it from **Reader settings**.
-
-Dark Reader Mode can also be assigned to shortcut actions, so it can be switched without opening the full settings menu.
-
-## Line Spacing
-
-CrossInk supports adjustable reader line spacing from compact to wide spacing.
-
-Use this when a book feels visually cramped, or when larger fonts need more vertical room to stay comfortable.
-
-## Guide Dots
-
-Guide Dots adds small dots between words. The idea comes from speed-reading guidance where focusing on the space between words can help peripheral vision pick up more of the surrounding text.
-
-Toggle it from **Reader settings**.
-
-## Force Paragraph Indents
-
-Some books do not define paragraph indents in a way the firmware understands, which can make the page look like one large wall of text.
-
-Force Paragraph Indents adds an indent at each new paragraph regardless of how the book is formatted.
-
-This works when **Reader Paragraph Alignment** is set to:
-
-- Left
-- Justify
-- Book's Style
-
-Toggle it from **Reader settings**.
-
-## Auto Page Turn
-
-Auto Page Turn can advance pages on a timer while reading.
-
-CrossInk adds a custom interval picker, so the interval is not limited to the built-in presets. The reader can also remember a different Auto Page Turn interval per book.
-
-Open the reader menu and select **Auto Page Turn** to configure it.
-
-## Time Left
-
-CrossInk can show estimated time left in the current chapter or book.
-
-The estimate is based on your recent forward-page reading pace. Non-linear jumps such as chapter skips, bookmark jumps, and footnote navigation are handled separately so they do not immediately distort the normal reading estimate.
-
-Use **Reset Reading Pace** if the estimate was trained by unusual reading behavior and you want it to learn again from fresh page turns.
+---
 
 ## Bookmarks
 
-CrossInk supports EPUB bookmarks from the reader.
+EPUB bookmarks from the reader (add, list, jump, delete) come from the CrossPoint reader stack when enabled in your build.
 
-You can:
+---
 
-- Add a bookmark while reading
-- See bookmark indicators in the reader
-- Open a bookmark list
-- Jump back to saved locations
-- Delete individual bookmarks
+## Reading stats
 
-## Clippings And Highlights
+Casper tracks **per-book** and **device lifetime** stats (sessions, time, progress, pace, streak, habit-style charts on supported screens). Open **Reading Stats** from the long-press menu (when assigned) or related home/Dashboard entry points.
 
-CrossInk supports EPUB text clippings from the reader. Use **Create Clipping**
-from the reader menu, select text on the current page, and save it.
+- Date-related detail needs a real-time clock (typical X3). X4 without RTC has a thinner clock/date story.  
+- Clear-cache tools should preserve progress/stats files when implemented as in current Casper.
 
-A saved clipping is used in three ways:
+### CrossInk-only / not current Casper
 
-- It appears as a highlight in the reader
-- It appears in the in-app clipping list for that book
-- It is appended to `/My Clippings.txt` on the SD card in a Kindle-style text format
+| Feature | Status |
+|---------|--------|
+| **KOReader Sync** / Auto Upload Options | **Not working** in the current Casper build — do not rely on docs that treat it as ready |
+| Nearby Position Sync (ESP-NOW) | CrossInk-era doc; not a Casper 1.5 highlight |
+| Nearby Reading Stats Sync | CrossInk-era doc; treat as optional/upstream only |
+| Dark Reader Mode, Guide Dots, Bionic/Focus Reading as product pillars | May exist upstream or partially; not the focus of the Casper photo tour |
+| Clippings / My Clippings.txt | CrossInk-era pipeline; confirm on your build before depending on it |
+| Stats-as-sleep-screen modes | Not a current Casper claim |
 
-The in-app clipping list is stored separately from the text export. Deleting a
-clipping from CrossInk removes the saved clipping and highlight from the device
-UI, but it does not rewrite old entries that were already appended to
-`/My Clippings.txt`.
+Older pages such as [Reading Stats Sync](./reading-stats-sync.md) and [Nearby Position Sync](./nearby-position-sync.md) remain for historical/upstream reference.
 
-For storage paths and binary format details, see [Data Cache](./data-cache.md)
-and [File Formats](./file-formats.md).
+---
 
-## Reading Stats
+## Finished books and Read folder
 
-CrossInk tracks per-book reading stats automatically and aggregates them into global stats.
+You can mark a book finished from the reader/menu when those actions are present. Optional **move finished books to `/Read/`** and **remove from recents** are system/library settings when enabled (default off in Casper factory settings).
 
-Tracked stats include:
+---
 
-- Total reading time
-- Number of sessions
-- Pages turned
-- Average session time
-- All-time reading stats, including total books read
+## Reader controls and shortcuts
 
-Recent CrossInk versions expanded this into a larger stats system, including synced totals, richer X3 stats screens, reading-streak and time charts, editable stat dates, idle-time filtering, reset controls, and all-time stats backup options.
+Casper factory control defaults:
 
-Note: Date-related stats require a device with a real-time clock (RTC) module. The X4 does not have an RTC module, therefore will not have as detailed stats as the X3.
+- Short power → **Sleep**  
+- Long power → **Force refresh**  
+- Long-press Menu → **Dictionary**  
+- Side long-press → **Off**
 
-Reading stats can also be used as a sleep screen, including the Minimal Stats sleep screen on supported builds.
-
-For two-device syncing, see [Reading Stats Sync](./reading-stats-sync.md).
-
-## Nearby Position Sync
-
-CrossInk can copy the current EPUB position from one nearby CrossInk reader to
-another over ESP-NOW. Open the same EPUB on both readers, choose **Nearby
-Position Sync** from the in-book menu on both devices, and press **Share** on
-the reader that is already at the correct page.
-
-The receiving reader shows the incoming position and only applies it after you
-confirm it.
-
-For details and troubleshooting, see [Nearby Position Sync](./nearby-position-sync.md).
-
-## Finished Books And Read Folder
-
-You can manually mark a book as finished from the in-book menu.
-
-At 99% book progress, CrossInk also shows a popup asking whether to mark the book as finished.
-
-If **Move finished books to Read folder** is enabled, books marked as finished are moved to `/Read/` on the SD card.
-
-Marking books as finished also contributes to the total **Books Read** reading stat.
-
-The file browser can also mark books as finished without opening them first.
-
-## Reader Controls And Shortcuts
-
-CrossInk adds reader-focused control options beyond the default button mappings.
-
-Examples include:
-
-- Reader-only front-button actions
-- Front and side button mappings that respect the current orientation
-- X3 tilt shortcuts
-- Power-button reader shortcut actions
-- Quick access to Controls from the in-reader menu
-- Side-button shortcuts for changing font size or font family
-
-For the full controls reference, see [Controls](./controls.md).
+Remapping and related options: [Controls](./controls.md).

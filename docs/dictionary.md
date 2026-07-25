@@ -3,101 +3,91 @@ title: Dictionary
 nav_order: 5
 ---
 
-# Dictionary (English + Spanish)
+# Dictionary
 
-Casper can look up words offline from dictionary packs on the SD card.
+Casper looks up words while reading using **offline StarDict packs** on the SD card.
 
-## Install dictionary files
+Casper does **not** use the older CXDict single-file format (`en.cxdict` under `/.crosspoint/dict/`). Everything is **one folder per dictionary** under `/dictionaries/` (or `/.dictionaries/`).
 
-Create this folder on the SD card:
+---
 
+## SD card layout
+
+### Roots (both supported)
+
+| Root | Notes |
+|------|--------|
+| `/dictionaries/` | Preferred. Visible in Browse when hidden files are shown. |
+| `/.dictionaries/` | Same rules; hidden by default in the file browser. |
+
+Discovery scans both roots. Folder names must not start with `.` and must not contain `/` or `\`.
+
+### One folder per pack
+
+```text
+/dictionaries/
+  English/
+    english.ifo          # optional metadata
+    english.idx          # required, uncompressed
+    english.dict         # required (or english.dict.dz)
+    english.qidx         # optional; device-generated index sidecar
+  English-Spanish/
+    …
+  Spanish-English/
+    …
 ```
-/.crosspoint/dict/
-```
 
-Copy any of these files into it (use these exact names):
+| Rule | Detail |
+|------|--------|
+| Folder name | Label in **Settings → Reader → Dictionary** (e.g. `English`). |
+| Single stem | Exactly **one** `.idx` basename inside the folder. |
+| Data file | Same stem with `.dict` **or** `.dict.dz` must exist. |
+| Uncompressed index | `.idx.gz` is **not** supported; decompress before copy. |
+| Optional `.ifo` | Recommended. Rejects `idxoffsetbits=64`. |
+| Ignored | `.syn` synonym files. |
 
-| File | Contents | Repo source |
-|------|----------|-------------|
-| `en.cxdict` | English **reader pack** (~150–250k headwords; Wiktionary-first, enPR, 2 senses) | `docs/en.cxdict` |
-| `es-en.cxdict` | Spanish → English | `docs/es-en.cxdict` |
-| `en-es.cxdict` | English → Spanish | `docs/en-es.cxdict` |
+### `.qidx` (device-built)
 
-You can install **one or more**. Lookup auto-tries installed packs in this order:
+Not part of a release zip. On first lookup (or when the index changes), the firmware writes a small sampled-offset table next to the `.idx`. Safe to delete; it rebuilds automatically (UI may show “Indexing…” once per pack).
 
-1. `en.cxdict` (EN)
-2. `es.cxdict` (ES)
-3. `es-en.cxdict` (ES→EN)
+---
 
-The popup shows which pack answered, e.g. `casa  [ES->EN]`.
+## Bundled packs
 
-### Recommended setup for bilingual reading
+Ship or copy whole folders under `/dictionaries/`:
 
-Copy all three shipped packs:
+| Folder | Role |
+|--------|------|
+| `English/` | English definitions |
+| `English-Spanish/` | English → Spanish |
+| `Spanish-English/` | Spanish → English |
 
-```
-/.crosspoint/dict/en.cxdict
-/.crosspoint/dict/es-en.cxdict
-/.crosspoint/dict/en-es.cxdict
-```
+Enable one or more packs under **Settings → Reader → Dictionary**. Multi-select cascades results with pack headers on the definition card. On first dictionary open with nothing selected, firmware may auto-enable every installed pack.
+
+---
 
 ## Use it while reading
 
 1. Open an EPUB.
-2. Open the reader menu and choose **Dictionary** (sits above **Select Chapter**), or assign **Dictionary** to the power-button short/long press under **Settings → Controls → Power Button**.
-3. Move the cursor onto a word (same navigation as clipping). Quotes and punctuation around the word are stripped automatically.
-4. Press **Select** to open the definition popup. Book text stays visible around the card.
-5. If several packs match (e.g. English **and** Spanish→English for `por`), the popup shows each under a `[EN]` / `[ES->EN]` section.
-6. Inflected forms like *gagging* / *missiles* expand to include the base word’s meaning when available. Circular adverb glosses like *obsequiously* → “in an obsequious manner” also pull in the base adjective definition. English entries often include an IPA pronunciation (`/…/`).
-7. Press **Select** again (**Close**) to dismiss the definition and keep choosing words.
-8. Press **Back** to leave dictionary mode.
-9. **Up/Down** scrolls long definitions while the popup is open.
+2. Long-press **Menu** (default) to open **Dictionary Lookup**, or choose Dictionary from the reader menu if available.
+3. Move to a word with Left/Right (and Up/Down by line). Soft hyphens and end-of-line hyphen splits are joined for lookup.
+4. Short **Select** looks up the word.
+5. **Multi-word:** long-press **Select** to arm a range, move to extend, short **Select** to look up the phrase.
+6. Definition card overlays the page (headword, optional pronunciation, pack sections). **Back** / **Done** dismisses.
 
-**Spanish in books:** install `es-en.cxdict` (and optionally `es.cxdict`) next to `en.cxdict`. Without a Spanish pack, Spanish tokens only match accidental English hits (e.g. acronyms).
+### Lookup behavior
 
-**Spanish clitics:** forms like *ayudame*, *dime*, *dámelo* are not always listed as headwords. The firmware strips object clitics (`me`, `te`, `se`, `lo`/`la`, …), looks up the stem or infinitive (`ayuda` / `ayudar`), and for ES→EN packs shows a natural English phrase on the first line when possible:
+- Punctuation and quotes are stripped; Spanish accents kept where possible (with an accent-fold fallback).
+- English-style stems (plurals, `-ing`, etc.).
+- Spanish object clitics (`ayúdame` → `ayuda` / `ayudar`) with a short natural phrase when the pack is bilingual.
+- Multi-word selections try the full phrase, collocation windows (e.g. `por favor`), then each token with the same rules.
 
-```
-help me
-ayuda (me / to me)
-help, aid, assistance
-```
-
-Copy the rebuilt `docs/es-en.cxdict` to the SD card for this to work.
-
-## Build packs yourself
-
-English is built **Wiktionary-first**, with **Open English WordNet** (modern WordNet)
-for gap-fill + short synonym hints, and public-domain Webster only for remaining holes:
-
-```bash
-# 1) Download English Wiktionary extract (~475 MB compressed) once:
-#    https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl.gz
-#    -> scripts/data/kaikki-en.jsonl.gz
-#
-# 2) OEWN JSON should live in scripts/data/oewn2025/ (see en-word.net)
-
-# Compact reader pack (default): ~280k words, 2 senses, limited forms, enPR preferred.
-# OEWN + Webster lemmas are always kept through the max-words trim (so literary
-# words like "pendulous" are not dropped when Wiktionary alone would fill the budget).
-python scripts/build_en_dict.py -o docs/en.cxdict
-
-# Optional: full kitchen-sink pack
-python scripts/build_en_dict.py -o docs/en-full.cxdict --full
-
-# Optional TSV overrides (highest priority): word<TAB>definition
-python scripts/build_en_dict.py -o docs/en.cxdict -i my_words.tsv
-```
-
-Spanish/English bilingual packs were converted from
-[open-dsl-dict Wiktionary tabfiles](https://github.com/open-dsl-dict/wiktionary-dict)
-(Creative Commons / GFDL). English monolingual uses
-[kaikki.org English Wiktionary](https://kaikki.org/dictionary/English/) +
-[Open English WordNet](https://en-word.net/) (CC-BY 4.0) + Webster gap-fill.
+---
 
 ## Notes
 
-- English + Spanish focus for this MVP.
-- Simple stemming helps plurals / basic endings.
-- Keys keep Spanish accents; a second pass folds accents if needed.
-- Not yet: StarDict / reader.dict auto-import, full modern slang, UI language picker.
+- Stock CrossPoint **StarDict** reader — not CXDict and not a full desktop StarDict feature set.
+- Arbitrary idioms only match if they exist as headwords or can be recovered via windows/stems.
+- Clear or reinstall packs on the SD card if you rename folders; settings store folder names.
+
+More UI detail: [Casper tour](./casper.md#dictionary).

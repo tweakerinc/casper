@@ -59,8 +59,7 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
   - Long-Press Menu → **Dictionary**
   - Side long-press → **Off** (no multi-page when resting a finger)
 - **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`); percent complete top-right; pages bottom-right with a `Pg.` prefix.
-
-**Not currently available:** Auto Upload for KOReader Sync are not working in this build.
+- **KOReader Sync** — CrossPoint 1.5 setup (Sign Up / Authenticate, default `sync.crosspointreader.com`), plus Casper **auto-upload on close** (Time / Percent / Adaptive). **Sync Behavior**: **Ask Every Time** (choose Apply vs Upload) or **Smart Sync** (auto-resolve). See [docs/koreader-sync.md](./docs/koreader-sync.md).
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
@@ -72,10 +71,23 @@ Casper looks up words offline from **StarDict** folders on the SD card under `/d
 
 See [Dictionary](./docs/dictionary.md) for pack layout and install notes.
 
+### KOReader Sync setup (1.5)
+
+1. **Settings → System → KOReader Sync**
+2. Enter **Username** / **Password** (same on all devices).
+3. Leave **Sync Server URL** empty for the CrossPoint server (`sync.crosspointreader.com`), **or** set `https://sync.koreader.rocks` for the legacy public server.
+4. On the **first** device: **Sign Up**. On others: **Authenticate** only.
+5. **Sync Behavior** → **Ask Every Time** if you want to choose Apply/Upload each manual sync; **Smart Sync** auto-resolves.
+6. Optional: **Auto Upload on Close** + **Upload Type** (Time / Percent / Adaptive).
+
+Full steps (including self-hosted): **[docs/koreader-sync.md](./docs/koreader-sync.md)**.
+
 ### Reader features & controls
 
-- [Reader Features](./docs/reader-features.md) — options, stats, and related notes (some older CrossInk items are marked there)  
+- [Reader Features](./docs/reader-features.md) — options, stats, and related notes  
 - [Controls](./docs/controls.md) — shortcuts and remapping  
+- [KOReader Sync](./docs/koreader-sync.md) — Sign Up, servers, Smart Sync, auto-upload  
+
 
 
 
@@ -110,6 +122,7 @@ To go back to official firmware, reflash from [crosspointreader.com](https://cro
 - [User Guide](./USER_GUIDE.md)
 - [Installation](./docs/installation.md)
 - [Dictionary](./docs/dictionary.md)
+- [KOReader Sync](./docs/koreader-sync.md)
 - [Font Build Variants](./docs/font-build-variants.md)
 - [Reader Features](./docs/reader-features.md)
 - [Controls](./docs/controls.md)

@@ -57,6 +57,7 @@ Personal e-reader firmware for **Xteink X3/X4**, built on
 - [Casper tour (photos)](./casper.md)
 - [Installation](./installation.md)
 - [Dictionary](./dictionary.md)
+- [KOReader Sync](./koreader-sync.md)
 - [Font Build Variants](./font-build-variants.md)
 - [Reader Features](./reader-features.md)
 - [Controls](./controls.md)

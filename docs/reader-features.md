@@ -60,7 +60,7 @@ Casper tracks **per-book** and **device lifetime** stats (sessions, time, progre
 
 | Feature | Status |
 |---------|--------|
-| **KOReader Sync** / Auto Upload Options | **Not working** in the current Casper build — do not rely on docs that treat it as ready |
+| **KOReader Sync** | Supported (1.5 Sign Up/Authenticate + Casper auto-upload). See [KOReader Sync](./koreader-sync.md) |
 | Nearby Position Sync (ESP-NOW) | CrossInk-era doc; not a Casper 1.5 highlight |
 | Nearby Reading Stats Sync | CrossInk-era doc; treat as optional/upstream only |
 | Dark Reader Mode, Guide Dots, Bionic/Focus Reading as product pillars | May exist upstream or partially; not the focus of the Casper photo tour |

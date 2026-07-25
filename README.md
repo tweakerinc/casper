@@ -3,7 +3,7 @@
 
 ## What's different in Casper?
 
-Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. My goal was to maximize the usable space on the dashboard. I was able to fit lifetime stats at the bottom by rearranging things a bit. I also changed the settings so you can now choose what you put in each of the four Corners of your Reader UI. You can choose between Battery, Page Counter, Progress Percentage, Timee Left in Book, and Time Left in Chapter. You can also choose to hide any corner if you prefer a minimalist view. I made many minor changes to spelling, punctuation, verbiage, in various menus. There are a dozen or more other tiny changes like those.
+Casper is a personal build, rebranded and tuned for how I actually use the Xteink X3 day to day. My goal was to maximize the usable space on the dashboard. I was able to fit lifetime stats at the bottom by rearranging things a bit. I made many minor changes to spelling, punctuation, verbiage, in various menus. I also changed default layouts like where the battery icon is located, etc. The Reader UI got some changes as well. I moved battery to the top left to match the dashboard, the % Complete was moved to the top right to declutter the bottom. I added "Pg." to the page numbers in the bottom right, as well as clarity on the timer in the bottom left. If you have turned on progress bar in (`Settings` -> `Reader` -> `Customize Status Bar`) it will either say Time Left `In Book` or `In Chapter` based on your selection. There are a dozen or more other tiny changes like those.
 
 <p align="center">
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
@@ -51,7 +51,7 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 
 ### Casper highlights
 
-- **Casper Branding** — Custom boot logo, web portal, serial version strings.
+- **Casper Branding** — Custom boot logo of a cute ghost, web portal, serial version strings.
 - **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink). Lifetime stats were added and the layout was rearranged to make the most of the space.
 - **Offline Dictionary** — I spent a lot of time trying to get the look right. I wanted a pop up window with pronunciation, and numbered definitions. Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press Select while in the dictionary tool starts multi-word selection; extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match. Multiple **StarDict** packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
 - **Control defaults**
@@ -60,7 +60,16 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
   - Long-Press Menu → **Dictionary**
   - Side long-press → **Off** (no multi-page when resting a finger)
 - **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`); percent complete top-right; pages bottom-right with a `Pg.` prefix.
-- **KOReader Sync** — CrossPoint 1.5 setup (Sign Up / Authenticate, default `sync.crosspointreader.com`), plus Casper **auto-upload on close** (Time / Percent / Adaptive). **Sync Behavior**: **Ask Every Time** (choose Apply vs Upload) or **Smart Sync** (auto-resolve). See [docs/koreader-sync.md](./docs/koreader-sync.md).
+- **KOReader Sync** — Sign Up / Authenticate (default `sync.crosspointreader.com`). **Sync Behavior** is four exclusive modes (pick one):
+
+  | Mode | Kind | What it does |
+  |------|------|----------------|
+  | **Ask Every Time** | Manual | Sync Progress asks **Apply Remote** vs **Upload Local**. No auto-upload on leave. |
+  | **Smart Sync** | Manual | CrossPoint 1.5-style: auto-resolve furthest progress / already synced. No auto-upload on leave. |
+  | **Percent** | Auto-upload | On leave, upload if progress advanced enough (default **1%**). Skip toast if not. |
+  | **Time** | Auto-upload | On leave, upload if enough time passed (default **1 hour**). Skip toast if not. |
+
+  Full setup: [docs/koreader-sync.md](./docs/koreader-sync.md).
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 
@@ -72,16 +81,17 @@ Casper looks up words offline from **StarDict** folders on the SD card under `/d
 
 See [Dictionary](./docs/dictionary.md) for pack layout and install notes.
 
-### KOReader Sync setup (1.5)
+### KOReader Sync setup
 
 1. **Settings → System → KOReader Sync**
 2. Enter **Username** / **Password** (same on all devices).
-3. Leave **Sync Server URL** empty for the CrossPoint server (`sync.crosspointreader.com`), **or** set `https://sync.koreader.rocks` for the legacy public server.
-4. On the **first** device: **Sign Up**. On others: **Authenticate** only.
-5. **Sync Behavior** → **Ask Every Time** if you want to choose Apply/Upload each manual sync; **Smart Sync** auto-resolves.
-6. Optional: **Auto Upload on Close** + **Upload Type** (Time / Percent / Adaptive).
+3. **Sign Up** (first device) or **Authenticate** (others).
+4. Leave **Sync Server URL** empty for `sync.crosspointreader.com`, or set `https://sync.koreader.rocks`.
+5. **Sync Behavior** (popup — pick **one**):
+   - **Ask Every Time** / **Smart Sync** — manual Sync Progress only (Smart Sync = CrossPoint 1.5 auto-resolve)
+   - **Percent** / **Time** — auto-upload when leaving a book (defaults 1% / 1 hour); not combined with Smart Sync
 
-Full steps (including self-hosted): **[docs/koreader-sync.md](./docs/koreader-sync.md)**.
+Full guide: **[docs/koreader-sync.md](./docs/koreader-sync.md)**.
 
 ### Reader features & controls
 

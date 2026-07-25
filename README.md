@@ -60,7 +60,7 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
   - Side long-press → **Off** (no multi-page when resting a finger)
 - **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`); percent complete top-right; pages bottom-right with a `Pg.` prefix.
 
-**Not currently available:** KOReader Sync (and related Auto Upload Options) are not working in this build.
+**Not currently available:** Auto Upload for KOReader Sync are not working in this build.
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
 

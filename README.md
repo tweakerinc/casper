@@ -51,9 +51,8 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
 ### Casper highlights
 
 - **Casper Branding** — Custom boot logo of a cute ghost, web portal, serial version strings.
-- **Dashboard** - Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink) All I did was add lifetime stats and rearrange things a bit to make the most out of the space we have.
-- **Offline Dictionary** — in-reader word selection, hyphen compounds, multi-word phrases; long-press Menu defaults to dictionary. It opens word selection on the page; move to a word and press Select to look it up (hyphenated compounds are handled). Press and hold Select to mark a range, move to extend it, then Select again to look up multiple words.
-- **KOReader Sync** — credentials + adaptive / furthest-ahead style options.
+- **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink) All I did was add lifetime stats and rearrange things a bit to make the most out of the space we have.
+- **Offline Dictionary** — Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press while in Dictionary Tool will open multi-word selection, extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match.  Multiple packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
 - **Control defaults**
   - Short-Press Power → **Sleep**
   - Long-Press Menu → **Dictionary**

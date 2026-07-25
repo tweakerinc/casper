@@ -9,46 +9,39 @@ Casper is a personal build of CrossInk (https://github.com/uxjulia/CrossInk), re
   <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
 </p>
 
-<p align="center"><em>Dashboard — current book, reading stats, lifetime totals, streak</em></p>
+<p align="center"><em>Dashboard Home Screen — Current Book, Reading Stats for Book & Lifetime Device, Streak</em></p>
 
 <table>
   <tr>
     <td align="center" width="33%">
       <img src="./docs/images/casper/reading-view.jpg" alt="Reading view" /><br/>
-      <em>Reader chrome</em>
+      <em>Reader UI</em>
     </td>
     <td align="center" width="33%">
       <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" /><br/>
-      <em>Book reading stats</em>
+      <em>Reading Stats Per Book</em>
     </td>
     <td align="center" width="33%">
       <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime stats" /><br/>
-      <em>Device lifetime stats</em>
+      <em>Device Lifetime Stats</em>
     </td>
   </tr>
   <tr>
     <td align="center" width="33%">
       <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" /><br/>
-      <em>Dictionary card</em>
+      <em>Dictionary Lookup</em>
     </td>
     <td align="center" width="33%">
       <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" /><br/>
-      <em>Multi-word lookup</em>
+      <em>Multi-Word Lookup</em>
     </td>
     <td align="center" width="33%">
       <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" /><br/>
-      <em>Spanish clitics</em>
+      <em>Spanish Translation</em>
     </td>
   </tr>
   <tr>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary packs" /><br/>
-      <em>Dictionary packs</em>
-    </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/controls.jpg" alt="Controls settings" /><br/>
-      <em>Controls defaults</em>
-    </td>
+      </td>
     <td></td>
   </tr>
 </table>

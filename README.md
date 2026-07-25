@@ -40,17 +40,6 @@ Casper is a personal build, rebranded and tuned for how I actually use the Xtein
       <em>Spanish Translation</em>
     </td>
   </tr>
-  <tr>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary packs" /><br/>
-      <em>Dictionary Packs</em>
-    </td>
-    <td align="center" width="33%">
-      <img src="./docs/images/casper/controls.jpg" alt="Controls settings" /><br/>
-      <em>Controls Defaults</em>
-    </td>
-    <td></td>
-  </tr>
 </table>
 
 **Full photo tour with captions:** **[docs/casper.md](./docs/casper.md)**

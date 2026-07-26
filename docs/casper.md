@@ -35,7 +35,7 @@ labels — **Menu · Browse · Settings · Read**.
 Chrome stays small so the page stays the focus: battery, clock, progress,
 time left, chapter, and page number.
 
-<img src="./images/casper/reading-view.jpg?v=20260726" alt="Casper reading view with status bar chrome" width="360" />
+<img src="./images/casper/reader-ui.jpg" alt="Casper reading view with status bar chrome" width="360" />
 
 *Reader — top battery / clock / percent complete; bottom time left, chapter, Pg. n/m.*
 

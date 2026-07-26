@@ -24,7 +24,7 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 <table>
   <tr>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/reading-view.jpg?v=20260726" alt="Reading view" width="280" /><br/>
+      <img src="./docs/images/casper/reader-ui.jpg" alt="Reading view" width="280" /><br/>
       <em>Reader UI</em>
     </td>
     <td align="center" valign="top" width="33%">

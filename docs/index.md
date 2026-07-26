@@ -35,7 +35,7 @@ Personal e-reader firmware for **Xteink X3/X4**, built on
 ### Screenshots
 
 <p align="center">
-  <img src="./images/casper/reading-view.jpg" alt="Reading view" width="180" />
+  <img src="./images/casper/reader-ui.jpg" alt="Reading view" width="180" />
   &nbsp;
   <img src="./images/casper/reading-stats.jpg" alt="Reading stats" width="180" />
   &nbsp;

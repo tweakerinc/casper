@@ -58,30 +58,78 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 
 **Note**: Target hardware is the **Xteink X3 & X4** (ESP32-C3). Flash at your own risk; keep a stock CrossPoint `.bin` so you can revert.
 
-### Casper highlights
+### Features
 
-- **Casper Branding** — Custom boot logo, web portal, serial version strings.
-- **Dashboard** — Dashboard Home Screen is essentially the same as [CrossInk](https://github.com/uxjulia/crossink). Lifetime stats were added and the layout was rearranged to make the most of the space.
-- **Offline Dictionary** — I spent a lot of time trying to get the look right. I wanted a pop up window with pronunciation, and numbered definitions. Long-press Menu opens word selection on the current page. Move to a word and press Select to look it up. Long-press Select while in the dictionary tool starts multi-word selection; extend with Left/Right, then short Select to look up the phrase. Soft-hyphen and end-of-line splits are joined so compounds still match. Multiple **StarDict** packs can run at once (e.g. English + Spanish–English), with stems, Spanish clitics, and collocation windows when the full phrase isn’t a headword.
-- **Control defaults**
-  - Short-Press Power → **Sleep**
-  - Long-Press Power → **Force refresh**
-  - Long-Press Menu → **Dictionary**
-  - Side long-press → **Off** (no multi-page when resting a finger)
-- **Reader UI** — Battery top-left; time remaining shows scope (`in Chapter` / `in Book`); percent complete top-right; pages bottom-right with a `Pg.` prefix.
-- **KOReader Sync** — Sign Up / Authenticate (default `sync.crosspointreader.com`). **Sync Behavior** is four exclusive modes (pick one):
+#### Dashboard
+Improved layout based on [CrossInk](https://github.com/uxjulia/crossink)'s dashboard (the best starting point). Space is used more efficiently so **Lifetime Stats** fit cleanly on the main home screen alongside the current book, progress, and glanceable book stats.
 
-  | Mode | Kind | What it does |
-  |------|------|----------------|
-  | **Ask Every Time** | Manual | Sync Progress asks **Apply Remote** vs **Upload Local**. No auto-upload on leave. |
-  | **Smart Sync** | Manual | CrossPoint 1.5-style: auto-resolve furthest progress / already synced. No auto-upload on leave. |
-  | **Percent** | Auto-upload | On leave, upload if progress advanced enough (default **1%**). Skip toast if not. |
-  | **Time** | Auto-upload | On leave, upload if enough time passed (default **1 hour**). Skip toast if not. |
+- **X3** (RTC): day streak, reader type, daily average, started / finish dates
+- **X4** (no RTC): session and pace metrics in place of calendar-only fields
+- One firmware image for **both** devices; only hardware-backed stats are gated
 
-  Full setup: [docs/koreader-sync.md](./docs/koreader-sync.md).
+Empty library still shows the full dashboard shell (frames and labels) so the home screen never looks broken before you open a first book.
+
+#### Offline Dictionary
+Popup definitions with pronunciation and numbered senses — formatting tuned for e-ink.
+
+- **Long-press Menu** while reading → dictionary word selection on the page
+- **Long-press Select** in the dictionary tool → multi-word selection (extend with Left/Right, short Select to look up)
+- Soft hyphens and end-of-line splits are joined so compounds still match
+- Multiple **StarDict** packs at once (e.g. English + Spanish–English), with stems and collocation fallbacks
+
+**Install:** put dictionary packs under `/dictionaries/` (or `/.dictionaries/`) on the SD card, then **Settings → Reader → Dictionary** and enable the packs you want. English and Spanish packs are the ones I ship and use; see [Dictionary](./docs/dictionary.md).
+
+#### Customizable Reader UI
+Choose what appears in every corner of the reading screen (or hide everything for a clean page).
+
+My preferred layout:
+
+| | Left | Center | Right |
+|--|------|--------|-------|
+| **Top** | Battery | Clock | % complete |
+| **Bottom** | Time left (chapter or book) | Chapter title | Chapter pages (`Pg. n/m`) |
+
+Any element can be shown, hidden, or moved under **Settings → Reader → Customise Status Bar**. Thin book progress bar by default.
+
+#### Menu & UI improvements
+- Clearer spelling and wording throughout menus
+- Settings kept reachable with fewer clicks; **side buttons scroll horizontal Settings tabs** instead of only walking the full list
+- **Long-press Read** on the Dashboard → quick book menu (stats, reset pace, mark finished, remove from recent, etc.)
+- Front home map on Dashboard: **Menu · Browse · Settings · Read**
+- Improved **Manage Fonts** flow with a more accurate, full-width preview
+- Default reading face: **Lexend Deca 12**
+- Double-line Settings header / tab chrome for clearer hierarchy
+
+**Controls (defaults)**
+
+| Action | Behavior |
+|--------|----------|
+| Short-press Power | Sleep / wake |
+| Long-press Power | Screen refresh |
+| Long-press Menu | Dictionary (while reading) |
+| Long-press Select (in dictionary) | Multi-word selection |
+| Side long-press | Off (no multi-page skip when resting a finger) |
+
+#### KOReader Sync
+Sign up / authenticate (default `sync.crosspointreader.com`). **Sync Behavior** is four exclusive modes (pick one):
+
+| Mode | Kind | What it does |
+|------|------|----------------|
+| **Ask Every Time** | Manual | Sync Progress asks **Apply Remote** vs **Upload Local**. No auto-upload on leave. |
+| **Smart Sync** | Manual | CrossPoint 1.5-style: furthest progress / already synced. No auto-upload on leave. |
+| **Percent** | Auto-upload | On leave, upload if progress advanced enough (default **1%**). |
+| **Time** | Auto-upload | On leave, upload if enough time passed (default **1 hour**). |
+
+Example: automatically upload when closing a book if you've read more than 1%, or if more than an hour has passed since the last upload.
+
+Full setup: [docs/koreader-sync.md](./docs/koreader-sync.md).
+
+#### Also included
+- **Casper branding** — boot logo, web portal titles, serial / version strings
+- **Reading Stats** screens for the current book and this device (open from the long-press book menu)
+- Works on **Xteink X3 and X4** from one build
 
 For version-by-version notes, see [Releases](https://github.com/TweakerInc/casper/releases).
-
 ---
 
 ### Dictionary

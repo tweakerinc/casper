@@ -15,7 +15,7 @@ My goal was to maximize the usable space on the dashboard as well as implement a
 Below Images are all from an XTEINK X3. This firmware will work with the X4 but some of the features will be gated, simply becaue the X4 does not have an RTC (Real Time Clock). My main focus thus far has been the X3 but I will be spending a bit more time on the X4.
 
 <p align="center">
-  <img src="./docs/images/casper/dashboard.jpg" alt="Casper Dashboard home" width="360" />
+  <img src="./docs/images/casper/dashboard.jpg?v=20260726" alt="Casper Dashboard home" width="360" />
 </p>
 
 <p align="center"><em>Dashboard Home Screen — Current Book, Reading Stats for Book & Lifetime Device, Streak</em></p>
@@ -24,7 +24,7 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 <table>
   <tr>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/reading-view.jpg" alt="Reading view" width="280" /><br/>
+      <img src="./docs/images/casper/reading-view.jpg?v=20260726" alt="Reading view" width="280" /><br/>
       <em>Reader UI</em>
     </td>
     <td align="center" valign="top" width="33%">

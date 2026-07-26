@@ -24,7 +24,7 @@ selection. (KOReader Sync is **not** part of the current build.)
 Current book cover, live metrics, lifetime totals, streak, and short front-button
 labels — **Menu · Browse · Settings · Read**.
 
-<img src="./images/casper/dashboard.jpg" alt="Casper Dashboard home with book cover and stats" width="360" />
+<img src="./images/casper/dashboard.jpg?v=20260726" alt="Casper Dashboard home with book cover and stats" width="360" />
 
 *Dashboard — cover, book metrics, lifetime grid, 16-day streak, Night Reader.*
 
@@ -35,7 +35,7 @@ labels — **Menu · Browse · Settings · Read**.
 Chrome stays small so the page stays the focus: battery, clock, progress,
 time left, chapter, and page number.
 
-<img src="./images/casper/reading-view.jpg" alt="Casper reading view with status bar chrome" width="360" />
+<img src="./images/casper/reading-view.jpg?v=20260726" alt="Casper reading view with status bar chrome" width="360" />
 
 *Reader — top battery / clock / percent complete; bottom time left, chapter, Pg. n/m.*
 

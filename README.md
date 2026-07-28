@@ -14,11 +14,30 @@ My goal was to maximize the usable space on the dashboard as well as implement a
 
 Below Images are all from an XTEINK X3. This firmware will work with the X4 but some of the features will be gated, simply becaue the X4 does not have an RTC (Real Time Clock). My main focus thus far has been the X3 but I will be spending a bit more time on the X4.
 
+## Themes
+
+### Bare · Stats
+
 <p align="center">
-  <img src="./docs/images/casper/dashboard.jpg?v=20260726" alt="Casper Dashboard home" width="360" />
+  <img src="./docs/images/casper/bare-theme.jpg?v=20260728" alt="Casper Bare theme home" height="420" />
+  &nbsp;&nbsp;
+  <img src="./docs/images/casper/dashboard.jpg?v=20260728" alt="Casper Stats theme home" height="420" />
 </p>
 
-<p align="center"><em>Dashboard Home Screen — Current Book, Reading Stats for Book & Lifetime Device, Streak</em></p>
+<p align="center">
+  <em><strong>Bare</strong> — just you and the book: cover, title, and simple actions focused on reading.<br/>
+  <strong>Stats</strong> — for power users and nerds who cannot get enough numbers: metrics, lifetime totals, streak.</em>
+</p>
+
+### Synopsis view
+
+<p align="center">
+  <img src="./docs/images/casper/synopsis-view.jpg?v=20260728" alt="Casper book synopsis view" height="420" />
+</p>
+
+<p align="center">
+  <em><strong>Synopsis</strong> — a short description of the current book without leaving the home experience.</em>
+</p>
 
 <!-- valign=top so short captions (e.g. "Reader UI") don't sink lower than longer ones on mobile -->
 <table>

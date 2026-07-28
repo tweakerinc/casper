@@ -19,12 +19,12 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 <table>
   <tr>
     <td align="center" valign="top" width="50%">
-      <strong>Bare</strong><br/><br/>
+      <h3>Bare</h3>
       <img src="./docs/images/casper/bare-theme.jpg?v=20260728" alt="Casper Bare theme home" width="320" /><br/>
       <em>Just you and the book: cover, title, and simple actions focused on reading.</em>
     </td>
     <td align="center" valign="top" width="50%">
-      <strong>Stats</strong><br/><br/>
+      <h3>Stats</h3>
       <img src="./docs/images/casper/dashboard.jpg?v=20260728" alt="Casper Stats theme home" width="320" /><br/>
       <em>For power users and nerds who cannot get enough numbers: metrics, lifetime totals, streak.</em>
     </td>

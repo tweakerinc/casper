@@ -16,32 +16,28 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
 
 ## Themes
 
-### Bare · Stats
-
-<p align="center">
-  <img src="./docs/images/casper/bare-theme.jpg?v=20260728" alt="Casper Bare theme home" height="420" />
-  &nbsp;&nbsp;
-  <img src="./docs/images/casper/dashboard.jpg?v=20260728" alt="Casper Stats theme home" height="420" />
-</p>
-
-<p align="center">
-  <em><strong>Bare</strong> — just you and the book: cover, title, and simple actions focused on reading.<br/>
-  <strong>Stats</strong> — for power users and nerds who cannot get enough numbers: metrics, lifetime totals, streak.</em>
-</p>
-
-### Synopsis view
-
-<p align="center">
-  <img src="./docs/images/casper/synopsis-view.jpg?v=20260728" alt="Casper book synopsis view" height="420" />
-</p>
-
-<p align="center">
-  <em><strong>Synopsis</strong> — a short description of the current book without leaving the home experience.</em>
-</p>
+<table>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <strong>Bare</strong><br/><br/>
+      <img src="./docs/images/casper/bare-theme.jpg?v=20260728" alt="Casper Bare theme home" width="320" /><br/>
+      <em>Just you and the book: cover, title, and simple actions focused on reading.</em>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <strong>Stats</strong><br/><br/>
+      <img src="./docs/images/casper/dashboard.jpg?v=20260728" alt="Casper Stats theme home" width="320" /><br/>
+      <em>For power users and nerds who cannot get enough numbers: metrics, lifetime totals, streak.</em>
+    </td>
+  </tr>
+</table>
 
 <!-- valign=top so short captions (e.g. "Reader UI") don't sink lower than longer ones on mobile -->
 <table>
   <tr>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/synopsis-view.jpg?v=20260728" alt="Book synopsis" width="280" /><br/>
+      <em>Synopsis</em>
+    </td>
     <td align="center" valign="top" width="33%">
       <img src="./docs/images/casper/reader-ui.jpg" alt="Reading view" width="280" /><br/>
       <em>Reader UI</em>
@@ -50,12 +46,12 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
       <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" width="280" /><br/>
       <em>Reading Stats Per Book</em>
     </td>
+  </tr>
+  <tr>
     <td align="center" valign="top" width="33%">
       <img src="./docs/images/casper/lifetime-stats.jpg" alt="Device stats" width="280" /><br/>
       <em>Device Lifetime Stats</em>
     </td>
-  </tr>
-  <tr>
     <td align="center" valign="top" width="33%">
       <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" width="280" /><br/>
       <em>Dictionary Lookup</em>
@@ -64,10 +60,14 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
       <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" width="280" /><br/>
       <em>Multi-Word Lookup</em>
     </td>
+  </tr>
+  <tr>
     <td align="center" valign="top" width="33%">
       <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" width="280" /><br/>
       <em>Spanish Translation</em>
     </td>
+    <td></td>
+    <td></td>
   </tr>
 </table>
 

@@ -39,35 +39,41 @@ Below Images are all from an XTEINK X3. This firmware will work with the X4 but 
       <em>Synopsis</em>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/reader-ui.jpg" alt="Reading view" width="280" /><br/>
+      <img src="./docs/images/casper/reader-ui.jpg?v=20260728" alt="Reading view" width="280" /><br/>
       <em>Reader UI</em>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/reading-stats.jpg" alt="Reading stats" width="280" /><br/>
-      <em>Reading Stats Per Book</em>
+      <img src="./docs/images/casper/customize-reader-ui.jpg?v=20260728" alt="Customize Reader UI" width="280" /><br/>
+      <em>Customize Reader UI</em>
     </td>
   </tr>
   <tr>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/lifetime-stats.jpg" alt="Device stats" width="280" /><br/>
-      <em>Device Lifetime Stats</em>
+      <img src="./docs/images/casper/manage-fonts.jpg?v=20260728" alt="Manage Fonts" width="280" /><br/>
+      <em>Manage Fonts</em>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/english-definition.jpg" alt="English dictionary" width="280" /><br/>
+      <img src="./docs/images/casper/english-definition.jpg?v=20260728" alt="English dictionary" width="280" /><br/>
       <em>Dictionary Lookup</em>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-word selection" width="280" /><br/>
+      <img src="./docs/images/casper/multi-word-selection.jpg?v=20260728" alt="Multi-word selection" width="280" /><br/>
       <em>Multi-Word Lookup</em>
     </td>
   </tr>
   <tr>
     <td align="center" valign="top" width="33%">
-      <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish-English" width="280" /><br/>
+      <img src="./docs/images/casper/spanish-english.jpg?v=20260728" alt="Spanish-English" width="280" /><br/>
       <em>Spanish Translation</em>
     </td>
-    <td></td>
-    <td></td>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/reading-stats.jpg?v=20260728" alt="Reading stats" width="280" /><br/>
+      <em>Reading Stats Per Book</em>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <img src="./docs/images/casper/lifetime-stats.jpg?v=20260728" alt="Device stats" width="280" /><br/>
+      <em>Device Lifetime Stats</em>
+    </td>
   </tr>
 </table>
 

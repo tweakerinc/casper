@@ -18,13 +18,6 @@ with multi-word selection and bilingual packs.
 |:----:|:-----:|:----------:|
 | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
 
-
-| Theme | Who it’s for | Home actions |
-|-------|----------------|--------------|
-| **Bare** | Just you and the book. Large cover, title/author, minimal UI | **Menu · Library · Synopsis · Read** |
-| **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu · Library · Settings · Read** |
-| **Stats-Life** | Stats plus **lifetime device stats** on home screen | **Menu · Library · Settings · Read**  |
-
 > **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
 
 <h2 align="center">Gallery</h2>

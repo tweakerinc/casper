@@ -27,7 +27,7 @@ dictionary lookup with multi-word selection.
 
 | Bare | Stats | Stats-Life |
 |:----:|:-----:|:----------:|
-| <img src="./images/casper/bare-theme.jpg" alt="Casper Bare theme home" width="240" /> | <img src="./images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="240" /> | <img src="./images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="240" /> |
+| <img src="./images/casper/bare-home.jpg" alt="Casper Bare theme home" width="240" /> | <img src="./images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="240" /> | <img src="./images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="240" /> |
 
 ### Bare
 

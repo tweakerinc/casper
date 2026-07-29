@@ -17,17 +17,17 @@ with multi-word selection and bilingual packs.
 | Bare | Stats | Stats-Life |
 |:----:|:-----:|:----------:|
 | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
-| **Bare** | **Stats** | **Stats-Life** |
+
 
 | Theme | Who it’s for | Home actions |
 |-------|----------------|--------------|
-| **Bare** | Just you and the book — large cover, title/author, minimal chrome | **Menu · Library · Synopsis · Read** |
+| **Bare** | Just you and the book. Large cover, title/author, minimal UI | **Menu · Library · Synopsis · Read** |
 | **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu · Library · Settings · Read** |
-| **Stats-Life** | Stats plus **lifetime device stats** on home | Same as Stats |
+| **Stats-Life** | Stats plus **lifetime device stats** on home screen | **Menu · Library · Settings · Read**  |
 
 > **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
 
-## Screenshots
+<h2 align="center">Gallery</h2>
 
 | Synopsis | Reading UI | Multi-Word Lookup | Dictionary Lookup |
 |:--------:|:----------:|:-----------------:|:-----------------:|
@@ -46,15 +46,6 @@ with multi-word selection and bilingual packs.
 
 **Full photo tour:** **[docs/casper.md](./docs/casper.md)**
 
-## Highlights
-
-| | |
-|---|---|
-| **Bare home** | Cover-first, minimal chrome, Synopsis on the front row |
-| **Stats / Stats-Life** | Cover + book metrics; Stats-Life adds lifetime totals on home |
-| **Reader chrome** | Six-slot status bars, battery modes, progress, time left, chapter, pages |
-| **Dictionary** | StarDict packs, multi-pack cascade, multi-word selection, Spanish clitics |
-| **Stats tracking** | Per-book + lifetime; optional tracking off; backup under System → Stats |
 
 ## Docs
 

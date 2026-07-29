@@ -16,25 +16,35 @@ with multi-word selection and bilingual packs.
 
 | Bare | Stats | Stats-Life |
 |:----:|:-----:|:----------:|
-| <img src="./docs/images/casper/bare-home.jpg" alt="Casper Bare theme home" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="260" /> |
+| <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
+| **Bare** | **Stats** | **Stats-Life** |
 
 | Theme | Who it’s for | Home actions |
 |-------|----------------|--------------|
-| **Bare** | Readers who want it to feel like just them and the book — large cover, title/author, minimal chrome | **Menu · Library · Synopsis · Read** (long-press Menu → Settings, Library → Recents, Read → book menu) |
-| **Stats** | Power users who want detailed book data: reading time, time left, progress, daily average, pages/min, start & est. finish | **Menu · Library · Settings · Read** |
-| **Stats-Life** | Everything in **Stats**, plus **lifetime device stats** on the home screen | Same as Stats |
+| **Bare** | Just you and the book — large cover, title/author, minimal chrome | **Menu · Library · Synopsis · Read** |
+| **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu · Library · Settings · Read** |
+| **Stats-Life** | Stats plus **lifetime device stats** on home | Same as Stats |
 
 > **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
 
-### Synopsis
+## Screenshots
 
-<p align="center">
-  <img src="./docs/images/casper/synopsis-view.jpg" height="360" alt="Casper book synopsis view" />
-</p>
+| Synopsis | Reading UI | Multi-Word Lookup | Dictionary Lookup |
+|:--------:|:----------:|:-----------------:|:-----------------:|
+| <img src="./docs/images/casper/synopsis-view.jpg" alt="Synopsis" width="200" /> | <img src="./docs/images/casper/reader-ui.jpg" alt="Reading UI" width="200" /> | <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-Word Lookup" width="200" /> | <img src="./docs/images/casper/dictionary-lookup.jpg" alt="Dictionary Lookup" width="200" /> |
+| Synopsis | Reading UI | Multi-Word Lookup | Dictionary Lookup |
 
-<p align="center">
-  <em><strong>Synopsis</strong> — short blurb for the current book (Bare home button or long-press book menu).</em>
-</p>
+| Reading Stats | Lifetime Stats | Controls | Dictionary Settings |
+|:-------------:|:--------------:|:--------:|:-------------------:|
+| <img src="./docs/images/casper/reading-stats.jpg" alt="Reading Stats" width="200" /> | <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime Reading Stats" width="200" /> | <img src="./docs/images/casper/controls.jpg" alt="Controls" width="200" /> | <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary Settings" width="200" /> |
+| Reading Stats | Lifetime Stats | Controls | Dictionary Settings |
+
+| Spanish Translation | Manage Fonts | Customize Reader UI | Settings |
+|:-------------------:|:------------:|:-------------------:|:--------:|
+| <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish Translation" width="200" /> | <img src="./docs/images/casper/manage-fonts.jpg" alt="Manage Fonts" width="200" /> | <img src="./docs/images/casper/customize-reader-ui.jpg" alt="Customize Reader UI" width="200" /> | <img src="./docs/images/casper/settings.jpg" alt="Settings" width="200" /> |
+| Spanish Translation | Manage Fonts | Customize Reader UI | Settings |
+
+**Full photo tour:** **[docs/casper.md](./docs/casper.md)**
 
 ## Highlights
 
@@ -45,37 +55,6 @@ with multi-word selection and bilingual packs.
 | **Reader chrome** | Six-slot status bars, battery modes, progress, time left, chapter, pages |
 | **Dictionary** | StarDict packs, multi-pack cascade, multi-word selection, Spanish clitics |
 | **Stats tracking** | Per-book + lifetime; optional tracking off; backup under System → Stats |
-
-### More screenshots
-
-<p align="center">
-  <img src="./docs/images/casper/reader-ui.jpg" height="260" alt="Reader view" />
-  &nbsp;
-  <img src="./docs/images/casper/multi-word-selection.jpg" height="260" alt="Multi-word dictionary" />
-  &nbsp;
-  <img src="./docs/images/casper/dictionary-lookup.jpg" height="260" alt="Dictionary definition card" />
-</p>
-<p align="center">
-  <img src="./docs/images/casper/reading-stats.jpg" height="260" alt="Per-book reading stats" />
-  &nbsp;
-  <img src="./docs/images/casper/lifetime-stats.jpg" height="260" alt="Lifetime device stats" />
-  &nbsp;
-  <img src="./docs/images/casper/controls.jpg" height="260" alt="Controls settings" />
-</p>
-<p align="center">
-  <img src="./docs/images/casper/dictionary-settings.jpg" height="260" alt="Dictionary pack selection" />
-  &nbsp;
-  <img src="./docs/images/casper/spanish-english.jpg" height="260" alt="Spanish–English lookup" />
-  &nbsp;
-  <img src="./docs/images/casper/manage-fonts.jpg" height="260" alt="Manage Fonts" />
-</p>
-<p align="center">
-  <img src="./docs/images/casper/customize-reader-ui.jpg" height="260" alt="Customize Reader UI" />
-  &nbsp;
-  <img src="./docs/images/casper/settings.jpg" height="260" alt="Settings" />
-</p>
-
-**Full photo tour:** **[docs/casper.md](./docs/casper.md)**
 
 ## Docs
 

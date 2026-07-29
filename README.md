@@ -3,7 +3,7 @@
 Personal firmware for **Xteink X3/X4**, based on
 **[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)**.
 
-Casper keeps CrossPointΓÇÖs stable reader core and adds branding plus a
+Casper keeps CrossPoint’s stable reader core and adds branding plus a
 reading-first UI: **Bare**, **Stats**, and **Stats-Life** home themes,
 redesigned **reader chrome**, **reading stats**, and a **StarDict dictionary**
 with multi-word selection and bilingual packs.
@@ -11,7 +11,7 @@ with multi-word selection and bilingual packs.
 <h2 align="center">Themes</h2>
 
 <p align="center">
-  Home skins for different reading styles. Pick one under <strong>Settings ΓåÆ Display ΓåÆ Theme</strong>.
+  Home skins for different reading styles. Pick one under <strong>Settings → Display → Theme</strong>.
 </p>
 
 | Bare | Stats | Stats-Life |
@@ -19,11 +19,11 @@ with multi-word selection and bilingual packs.
 | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
 
 
-| Theme | Who itΓÇÖs for | Home actions |
+| Theme | Who it’s for | Home actions |
 |-------|----------------|--------------|
-| **Bare** | Just you and the book. Large cover, title/author, minimal UI | **Menu ┬╖ Library ┬╖ Synopsis ┬╖ Read** |
-| **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu ┬╖ Library ┬╖ Settings ┬╖ Read** |
-| **Stats-Life** | Stats plus **lifetime device stats** on home screen | **Menu ┬╖ Library ┬╖ Settings ┬╖ Read**  |
+| **Bare** | Just you and the book. Large cover, title/author, minimal UI | **Menu · Library · Synopsis · Read** |
+| **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu · Library · Settings · Read** |
+| **Stats-Life** | Stats plus **lifetime device stats** on home screen | **Menu · Library · Settings · Read**  |
 
 > **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
 
@@ -55,25 +55,25 @@ Feature overview from **[Casper v0.1.3](https://github.com/tweakerinc/casper/rel
 
 Built for people who want detailed reading data. **Stats** tracks Reading Time, Time Left in Book/Chapter, Progress, Daily Average, Pages per Minute, book start date, and estimated finish date. **Stats-Life** includes everything and adds Lifetime Device Stats to your Home Screen.
 
-`Menu` ┬╖ `Library` ┬╖ `Settings` ┬╖ `Read`  
-(+ long-press **Read** ΓåÆ quick book menu: mark finished, remove from recents, delete stats/cache, view synopsis, etc.)
+`Menu` · `Library` · `Settings` · `Read`  
+(+ long-press **Read** → quick book menu: mark finished, remove from recents, delete stats/cache, view synopsis, etc.)
 
 #### Bare
 
-Designed for readers who simply want to feel as if it is them and their book ΓÇö a minimal theme loaded with functionality.
+Designed for readers who simply want to feel as if it is them and their book — a minimal theme loaded with functionality.
 
-`Menu` ┬╖ `Library` ┬╖ `Synopsis` ┬╖ `Read`
+`Menu` · `Library` · `Synopsis` · `Read`
 
-- Long-press **Menu** ΓåÆ Settings  
-- Long-press **Library** ΓåÆ Recents  
-- Long-press **Read** ΓåÆ book quick menu  
+- Long-press **Menu** → Settings  
+- Long-press **Library** → Recents  
+- Long-press **Read** → book quick menu  
 
 > **Note:** Certain date/time features only work on the **X3** (the X4 does not have a real-time clock).
 
 ### System + Reader Status Bars
 
 Fully customizable status bars with slot-based placement and live previews.  
-Choose exactly what appears in the top status bar and position items in any of the **6 available slots** (Top/Bottom ├ù Left/Middle/Right) independently for the **system UI** and the **reader**.
+Choose exactly what appears in the top status bar and position items in any of the **6 available slots** (Top/Bottom × Left/Middle/Right) independently for the **system UI** and the **reader**.
 
 ### Battery Display Options
 
@@ -96,9 +96,9 @@ Fully customizable button remapping.
 Front buttons act as a list; side buttons can be set as tabs (or whatever you prefer).  
 A popular setup is using the side buttons as left/right controls to scroll through horizontal tabs.
 
-### System ΓåÆ Stats Folder
+### System → Stats Folder
 
-New options under **Settings ΓåÆ System ΓåÆ Stats**:
+New options under **Settings → System → Stats**:
 
 - Enable / Disable Stat Tracking  
 - Auto Backup  
@@ -121,15 +121,15 @@ Unified design language across the interface:
 
 ### Book Synopsis
 
-In the **Bare** theme, a **Synopsis** button is available on the home screen (requires synopsis metadata ΓÇö easy to add with Calibre).
+In the **Bare** theme, a **Synopsis** button is available on the home screen (requires synopsis metadata — easy to add with Calibre).
 
 You can also long-press **Select/Open** on any book in the library to open a quick menu that includes the synopsis. Useful for refreshing your memory or choosing your next book without leaving the device.
 
 ### Reader Shortcuts
 
-- Long-press **Select** ΓåÆ Dictionary  
-- Long-press **Select** again while in dictionary ΓåÆ Multi-word select mode  
-- **Menu** button ΓåÆ Reader options menu  
+- Long-press **Select** → Dictionary  
+- Long-press **Select** again while in dictionary → Multi-word select mode  
+- **Menu** button → Reader options menu  
 
 ### Dictionary
 
@@ -159,8 +159,8 @@ Flash with the CrossPoint web installer (**Custom .bin**) or `esptool` (app at
 
 ## Credits
 
-- [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) ΓÇö firmware base  
-- Casper branding / UI overlay ΓÇö this project  
+- [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) — firmware base  
+- Casper branding / UI overlay — this project  
 
 ## License
 

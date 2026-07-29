@@ -17,17 +17,17 @@ with multi-word selection and bilingual packs.
 | Bare | Stats | Stats-Life |
 |:----:|:-----:|:----------:|
 | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
-| **Bare** | **Stats** | **Stats-Life** |
+
 
 | Theme | Who it’s for | Home actions |
 |-------|----------------|--------------|
-| **Bare** | Just you and the book — large cover, title/author, minimal chrome | **Menu · Library · Synopsis · Read** |
+| **Bare** | Just you and the book. Large cover, title/author, minimal UI | **Menu · Library · Synopsis · Read** |
 | **Stats** | Book metrics: reading time, time left, progress, pace, start & est. finish | **Menu · Library · Settings · Read** |
-| **Stats-Life** | Stats plus **lifetime device stats** on home | Same as Stats |
+| **Stats-Life** | Stats plus **lifetime device stats** on home screen | **Menu · Library · Settings · Read**  |
 
 > **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
 
-## Screenshots
+<h2 align="center">Gallery</h2>
 
 | Synopsis | Reading UI | Multi-Word Lookup | Dictionary Lookup |
 |:--------:|:----------:|:-----------------:|:-----------------:|
@@ -46,15 +46,101 @@ with multi-word selection and bilingual packs.
 
 **Full photo tour:** **[docs/casper.md](./docs/casper.md)**
 
-## Highlights
+---
 
-| | |
-|---|---|
-| **Bare home** | Cover-first, minimal chrome, Synopsis on the front row |
-| **Stats / Stats-Life** | Cover + book metrics; Stats-Life adds lifetime totals on home |
-| **Reader chrome** | Six-slot status bars, battery modes, progress, time left, chapter, pages |
-| **Dictionary** | StarDict packs, multi-pack cascade, multi-word selection, Spanish clitics |
-| **Stats tracking** | Per-book + lifetime; optional tracking off; backup under System → Stats |
+## Features
+
+Feature overview from **[Casper v0.1.3](https://github.com/tweakerinc/casper/releases/tag/v0.1.3)** (New Themes and UI Overhaul). Full release notes and firmware assets are on the [Releases](https://github.com/tweakerinc/casper/releases) page.
+
+### Themes
+
+#### Stats & Stats-Life
+
+Built for people who want detailed reading data. **Stats** tracks Reading Time, Time Left in Book/Chapter, Progress, Daily Average, Pages per Minute, book start date, and estimated finish date. **Stats-Life** includes everything and adds Lifetime Device Stats to your Home Screen.
+
+`Menu` · `Library` · `Settings` · `Read`  
+(+ long-press **Read** → quick book menu: mark finished, remove from recents, delete stats/cache, view synopsis, etc.)
+
+#### Bare
+
+Designed for readers who simply want to feel as if it is them and their book — a minimal theme loaded with functionality.
+
+`Menu` · `Library` · `Synopsis` · `Read`
+
+- Long-press **Menu** → Settings  
+- Long-press **Library** → Recents  
+- Long-press **Read** → book quick menu  
+
+> **Note:** Certain date/time features only work on the **X3** (the X4 does not have a real-time clock).
+
+### System + Reader Status Bars
+
+Fully customizable status bars with slot-based placement and live previews.  
+Choose exactly what appears in the top status bar and position items in any of the **6 available slots** (Top/Bottom × Left/Middle/Right) independently for the **system UI** and the **reader**.
+
+### Battery Display Options
+
+Independent control for system and reader:
+
+- Hidden  
+- Icon only  
+- Percent only  
+- Icon + Percent  
+
+### Manage Fonts
+
+Completely redesigned with tabs, 50/50 live preview, a Download Fonts row, and improved organization.  
+Default fonts are now **Source Serif 4** and **Bitter**.  
+This is where you set font, size, layout, and style for how books are displayed, with a clean preview of every change.
+
+### Tabbed Navigation + Button Remapping
+
+Fully customizable button remapping.  
+Front buttons act as a list; side buttons can be set as tabs (or whatever you prefer).  
+A popular setup is using the side buttons as left/right controls to scroll through horizontal tabs.
+
+### System → Stats Folder
+
+New options under **Settings → System → Stats**:
+
+- Enable / Disable Stat Tracking  
+- Auto Backup  
+- Backup Now  
+
+You can turn stats off completely if you prefer a distraction-free reading experience.
+
+### Cover Thumbnail Pipeline
+
+Improved cover generation for clearer, higher-quality thumbnails.
+
+### UI Polish
+
+Unified design language across the interface:
+
+- Black chips instead of grey highlights  
+- Better title centering  
+- Cleaner version string  
+- Fixed long-press behavior in the Library  
+
+### Book Synopsis
+
+In the **Bare** theme, a **Synopsis** button is available on the home screen (requires synopsis metadata — easy to add with Calibre).
+
+You can also long-press **Select/Open** on any book in the library to open a quick menu that includes the synopsis. Useful for refreshing your memory or choosing your next book without leaving the device.
+
+### Reader Shortcuts
+
+- Long-press **Select** → Dictionary  
+- Long-press **Select** again while in dictionary → Multi-word select mode  
+- **Menu** button → Reader options menu  
+
+### Dictionary
+
+Offline StarDict packs on the SD card, with multi-pack cascade and multi-word selection.
+
+To install dictionaries, extract the `.dictionaries` folder to the **root of your SD card**.
+
+---
 
 ## Docs
 

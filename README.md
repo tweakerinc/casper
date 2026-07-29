@@ -3,10 +3,8 @@
 Personal firmware for **Xteink X3/X4**, based on
 **[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & [CrossInk](https://github.com/uxjulia/CrossInk). Huge thanks to everyone for all their hard working!
 
-Casper keeps CrossPoint’s stable reader core and adds branding plus a
-reading-first UI: **Bare**, **Stats**, and **Stats-Life** home themes,
-redesigned **reader chrome**, **reading stats**, and a **StarDict dictionary**
-with multi-word selection and bilingual packs.
+Casper keeps CrossPoint’s stable reader core, and CrossInks AMAZING Stat Tracking, and adds a redesign to the UI, from thoughtful long-press menus that bring your settings where they need to be, to completely customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary**
+with multi-word selection and bilingual packs. **Bare**, **Stats**, and **Stats-Life** themes.
 
 <h2 align="center">Themes</h2>
 

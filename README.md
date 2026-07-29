@@ -16,7 +16,7 @@ with multi-word selection and bilingual packs.
 
 | Bare | Stats | Stats-Life |
 |:----:|:-----:|:----------:|
-| <img src="./docs/images/casper/bare-theme.jpg" alt="Casper Bare theme home" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="260" /> |
+| <img src="./docs/images/casper/bare-home.jpg" alt="Casper Bare theme home" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="260" /> |
 
 | Theme | Who it’s for | Home actions |
 |-------|----------------|--------------|

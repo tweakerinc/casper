@@ -19,5 +19,7 @@ class Lyra3CoversTheme : public LyraTheme {
  public:
   void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
-                           std::function<bool()> storeCoverBuffer) const override;
+                           StoreCoverBufferFn storeCoverBuffer, const BookReadingStats* stats = nullptr,
+                           float progressPercent = -1.0f, const GlobalReadingStats* globalStats = nullptr,
+                           const char* currentChapterTitle = nullptr) const override;
 };

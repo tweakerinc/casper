@@ -122,7 +122,9 @@ void ClearCacheActivity::clearCache() {
 
       file.close();  // Close before attempting to delete
 
-      if (Storage.removeDir(fullPath.c_str())) {
+      // Wipe layout/render caches only — keep per-book stats (stats*.bin) and
+      // dictionary history, matching CrossInk clear-cache behavior.
+      if (clearBookCacheDirectoryPreservingStats(fullPath.c_str())) {
         clearedCount++;
       } else {
         LOG_ERR("CLEAR_CACHE", "Failed to remove: %s", fullPath.c_str());

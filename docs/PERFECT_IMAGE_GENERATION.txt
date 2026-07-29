@@ -1,0 +1,201 @@
+================================================================================
+PERFECT IMAGE GENERATION — Casper home book covers
+================================================================================
+Status: LOCKED recipe (Atkinson / 1:1 / multipass). Cache key c30.
+Perfect path: MCU max-height assembly + empty-bin carry-forward + balanced Atkinson.
+NO row hairline filters (c26–c28 filters either missed seams or invented bands).
+Stats + Stats-Life share one height key (statsFamilyHeroThumbHeight) and ONE file.
+
+This document is the exact recipe so the pipeline can be recreated by anyone.
+
+--------------------------------------------------------------------------------
+1. WHAT “PERFECT” MEANS
+--------------------------------------------------------------------------------
+- Clean 4-level grayscale covers on e-ink (not muddy 1-bit crosshatch).
+- No visible dither grids / moiré from scaling.
+- No full-width horizontal hairlines / MCU seams / empty-bin strips.
+- Full jacket visible (contain-fit, no side crop).
+- Home multipass paints true greys (HALF base → LSB → MSB → displayGrayBuffer).
+
+--------------------------------------------------------------------------------
+2. CACHE KEY / OUTPUT FILE NAME
+--------------------------------------------------------------------------------
+File: lib/Epub/Epub.cpp
+
+  getThumbBmpPath()     →  cachePath + "/thumb_c30_[HEIGHT].bmp"
+  getThumbBmpPath(H)    →  cachePath + "/thumb_c30_" + height + ".bmp"
+
+Meaning of the key:
+  c30 = generation recipe version (bump whenever gen quality settings change).
+  HEIGHT = pixel height of the generated BMP (width = floor(H*3/4) ≈ 3:4).
+
+IMPORTANT — one pipeline for ALL themes:
+  Epub::generateThumbBmp → JpegToBmpConverter::jpegFileToHighQualityCoverThumb…
+  Theme only chooses HEIGHT:
+    Bare            → 560
+    Stats+Stats-Life → statsFamilyHeroThumbHeight(pageW, pageH)  [SAME file]
+
+Bare: thumb_c30_560.bmp (420×560).
+Stats / Stats-Life: one shared thumb_c30_<H>.bmp (never two gens).
+
+Do NOT reintroduce c24 (480×640): Bare had to scale down → gridlines.
+
+--------------------------------------------------------------------------------
+3. ENTRY POINT (EPUB JPEG COVERS)
+--------------------------------------------------------------------------------
+File: lib/Epub/Epub.cpp  (generateThumbBmp / JPEG branch)
+
+  THUMB_TARGET_HEIGHT = height argument
+  THUMB_TARGET_WIDTH  = max(1, (height * 3 + 1) / 4)   // 3:4 contain box
+
+  JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(
+      jpegFile, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
+
+That API forces:
+  oneBit           = false
+  crop             = false   // contain-fit, never crop sides
+  coverHighQuality = true
+
+PNG covers use PngToBmpConverter::pngFileToCoverThumbBmpStreamWithSize with the
+same size box (same 3:4 math). Prefer keeping PNG path equivalent if you touch it.
+
+--------------------------------------------------------------------------------
+4. JPEG CONVERTER FLAGS (MUST STAY)
+--------------------------------------------------------------------------------
+File: lib/JpegToBmpConverter/JpegToBmpConverter.cpp
+
+  USE_8BIT_OUTPUT      = false   // 2-bit BMP (4 palette levels)
+  USE_ATKINSON         = true
+  USE_FLOYD_STEINBERG  = false
+  USE_NOISE_DITHERING  = false
+  USE_PRESCALE         = true    // scale to target BEFORE dither (critical)
+
+For coverHighQuality:
+  - AtkinsonDitherer(outWidth, /*balancedLevels=*/true)
+  - Mild lift: adjustPixelCoverThumb() == adjustPixel1Bit()
+  - Empty Y-scale bins: carry forward previous good gray (not black, not solid white)
+  - Pad remaining output rows at end of decode so BMP height is complete
+  - MCU row buffer cleared with mid-gray (128) at start of each MCU row
+  - Process max blockH across the MCU row (not only last column’s iHeight)
+  - NO row-delay hairline filter (c26–c28 invented bands)
+
+2-bit BMP palette (exact):
+  0 → 0x00 black
+  1 → 0x55 dark gray (85)
+  2 → 0xAA light gray (170)
+  3 → 0xFF white
+
+Balanced Atkinson thresholds (equal bins):
+  < 64 → 0
+  < 128 → 1
+  < 192 → 2
+  else  → 3
+Quantized values: 0, 85, 170, 255 (match palette).
+
+Legacy non-cover Atkinson (balancedLevels=false) is intentionally darker and is
+NOT used for home covers.
+
+--------------------------------------------------------------------------------
+5. PRE-DITHER LIFT (adjustPixelCoverThumb / adjustPixel1Bit)
+--------------------------------------------------------------------------------
+File: lib/GfxRenderer/BitmapHelpers.cpp
+
+  Soft gamma (~20% toward sqrt) + small lift (+8)
+  Light cream nudge on mid-highs (+6 when in ~155–230)
+  No hard black/white rails (those crushed jackets and brought grids back)
+
+This keeps midtones open so balanced Atkinson resolves them cleanly.
+
+--------------------------------------------------------------------------------
+6. SIZING RULES (1:1 BLIT — THE ANTI-GRID LAW)
+--------------------------------------------------------------------------------
+File: src/components/themes/HomeCoverMetrics.h
+
+LAW: Never nearest-neighbor scale a 2-bit Atkinson BMP up or down for display.
+     Gen pixel size must match the plate you blit (or only scale DOWN as a last
+     resort). Upscale/downscale of dither = visible gridlines / horizontal bands.
+
+Bare (fixed):
+  imageWidth  = 420
+  imageHeight = 560
+  Gen: thumb_c30_560.bmp = 420×560, blit 1:1.
+  Layout plate prefers exact 420×560; multipass snapshots the art rect.
+
+Stats + Stats-Life (ONE shared plate):
+  statsFamilyHeroPlate(pageW, pageH) → coverW × coverH
+  statsFamilyHeroThumbHeight(pageW, pageH) for gen AND path
+  Plate MUST equal gen size — never shrink plate after gen (Stats used to
+  re-height when measured stats column was wider than budget → scale → lines).
+  Under-box (title/author vs lifetime card) must NOT change height key.
+
+HomeActivity must request gen at the CURRENT theme’s hero height only
+(homeHeroThumbHeight). Cross-theme size fallbacks cause wrong thumb + rescale.
+
+--------------------------------------------------------------------------------
+7. DISPLAY MULTIPASS (HOME GREYS)
+--------------------------------------------------------------------------------
+File: src/activities/home/HomeActivity.cpp → multipassHomeCoverGrayscale()
+
+Order is mandatory (same idea as sleep covers):
+  1. UI already painted into framebuffer (2-bit midtones temporarily as black)
+  2. displayGrayscaleBase(HALF_REFRESH)     // base plane first
+  3. Draw cover art in GRAYSCALE_LSB → copyGrayscaleLsbBuffers()
+  4. Draw cover art in GRAYSCALE_MSB → copyGrayscaleMsbBuffers()
+  5. displayGrayBuffer()
+  6. Restore BW UI buffer if stored; setRenderMode(BW)
+
+Prefer 1:1 native blit when drawing art (drawnW==bw && drawnH==bh).
+Contain-fit only if the plate is smaller than the bitmap.
+
+Settled skip: coverGrayOnPanel + snapshot. Force refresh must clear settle and
+re-run multipass (do not leave a dark/HALF-only cover).
+onEnter freeCoverBuffer so theme switches always remultipass.
+
+--------------------------------------------------------------------------------
+8. DRAW RULES IN THEMES
+--------------------------------------------------------------------------------
+- Contain-fit jacket into plate (no crop).
+- Prefer drawBitmap(..., bw, bh) when sizes match (no rescale).
+- Stats family: top-left art align so stats top == cover top.
+- Bare: center art in plate; store art rect (not letterbox) for multipass.
+- Rounded mask + 1px stroke after blit is fine (does not affect gen quality).
+- Path lookup: only the current theme’s height key (no wrong-size fallbacks).
+
+--------------------------------------------------------------------------------
+9. KNOWN FAILURES TO AVOID (LEARNED THE HARD WAY)
+--------------------------------------------------------------------------------
+- Gen larger than display then scale down (c24 480×640) → grids on Bare.
+- Share one Bare-sized thumb with Focus/Stats when their plate is a different
+  width → scale → grids.
+- Process only last MCU column’s blockH → skipped source rows → horizontal seam.
+- Empty Y-scale bins as black → hairline; as solid white → band after dither.
+  Use carry-forward of last good gray per column (c30).
+- Short BMP height (not filling outHeight) → trash strip / line at bottom.
+- Double multipass / wrong thumb height → white flash or muddy art.
+- Floyd–Steinberg on covers → worm artifacts.
+- 1-bit thumbs for home greys → no real midtones on multipass.
+- Shrinking Stats plate when measured stats > budget → scale → horizontal lines.
+- Stats and Stats-Life using different height keys → two gens + missing cover.
+
+--------------------------------------------------------------------------------
+10. HOW TO REGENERATE AFTER A RECIPE CHANGE
+--------------------------------------------------------------------------------
+1. Bump c30 → cN+1 in Epub::getThumbBmpPath.
+2. Flash firmware.
+3. Delete Cache on the book (or force home refresh) so thumb_cN+1_*.bmp is built.
+4. Confirm 1:1: on-disk BMP width/height == on-screen drawn size for that theme.
+
+--------------------------------------------------------------------------------
+11. KEY SOURCE FILES (QUICK MAP)
+--------------------------------------------------------------------------------
+  lib/JpegToBmpConverter/JpegToBmpConverter.cpp   // decode, scale, dither, seams
+  lib/GfxRenderer/BitmapHelpers.cpp / .h          // lift + Atkinson balanced
+  lib/Epub/Epub.cpp                               // cache key + gen entry
+  src/components/themes/HomeCoverMetrics.h        // sizes / 1:1 law
+  src/activities/home/HomeActivity.cpp            // multipass + gen height
+  src/components/themes/bare/BareTheme.cpp        // 1:1 Bare blit
+  src/components/themes/focus/FocusTheme.cpp      // Stats + Stats-Life shared plate
+
+================================================================================
+END PERFECT IMAGE GENERATION
+================================================================================

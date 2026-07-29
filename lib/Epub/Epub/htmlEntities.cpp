@@ -44,7 +44,9 @@ static constexpr EntityPair ENTITY_LOOKUP[] = {
     {"&ldquo;", "\u201C"}, {"&le;", "≤"},          {"&lfloor;", "⌊"},     {"&lowast;", "∗"},  {"&loz;", "◊"},
     {"&lrm;", "\u200E"},   {"&lsaquo;", "‹"},      {"&lsquo;", "\u2018"}, {"&lt;", "<"},      {"&macr;", "¯"},
     {"&mdash;", "—"},      {"&micro;", "µ"},       {"&middot;", "·"},     {"&minus;", "−"},   {"&mu;", "μ"},
-    {"&nabla;", "∇"},      {"&nbsp;", "\xC2\xA0"}, {"&ndash;", "–"},      {"&ne;", "≠"},      {"&ni;", "∋"},
+    // Map nbsp to ASCII space: e-ink fonts measure NBSP poorly (often 0-width
+    // bitmap), and description layout treats ' ' as the inter-word gap.
+    {"&nabla;", "∇"},      {"&nbsp;", " "},        {"&ndash;", "–"},      {"&ne;", "≠"},      {"&ni;", "∋"},
     {"&not;", "¬"},        {"&notin;", "∉"},       {"&nsub;", "⊄"},       {"&ntilde;", "ñ"},  {"&nu;", "ν"},
     {"&oacute;", "ó"},     {"&ocirc;", "ô"},       {"&oelig;", "œ"},      {"&ograve;", "ò"},  {"&oline;", "‾"},
     {"&omega;", "ω"},      {"&omicron;", "ο"},     {"&oplus;", "⊕"},      {"&or;", "∨"},      {"&ordf;", "ª"},

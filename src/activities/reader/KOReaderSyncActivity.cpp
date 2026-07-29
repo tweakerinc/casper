@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Arduino.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
 #include <esp_wifi.h>
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
@@ -19,6 +21,7 @@
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "SilentRestart.h"
+#include "WifiCredentialStore.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -93,7 +96,7 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
-  returnToReader();
+  finishToDestination();
 }
 
 void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
@@ -111,34 +114,177 @@ void KOReaderSyncActivity::completeAlreadySynced() {
   }
   markAutoReturn();
   requestUpdate(true);
+  if (shouldFinishAtHome()) {
+    delay(600);
+    finishToDestination();
+  }
+}
+
+void KOReaderSyncActivity::finishAutoMode() {
+  exitHandled = true;
+  esp_wifi_stop();
+  wifiActivated = false;
+  LOG_DBG("KOSync", "Sync finished on leave, restarting to home");
+  silentRestart();
+}
+
+void KOReaderSyncActivity::finishToDestination() {
+  if (shouldFinishAtHome()) {
+    finishAutoMode();
+  } else {
+    returnToReader();
+  }
+}
+
+void KOReaderSyncActivity::showBusyStatus(const State nextState, const char* message, const char* detail) {
+  {
+    RenderLock lock(*this);
+    state = nextState;
+    statusMessage = message ? message : "";
+    statusDetail = detail ? detail : "";
+  }
+  // Wait until the frame is on screen — leave-sync blocks the main task for
+  // NTP / hash / TLS next, so requestUpdate(true) alone never paints in time.
+  requestUpdateAndWait();
 }
 
 void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
     LOG_DBG("KOSync", "WiFi connection failed, exiting");
-    returnToReader();
+    finishToDestination();
     return;
   }
 
   LOG_DBG("KOSync", "WiFi connected, starting sync");
 
-  {
-    RenderLock lock(*this);
-    state = SYNCING;
-    statusMessage = tr(STR_SYNCING_TIME);
-  }
-  requestUpdate(true);
+  // Paint each phase before blocking work so leave-sync never looks frozen.
+  showBusyStatus(SYNCING, tr(STR_SYNCING_TIME), WiFi.SSID().c_str());
 
-  // Sync time with NTP before making API requests
+  // Sync time with NTP before making API requests (up to ~5s).
   syncTimeWithNTP();
 
+  showBusyStatus(SYNCING, tr(STR_CALC_HASH), nullptr);
+
+  if (autoUploadOnly) {
+    performAutoUpload();
+  } else {
+    performSync();
+  }
+}
+
+bool KOReaderSyncActivity::mapRemoteProgressForCompare() {
+  ensureEpubLoaded();
+  if (!epub) {
+    return false;
+  }
+  hasRemoteProgress = true;
+  std::optional<CrossPointPosition> richMapped;
+  if (remoteProgress.position.has_value()) {
+    richMapped = ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer);
+  }
+  if (richMapped.has_value()) {
+    remotePosition = *richMapped;
+  } else {
+    SavedProgressPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
+    remotePosition = ProgressMapper::toCrossPoint(epub, koPos, renderer, currentSpineIndex, totalPagesInSpine);
+  }
+  return true;
+}
+
+void KOReaderSyncActivity::performAutoUpload() {
+  // Quiet leave path (Percent/Time): still protect against overwriting a further
+  // remote position — same furthest-ahead idea as Smart, but only pause for a
+  // choice when remote is ahead.
+  const DocumentMatchMethod primaryMethod = KOREADER_STORE.getMatchMethod();
+  documentHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
+  if (documentHash.empty()) {
+    showBusyStatus(SYNC_FAILED, tr(STR_SYNC_FAILED_MSG), tr(STR_HASH_FAILED));
+    delay(1500);
+    finishAutoMode();
+    return;
+  }
+  const std::string primaryHash = documentHash;
+  LOG_DBG("KOSync", "Quiet leave sync hash (%s): %s", matchMethodName(primaryMethod), documentHash.c_str());
+
+  showBusyStatus(SYNCING, tr(STR_FETCH_PROGRESS), nullptr);
+
+  auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
+  // Probe alternate document-id method so we don't miss progress from another matching mode.
+  {
+    const DocumentMatchMethod altMethod = alternateMatchMethod(primaryMethod);
+    const std::string altHash = calculateDocumentHashForMethod(epubPath, altMethod);
+    if (!altHash.empty() && altHash != documentHash) {
+      KOReaderProgress altProgress;
+      const auto altResult = KOReaderSyncClient::getProgress(altHash, altProgress);
+      if (altResult == KOReaderSyncClient::OK &&
+          (result == KOReaderSyncClient::NOT_FOUND || altProgress.percentage > remoteProgress.percentage)) {
+        documentHash = altHash;
+        remoteProgress = std::move(altProgress);
+        result = KOReaderSyncClient::OK;
+      }
+    }
+  }
+
+  if (result == KOReaderSyncClient::NOT_FOUND) {
+    LOG_DBG("KOSync", "Quiet leave: no remote progress; uploading local %.6f", localProgress.percentage);
+    documentHash = primaryHash;
+    performUpload();
+    return;
+  }
+  if (result != KOReaderSyncClient::OK) {
+    {
+      RenderLock lock(*this);
+      state = SYNC_FAILED;
+      statusMessage = KOReaderSyncClient::errorString(result);
+    }
+    markAutoReturn();  // allow timed exit; Back also works immediately
+    requestUpdate(true);
+    return;
+  }
+
+  static constexpr float SAME_PROGRESS_EPSILON = 0.001f;
+  const float delta = localProgress.percentage - remoteProgress.percentage;
+  LOG_DBG("KOSync", "Quiet leave compare local=%.6f remote=%.6f delta=%.6f", localProgress.percentage,
+          remoteProgress.percentage, delta);
+
+  if (std::fabs(delta) <= SAME_PROGRESS_EPSILON) {
+    // Still stamp so Percent/Time gates advance after a no-op sync.
+    {
+      float stampPercent = autoUploadBookPercent;
+      if (stampPercent < 0.0f && localProgress.percentage >= 0.0f) {
+        stampPercent = localProgress.percentage * 100.0f;
+      }
+      KOREADER_STORE.markAutoUploadSucceeded(epubPath.c_str(), stampPercent);
+    }
+    completeAlreadySynced();
+    return;
+  }
+
+  if (delta > 0) {
+    // Local further — safe to push. Prefer configured match method for the record.
+    documentHash = primaryHash;
+    performUpload();
+    return;
+  }
+
+  // Remote further — do not silently overwrite; ask Apply Remote vs Upload Local.
+  if (!mapRemoteProgressForCompare()) {
+    {
+      RenderLock lock(*this);
+      state = SYNC_FAILED;
+      statusMessage = tr(STR_SYNC_FAILED_MSG);
+    }
+    requestUpdate(true);
+    delay(1500);
+    finishAutoMode();
+    return;
+  }
   {
     RenderLock lock(*this);
-    statusMessage = tr(STR_CALC_HASH);
+    state = SHOWING_RESULT;
+    selectedOption = 0;  // default: keep remote (safer when remote is ahead)
   }
   requestUpdate(true);
-
-  performSync();
 }
 
 void KOReaderSyncActivity::performSync() {
@@ -149,19 +295,19 @@ void KOReaderSyncActivity::performSync() {
       RenderLock lock(*this);
       state = SYNC_FAILED;
       statusMessage = tr(STR_HASH_FAILED);
+      statusDetail.clear();
     }
-    requestUpdate(true);
+    if (shouldFinishAtHome()) {
+      markAutoReturn();
+    }
+    requestUpdateAndWait();
     return;
   }
   const std::string primaryHash = documentHash;
 
   LOG_DBG("KOSync", "Document hash (%s): %s", matchMethodName(primaryMethod), documentHash.c_str());
 
-  {
-    RenderLock lock(*this);
-    statusMessage = tr(STR_FETCH_PROGRESS);
-  }
-  requestUpdateAndWait();
+  showBusyStatus(SYNCING, tr(STR_FETCH_PROGRESS), nullptr);
 
   // Fetch remote progress. In smart mode, also probe the alternate document-id
   // method and use the furthest remote state we can find. This avoids a stale
@@ -215,6 +361,9 @@ void KOReaderSyncActivity::performSync() {
       state = SYNC_FAILED;
       statusMessage = KOReaderSyncClient::errorString(result);
     }
+    if (shouldFinishAtHome()) {
+      markAutoReturn();
+    }
     requestUpdate(true);
     return;
   }
@@ -226,7 +375,10 @@ void KOReaderSyncActivity::performSync() {
     {
       RenderLock lock(*this);
       state = SYNC_FAILED;
-      statusMessage = "";
+      statusMessage = tr(STR_SYNC_FAILED_MSG);
+    }
+    if (shouldFinishAtHome()) {
+      markAutoReturn();
     }
     requestUpdate(true);
     return;
@@ -285,12 +437,7 @@ void KOReaderSyncActivity::performSync() {
 }
 
 void KOReaderSyncActivity::performUpload() {
-  {
-    RenderLock lock(*this);
-    state = UPLOADING;
-    statusMessage = tr(STR_UPLOAD_PROGRESS);
-  }
-  requestUpdateAndWait();
+  showBusyStatus(UPLOADING, tr(STR_UPLOAD_PROGRESS), nullptr);
 
   // localProgress was pre-computed in EpubReaderActivity before the Epub was released.
   KOReaderProgress progress;
@@ -349,20 +496,166 @@ void KOReaderSyncActivity::performUpload() {
       statusMessage = KOReaderSyncClient::errorString(result);
     }
     requestUpdate();
+    if (shouldFinishAtHome()) {
+      delay(1500);
+      finishToDestination();
+    }
     return;
+  }
+
+  // Stamp per-book baseline after any successful upload (auto or manual).
+  {
+    float stampPercent = autoUploadBookPercent;
+    if (stampPercent < 0.0f && localProgress.percentage >= 0.0f) {
+      stampPercent = localProgress.percentage * 100.0f;
+    }
+    KOREADER_STORE.markAutoUploadSucceeded(epubPath.c_str(), stampPercent);
   }
 
   {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
   }
-  markAutoReturn();
+  if (smartSyncEnabled() || shouldFinishAtHome()) {
+    markAutoReturn();
+  }
   requestUpdate(true);
+
+  if (shouldFinishAtHome()) {
+    delay(800);
+    finishToDestination();
+  }
+}
+
+void KOReaderSyncActivity::startQuietWifiConnect() {
+  WIFI_STORE.loadFromFile();
+  quietWifiPending = true;
+  quietWifiAttempts = 0;
+  quietWifiBeginIssued = false;
+  quietWifiStartMs = 0;
+
+  // Prefer last-connected SSID as first try.
+  quietWifiCredIndex = 0;
+  const auto& creds = WIFI_STORE.getCredentials();
+  const std::string& last = WIFI_STORE.getLastConnectedSsid();
+  if (!last.empty()) {
+    for (size_t i = 0; i < creds.size(); ++i) {
+      if (creds[i].ssid == last) {
+        quietWifiCredIndex = i;
+        break;
+      }
+    }
+  }
+
+  const char* firstSsid = creds.empty() ? nullptr : creds[quietWifiCredIndex % creds.size()].ssid.c_str();
+  showBusyStatus(CONNECTING, tr(STR_CONNECTING_SAVED_WIFI), firstSsid);
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(50);
+}
+
+void KOReaderSyncActivity::tickQuietWifiConnect() {
+  if (!quietWifiPending) {
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    quietWifiPending = false;
+    WIFI_STORE.setLastConnectedSsid(WiFi.SSID().c_str());
+    WIFI_STORE.saveToFile();
+    LOG_DBG("KOSync", "Quiet WiFi connected: %s", WiFi.SSID().c_str());
+    onWifiSelectionComplete(true);
+    return;
+  }
+
+  const auto& creds = WIFI_STORE.getCredentials();
+  if (creds.empty()) {
+    quietWifiPending = false;
+    {
+      RenderLock lock(*this);
+      state = SYNC_FAILED;
+      statusMessage = tr(STR_WIFI_CONN_FAILED);
+    }
+    requestUpdate(true);
+    delay(1200);
+    finishToDestination();
+    return;
+  }
+
+  if (!quietWifiBeginIssued) {
+    if (quietWifiAttempts >= creds.size()) {
+      quietWifiPending = false;
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_WIFI_CONN_FAILED);
+      }
+      requestUpdate(true);
+      delay(1200);
+      finishToDestination();
+      return;
+    }
+    const auto& cred = creds[quietWifiCredIndex % creds.size()];
+    LOG_DBG("KOSync", "Quiet WiFi try [%u/%u]: %s", static_cast<unsigned>(quietWifiAttempts + 1),
+            static_cast<unsigned>(creds.size()), cred.ssid.c_str());
+    // Show network name so multi-SSID try/timeout does not look stuck.
+    char detail[48];
+    snprintf(detail, sizeof(detail), "%s (%u/%u)", cred.ssid.c_str(),
+             static_cast<unsigned>(quietWifiAttempts + 1), static_cast<unsigned>(creds.size()));
+    showBusyStatus(CONNECTING, tr(STR_CONNECTING_SAVED_WIFI), detail);
+    if (!cred.password.empty()) {
+      WiFi.begin(cred.ssid.c_str(), cred.password.c_str());
+    } else {
+      WiFi.begin(cred.ssid.c_str());
+    }
+    quietWifiBeginIssued = true;
+    quietWifiStartMs = millis();
+    return;
+  }
+
+  if (millis() - quietWifiStartMs < QUIET_WIFI_TIMEOUT_MS) {
+    return;  // still waiting
+  }
+
+  // Timeout — try next credential (circular from last-connected start).
+  WiFi.disconnect(true, false);
+  delay(30);
+  quietWifiBeginIssued = false;
+  quietWifiAttempts++;
+  quietWifiCredIndex = (quietWifiCredIndex + 1) % creds.size();
+}
+
+void KOReaderSyncActivity::drawFullPageStatus(const char* message, const char* detail) const {
+  renderer.clearScreen();
+  auto metrics = UITheme::getInstance().getMetrics();
+  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                 tr(STR_KOREADER_SYNC));
+  const int top = screen.y + screen.height / 2 - 40;
+  if (message && message[0]) {
+    UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top, message, true, EpdFontFamily::BOLD);
+  }
+  if (detail && detail[0]) {
+    UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 36, detail, true, EpdFontFamily::REGULAR);
+  }
+  // Busy phases: Back cancels. Terminal success/fail still offer Done via loop.
+  const bool busy = (state == CONNECTING || state == SYNCING || state == UPLOADING);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), busy ? "" : tr(STR_DONE), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
 }
 
 void KOReaderSyncActivity::onEnter() {
   Activity::onEnter();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+
+  // Sync Behavior → Disabled: never start WiFi or network work.
+  if (KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::OFF) {
+    LOG_DBG("KOSync", "Sync behavior Disabled; exiting without network");
+    finishToDestination();
+    return;
+  }
 
   // Check for credentials first
   if (!KOREADER_STORE.hasCredentials()) {
@@ -381,7 +674,14 @@ void KOReaderSyncActivity::onEnter() {
     return;
   }
 
-  // Launch WiFi selection subactivity
+  // Leave / auto-upload: quiet saved-network connect (Connecting… only).
+  // Manual Sync Progress keeps the full WiFi picker for first-time / failures.
+  if (useQuietWifi()) {
+    LOG_DBG("KOSync", "Starting quiet WiFi connect for leave sync");
+    startQuietWifiConnect();
+    return;
+  }
+
   LOG_DBG("KOSync", "Launching WifiSelectionActivity...");
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -390,14 +690,55 @@ void KOReaderSyncActivity::onEnter() {
 void KOReaderSyncActivity::onExit() {
   Activity::onExit();
 
+  if (exitHandled) {
+    return;
+  }
+
   if (wifiActivated) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestartToReader();
+    if (shouldFinishAtHome()) {
+      silentRestart();
+    } else {
+      silentRestartToReader();
+    }
   }
 }
 
 void KOReaderSyncActivity::render(RenderLock&&) {
+  // Quiet leave-sync: full-page status (no framebuffer snapshot — saves TLS heap).
+  if (useQuietLeaveUi()) {
+    if (state == NO_CREDENTIALS) {
+      drawFullPageStatus(tr(STR_NO_CREDENTIALS_MSG), tr(STR_KOREADER_SETUP_HINT));
+      return;
+    }
+    if (state == CONNECTING || state == SYNCING || state == UPLOADING) {
+      // statusDetail: SSID, try count, or other phase context.
+      drawFullPageStatus(statusMessage.c_str(), statusDetail.empty() ? nullptr : statusDetail.c_str());
+      return;
+    }
+    if (state == UPLOAD_COMPLETE) {
+      drawFullPageStatus(tr(STR_UPLOAD_SUCCESS), nullptr);
+      return;
+    }
+    if (state == SYNC_COMPLETE) {
+      drawFullPageStatus(tr(STR_ALREADY_SYNCED), nullptr);
+      return;
+    }
+    if (state == SYNC_FAILED) {
+      drawFullPageStatus(tr(STR_SYNC_FAILED_MSG),
+                         !statusDetail.empty() ? statusDetail.c_str()
+                         : !statusMessage.empty() ? statusMessage.c_str()
+                                                  : nullptr);
+      return;
+    }
+    if (state == NO_REMOTE_PROGRESS) {
+      drawFullPageStatus(tr(STR_NO_REMOTE_MSG), tr(STR_UPLOAD_PROMPT));
+      return;
+    }
+    // SHOWING_RESULT falls through to compare UI below.
+  }
+
   renderer.clearScreen();
 
   auto metrics = UITheme::getInstance().getMetrics();
@@ -419,16 +760,24 @@ void KOReaderSyncActivity::render(RenderLock&&) {
     return;
   }
 
-  if (state == SYNCING || state == UPLOADING) {
+  if (state == CONNECTING || state == SYNCING || state == UPLOADING) {
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top, statusMessage.c_str(), true, EpdFontFamily::BOLD);
+    if (!statusDetail.empty()) {
+      UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 36, statusDetail.c_str(), true,
+                                EpdFontFamily::REGULAR);
+    }
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
 
   if (state == SHOWING_RESULT) {
-    // Show comparison
+    int contentLeft = screen.x + metrics.contentSidePadding;
+    int contentWidth = screen.width - metrics.contentSidePadding * 2;
     top = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_PROGRESS_FOUND), true, EpdFontFamily::BOLD);
+
+    renderer.drawText(UI_10_FONT_ID, contentLeft, top, tr(STR_PROGRESS_FOUND), true, EpdFontFamily::BOLD);
 
     // Remote chapter name requires Epub (loaded lazily in performSync before this state).
     const int remoteTocIndex = epub->getTocIndexForSpineIndex(remotePosition.spineIndex);
@@ -441,47 +790,47 @@ void KOReaderSyncActivity::render(RenderLock&&) {
                                   : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(currentSpineIndex + 1));
 
     // Remote progress - chapter and page
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 40, tr(STR_REMOTE_LABEL), true);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, top + 36, tr(STR_REMOTE_LABEL), true);
     char remoteChapterStr[128];
     snprintf(remoteChapterStr, sizeof(remoteChapterStr), "  %s", remoteChapter.c_str());
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 65, remoteChapterStr);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, top + 58, remoteChapterStr);
     char remotePageStr[64];
     snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
              remoteProgress.percentage * 100);
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 90, remotePageStr);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, top + 80, remotePageStr);
 
+    int yLocal = top + 110;
     if (!remoteProgress.device.empty()) {
       char deviceStr[64];
       snprintf(deviceStr, sizeof(deviceStr), tr(STR_DEVICE_FROM_FORMAT), remoteProgress.device.c_str());
-      renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 115, deviceStr);
+      renderer.drawText(UI_10_FONT_ID, contentLeft, top + 102, deviceStr);
+      yLocal = top + 128;
     }
 
     // Local progress - chapter and page
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 150, tr(STR_LOCAL_LABEL), true);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, yLocal, tr(STR_LOCAL_LABEL), true);
     char localChapterStr[128];
     snprintf(localChapterStr, sizeof(localChapterStr), "  %s", localChapter.c_str());
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 175, localChapterStr);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, yLocal + 22, localChapterStr);
     char localPageStr[64];
     snprintf(localPageStr, sizeof(localPageStr), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), currentPage + 1, totalPagesInSpine,
              localProgress.percentage * 100);
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 200, localPageStr);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, yLocal + 44, localPageStr);
 
-    const int optionY = top + 230;
-    const int optionHeight = 30;
+    const int optionY = yLocal + 74;
+    const int optionHeight = 28;
 
     // Apply option
     if (selectedOption == 0) {
-      renderer.fillRect(screen.x, optionY - 2, screen.width - 1, optionHeight);
+      renderer.fillRect(contentLeft - 4, optionY - 2, contentWidth + 8, optionHeight);
     }
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, optionY, tr(STR_APPLY_REMOTE),
-                      selectedOption != 0);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, optionY, tr(STR_APPLY_REMOTE), selectedOption != 0);
 
     // Upload option
     if (selectedOption == 1) {
-      renderer.fillRect(screen.x, optionY + optionHeight - 2, screen.width - 1, optionHeight);
+      renderer.fillRect(contentLeft - 4, optionY + optionHeight - 2, contentWidth + 8, optionHeight);
     }
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, optionY + optionHeight,
-                      tr(STR_UPLOAD_LOCAL), selectedOption != 1);
+    renderer.drawText(UI_10_FONT_ID, contentLeft, optionY + optionHeight, tr(STR_UPLOAD_LOCAL), selectedOption != 1);
 
     // Bottom button hints
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -523,14 +872,43 @@ void KOReaderSyncActivity::render(RenderLock&&) {
 }
 
 void KOReaderSyncActivity::loop() {
-  if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE || state == SYNC_COMPLETE) {
-    if (autoReturnAt != 0 && millis() >= autoReturnAt) {
-      returnToReader();
+  // Cancel quiet Wi‑Fi / in-progress leave sync — never trap the user with no exit.
+  // Only Back cancels: the busy UI labels Confirm empty, and treating Confirm as
+  // cancel races with Ask-every-time (ConfirmationActivity selects on Confirm
+  // *press*; the subsequent *release* arrives while quiet Wi‑Fi is connecting
+  // and used to abort before NTP/hash/fetch ever ran).
+  if (quietWifiPending || state == CONNECTING || state == SYNCING || state == UPLOADING) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      LOG_DBG("KOSync", "User cancelled sync (state=%d quietWifi=%d)", static_cast<int>(state),
+              quietWifiPending ? 1 : 0);
+      quietWifiPending = false;
+      WiFi.disconnect(false);
+      finishToDestination();
       return;
     }
+    if (quietWifiPending) {
+      tickQuietWifiConnect();
+    }
+    return;
+  }
+
+  if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE || state == SYNC_COMPLETE) {
+    // Auto-dismiss after delay when set (success paths).
+    if (autoReturnAt != 0 && millis() >= autoReturnAt) {
+      finishToDestination();
+      return;
+    }
+    // Always allow Back / Confirm / tap to leave — especially leave-to-home failures
+    // that previously ignored input and left a dead screen.
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      returnToReader();
+      finishToDestination();
+      return;
+    }
+    int tx = 0;
+    int ty = 0;
+    if (mappedInput.wasScreenTapped(tx, ty)) {
+      finishToDestination();
     }
     return;
   }
@@ -581,7 +959,7 @@ void KOReaderSyncActivity::loop() {
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      returnToReader();
+      finishToDestination();
     }
     return;
   }
@@ -615,7 +993,7 @@ void KOReaderSyncActivity::loop() {
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      returnToReader();
+      finishToDestination();
     }
     return;
   }

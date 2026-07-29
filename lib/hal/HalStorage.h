@@ -29,6 +29,9 @@ class HalStorage {
   bool writeFile(const char* path, const String& content);
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
+  // Install SdFat timestamp callback from the RTC (optional UTC offset pointer into SETTINGS).
+  // Without this, new files/folders often land as 12/31/2025 or 1980 FAT defaults.
+  void installDateTimeCallback(const uint8_t* utcOffsetQuarterHoursBiased);
 
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);

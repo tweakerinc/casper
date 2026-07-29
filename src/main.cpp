@@ -32,6 +32,8 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "activities/reader/ReadingStatsUtils.h"
+#include "activities/reader/StatsBackup.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
 
@@ -42,71 +44,114 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
+static bool longPowerButtonHandled = false;
 
-// Fonts
-EpdFont notoserif14RegularFont(&notoserif_14_regular);
-EpdFont notoserif14BoldFont(&notoserif_14_bold);
-EpdFont notoserif14ItalicFont(&notoserif_14_italic);
-EpdFont notoserif14BoldItalicFont(&notoserif_14_bolditalic);
-EpdFontFamily notoserif14FontFamily(&notoserif14RegularFont, &notoserif14BoldFont, &notoserif14ItalicFont,
-                                    &notoserif14BoldItalicFont);
+void enterDeepSleep(bool fromTimeout = false);
+
+// Global long-press power actions that fire while still held (sleep / refresh).
+static bool isGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
+  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+         action == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH;
+}
+
+static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
+  const unsigned long held = gpio.getPowerButtonHeldTime();
+  if (mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
+    if (longPowerButtonHandled) {
+      longPowerButtonHandled = false;
+      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+    }
+    return held < SETTINGS.getPowerButtonLongPressDuration()
+               ? static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
+               : static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+  }
+
+  if (longPowerButtonHandled || !gpio.isPressed(HalGPIO::BTN_POWER) ||
+      held < SETTINGS.getPowerButtonLongPressDuration()) {
+    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+  }
+
+  const auto action = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+  if (!isGlobalPowerButtonAction(action)) {
+    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+  }
+  longPowerButtonHandled = true;
+  return action;
+}
+
+static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
+  switch (action) {
+    case CrossPointSettings::SHORT_PWRBTN::SLEEP:
+      enterDeepSleep();
+      return true;
+    case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
+      LOG_DBG("MAIN", "Manual screen refresh triggered");
+      if (!activityManager.handleForcedRefresh()) {
+        RenderLock lock;
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+// Reader + UI: Source Serif 4 (default) and Bitter. Lexend/Literata via SD download only.
 #ifndef OMIT_FONTS
-EpdFont notoserif12RegularFont(&notoserif_12_regular);
-EpdFont notoserif12BoldFont(&notoserif_12_bold);
-EpdFont notoserif12ItalicFont(&notoserif_12_italic);
-EpdFont notoserif12BoldItalicFont(&notoserif_12_bolditalic);
-EpdFontFamily notoserif12FontFamily(&notoserif12RegularFont, &notoserif12BoldFont, &notoserif12ItalicFont,
-                                    &notoserif12BoldItalicFont);
-EpdFont notoserif16RegularFont(&notoserif_16_regular);
-EpdFont notoserif16BoldFont(&notoserif_16_bold);
-EpdFont notoserif16ItalicFont(&notoserif_16_italic);
-EpdFont notoserif16BoldItalicFont(&notoserif_16_bolditalic);
-EpdFontFamily notoserif16FontFamily(&notoserif16RegularFont, &notoserif16BoldFont, &notoserif16ItalicFont,
-                                    &notoserif16BoldItalicFont);
-EpdFont notoserif18RegularFont(&notoserif_18_regular);
-EpdFont notoserif18BoldFont(&notoserif_18_bold);
-EpdFont notoserif18ItalicFont(&notoserif_18_italic);
-EpdFont notoserif18BoldItalicFont(&notoserif_18_bolditalic);
-EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFont, &notoserif18ItalicFont,
-                                    &notoserif18BoldItalicFont);
+EpdFont bitter12RegularFont(&bitter_12_regular);
+EpdFont bitter12BoldFont(&bitter_12_bold);
+EpdFont bitter12ItalicFont(&bitter_12_italic);
+EpdFont bitter12BoldItalicFont(&bitter_12_bolditalic);
+EpdFontFamily bitter12FontFamily(&bitter12RegularFont, &bitter12BoldFont, &bitter12ItalicFont,
+                                 &bitter12BoldItalicFont);
+EpdFont bitter14RegularFont(&bitter_14_regular);
+EpdFont bitter14BoldFont(&bitter_14_bold);
+EpdFont bitter14ItalicFont(&bitter_14_italic);
+EpdFont bitter14BoldItalicFont(&bitter_14_bolditalic);
+EpdFontFamily bitter14FontFamily(&bitter14RegularFont, &bitter14BoldFont, &bitter14ItalicFont,
+                                 &bitter14BoldItalicFont);
+EpdFont bitter16RegularFont(&bitter_16_regular);
+EpdFont bitter16BoldFont(&bitter_16_bold);
+EpdFont bitter16ItalicFont(&bitter_16_italic);
+EpdFont bitter16BoldItalicFont(&bitter_16_bolditalic);
+EpdFontFamily bitter16FontFamily(&bitter16RegularFont, &bitter16BoldFont, &bitter16ItalicFont,
+                                 &bitter16BoldItalicFont);
+EpdFont bitter18RegularFont(&bitter_18_regular);
+EpdFont bitter18BoldFont(&bitter_18_bold);
+EpdFont bitter18ItalicFont(&bitter_18_italic);
+EpdFont bitter18BoldItalicFont(&bitter_18_bolditalic);
+EpdFontFamily bitter18FontFamily(&bitter18RegularFont, &bitter18BoldFont, &bitter18ItalicFont,
+                                 &bitter18BoldItalicFont);
 
-EpdFont notosans12RegularFont(&notosans_12_regular);
-EpdFont notosans12BoldFont(&notosans_12_bold);
-EpdFont notosans12ItalicFont(&notosans_12_italic);
-EpdFont notosans12BoldItalicFont(&notosans_12_bolditalic);
-EpdFontFamily notosans12FontFamily(&notosans12RegularFont, &notosans12BoldFont, &notosans12ItalicFont,
-                                   &notosans12BoldItalicFont);
-EpdFont notosans14RegularFont(&notosans_14_regular);
-EpdFont notosans14BoldFont(&notosans_14_bold);
-EpdFont notosans14ItalicFont(&notosans_14_italic);
-EpdFont notosans14BoldItalicFont(&notosans_14_bolditalic);
-EpdFontFamily notosans14FontFamily(&notosans14RegularFont, &notosans14BoldFont, &notosans14ItalicFont,
-                                   &notosans14BoldItalicFont);
-EpdFont notosans16RegularFont(&notosans_16_regular);
-EpdFont notosans16BoldFont(&notosans_16_bold);
-EpdFont notosans16ItalicFont(&notosans_16_italic);
-EpdFont notosans16BoldItalicFont(&notosans_16_bolditalic);
-EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont, &notosans16ItalicFont,
-                                   &notosans16BoldItalicFont);
-EpdFont notosans18RegularFont(&notosans_18_regular);
-EpdFont notosans18BoldFont(&notosans_18_bold);
-EpdFont notosans18ItalicFont(&notosans_18_italic);
-EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
-EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
-                                   &notosans18BoldItalicFont);
-
+EpdFont sourceserif12RegularFont(&sourceserif4_12_regular);
+EpdFont sourceserif12BoldFont(&sourceserif4_12_bold);
+EpdFont sourceserif12ItalicFont(&sourceserif4_12_italic);
+EpdFont sourceserif12BoldItalicFont(&sourceserif4_12_bolditalic);
+EpdFontFamily sourceserif12FontFamily(&sourceserif12RegularFont, &sourceserif12BoldFont, &sourceserif12ItalicFont,
+                                      &sourceserif12BoldItalicFont);
+EpdFont sourceserif14RegularFont(&sourceserif4_14_regular);
+EpdFont sourceserif14BoldFont(&sourceserif4_14_bold);
+EpdFont sourceserif14ItalicFont(&sourceserif4_14_italic);
+EpdFont sourceserif14BoldItalicFont(&sourceserif4_14_bolditalic);
+EpdFontFamily sourceserif14FontFamily(&sourceserif14RegularFont, &sourceserif14BoldFont, &sourceserif14ItalicFont,
+                                      &sourceserif14BoldItalicFont);
+EpdFont sourceserif16RegularFont(&sourceserif4_16_regular);
+EpdFont sourceserif16BoldFont(&sourceserif4_16_bold);
+EpdFont sourceserif16ItalicFont(&sourceserif4_16_italic);
+EpdFont sourceserif16BoldItalicFont(&sourceserif4_16_bolditalic);
+EpdFontFamily sourceserif16FontFamily(&sourceserif16RegularFont, &sourceserif16BoldFont, &sourceserif16ItalicFont,
+                                      &sourceserif16BoldItalicFont);
+EpdFont sourceserif18RegularFont(&sourceserif4_18_regular);
+EpdFont sourceserif18BoldFont(&sourceserif4_18_bold);
+EpdFont sourceserif18ItalicFont(&sourceserif4_18_italic);
+EpdFont sourceserif18BoldItalicFont(&sourceserif4_18_bolditalic);
+EpdFontFamily sourceserif18FontFamily(&sourceserif18RegularFont, &sourceserif18BoldFont, &sourceserif18ItalicFont,
+                                      &sourceserif18BoldItalicFont);
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
-
-EpdFont ui10RegularFont(&ubuntu_10_regular);
-EpdFont ui10BoldFont(&ubuntu_10_bold);
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
-
-EpdFont ui12RegularFont(&ubuntu_12_regular);
-EpdFont ui12BoldFont(&ubuntu_12_bold);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
@@ -192,7 +237,7 @@ static bool loadSleepFrameBuffer() {
 }
 
 // Enter deep sleep mode
-void enterDeepSleep(bool fromTimeout = false) {
+void enterDeepSleep(bool fromTimeout) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
@@ -203,6 +248,9 @@ void enterDeepSleep(bool fromTimeout = false) {
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
+  // Persist settings before power-off so remaps (and other in-RAM settings)
+  // are not lost if a prior save failed or never ran.
+  SETTINGS.saveToFile();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
@@ -211,6 +259,19 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
+  }
+
+  // X3: optional automatic daily stats backup (RTC date → stats_YYYY-MM-DD.bin).
+  // Same-day sleeps overwrite that day's file; keeps a rolling week via prune.
+  if (gpio.deviceIsX3() && SETTINGS.autoBackupStats != 0) {
+    ReadingStatsDateTime now;
+    if (getCurrentLocalReadingStatsDateTime(now)) {
+      if (!backupGlobalStats(false)) {
+        LOG_ERR("MAIN", "Automatic reading-stats backup failed before deep sleep");
+      }
+    } else {
+      LOG_DBG("MAIN", "Skip auto stats backup: no RTC date/time");
+    }
   }
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
@@ -239,19 +300,17 @@ void setupDisplayAndFonts(bool seamless = false) {
   }
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
-  renderer.insertFont(NOTOSERIF_14_FONT_ID, notoserif14FontFamily);
 #ifndef OMIT_FONTS
-  renderer.insertFont(NOTOSERIF_12_FONT_ID, notoserif12FontFamily);
-  renderer.insertFont(NOTOSERIF_16_FONT_ID, notoserif16FontFamily);
-  renderer.insertFont(NOTOSERIF_18_FONT_ID, notoserif18FontFamily);
-
-  renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
-  renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
-  renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
-  renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
+  renderer.insertFont(BITTER_12_FONT_ID, bitter12FontFamily);
+  renderer.insertFont(BITTER_14_FONT_ID, bitter14FontFamily);
+  renderer.insertFont(BITTER_16_FONT_ID, bitter16FontFamily);
+  renderer.insertFont(BITTER_18_FONT_ID, bitter18FontFamily);
+  // UI_10/UI_12 alias Source Serif 12/14 — insert full families once.
+  renderer.insertFont(SOURCESERIF4_12_FONT_ID, sourceserif12FontFamily);
+  renderer.insertFont(SOURCESERIF4_14_FONT_ID, sourceserif14FontFamily);
+  renderer.insertFont(SOURCESERIF4_16_FONT_ID, sourceserif16FontFamily);
+  renderer.insertFont(SOURCESERIF4_18_FONT_ID, sourceserif18FontFamily);
 #endif  // OMIT_FONTS
-  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
-  renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
 
   // Discover and load SD card fonts
@@ -307,6 +366,8 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
+  // Stamp new SD files/dirs with RTC local time (fixes 12/31/2025 / 1980 dates).
+  Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
@@ -356,7 +417,7 @@ void setup() {
   }
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
-  LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
+  LOG_DBG("MAIN", "Starting Casper version " CROSSPOINT_VERSION);
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -518,29 +579,20 @@ void loop() {
     return;
   }
 
-  if (millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) &&
-      gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
-    // If the screenshot combination is potentially being pressed, don't sleep
-    if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
-      return;
-    }
-    enterDeepSleep();
-    // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
-    return;
-  }
-
-  // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
-      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
-    LOG_DBG("MAIN", "Manual screen refresh triggered");
-    if (!activityManager.handleForcedRefresh()) {
-      RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  // Short vs long power: long held triggers global sleep/refresh immediately;
+  // release dispatches the short or long action (CrossInk-style).
+  if (millis() >= allowSleepAt) {
+    // Screenshot combo still takes priority over power sleep.
+    if (!(gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN))) {
+      if (handleGlobalPowerButtonAction(getPowerButtonAction())) {
+        return;
+      }
     }
   }
 
-  // Refresh the battery icon when USB is plugged or unplugged.
-  // Placed after sleep guards so we never queue a render that won't be processed.
+  // Refresh chrome when USB is plugged or unplugged.
+  // Home with a settled grayscale cover skips spurious multipass redraws; still
+  // request so activities that show battery chrome can update when relevant.
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
   }

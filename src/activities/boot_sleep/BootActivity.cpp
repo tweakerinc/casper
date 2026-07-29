@@ -13,9 +13,17 @@ void BootActivity::onEnter() {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_BOOTING));
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION);
+
+  // Centered Casper logo + name (no "BOOTING" caption).
+  constexpr int kLogoSize = 120;
+  const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
+  renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
+
+  const int wordY = logoY + kLogoSize + 12;
+  renderer.drawCenteredText(UI_12_FONT_ID, wordY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+
+  const int versionY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
+  renderer.drawCenteredText(SMALL_FONT_ID, versionY, CROSSPOINT_VERSION, true);
+
   renderer.displayBuffer();
 }

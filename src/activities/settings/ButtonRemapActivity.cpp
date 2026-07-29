@@ -1,199 +1,359 @@
 #include "ButtonRemapActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <I18n.h>
+#include <Logging.h>
+
+#include <algorithm>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ButtonNavigator.h"
 
 namespace {
-// UI steps correspond to logical roles in order: Back, Confirm, Left, Right.
-constexpr uint8_t kRoleCount = 4;
-// Marker used when a role has not been assigned yet.
-constexpr uint8_t kUnassigned = 0xFF;
-// Duration to show temporary error text when reassigning a button.
-constexpr unsigned long kErrorDisplayMs = 1500;
+// Function options shown in the picker (order = display order).
+constexpr uint8_t kFunctionChoices[] = {
+    CrossPointSettings::BTN_FUNC_BACK,  CrossPointSettings::BTN_FUNC_CONFIRM, CrossPointSettings::BTN_FUNC_LEFT,
+    CrossPointSettings::BTN_FUNC_RIGHT, CrossPointSettings::BTN_FUNC_UP,      CrossPointSettings::BTN_FUNC_DOWN,
+    CrossPointSettings::BTN_FUNC_NONE,
+};
+constexpr int kFunctionChoiceCount = static_cast<int>(sizeof(kFunctionChoices) / sizeof(kFunctionChoices[0]));
+
+// Bare / Dashboard (Casper) footers use MinimalTheme::drawButtonHints:
+// four equal columns, UI_10, text centered (and truncated) in each slot.
+// Do not use BaseTheme's fixed 80px pill X positions — outer slots were off.
+constexpr int kFooterFontId = UI_10_FONT_ID;
+constexpr int kFooterSlots = 4;
+
+void drawDownArrow(const GfxRenderer& renderer, const int tipX, const int tipY, const int size) {
+  // Tip at bottom (points down toward front keys); wide base above.
+  for (int i = 0; i < size; ++i) {
+    const int half = i;
+    const int y = tipY - i;
+    renderer.drawLine(tipX - half, y, tipX + half, y, true);
+  }
+}
+
+void drawLeftArrow(const GfxRenderer& renderer, const int tipX, const int tipY, const int size) {
+  // Tip at left (points left toward the side key); wide base on the right.
+  for (int i = 0; i < size; ++i) {
+    const int half = i;
+    const int x = tipX + i;
+    renderer.drawLine(x, tipY - half, x, tipY + half, true);
+  }
+}
+
+void drawRightArrow(const GfxRenderer& renderer, const int tipX, const int tipY, const int size) {
+  // Tip at right (points right toward the side key); wide base on the left.
+  for (int i = 0; i < size; ++i) {
+    const int half = i;
+    const int x = tipX - i;
+    renderer.drawLine(x, tipY - half, x, tipY + half, true);
+  }
+}
 }  // namespace
 
 void ButtonRemapActivity::onEnter() {
   Activity::onEnter();
-
-  // Start with all roles unassigned to avoid duplicate blocking.
-  currentStep = 0;
-  tempMapping[0] = kUnassigned;
-  tempMapping[1] = kUnassigned;
-  tempMapping[2] = kUnassigned;
-  tempMapping[3] = kUnassigned;
+  std::memcpy(tempMap, SETTINGS.hwButtonFunction, sizeof(tempMap));
+  selectedIndex = 0;
   errorMessage.clear();
   errorUntil = 0;
+  dirty = false;
   requestUpdate();
 }
 
-void ButtonRemapActivity::onExit() { Activity::onExit(); }
+void ButtonRemapActivity::onExit() {
+  // Persist only a valid map (auto-save when the user made valid edits).
+  if (dirty && CrossPointSettings::isButtonFunctionMapValid(tempMap)) {
+    SETTINGS.applyButtonFunctionMap(tempMap);
+    SETTINGS.saveToFile();
+  }
+  Activity::onExit();
+}
+
+void ButtonRemapActivity::showError(const char* msg) {
+  errorMessage = msg ? msg : "";
+  errorUntil = millis() + 1800;
+  requestUpdate();
+}
+
+void ButtonRemapActivity::resetDefaults() {
+  CrossPointSettings::setDefaultButtonFunctionMap(tempMap);
+  dirty = true;
+  // Do not live-apply while this screen is open — footer chrome and nav stay locked.
+  showError(tr(STR_REMAP_RESET_DONE));
+}
+
+bool ButtonRemapActivity::tryAssign(const uint8_t hwIndex, const uint8_t function) {
+  if (hwIndex >= CrossPointSettings::HW_REMAP_BUTTON_COUNT) return false;
+  if (function >= CrossPointSettings::BTN_FUNC_COUNT) return false;
+
+  uint8_t trial[CrossPointSettings::HW_REMAP_BUTTON_COUNT];
+  std::memcpy(trial, tempMap, sizeof(trial));
+  trial[hwIndex] = function;
+  if (!CrossPointSettings::isButtonFunctionMapValid(trial)) {
+    showError(tr(STR_REMAP_NEED_CORE));
+    return false;
+  }
+  std::memcpy(tempMap, trial, sizeof(tempMap));
+  dirty = true;
+  // Defer apply until exit so button hints / input stay stable while remapping.
+  return true;
+}
+
+void ButtonRemapActivity::openFunctionPicker() {
+  if (selectedIndex < 0 || selectedIndex >= kSlotCount) return;
+
+  const uint8_t hw = static_cast<uint8_t>(selectedIndex);
+  std::vector<std::string> labels;
+  labels.reserve(kFunctionChoiceCount);
+  int current = 0;
+  for (int i = 0; i < kFunctionChoiceCount; i++) {
+    labels.emplace_back(functionName(kFunctionChoices[i]));
+    if (kFunctionChoices[i] == tempMap[hw]) current = i;
+  }
+
+  functionPopup.show(slotName(hw), labels, current, [this, hw](int idx) {
+    if (idx < 0 || idx >= kFunctionChoiceCount) return;
+    if (tryAssign(hw, kFunctionChoices[idx])) {
+      requestUpdate();
+    } else {
+      requestUpdate();
+    }
+  });
+  requestUpdate();
+}
+
+void ButtonRemapActivity::commitAndExit() {
+  if (!CrossPointSettings::isButtonFunctionMapValid(tempMap)) {
+    showError(tr(STR_REMAP_NEED_CORE));
+    return;
+  }
+  dirty = true;
+  SETTINGS.applyButtonFunctionMap(tempMap);
+  if (!SETTINGS.saveToFile()) {
+    LOG_ERR("REMAP", "Failed to persist hwButtonFunction map");
+    showError(tr(STR_REMAP_NEED_CORE));  // reuse; save failure is rare
+    return;
+  }
+  dirty = false;  // already saved
+  finish();
+}
 
 void ButtonRemapActivity::loop() {
-  // Clear any temporary warning after its timeout.
   if (errorUntil > 0 && millis() > errorUntil) {
     errorMessage.clear();
     errorUntil = 0;
     requestUpdate();
-    return;
   }
 
-  // Side buttons:
-  // - Up: reset mapping to defaults and exit.
-  // - Down: cancel without saving.
-  if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-    // Persist default mapping immediately so the user can recover quickly.
-    SETTINGS.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
-    SETTINGS.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
-    SETTINGS.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
-    SETTINGS.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
-    SETTINGS.saveToFile();
-    finish();
-    return;
-  }
+  if (functionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-    // Exit without changing settings.
-    finish();
-    return;
-  }
-
-  {
-    // Make sure UI done rendering before accepting another assignment.
-    // This avoids rapid double-presses that can advance the step without a visible redraw.
-    RenderLock lock(*this);
-
-    // Wait for a front button press to assign to the current role.
-    const int pressedButton = mappedInput.getPressedFrontButton();
-    if (pressedButton < 0) {
-      return;
-    }
-
-    // Update temporary mapping and advance the remap step.
-    // Only accept the press if this hardware button isn't already assigned elsewhere.
-    if (!validateUnassigned(static_cast<uint8_t>(pressedButton))) {
-      requestUpdate();
-      return;
-    }
-    tempMapping[currentStep] = static_cast<uint8_t>(pressedButton);
-    currentStep++;
-
-    if (currentStep >= kRoleCount) {
-      // All roles assigned; save to settings and exit.
-      applyTempMapping();
-      SETTINGS.saveToFile();
-      finish();
-      return;
-    }
-
+  // List navigation uses the current (valid) map via NavPrev/NavNext.
+  ButtonNavigator nav;
+  nav.onPrevious([this] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, kListCount);
     requestUpdate();
+  });
+  nav.onNext([this] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, kListCount);
+    requestUpdate();
+  });
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (selectedIndex == kResetRow) {
+      resetDefaults();
+    } else {
+      openFunctionPicker();
+    }
+    return;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    commitAndExit();
+    return;
+  }
+}
+
+void ButtonRemapActivity::drawSlotArrows() const {
+  if (selectedIndex < 0 || selectedIndex >= kSlotCount) return;
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  // Compact so side arrows sit cleanly in the left/right margin (no side labels).
+  constexpr int kArrowSize = 7;
+  const bool isX3 = gpio.deviceIsX3();
+
+  if (selectedIndex < 4) {
+    // Center on the locked footer labels (Back / Select / Up / Down), not live map text.
+    const char* locked[] = {tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN)};
+    const char* raw = locked[selectedIndex];
+    const int slotW = pageWidth / kFooterSlots;
+    int tipX = selectedIndex * slotW + slotW / 2;
+    if (raw != nullptr && raw[0] != '\0') {
+      const int maxLabelW = std::max(8, slotW - 8);
+      const std::string label =
+          renderer.truncatedText(kFooterFontId, raw, maxLabelW, EpdFontFamily::REGULAR);
+      const int tw = renderer.getTextWidth(kFooterFontId, label.c_str(), EpdFontFamily::REGULAR);
+      const int tx = selectedIndex * slotW + (slotW - tw) / 2;
+      tipX = tx + tw / 2;
+    }
+    const int tipY = pageHeight - metrics.buttonHintsHeight - 2;
+    drawDownArrow(renderer, tipX, tipY, kArrowSize);
+    return;
+  }
+
+  // Side keys only — no side labels; arrows sit in the left/right margins.
+  // Vertical positions match BaseTheme::drawSideButtonHints key chrome.
+  constexpr int kSideBtnH = 80;
+  constexpr int kSideMargin = 4;
+
+  if (isX3) {
+    constexpr int kX3SideY = 155;
+    const int tipY = kX3SideY + kSideBtnH / 2;
+    if (selectedIndex == 4) {
+      // Left margin — tip near the left edge, pointing left at the key.
+      drawLeftArrow(renderer, kSideMargin + 2, tipY, kArrowSize);
+    } else {
+      // Right margin — tip near the right edge, pointing right at the key.
+      drawRightArrow(renderer, pageWidth - kSideMargin - 2, tipY, kArrowSize);
+    }
+  } else {
+    // X4: both side keys on the right; arrows stay in the right margin.
+    constexpr int kX4TopY = 345;
+    const int tipX = pageWidth - kSideMargin - 2;
+    if (selectedIndex == 4) {
+      drawRightArrow(renderer, tipX, kX4TopY + kSideBtnH / 2, kArrowSize);
+    } else {
+      drawRightArrow(renderer, tipX, kX4TopY + kSideBtnH + kSideBtnH / 2, kArrowSize);
+    }
   }
 }
 
 void ButtonRemapActivity::render(RenderLock&&) {
-  const auto labelForHardware = [&](uint8_t hardwareIndex) -> const char* {
-    for (uint8_t i = 0; i < kRoleCount; i++) {
-      if (tempMapping[i] == hardwareIndex) {
-        return getRoleName(i);
-      }
-    }
-    return "-";
-  };
-
   const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto& theme = UITheme::getInstance().getTheme();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  // Always full clear — never paint new footer text over old glyphs (popup used to
+  // redraw mapLabels on top of function names without clearing).
   renderer.clearScreen();
 
+  // Title + thick bottom rule (same as Settings / Manage Fonts header).
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_REMAP_FRONT_BUTTONS));
-  GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
-                    tr(STR_REMAP_PROMPT));
 
-  int topOffset = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  int contentHeight = pageHeight - topOffset - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  // Double-line hint band under the header — match Manage Fonts "Preview" chrome:
+  // header already drew the top 3px rule; label band; matching 3px bottom rule.
+  // Use the largest font that fits the full sentence (no ellipsis when possible).
+  constexpr int kRuleThickness = 3;
+  constexpr int kBandExtraPad = 10;
+  const char* hint = tr(STR_REMAP_SLOT_HINT);
+  const int maxHintW = std::max(40, pageWidth - metrics.contentSidePadding * 2);
+  int hintFont = UI_12_FONT_ID;
+  if (renderer.getTextWidth(UI_12_FONT_ID, hint, EpdFontFamily::REGULAR) > maxHintW) {
+    hintFont = UI_10_FONT_ID;
+    if (renderer.getTextWidth(UI_10_FONT_ID, hint, EpdFontFamily::REGULAR) > maxHintW) {
+      hintFont = SMALL_FONT_ID;
+    }
+  }
+  const int chromeLineH = renderer.getLineHeight(hintFont);
+  const int labelBandH = chromeLineH + kBandExtraPad;
+  const int labelBandTop = metrics.topPadding + metrics.headerHeight;  // text area below header rule
+  const int labelY = labelBandTop + (labelBandH - chromeLineH) / 2;
+  // Only truncate if even SMALL_FONT cannot fit (long translations).
+  const std::string hintShown =
+      renderer.truncatedText(hintFont, hint, maxHintW, EpdFontFamily::REGULAR);
+  renderer.drawCenteredText(hintFont, labelY, hintShown.c_str(), true, EpdFontFamily::REGULAR);
+  const int bottomRuleY = labelBandTop + labelBandH;
+  renderer.drawLine(0, bottomRuleY, pageWidth - 1, bottomRuleY, kRuleThickness, true);
+
+  // Vertically center the list in the free band above the button hints so arrows
+  // sit closer to the front keys with less empty dead space below.
+  const int rowStep = std::max(1, theme.getListRowStep(false));
+  const int listContentH = rowStep * kListCount;
+  const int availTop = bottomRuleY + kRuleThickness + metrics.verticalSpacing;
+  const int availBottom = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int availH = std::max(0, availBottom - availTop);
+  const int listH = std::min(listContentH, availH);
+  const int listTop = availTop + std::max(0, (availH - listH) / 2);
+
   GUI.drawList(
-      renderer, Rect{0, topOffset, pageWidth, contentHeight}, kRoleCount, currentStep,
-      [&](int index) { return getRoleName(static_cast<uint8_t>(index)); }, nullptr, nullptr,
-      [&](int index) {
-        uint8_t assignedButton = tempMapping[static_cast<uint8_t>(index)];
-        return (assignedButton == kUnassigned) ? tr(STR_UNASSIGNED) : getHardwareName(assignedButton);
+      renderer, Rect{0, listTop, pageWidth, listH}, kListCount, selectedIndex,
+      [this](int index) -> std::string {
+        if (index == kResetRow) return tr(STR_REMAP_RESET_DEFAULTS);
+        return slotName(static_cast<uint8_t>(index));
+      },
+      nullptr, nullptr,
+      [this](int index) -> std::string {
+        if (index == kResetRow) return "";
+        return functionName(tempMap[static_cast<uint8_t>(index)]);
       },
       true);
 
-  // Temporary warning banner for duplicates.
-  if (!errorMessage.empty()) {
+  if (!errorMessage.empty() && !functionPopup.isActive()) {
     GUI.drawHelpText(renderer,
-                     Rect{0, pageHeight - metrics.buttonHintsHeight - metrics.contentSidePadding - 15, pageWidth, 20},
+                     Rect{0, pageHeight - metrics.buttonHintsHeight - metrics.contentSidePadding - 18, pageWidth, 18},
                      errorMessage.c_str());
   }
 
-  // Provide side button actions at the bottom of the screen (split across two lines).
-  GUI.drawHelpText(renderer,
-                   Rect{0, topOffset + 4 * metrics.listRowHeight + 4 * metrics.verticalSpacing, pageWidth, 20},
-                   tr(STR_REMAP_RESET_HINT));
-  GUI.drawHelpText(renderer,
-                   Rect{0, topOffset + 4 * metrics.listRowHeight + 5 * metrics.verticalSpacing + 20, pageWidth, 20},
-                   tr(STR_REMAP_CANCEL_HINT));
+  // Locked chrome for this editor: physical order Back · Select · Up · Down.
+  // Does not follow tempMap — inputs stay predictable while remapping.
+  GUI.drawButtonHints(renderer, tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 
-  // Live preview of logical labels under front buttons.
-  // This mirrors the on-device front button order: Back, Confirm, Left, Right.
-  GUI.drawButtonHints(renderer, labelForHardware(CrossPointSettings::FRONT_HW_BACK),
-                      labelForHardware(CrossPointSettings::FRONT_HW_CONFIRM),
-                      labelForHardware(CrossPointSettings::FRONT_HW_LEFT),
-                      labelForHardware(CrossPointSettings::FRONT_HW_RIGHT));
+  // Popup draws only the dialog (no second footer pass). Full clear above prevents overdraw.
+  if (functionPopup.isActive()) {
+    functionPopup.render(renderer);
+  } else {
+    drawSlotArrows();
+  }
+
   renderer.displayBuffer();
 }
 
-void ButtonRemapActivity::applyTempMapping() {
-  // Commit temporary mapping into settings (logical role -> hardware).
-  SETTINGS.frontButtonBack = tempMapping[0];
-  SETTINGS.frontButtonConfirm = tempMapping[1];
-  SETTINGS.frontButtonLeft = tempMapping[2];
-  SETTINGS.frontButtonRight = tempMapping[3];
-}
-
-bool ButtonRemapActivity::validateUnassigned(const uint8_t pressedButton) {
-  // Block reusing a hardware button already assigned to another role.
-  for (uint8_t i = 0; i < kRoleCount; i++) {
-    if (tempMapping[i] == pressedButton && i != currentStep) {
-      errorMessage = tr(STR_ALREADY_ASSIGNED);
-      errorUntil = millis() + kErrorDisplayMs;
-      return false;
-    }
-  }
-  return true;
-}
-
-const char* ButtonRemapActivity::getRoleName(const uint8_t roleIndex) const {
-  switch (roleIndex) {
+const char* ButtonRemapActivity::slotName(const uint8_t hwIndex) const {
+  switch (hwIndex) {
     case 0:
-      return tr(STR_BACK);
+      return tr(STR_REMAP_SLOT_FRONT_1);
     case 1:
-      return tr(STR_CONFIRM);
+      return tr(STR_REMAP_SLOT_FRONT_2);
     case 2:
-      return tr(STR_DIR_LEFT);
+      return tr(STR_REMAP_SLOT_FRONT_3);
     case 3:
+      return tr(STR_REMAP_SLOT_FRONT_4);
+    case 4:
+      return tr(STR_REMAP_SLOT_SIDE_LEFT);
+    case 5:
+      return tr(STR_REMAP_SLOT_SIDE_RIGHT);
     default:
-      return tr(STR_DIR_RIGHT);
+      return "";
   }
 }
 
-const char* ButtonRemapActivity::getHardwareName(const uint8_t buttonIndex) const {
-  switch (buttonIndex) {
-    case CrossPointSettings::FRONT_HW_BACK:
-      return tr(STR_HW_BACK_LABEL);
-    case CrossPointSettings::FRONT_HW_CONFIRM:
-      return tr(STR_HW_CONFIRM_LABEL);
-    case CrossPointSettings::FRONT_HW_LEFT:
-      return tr(STR_HW_LEFT_LABEL);
-    case CrossPointSettings::FRONT_HW_RIGHT:
-      return tr(STR_HW_RIGHT_LABEL);
+const char* ButtonRemapActivity::functionName(const uint8_t function) const {
+  switch (function) {
+    case CrossPointSettings::BTN_FUNC_BACK:
+      return tr(STR_BACK);
+    case CrossPointSettings::BTN_FUNC_CONFIRM:
+      // Menus label this action "Select"; keep the remapper consistent.
+      return tr(STR_SELECT);
+    case CrossPointSettings::BTN_FUNC_LEFT:
+      return tr(STR_DIR_LEFT);
+    case CrossPointSettings::BTN_FUNC_RIGHT:
+      return tr(STR_DIR_RIGHT);
+    case CrossPointSettings::BTN_FUNC_UP:
+      return tr(STR_DIR_UP);
+    case CrossPointSettings::BTN_FUNC_DOWN:
+      return tr(STR_DIR_DOWN);
+    case CrossPointSettings::BTN_FUNC_NONE:
+      return tr(STR_DISABLED);
     default:
-      return "Unknown";
+      return "";
   }
 }

@@ -18,14 +18,21 @@ class FileBrowserActivity final : public Activity {
   // Deletion
   bool removeDirFile(const std::string& fullPath);
 
+  // Toggle showHiddenFiles and refresh the listing (Books mode).
+  void toggleHiddenFiles();
+
   ButtonNavigator buttonNavigator;
 
   size_t selectorIndex = 0;
 
   bool lockLongPressBack = false;
+  // Set when long-press Back already acted (toggle hidden); swallow the release.
+  bool longPressBackHandled = false;
   // True when this activity was entered while Confirm was already held; we must swallow the next
   // release so we don't immediately auto-open the first entry.
   bool lockNextConfirmRelease = false;
+  // Set when long-press Confirm opened the book menu; swallow release so we don't also activate.
+  bool longPressConfirmFired = false;
 
   Mode mode = Mode::Books;
 
@@ -37,6 +44,9 @@ class FileBrowserActivity final : public Activity {
   // Data loading
   void loadFiles();
   size_t findEntry(const std::string& name) const;
+
+  // Long-press Confirm on a book: shared action menu (Read, Description, Delete, …).
+  void showBookActionMenu(const std::string& fullPath, const std::string& displayName);
 
  public:
   explicit FileBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialPath = "/",

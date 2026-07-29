@@ -20,6 +20,9 @@ namespace {
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
 constexpr size_t SOFT_HYPHEN_BYTES = 2;
+// Guide Dots (CrossInk): middle dot between words (UTF-8 for U+00B7).
+constexpr char GUIDE_DOT_UTF8[] = "\xC2\xB7";
+constexpr uint32_t GUIDE_DOT_CODEPOINT = 0x00B7;
 // Paragraph-level direction: scan the first N words to find base direction.
 constexpr size_t RTL_PARAGRAPH_PROBE_WORDS = 3;
 // Per-word: scan enough chars to see through leading neutrals (quotes, numbers)
@@ -866,8 +869,17 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       actualGapCount++;
     } else if (wordIdx > 0 && !continuesVec[lastBreakAt + wordIdx]) {
       actualGapCount++;
-      totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]),
-                                                   firstCodepoint(lineWords[wordIdx]), lineWordStyles[wordIdx - 1]);
+      if (guideReadingEnabled) {
+        totalNaturalGaps +=
+            renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]), GUIDE_DOT_CODEPOINT,
+                                     lineWordStyles[wordIdx - 1]) +
+            renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+            renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(lineWords[wordIdx]),
+                                     EpdFontFamily::REGULAR);
+      } else {
+        totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]),
+                                                     firstCodepoint(lineWords[wordIdx]), lineWordStyles[wordIdx - 1]);
+      }
     } else if (wordIdx > 0 && continuesVec[lastBreakAt + wordIdx]) {
       // Non-breaking space tokens (" " with continues=true) are visible, stretchable spaces —
       // count them as justifiable gaps so justifyExtra is distributed to them too.
@@ -960,9 +972,18 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         reorderedGapCount++;
       } else if (wordIdx > 0 && !reorderedContinuesScratch[wordIdx]) {
         reorderedGapCount++;
-        reorderedNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx - 1]),
-                                                         firstCodepoint(reorderedWordsScratch[wordIdx]),
-                                                         reorderedStylesScratch[wordIdx - 1]);
+        if (guideReadingEnabled) {
+          reorderedNaturalGaps +=
+              renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx - 1]), GUIDE_DOT_CODEPOINT,
+                                       reorderedStylesScratch[wordIdx - 1]) +
+              renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+              renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(reorderedWordsScratch[wordIdx]),
+                                       EpdFontFamily::REGULAR);
+        } else {
+          reorderedNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx - 1]),
+                                                           firstCodepoint(reorderedWordsScratch[wordIdx]),
+                                                           reorderedStylesScratch[wordIdx - 1]);
+        }
       } else if (wordIdx > 0 && reorderedContinuesScratch[wordIdx]) {
         if (reorderedWordsScratch[wordIdx] == " ") {
           reorderedGapCount++;
@@ -1019,10 +1040,20 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         xpos += advance;
       } else if (wordIdx + 1 < reorderedWidthsScratch.size()) {
         const bool nextNoSpace = reorderedNoSpaceBeforeScratch[wordIdx + 1];
-        int gap = nextNoSpace ? 0
-                              : renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx]),
-                                                         firstCodepoint(reorderedWordsScratch[wordIdx + 1]),
-                                                         reorderedStylesScratch[wordIdx]);
+        int gap = 0;
+        if (!nextNoSpace) {
+          if (guideReadingEnabled) {
+            gap = renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx]), GUIDE_DOT_CODEPOINT,
+                                           reorderedStylesScratch[wordIdx]) +
+                  renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+                  renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT,
+                                           firstCodepoint(reorderedWordsScratch[wordIdx + 1]), EpdFontFamily::REGULAR);
+          } else {
+            gap = renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx]),
+                                           firstCodepoint(reorderedWordsScratch[wordIdx + 1]),
+                                           reorderedStylesScratch[wordIdx]);
+          }
+        }
         if (effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
           gap += reorderedJustifyExtra;
         }
@@ -1065,10 +1096,19 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
           bool nextNoSpace = false;
           if (wordIdx + 1 < lineWordCount) {
             nextNoSpace = noSpaceBeforeVec[lastBreakAt + wordIdx + 1];
-            gap = nextNoSpace
-                      ? 0
-                      : renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
-                                                 firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
+            if (nextNoSpace) {
+              gap = 0;
+            } else if (guideReadingEnabled) {
+              // CrossInk Guide Dots: room for · between words (space · space).
+              gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]), GUIDE_DOT_CODEPOINT,
+                                             lineWordStyles[wordIdx]) +
+                    renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+                    renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(lineWords[wordIdx + 1]),
+                                             EpdFontFamily::REGULAR);
+            } else {
+              gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
+                                             firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
+            }
           }
           if (wordIdx + 1 < lineWordCount && effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
             gap += justifyExtra;
@@ -1106,10 +1146,18 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
           bool nextNoSpace = false;
           if (wordIdx + 1 < lineWordCount) {
             nextNoSpace = noSpaceBeforeVec[lastBreakAt + wordIdx + 1];
-            gap = nextNoSpace
-                      ? 0
-                      : renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
-                                                 firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
+            if (nextNoSpace) {
+              gap = 0;
+            } else if (guideReadingEnabled) {
+              gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]), GUIDE_DOT_CODEPOINT,
+                                             lineWordStyles[wordIdx]) +
+                    renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+                    renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(lineWords[wordIdx + 1]),
+                                             EpdFontFamily::REGULAR);
+            } else {
+              gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
+                                             firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
+            }
           }
           if (wordIdx + 1 < lineWordCount && effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
             gap += justifyExtra;
@@ -1135,10 +1183,50 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
+  // Guide Dots offsets (relative to each word's xpos): 0 = no dot after this word.
+  auto buildGuideDotOffsets = [&](const std::vector<std::string>& words, const std::vector<int16_t>& xpos,
+                                  const std::vector<EpdFontFamily::Style>& styles,
+                                  const std::vector<bool>* focusSuffixOrNull) {
+    std::vector<uint16_t> dots;
+    if (!guideReadingEnabled || words.size() < 2) {
+      return dots;
+    }
+    dots.assign(words.size(), 0);
+    for (size_t i = 0; i + 1 < words.size(); ++i) {
+      // Skip glued tokens (focus suffix / continuation).
+      if (focusSuffixOrNull && i + 1 < focusSuffixOrNull->size() && (*focusSuffixOrNull)[i + 1]) {
+        continue;
+      }
+      // Only place a dot when layout left a real gap (space between words).
+      const int leftW = renderer.getTextAdvanceX(fontId, words[i].c_str(), styles[i]);
+      if (static_cast<int>(xpos[i + 1]) <= static_cast<int>(xpos[i]) + leftW + 1) {
+        continue;
+      }
+      const int gapLeft =
+          renderer.getSpaceAdvance(fontId, lastCodepoint(words[i]), GUIDE_DOT_CODEPOINT, styles[i]);
+      const int offset = leftW + gapLeft;
+      if (offset > 0 && offset < 65535) {
+        dots[i] = static_cast<uint16_t>(offset);
+      }
+    }
+    // Drop empty vector so TextBlock omits the guide arena when nothing to draw.
+    bool any = false;
+    for (uint16_t d : dots) {
+      if (d != 0) {
+        any = true;
+        break;
+      }
+    }
+    if (!any) {
+      dots.clear();
+    }
+    return dots;
+  };
+
   if (!lineHasFocusSplit) {
-    // TextBlock flattens the vectors into its arena; they stay owned here and die at return.
+    auto guideDots = buildGuideDotOffsets(lineWords, lineXPos, lineWordStyles, nullptr);
     auto block = std::make_shared<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
-                                             std::vector<uint16_t>{}, blockStyle);
+                                             std::vector<uint16_t>{}, guideDots, blockStyle);
     if (!block->valid()) {
       LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
       return;
@@ -1188,7 +1276,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
-  auto block = std::make_shared<TextBlock>(outWords, outXPos, outStyles, outBoundaries, outSuffixX, blockStyle);
+  auto guideDots = buildGuideDotOffsets(outWords, outXPos, outStyles, nullptr);
+  auto block =
+      std::make_shared<TextBlock>(outWords, outXPos, outStyles, outBoundaries, outSuffixX, guideDots, blockStyle);
   if (!block->valid()) {
     LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
     return;

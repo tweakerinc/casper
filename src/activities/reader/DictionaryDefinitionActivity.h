@@ -1,15 +1,17 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Paged plain-text viewer for one dictionary definition. The definition is
-// word-wrapped once on entry; each page renders spans of the original string,
-// so no per-line copies are held.
+// Popup-style viewer for one dictionary definition (StarDict data, CrossInk-like layout).
+// Headword left/centered bold; optional pronunciation; wrapped senses; Up/Down scroll.
+// Restores a full-framebuffer snapshot under the card so the reader page is not whitened.
+// Back → isCancelled (stay in word-select). Done/Confirm → not cancelled (exit dictionary).
 class DictionaryDefinitionActivity final : public Activity {
  public:
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
@@ -19,28 +21,36 @@ class DictionaryDefinitionActivity final : public Activity {
         definition(std::move(definition)) {}
 
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
-  // One wrapped display line: a byte span of `definition`. Wrapping keeps
-  // lines under the screen width, so uint16_t length is ample.
-  struct Line {
-    uint32_t start;
-    uint16_t len;
-  };
-
-  void wrapText();
-  int measureSpan(int fontId, const char* text, size_t len) const;
-  void drawBody(int fontId, int x, int startY) const;
+  void normalizeDefinition();
+  void rebuildLines();
+  void layoutPopup();
+  bool captureBackground();
 
   const std::string headword;
-  // Not const: onEnter() normalizes embedded NULs (StarDict multi-type
-  // separators) to newlines so C-string APIs see the whole text.
+  // Not const: onEnter() normalizes StarDict markup / HTML into plain text.
   std::string definition;
-  std::vector<Line> lines;
-  int currentPage = 0;
-  int totalPages = 1;
-  int linesPerPage = 1;
+  std::string pronunciation;  // Extracted /.../ or [...] after headword, if any
+  std::vector<std::string> lines;
+  int scrollLine = 0;
+  int visibleLines = 1;
+  int popupX = 0;
+  int popupY = 0;
+  int popupW = 0;
+  int popupH = 0;
+  int bodyTop = 0;
+  int bodyH = 0;
+  // Card-region snapshot (not full framebuffer) so the popup redraws over the page.
+  std::unique_ptr<uint8_t[]> backgroundBuffer;
+  size_t backgroundBufferSize = 0;
+  int bgX = 0;
+  int bgY = 0;
+  int bgW = 0;
+  int bgH = 0;
+  bool hasBackground = false;
   ButtonNavigator buttonNavigator;
 };

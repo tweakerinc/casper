@@ -2,17 +2,28 @@
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
+#include <I18n.h>
 
 #include <optional>
 
 #include "BookmarkEntry.h"
+#include "BookReadingStats.h"
 #include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
+#include "GlobalReadingStats.h"
 #include "ProgressMapper.h"
+#include "ReaderUtils.h"
 #include "activities/Activity.h"
 
 class EpubReaderActivity final : public Activity {
   std::shared_ptr<Epub> epub;
+  // Minimal reading-stats session tracking for Dashboard (fail-soft).
+  BookReadingStats readingStats;
+  GlobalReadingStats globalReadingStats;
+  unsigned long readingSessionStartMs = 0;
+  // Smoothed book time-left for the status bar (mutable: updated from const format helper).
+  // Dampens page-to-page jumps from chapter density / dwell noise.
+  mutable uint32_t smoothedBookTimeLeftSeconds = 0;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
@@ -28,11 +39,16 @@ class EpubReaderActivity final : public Activity {
   int cachedChapterTotalPageCount = 0;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
+  // Absorbs bounce so one physical press cannot advance multiple pages.
+  ReaderUtils::PageTurnLatch pageTurnLatch;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
   // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
+  // Clipping jump: stored page index is best-effort; render may re-resolve via text match.
+  uint16_t pendingParagraphIndex = UINT16_MAX;
+  uint16_t pendingClippingIndex = UINT16_MAX;
   bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
   // Consecutive page-load failures. Each failure drops the section and rebuilds on the next render,
@@ -44,7 +60,11 @@ class EpubReaderActivity final : public Activity {
   bool showBookmarkMessage = false;
   // "No dictionary set" popup, shown when a lookup is triggered without a configured dictionary.
   bool showDictionaryMessage = false;
+  StrId dictionaryMessageId = StrId::STR_DICT_NO_DICT_SET;
   unsigned long dictionaryMessageTime = 0UL;
+  // When non-zero, wall-clock time while menus/dict are open is excluded from
+  // session reading totals and page-pace samples.
+  unsigned long statsPauseStartMs = 0UL;
   bool ignoreNextConfirmRelease = false;
   bool currentPageBookmarked = false;
   // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
@@ -93,7 +113,11 @@ class EpubReaderActivity final : public Activity {
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
+  void drawClippingHighlights(const Page& page, int fontId, int orientedMarginTop, int orientedMarginLeft) const;
   void renderStatusBar() const;
+  // Fills buf with a compact time-left label ("12m · Book") or "Learning Pace...".
+  // Returns false when the setting is hide or there is nothing useful to show.
+  bool formatTimeLeftLabel(char* buf, size_t len, bool bookEstimate) const;
   // Pages laid out per incremental-build pump: on the render path (catching up to the page
   // being shown) and per loop() tick (background build of a large chapter). Kept small so a
   // background build chunk never noticeably delays input or a pending render.
@@ -170,19 +194,35 @@ class EpubReaderActivity final : public Activity {
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
   void openDictionaryWordSelect();
+  void startClipSelection();
+  void handleClippingJump(const ClippingJumpResult& clipping);
+  void openBookStats();
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   bool launchKOReaderSync();
+  // Book-leave KOReader behavior (Ask confirm / Smart / Percent / Time).
+  bool tryStartAutoKoUpload();
+  // Shared launch after gates/confirm; uploadOnly=true for Percent/Time leave path.
+  bool launchLeaveKoSync(bool uploadOnly);
+  // Prefer leave-sync when applicable; otherwise onGoHome().
+  void leaveReaderToHome();
+  float getCurrentBookProgressPercent() const;
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
+  void setBookCompleted(bool isCompleted);
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
+
+  // Exclude wall time spent in menus / dictionary from session totals and pace.
+  void pauseReadingStatsClock();
+  void resumeReadingStatsClock();
+  void resetReadingPaceData();
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)

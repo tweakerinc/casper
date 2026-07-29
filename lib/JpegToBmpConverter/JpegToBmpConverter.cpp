@@ -220,6 +220,7 @@ struct BmpConvertCtx {
   int outWidth;
   int outHeight;
   bool oneBit;
+  bool coverHighQuality = false;  // home cover: 2-bit balanced Atkinson + mild lift
   int bytesPerRow;
   bool needsScaling;
   uint32_t scaleX_fp;  // source pixels per output pixel, 16.16 fixed-point
@@ -231,6 +232,9 @@ struct BmpConvertCtx {
   // Accumulates one MCU row (up to MAX_MCU_HEIGHT source rows × srcWidth pixels)
   // Filled column-by-column as JPEGDEC callbacks arrive for the same MCU row
   std::unique_ptr<uint8_t[]> mcuBuf;
+  int mcuRowBaseY;   // blockY of MCU row currently being assembled (-1 = none)
+  int mcuRowMaxH;    // max blockH seen across columns in this MCU row
+  int lastSrcYProcessed;  // last source Y fully emitted (-1 = none)
 
   // Y-axis area averaging accumulators (needsScaling only)
   int currentOutY;
@@ -246,6 +250,19 @@ struct BmpConvertCtx {
   uint8_t* smoothOutRow;
 
   std::unique_ptr<uint8_t[]> bmpRow;
+  // Scratch grayscale row (outWidth) used before dither / seam filter
+  std::unique_ptr<uint8_t[]> grayRow;
+  // Last good scaled gray row — empty Y-bins copy this instead of solid white/black
+  // (solid fills become full-width horizontal hairlines after dither).
+  std::unique_ptr<uint8_t[]> lastGoodGray;
+  bool hasLastGoodGray = false;
+
+  // Legacy seam fields kept zeroed (c29+ disabled the delay hairline filter).
+  std::unique_ptr<uint8_t[]> seamA;
+  std::unique_ptr<uint8_t[]> seamB;
+  int seamAY;
+  int seamBY;
+  int seamHeld;  // 0, 1, or 2 rows buffered
 
   std::unique_ptr<AtkinsonDitherer> atkinsonDitherer;
   std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
@@ -268,42 +285,84 @@ static void yieldDuringDecodeBlock(BmpConvertCtx* ctx) {
   yieldToIdle();
 }
 
-// Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
-static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
+// Build grayscale for one output row into dst (length outWidth).
+// Cover/2-bit/8-bit: apply contrast lift here. 1-bit leaves raw — Atkinson1Bit /
+// quantize1bit apply their own lift internally.
+static void buildAdjustedGrayRow(BmpConvertCtx* ctx, const uint8_t* srcRow, uint8_t* dst) {
+  if (ctx->oneBit) {
+    memcpy(dst, srcRow, static_cast<size_t>(ctx->outWidth));
+  } else if (USE_8BIT_OUTPUT) {
+    for (int x = 0; x < ctx->outWidth; x++) {
+      dst[x] = adjustPixel(srcRow[x]);
+    }
+  } else if (ctx->coverHighQuality) {
+    for (int x = 0; x < ctx->outWidth; x++) {
+      dst[x] = static_cast<uint8_t>(adjustPixelCoverThumb(srcRow[x]));
+    }
+  } else {
+    for (int x = 0; x < ctx->outWidth; x++) {
+      dst[x] = static_cast<uint8_t>(adjustPixel(srcRow[x]));
+    }
+  }
+}
+
+// Dither (if needed) and write one already-adjusted grayscale row to the BMP.
+static void ditherAndWriteGrayRow(BmpConvertCtx* ctx, const uint8_t* grayRow, int outY) {
   memset(ctx->bmpRow.get(), 0, ctx->bytesPerRow);
 
   if (USE_8BIT_OUTPUT && !ctx->oneBit) {
-    for (int x = 0; x < ctx->outWidth; x++) {
-      ctx->bmpRow[x] = adjustPixel(srcRow[x]);
-    }
+    memcpy(ctx->bmpRow.get(), grayRow, static_cast<size_t>(ctx->outWidth));
   } else if (ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(srcRow[x], x)
-                                                    : quantize1bit(srcRow[x], x, outY);
+      const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(grayRow[x], x)
+                                                    : quantize1bit(grayRow[x], x, outY);
       ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
     }
     if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
   } else {
     for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t gray = adjustPixel(srcRow[x]);
       uint8_t twoBit;
-      if (ctx->atkinsonDitherer) {
-        twoBit = ctx->atkinsonDitherer->processPixel(gray, x);
-      } else if (ctx->fsDitherer) {
-        twoBit = ctx->fsDitherer->processPixel(gray, x);
+      if (ctx->fsDitherer) {
+        twoBit = ctx->fsDitherer->processPixel(grayRow[x], x);
+      } else if (ctx->atkinsonDitherer) {
+        twoBit = ctx->atkinsonDitherer->processPixel(grayRow[x], x);
       } else {
-        twoBit = quantize(gray, x, outY);
+        twoBit = quantize(grayRow[x], x, outY);
       }
       ctx->bmpRow[(x * 2) / 8] |= (twoBit << (6 - ((x * 2) % 8)));
     }
-    if (ctx->atkinsonDitherer)
-      ctx->atkinsonDitherer->nextRow();
-    else if (ctx->fsDitherer)
+    if (ctx->fsDitherer)
       ctx->fsDitherer->nextRow();
+    else if (ctx->atkinsonDitherer)
+      ctx->atkinsonDitherer->nextRow();
   }
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
   yieldDuringDecode(ctx);
+}
+
+// c29: no row-delay hairline filter. Prior filters (c26–c28) either missed seams
+// or blended real texture into new horizontal bands. Perfect recipe is MCU
+// max-height assembly + empty-bin white fill + balanced Atkinson only.
+static void pushGrayRow(BmpConvertCtx* ctx, const uint8_t* grayRow, int outY) {
+  ditherAndWriteGrayRow(ctx, grayRow, outY);
+}
+
+static void finishSeamBuffer(BmpConvertCtx* /*ctx*/) {
+  // No delayed rows when hairline filter is disabled.
+}
+
+// Write a fully-assembled source row (length outWidth or raw src for 1:1) to BMP.
+static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
+  uint8_t* gray = ctx->grayRow.get();
+  if (!gray) {
+    // Fallback without scratch: dither path used to adjust in-place — shouldn't happen
+    // when grayRow is allocated at setup.
+    ditherAndWriteGrayRow(ctx, srcRow, outY);
+    return;
+  }
+  buildAdjustedGrayRow(ctx, srcRow, gray);
+  pushGrayRow(ctx, gray, outY);
 }
 
 // Matches the progressive-JPEG smoothing used by JpegToFramebufferConverter, but stays
@@ -390,49 +449,64 @@ static void finishSmoothUpscale(BmpConvertCtx* ctx) {
 
 // Flush one scaled output row from Y-axis accumulators and advance currentOutY
 static void flushScaledRow(BmpConvertCtx* ctx) {
-  memset(ctx->bmpRow.get(), 0, ctx->bytesPerRow);
-
-  if (USE_8BIT_OUTPUT && !ctx->oneBit) {
-    for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t gray = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
-      ctx->bmpRow[x] = adjustPixel(gray);
-    }
-  } else if (ctx->oneBit) {
-    for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t gray = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
-      const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(gray, x)
-                                                    : quantize1bit(gray, x, ctx->currentOutY);
-      ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
-    }
-    if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
-  } else {
-    for (int x = 0; x < ctx->outWidth; x++) {
-      const uint8_t gray = adjustPixel((ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0);
-      uint8_t twoBit;
-      if (ctx->atkinsonDitherer) {
-        twoBit = ctx->atkinsonDitherer->processPixel(gray, x);
-      } else if (ctx->fsDitherer) {
-        twoBit = ctx->fsDitherer->processPixel(gray, x);
-      } else {
-        twoBit = quantize(gray, x, ctx->currentOutY);
-      }
-      ctx->bmpRow[(x * 2) / 8] |= (twoBit << (6 - ((x * 2) % 8)));
-    }
-    if (ctx->atkinsonDitherer)
-      ctx->atkinsonDitherer->nextRow();
-    else if (ctx->fsDitherer)
-      ctx->fsDitherer->nextRow();
+  // Empty bins used to emit black (raw=0) — hard horizontal hairlines on jackets.
+  // White fill (c26–c29) still left a visible band after dither. Carry forward the
+  // previous good gray sample per column so a missed Y-boundary blends with neighbors.
+  const int emptyFill = ctx->coverHighQuality ? 255 : 128;
+  uint8_t* gray = ctx->grayRow.get();
+  if (!gray) {
+    ctx->error = true;
+    return;
   }
 
-  ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
+  bool anySample = false;
+  for (int x = 0; x < ctx->outWidth; x++) {
+    int raw;
+    if (ctx->rowCount[x] > 0) {
+      raw = static_cast<int>(ctx->rowAccum[x] / ctx->rowCount[x]);
+      anySample = true;
+    } else if (ctx->hasLastGoodGray && ctx->lastGoodGray) {
+      // Reuse last good *raw-ish* via inverse is unavailable — use last adjusted gray
+      // as the source sample so the miss matches neighboring texture, not a flat strip.
+      raw = ctx->lastGoodGray[x];
+    } else {
+      raw = emptyFill;
+    }
+    if (ctx->oneBit) {
+      // 1-bit ditherers apply their own lift — keep raw gray.
+      gray[x] = static_cast<uint8_t>(raw);
+    } else if (ctx->coverHighQuality) {
+      // lastGoodGray stores post-lift values; only re-lift true source samples.
+      if (ctx->rowCount[x] > 0) {
+        gray[x] = static_cast<uint8_t>(adjustPixelCoverThumb(raw));
+      } else {
+        gray[x] = static_cast<uint8_t>(raw);
+      }
+    } else if (USE_8BIT_OUTPUT) {
+      gray[x] = (ctx->rowCount[x] > 0) ? adjustPixel(raw) : static_cast<uint8_t>(raw);
+    } else {
+      gray[x] = (ctx->rowCount[x] > 0) ? static_cast<uint8_t>(adjustPixel(raw)) : static_cast<uint8_t>(raw);
+    }
+  }
+
+  if (ctx->lastGoodGray && (anySample || ctx->hasLastGoodGray)) {
+    memcpy(ctx->lastGoodGray.get(), gray, static_cast<size_t>(ctx->outWidth));
+    ctx->hasLastGoodGray = true;
+  }
+
+  pushGrayRow(ctx, gray, ctx->currentOutY);
   ctx->currentOutY++;
-  yieldDuringDecode(ctx);
 }
 
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,
 // in left-to-right, top-to-bottom order (baseline JPEG).
 // Accumulates columns into mcuBuf; once the last column arrives (completing the MCU
 // row), applies scaling + dithering and writes packed BMP rows to bmpOut.
+//
+// Important: do NOT process using only the last column's blockH. JPEGDEC can report a
+// shorter iHeight on a right-edge chunk; earlier columns in the same MCU row may have
+// filled more rows. Using max height across the row avoids skipping source lines
+// (which produces a full-width horizontal seam after scale/dither).
 int bmpDrawCallback(JPEGDRAW* pDraw) {
   auto* ctx = reinterpret_cast<BmpConvertCtx*>(pDraw->pUser);
   if (!ctx || ctx->error) return 0;
@@ -452,33 +526,58 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
     ctx->error = true;
     return 0;
   }
+  if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
-  // Copy block pixels into MCU row buffer
-  for (int r = 0; r < blockH && r < MAX_MCU_HEIGHT; r++) {
+  // New MCU row: clear buffer first so missing columns never leave black leftovers.
+  // Mid-gray fill on covers makes any rare gap blend instead of a hard hairline.
+  if (ctx->mcuRowBaseY != blockY) {
+    const uint8_t fill = ctx->coverHighQuality ? 128 : 0;
+    memset(ctx->mcuBuf.get(), fill,
+           static_cast<size_t>(MAX_MCU_HEIGHT) * static_cast<size_t>(ctx->srcWidth));
+    ctx->mcuRowBaseY = blockY;
+    ctx->mcuRowMaxH = 0;
+  }
+
+  int h = blockH;
+  if (h > MAX_MCU_HEIGHT) h = MAX_MCU_HEIGHT;
+  if (h > ctx->mcuRowMaxH) ctx->mcuRowMaxH = h;
+
+  // Copy block pixels into MCU row buffer (row-relative to mcuRowBaseY).
+  for (int r = 0; r < h; r++) {
+    const int bufRow = (blockY - ctx->mcuRowBaseY) + r;
+    if (bufRow < 0 || bufRow >= MAX_MCU_HEIGHT) continue;
     const int copyW = (blockX + validW <= ctx->srcWidth) ? validW : (ctx->srcWidth - blockX);
     if (copyW <= 0) continue;
-    memcpy(ctx->mcuBuf.get() + r * ctx->srcWidth + blockX, pixels + r * stride, copyW);
+    memcpy(ctx->mcuBuf.get() + bufRow * ctx->srcWidth + blockX, pixels + r * stride, copyW);
   }
 
   // Wait for the last MCU column before processing any rows
   if (blockX + validW < ctx->srcWidth) return 1;
 
-  // Process each complete source row in this MCU row
-  const int endRow = blockY + blockH;
+  // Process every source row covered by the tallest block in this MCU row.
+  const int processH = ctx->mcuRowMaxH;
+  const int endRow = ctx->mcuRowBaseY + processH;
 
-  for (int y = blockY; y < endRow && y < ctx->srcHeight; y++) {
-    const uint8_t* srcRow = ctx->mcuBuf.get() + (y - blockY) * ctx->srcWidth;
+  for (int y = ctx->mcuRowBaseY; y < endRow && y < ctx->srcHeight; y++) {
+    // Skip already-emitted rows (defensive; should not happen with continuous decode).
+    if (y <= ctx->lastSrcYProcessed) continue;
+
+    const uint8_t* srcRow = ctx->mcuBuf.get() + (y - ctx->mcuRowBaseY) * ctx->srcWidth;
 
     if (ctx->smoothUpscale) {
       processSmoothSourceRow(ctx, srcRow, y);
     } else if (!ctx->needsScaling) {
       // 1:1 — outWidth == srcWidth, write directly
       writeOutputRow(ctx, srcRow, y);
+      ctx->currentOutY++;
     } else {
       // Fixed-point area averaging on X axis
       for (int outX = 0; outX < ctx->outWidth; outX++) {
         const int srcXStart = (static_cast<uint32_t>(outX) * ctx->scaleX_fp) >> 16;
-        const int srcXEnd = (static_cast<uint32_t>(outX + 1) * ctx->scaleX_fp) >> 16;
+        int srcXEnd = (static_cast<uint32_t>(outX + 1) * ctx->scaleX_fp) >> 16;
+        // Ensure every output column samples at least one source pixel (avoids
+        // black hairlines from empty bins at fixed-point boundaries).
+        if (srcXEnd <= srcXStart) srcXEnd = srcXStart + 1;
         int sum = 0;
         int count = 0;
         for (int srcX = srcXStart; srcX < srcXEnd && srcX < ctx->srcWidth; srcX++) {
@@ -487,6 +586,9 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
         }
         if (count == 0 && srcXStart < ctx->srcWidth) {
           sum = srcRow[srcXStart];
+          count = 1;
+        } else if (count == 0 && ctx->srcWidth > 0) {
+          sum = srcRow[ctx->srcWidth - 1];
           count = 1;
         }
         ctx->rowAccum[outX] += sum;
@@ -503,7 +605,13 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
         memset(ctx->rowCount.get(), 0, ctx->outWidth * sizeof(uint32_t));
       }
     }
+
+    ctx->lastSrcYProcessed = y;
   }
+
+  // MCU row complete — reset assembly state for the next row.
+  ctx->mcuRowBaseY = -1;
+  ctx->mcuRowMaxH = 0;
 
   return ctx->error ? 0 : 1;
 }
@@ -512,8 +620,15 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop) {
-  LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
+                                                     int targetHeight, bool oneBit, bool crop,
+                                                     bool coverHighQuality) {
+  // Home cover path (c22): 2-bit balanced Atkinson — far less visible dither than 1-bit.
+  // Display uses grayscale multipass on home (same idea as sleep covers).
+  if (coverHighQuality) {
+    oneBit = false;
+  }
+  LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d%s)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight,
+          coverHighQuality ? ", cover 2-bit Atkinson" : "");
 
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
@@ -631,6 +746,12 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.smoothScaleY_fp = interpolationStep(ctx.srcHeight, outHeight);
   ctx.smoothNextOutY = 0;
   ctx.smoothPrevY = -1;
+  ctx.mcuRowBaseY = -1;
+  ctx.mcuRowMaxH = 0;
+  ctx.lastSrcYProcessed = -1;
+  ctx.seamHeld = 0;
+  ctx.seamAY = 0;
+  ctx.seamBY = 0;
   ctx.rowsSinceYield = 0;
   ctx.blocksSinceYield = 0;
   ctx.error = false;
@@ -641,13 +762,34 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     LOG_ERR("JPG", "OOM: MCU buffer (%d bytes)", MAX_MCU_HEIGHT * ctx.srcWidth);
     return false;
   }
-  memset(ctx.mcuBuf.get(), 0, MAX_MCU_HEIGHT * ctx.srcWidth);
+  memset(ctx.mcuBuf.get(), coverHighQuality ? 128 : 0, MAX_MCU_HEIGHT * ctx.srcWidth);
 
   ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
   if (!ctx.bmpRow) {
     LOG_ERR("JPG", "OOM: BMP row buffer");
     return false;
   }
+
+  ctx.grayRow = makeUniqueNoThrow<uint8_t[]>(outWidth);
+  if (!ctx.grayRow) {
+    LOG_ERR("JPG", "OOM: gray row buffer");
+    return false;
+  }
+
+  // c30: carry-forward buffer for empty Y-scale bins (avoids solid hairline strips).
+  // Soft-fail: without it empty bins fall back to white/mid fill (still valid BMP).
+  if (needsScaling && !smoothUpscale) {
+    ctx.lastGoodGray = makeUniqueNoThrow<uint8_t[]>(outWidth);
+    if (ctx.lastGoodGray) {
+      memset(ctx.lastGoodGray.get(), coverHighQuality ? 255 : 128, static_cast<size_t>(outWidth));
+      ctx.hasLastGoodGray = false;
+    } else {
+      LOG_DBG("JPG", "No lastGoodGray buffer (heap); empty bins use solid fill");
+      ctx.hasLastGoodGray = false;
+    }
+  }
+
+  // c29+: no hairline delay buffers (saves RAM; filters caused banding).
 
   if (smoothUpscale) {
     // One contiguous allocation avoids three heap blocks while keeping smoothing line-buffered.
@@ -672,6 +814,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     ctx.nextOutY_srcStart = scaleY_fp;
   }
 
+  ctx.coverHighQuality = coverHighQuality;
+
   if (oneBit) {
     ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
     if (!ctx.atkinson1BitDitherer) {
@@ -679,16 +823,23 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
       return false;
     }
   } else if (!USE_8BIT_OUTPUT) {
-    if (USE_ATKINSON) {
-      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
+    if (coverHighQuality) {
+      // Equal 0/85/170/255 — smooth midtones with fine dither (not 1-bit crosshatch).
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/true);
       if (!ctx.atkinsonDitherer) {
-        LOG_ERR("JPG", "OOM: AtkinsonDitherer");
+        LOG_ERR("JPG", "OOM: AtkinsonDitherer (cover)");
         return false;
       }
     } else if (USE_FLOYD_STEINBERG) {
       ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
       if (!ctx.fsDitherer) {
         LOG_ERR("JPG", "OOM: FloydSteinbergDitherer");
+        return false;
+      }
+    } else if (USE_ATKINSON) {
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/false);
+      if (!ctx.atkinsonDitherer) {
+        LOG_ERR("JPG", "OOM: AtkinsonDitherer");
         return false;
       }
     }
@@ -701,6 +852,37 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (rc == 1 && ctx.smoothUpscale && !ctx.error) {
     finishSmoothUpscale(&ctx);
+  }
+
+  // Finish any remaining scaled rows (last source rows can leave the Y accum
+  // short of outHeight). Pad so the BMP height is complete — a short write used
+  // to leave a trash strip that looked like a line.
+  if (rc == 1 && !ctx.error && ctx.needsScaling && !ctx.smoothUpscale) {
+    while (ctx.currentOutY < ctx.outHeight) {
+      flushScaledRow(&ctx);
+      memset(ctx.rowAccum.get(), 0, ctx.outWidth * sizeof(uint32_t));
+      memset(ctx.rowCount.get(), 0, ctx.outWidth * sizeof(uint32_t));
+    }
+  }
+  // 1:1 path: if MCU assembly skipped source rows, pad remaining with last good /
+  // mid-gray so height matches header (avoids bottom trash line).
+  if (rc == 1 && !ctx.error && !ctx.needsScaling && !ctx.smoothUpscale) {
+    while (ctx.currentOutY < ctx.outHeight) {
+      uint8_t* gray = ctx.grayRow.get();
+      if (!gray) break;
+      if (ctx.hasLastGoodGray && ctx.lastGoodGray) {
+        memcpy(gray, ctx.lastGoodGray.get(), static_cast<size_t>(ctx.outWidth));
+      } else {
+        memset(gray, ctx.coverHighQuality ? 255 : 128, static_cast<size_t>(ctx.outWidth));
+      }
+      pushGrayRow(&ctx, gray, ctx.currentOutY);
+      ctx.currentOutY++;
+    }
+  }
+
+  // Drain cover hairline delay buffer (last 1–2 rows).
+  if (rc == 1 && !ctx.error) {
+    finishSeamBuffer(&ctx);
   }
 
   if (rc != 1 || ctx.error) {
@@ -729,5 +911,14 @@ bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& b
 // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                          int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false);
+}
+
+// Home covers (c30): 2-bit balanced Atkinson + mild lift, contain-fit.
+// Shared by Bare / Stats / Stats-Life. MCU max-height + empty-bin carry-forward.
+// Pair with home grayscale multipass for clean midtones (minimal dither grain).
+bool JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut,
+                                                                          int targetMaxWidth, int targetMaxHeight) {
+  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, /*oneBit=*/false,
+                                     /*crop=*/false, /*coverHighQuality=*/true);
 }

@@ -15,14 +15,14 @@
 #define FONTS_MANIFEST_VERSION 1
 
 #ifndef FONT_MANIFEST_URL
-// Manifest + .cpfont assets are published by .github/workflows/release-fonts.yml
-// to the crosspoint-fonts repo under the "sd-fonts-m<META>-b<BIN>" tag. The tag
-// pattern must stay in sync with the workflow; it derives its version numbers
-// from lib/EpdFont/scripts/cpfont_version.py.
+// CrossInk-hosted SD font manifest (same .cpfont v4 schema as CrossPoint).
+// Use plain HTTP for this public S3 bucket: HTTPS often stalls inside
+// esp_http_client on ESP32-C3; downloaded .cpfont files are still CRC-checked.
+// Path must stay in sync with FONTS_MANIFEST_VERSION + CPFONT_VERSION.
 #define FONT_MANIFEST_URL_STRINGIFY_INNER(x) #x
 #define FONT_MANIFEST_URL_STRINGIFY(x) FONT_MANIFEST_URL_STRINGIFY_INNER(x)
-#define FONT_MANIFEST_URL                                                                                           \
-  "https://github.com/crosspoint-reader/crosspoint-fonts/releases/download/sd-fonts-m" FONT_MANIFEST_URL_STRINGIFY( \
+#define FONT_MANIFEST_URL                                                                    \
+  "http://crossink-fonts.s3.us-east-1.amazonaws.com/sd-fonts-m" FONT_MANIFEST_URL_STRINGIFY( \
       FONTS_MANIFEST_VERSION) "-b" FONT_MANIFEST_URL_STRINGIFY(CPFONT_VERSION) "/fonts.json"
 #endif
 

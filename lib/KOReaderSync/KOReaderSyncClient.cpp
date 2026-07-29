@@ -12,9 +12,9 @@
 int KOReaderSyncClient::lastHttpCode = 0;
 
 namespace {
-// Device identifier for CrossPoint reader
-constexpr char DEVICE_NAME[] = "CrossPoint";
-constexpr char DEVICE_ID[] = "crosspoint-reader";
+// Device identifier shown on the sync server / conflict UI ("uploaded from …").
+constexpr char DEVICE_NAME[] = "Casper";
+constexpr char DEVICE_ID[] = "casper-reader";
 
 // KOSync's TLS-1.3 servers can't be reached through the precompiled system
 // mbedTLS (TLS 1.3 is stubbed out), so requests run over wolfSSL via

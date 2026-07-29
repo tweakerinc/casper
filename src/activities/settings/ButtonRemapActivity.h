@@ -1,9 +1,10 @@
 #pragma once
 
-#include <functional>
 #include <string>
 
+#include "CrossPointSettings.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 class ButtonRemapActivity final : public Activity {
  public:
@@ -16,21 +17,24 @@ class ButtonRemapActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  // Rendering task state.
+  static constexpr int kSlotCount = CrossPointSettings::HW_REMAP_BUTTON_COUNT;  // 6 physical keys
+  static constexpr int kResetRow = kSlotCount;                                  // 7th row: reset defaults
+  static constexpr int kListCount = kSlotCount + 1;
 
-  // Index of the logical role currently awaiting input.
-  uint8_t currentStep = 0;
-  // Temporary mapping from logical role -> hardware button index.
-  uint8_t tempMapping[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-  // Error banner timing (used when reassigning duplicate buttons).
+  uint8_t tempMap[CrossPointSettings::HW_REMAP_BUTTON_COUNT] = {};
+  int selectedIndex = 0;
   unsigned long errorUntil = 0;
   std::string errorMessage;
+  OptionPopup functionPopup;
+  bool dirty = false;
 
-  // Commit temporary mapping to settings.
-  void applyTempMapping();
-  // Returns false if a hardware button is already assigned to a different role.
-  bool validateUnassigned(uint8_t pressedButton);
-  // Labels for UI display.
-  const char* getRoleName(uint8_t roleIndex) const;
-  const char* getHardwareName(uint8_t buttonIndex) const;
+  void openFunctionPicker();
+  bool tryAssign(uint8_t hwIndex, uint8_t function);
+  void resetDefaults();
+  void commitAndExit();
+  void showError(const char* msg);
+
+  const char* slotName(uint8_t hwIndex) const;
+  const char* functionName(uint8_t function) const;
+  void drawSlotArrows() const;
 };

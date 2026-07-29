@@ -34,4 +34,13 @@ inline int asciiCaseCmp(const char* a, const char* b) {
  */
 std::string sanitizeFilename(const std::string& name, size_t maxBytes = 100);
 
+/**
+ * Format an author string for on-screen display.
+ * Calibre/OPF often stores "Last, First" (file-as order). When a segment has
+ * exactly one comma, it is flipped to "First Last". Multiple authors separated
+ * by " & ", " and ", or ";" are handled per segment. Names already in natural
+ * order (no single comma) are left unchanged.
+ */
+std::string formatAuthorDisplayName(const std::string& author);
+
 }  // namespace StringUtils

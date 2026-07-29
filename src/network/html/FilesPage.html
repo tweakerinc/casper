@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Files - CrossPoint Reader</title>
+  <title>Files - Casper Reader</title>
   <script src="/js/jszip.min.js"></script>
   <style>
     :root {
@@ -1501,7 +1501,7 @@
   </style>
 </head>
 <body>
-<h1>📚 CrossPoint Reader</h1>
+<h1>📚 Casper Reader</h1>
 
 <div class="nav-links">
   <a href="/">Home</a>
@@ -1547,7 +1547,7 @@
 
 <div class="card">
   <p style="text-align: center; color: #95a5a6; margin: 0;">
-    CrossPoint E-Reader • Open Source
+    Casper E-Reader • Open Source
   </p>
 </div>
 
@@ -1846,7 +1846,7 @@
 
   if (currentPath !== '/') {
     const leaf = currentPath.split('/').filter(Boolean).pop();
-    if (leaf) document.title = leaf + ' - Files - CrossPoint Reader';
+    if (leaf) document.title = leaf + ' - Files - Casper Reader';
   }
 
   // Network status monitoring
@@ -1934,7 +1934,7 @@
   }
 
   async function hydrate() {
-    // Fetch CrossPoint version
+    // Fetch Casper version
     fetchVersion();
 
     // Close modals when clicking overlay - call proper cleanup functions
@@ -3316,7 +3316,7 @@ let ENABLE_GRAYSCALE = DEFAULT_ENABLE_GRAYSCALE;
 let ENABLE_AUTO_CROP = DEFAULT_ENABLE_AUTO_CROP;
 let HANDEDNESS = 'right'; // 'right' = clockwise (right-handed), 'left' = counter-clockwise (left-handed)
 let OVERLAP_PERCENT = 5; // Minimum overlap percentage for splits (5%, 10%, 15%)
-const UPLOAD_SETTINGS_STORAGE_KEY = 'crosspoint.files.uploadSettings.v1';
+const UPLOAD_SETTINGS_STORAGE_KEY = 'Casper.files.uploadSettings.v1';
 const DEFAULT_UPLOAD_SETTINGS = Object.freeze({
   convertBeforeUpload: false,
   renameFromMetadata: false,
@@ -3405,8 +3405,8 @@ const logSection = document.getElementById('log-section');
 const logContainer = document.getElementById('log-container');
 const exportLogCheckbox = document.getElementById('export-log-checkbox');
 
-// CrossPoint version (fetched from API)
-let crosspointVersion = 'Unknown';
+// Casper version (fetched from API)
+let CasperVersion = 'Unknown';
 
 // Fetch version from API
 async function fetchVersion() {
@@ -3414,7 +3414,7 @@ async function fetchVersion() {
     const response = await fetch('/api/status');
     if (response.ok) {
       const data = await response.json();
-      crosspointVersion = data.version || 'Unknown';
+      CasperVersion = data.version || 'Unknown';
       if (data.device === 'X3' || data.device === 'X4') {
         DETECTED_DEVICE = data.device;
         applyDeviceTarget();
@@ -3752,7 +3752,7 @@ function exportLogToFile(filename = null, isBatch = false) {
   }
   // Extract text from log entries
   const entries = logContainer.querySelectorAll('.log-entry');
-  let logText = `CrossPoint Reader ${crosspointVersion} - EPUB Conversion Log\n`;
+  let logText = `Casper Reader ${CasperVersion} - EPUB Conversion Log\n`;
   logText += `Generated: ${new Date().toLocaleString()}\n`;
   logText += `${'='.repeat(60)}\n\n`;
 
@@ -5037,7 +5037,7 @@ async function convertEpubFile(file, progressCallback) {
         let modified = false;
 
         // Remove width/height attributes from ALL img tags (dimensions may have changed)
-        // This prevents CrossPoint and other readers from using wrong dimensions
+        // This prevents Casper and other readers from using wrong dimensions
         const allImgElements = doc.querySelectorAll('img');
         for (const img of allImgElements) {
           if (img.hasAttribute('width')) { img.removeAttribute('width'); modified = true; }

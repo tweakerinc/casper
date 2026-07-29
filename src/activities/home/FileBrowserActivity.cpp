@@ -9,15 +9,36 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
+#include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 
 namespace {
-constexpr unsigned long GO_HOME_MS = 1000;
+// Long-press threshold for book menu / folder delete / hidden-files toggle.
+constexpr unsigned long GO_HOME_MS = 500;
 constexpr size_t NAME_BUFFER_SIZE = 500;
+constexpr int ROOT_HINT_GAP = 20;
+
+// True if any path segment starts with '.' (hidden folder).
+bool containsHiddenPathSegment(const std::string& path) {
+  if (path.empty()) return false;
+  size_t segmentStart = (path.front() == '/') ? 1 : 0;
+  while (segmentStart < path.length()) {
+    const size_t segmentEnd = path.find('/', segmentStart);
+    if (segmentStart < path.length() && path[segmentStart] == '.') {
+      return true;
+    }
+    if (segmentEnd == std::string::npos) {
+      break;
+    }
+    segmentStart = segmentEnd + 1;
+  }
+  return false;
+}
 }  // namespace
 
 void FileBrowserActivity::loadFiles() {
@@ -186,20 +207,89 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
   return true;
 }
 
-void FileBrowserActivity::loop() {
-  // Long press BACK (1s+) goes to root folder (Books mode only).
-  // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
-  if (mode == Mode::Books && mappedInput.isPressed(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_HOME_MS && basepath != "/" && !lockLongPressBack) {
+void FileBrowserActivity::toggleHiddenFiles() {
+  const std::string currentEntry =
+      (!files.empty() && selectorIndex < files.size()) ? files[selectorIndex] : std::string();
+  SETTINGS.showHiddenFiles = SETTINGS.showHiddenFiles ? 0 : 1;
+  if (!SETTINGS.saveToFile()) {
+    LOG_ERR("FileBrowser", "Failed to save showHiddenFiles=%u", SETTINGS.showHiddenFiles);
+  }
+
+  // Leaving a hidden folder after hiding dots again would show an empty/invalid path.
+  if (!SETTINGS.showHiddenFiles && containsHiddenPathSegment(basepath)) {
     basepath = "/";
-    loadFiles();
-    selectorIndex = 0;
-    requestUpdate();
+  }
+
+  loadFiles();
+  selectorIndex = currentEntry.empty() ? 0 : findEntry(currentEntry);
+  if (!files.empty() && selectorIndex >= files.size()) {
+    selectorIndex = files.size() - 1;
+  }
+  requestUpdate();
+}
+
+void FileBrowserActivity::showBookActionMenu(const std::string& fullPath, const std::string& displayName) {
+  // Menu activity handles cache/stats/pace/description itself and stays open.
+  // Parent only handles terminal results so this folder (basepath) is preserved.
+  startActivityForResult(
+      std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, displayName, fullPath,
+                                                  /*includeRemoveFromRecents=*/false,
+                                                  /*openedFromLongPress=*/true),
+      [this, fullPath](const ActivityResult& result) {
+        lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+        lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+        if (result.isCancelled) {
+          requestUpdate();
+          return;
+        }
+        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+        if (!actionResult) {
+          requestUpdate();
+          return;
+        }
+        switch (static_cast<FileBrowserAction>(actionResult->action)) {
+          case FileBrowserAction::Open:
+            onSelectBook(fullPath);
+            return;
+          case FileBrowserAction::Delete:
+            // File already removed by the menu activity; refresh this folder listing.
+            loadFiles();
+            if (files.empty()) {
+              selectorIndex = 0;
+            } else if (selectorIndex >= files.size()) {
+              selectorIndex = files.size() - 1;
+            }
+            requestUpdate(true);
+            return;
+          default:
+            // Side-effect actions finish inside the menu; should not reach here.
+            requestUpdate();
+            return;
+        }
+      });
+}
+
+void FileBrowserActivity::loop() {
+  // Long press BACK/HOME (1s+) toggles hidden files (Books mode only).
+  // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
+  if (mode == Mode::Books && !longPressBackHandled && mappedInput.isPressed(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= GO_HOME_MS && !lockLongPressBack) {
+    longPressBackHandled = true;
+    toggleHiddenFiles();
     return;
   }
 
   if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     lockLongPressBack = false;
+    return;
+  }
+
+  // After long-press Confirm opened the book menu, swallow until Confirm is up
+  // so the release does not also short-press open the book.
+  if (longPressConfirmFired) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+      longPressConfirmFired = false;
+    }
     return;
   }
 
@@ -209,6 +299,20 @@ void FileBrowserActivity::loop() {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+
+  // Long-press Confirm on a book file → same action menu as Recents / Dashboard.
+  if (mode == Mode::Books && !files.empty() && selectorIndex < files.size() &&
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= GO_HOME_MS &&
+      !lockNextConfirmRelease) {
+    const std::string& entry = files[selectorIndex];
+    if (entry.back() != '/') {
+      std::string cleanBasePath = basepath;
+      if (cleanBasePath.back() != '/') cleanBasePath += "/";
+      longPressConfirmFired = true;
+      showBookActionMenu(cleanBasePath + entry, entry);
+      return;
+    }
+  }
 
   auto activateSelected = [this] {
     if (lockNextConfirmRelease) {
@@ -231,16 +335,13 @@ void FileBrowserActivity::loop() {
       return;
     }
 
-    if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) {
-      // --- LONG PRESS ACTION: DELETE FILE OR DIRECTORY ---
+    if (mode == Mode::Books && isDirectory && mappedInput.getHeldTime() >= GO_HOME_MS) {
+      // --- LONG PRESS on folder: confirm delete ---
       std::string cleanBasePath = basepath;
       if (cleanBasePath.back() != '/') cleanBasePath += "/";
       const std::string fullPath = cleanBasePath + entry;
 
       auto handler = [this, fullPath](const ActivityResult& res) {
-        // The confirmation popup acts on button press; if that button is still
-        // held when we resume, swallow its release so it doesn't also act here
-        // (Back would go up a directory, Confirm would open the selection).
         lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
         lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
         if (!res.isCancelled) {
@@ -251,37 +352,32 @@ void FileBrowserActivity::loop() {
             if (files.empty()) {
               selectorIndex = 0;
             } else if (selectorIndex >= files.size()) {
-              // Move selection to the new "last" item
               selectorIndex = files.size() - 1;
             }
-
             requestUpdate(true);
           } else {
             LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
           }
-        } else {
-          LOG_DBG("FileBrowser", "Delete cancelled by user");
         }
       };
 
-      std::string heading = tr(STR_DELETE) + std::string("? ");
-
-      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry), handler);
+      startActivityForResult(
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput, std::string(tr(STR_DELETE)) + "? ", entry),
+          handler);
       return;
-    } else {
-      // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
-      if (basepath.back() != '/') basepath += "/";
-
-      if (isDirectory) {
-        basepath += entry.substr(0, entry.length() - 1);
-        loadFiles();
-        selectorIndex = 0;
-        requestUpdate();
-      } else {
-        onSelectBook(basepath + entry);
-      }
     }
-    return;
+
+    // --- SHORT PRESS: OPEN/NAVIGATE ---
+    if (basepath.back() != '/') basepath += "/";
+
+    if (isDirectory) {
+      basepath += entry.substr(0, entry.length() - 1);
+      loadFiles();
+      selectorIndex = 0;
+      requestUpdate();
+    } else {
+      onSelectBook(basepath + entry);
+    }
   };
 
   int touchSel = static_cast<int>(selectorIndex);
@@ -298,6 +394,10 @@ void FileBrowserActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (longPressBackHandled) {
+      longPressBackHandled = false;
+      return;
+    }
     // Short press: go up one directory, or go home if at root
     if (mappedInput.getHeldTime() < GO_HOME_MS) {
       if (basepath != "/") {
@@ -407,32 +507,30 @@ void FileBrowserActivity::render(RenderLock&&) {
         [this](int index) { return getFileExtension(files[index]); }, false);
   }
 
-  // Full path display
-  {
-    const int pathY = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
-    const int separatorY = pathY - metrics.verticalSpacing / 2;
-    renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 3, true);
-    const int pathMaxWidth = pageWidth - metrics.contentSidePadding * 2;
-    // Left-truncate so the deepest directory is always visible
-    const char* pathStr = basepath.c_str();
-    const char* pathDisplay = pathStr;
-    char leftTruncBuf[256];
-    if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
-      const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (…)
-      const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ellipsis);
-      const int available = pathMaxWidth - ellipsisWidth;
-      // Walk forward from the start until the suffix fits, skipping UTF-8 continuation bytes
-      const char* p = pathStr;
-      while (*p) {
-        if (renderer.getTextWidth(SMALL_FONT_ID, p) <= available) break;
-        ++p;
-        while (*p && (static_cast<unsigned char>(*p) & 0xC0) == 0x80) ++p;
-      }
-      snprintf(leftTruncBuf, sizeof(leftTruncBuf), "%s%s", ellipsis, p);
-      pathDisplay = leftTruncBuf;
+  // Full path display (+ root hint for hidden-files toggle)
+  const int pathY = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
+  const int separatorY = pathY - metrics.verticalSpacing / 2;
+  renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 3, true);
+  const int pathMaxWidth = pageWidth - metrics.contentSidePadding * 2;
+  // Left-truncate so the deepest directory is always visible
+  const char* pathStr = basepath.c_str();
+  const char* pathDisplay = pathStr;
+  char leftTruncBuf[256];
+  if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
+    const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (…)
+    const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ellipsis);
+    const int available = pathMaxWidth - ellipsisWidth;
+    // Walk forward from the start until the suffix fits, skipping UTF-8 continuation bytes
+    const char* p = pathStr;
+    while (*p) {
+      if (renderer.getTextWidth(SMALL_FONT_ID, p) <= available) break;
+      ++p;
+      while (*p && (static_cast<unsigned char>(*p) & 0xC0) == 0x80) ++p;
     }
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, pathY, pathDisplay);
+    snprintf(leftTruncBuf, sizeof(leftTruncBuf), "%s%s", ellipsis, p);
+    pathDisplay = leftTruncBuf;
   }
+  renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, pathY, pathDisplay);
 
   // Help text
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
@@ -443,6 +541,17 @@ void FileBrowserActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  // At SD root: tip for long-press HOME to show/hide dotfiles (CrossInk parity).
+  if (mode == Mode::Books && basepath == "/") {
+    const int usedPathWidth = renderer.getTextWidth(SMALL_FONT_ID, basepath.c_str());
+    const int hintMaxWidth = pathMaxWidth - usedPathWidth - ROOT_HINT_GAP;
+    if (hintMaxWidth > 0) {
+      const auto hint = renderer.truncatedText(SMALL_FONT_ID, tr(STR_TOGGLE_HIDDEN_FILES_HINT), hintMaxWidth);
+      const int hintWidth = renderer.getTextWidth(SMALL_FONT_ID, hint.c_str());
+      renderer.drawText(SMALL_FONT_ID, pageWidth - metrics.contentSidePadding - hintWidth, pathY, hint.c_str());
+    }
+  }
 
   renderer.displayBuffer();
 }

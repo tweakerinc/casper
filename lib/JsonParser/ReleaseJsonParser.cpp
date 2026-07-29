@@ -11,6 +11,54 @@ void safeCopy(char* dst, size_t dstSize, const char* src, size_t srcLen) {
   dst[n] = '\0';
 }
 
+// Casper release assets are named Casper-v0.1.0 or Casper-v0.1.0.bin.
+// Also accept plain firmware.bin (SD / upstream tooling).
+bool isFirmwareAssetName(const char* name) {
+  if (name == nullptr || name[0] == '\0') {
+    return false;
+  }
+  if (strcmp(name, "firmware.bin") == 0) {
+    return true;
+  }
+
+  // Case-insensitive "Casper-" prefix (7 chars).
+  static constexpr char kPrefix[] = "Casper-";
+  static constexpr size_t kPrefixLen = 7;
+  for (size_t i = 0; i < kPrefixLen; ++i) {
+    const char a = name[i];
+    const char b = kPrefix[i];
+    if (a == '\0') {
+      return false;
+    }
+    const char al = static_cast<char>(a >= 'A' && a <= 'Z' ? a - 'A' + 'a' : a);
+    const char bl = static_cast<char>(b >= 'A' && b <= 'Z' ? b - 'A' + 'a' : b);
+    if (al != bl) {
+      return false;
+    }
+  }
+
+  const char* rest = name + kPrefixLen;
+  // Require a version-looking rest: v0.1.0… or 0.1.0…
+  if (!(rest[0] == 'v' || rest[0] == 'V' || (rest[0] >= '0' && rest[0] <= '9'))) {
+    return false;
+  }
+
+  // Allow no extension or .bin only (reject .zip / .md / source tarballs).
+  const char* dot = strrchr(name, '.');
+  if (dot == nullptr) {
+    return true;
+  }
+  if (dot == name || dot[1] == '\0') {
+    return false;
+  }
+  // ".bin" case-insensitive
+  if ((dot[1] == 'b' || dot[1] == 'B') && (dot[2] == 'i' || dot[2] == 'I') && (dot[3] == 'n' || dot[3] == 'N') &&
+      dot[4] == '\0') {
+    return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 ReleaseJsonParser::ReleaseJsonParser()
@@ -44,7 +92,7 @@ const char* ReleaseJsonParser::getFirmwareUrl() const { return firmwareUrl; }
 size_t ReleaseJsonParser::getFirmwareSize() const { return firmwareSize; }
 
 void ReleaseJsonParser::commitAsset() {
-  if (strcmp(currentAssetName, "firmware.bin") == 0) {
+  if (isFirmwareAssetName(currentAssetName)) {
     memcpy(firmwareUrl, currentAssetUrl, sizeof(firmwareUrl));
     firmwareSize = currentAssetSize;
     firmwareFound = true;

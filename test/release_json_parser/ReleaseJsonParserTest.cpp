@@ -545,6 +545,56 @@ TEST(ReleaseJsonParser, FirmwareBinExactMatch) {
   EXPECT_EQ(p.getFirmwareSize(), 200u);
 }
 
+TEST(ReleaseJsonParser, CasperAssetNameNoExtension) {
+  const char* json = R"({
+      "tag_name": "v0.1.0",
+      "assets": [
+        {"name": "source.zip", "browser_download_url": "https://src", "size": 1},
+        {"name": "Casper-v0.1.0", "browser_download_url": "https://casper/fw", "size": 5435808}
+      ]
+    })";
+
+  ReleaseJsonParser p;
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundTag());
+  EXPECT_TRUE(p.foundFirmware());
+  EXPECT_STREQ(p.getFirmwareUrl(), "https://casper/fw");
+  EXPECT_EQ(p.getFirmwareSize(), 5435808u);
+}
+
+TEST(ReleaseJsonParser, CasperAssetNameWithBinExtension) {
+  const char* json = R"({
+      "tag_name": "v0.1.1",
+      "assets": [
+        {"name": "Casper-v0.1.1.bin", "browser_download_url": "https://casper/bin", "size": 1000}
+      ]
+    })";
+
+  ReleaseJsonParser p;
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundFirmware());
+  EXPECT_STREQ(p.getFirmwareUrl(), "https://casper/bin");
+  EXPECT_EQ(p.getFirmwareSize(), 1000u);
+}
+
+TEST(ReleaseJsonParser, CasperAssetNameRejectsZip) {
+  const char* json = R"({
+      "tag_name": "v0.1.0",
+      "assets": [
+        {"name": "Casper-v0.1.0.zip", "browser_download_url": "https://zip", "size": 50},
+        {"name": "Casper-dictionaries.zip", "browser_download_url": "https://dicts", "size": 60}
+      ]
+    })";
+
+  ReleaseJsonParser p;
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundTag());
+  EXPECT_FALSE(p.foundFirmware());
+}
+
 TEST(ReleaseJsonParser, LargeSize) {
   // 16MB firmware (maximum flash size)
   const char* json =

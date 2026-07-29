@@ -6,13 +6,22 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include <algorithm>
 #include <cstring>
 
-size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const uint16_t textBytes) {
+namespace {
+constexpr char GUIDE_DOT_UTF8[] = "\xc2\xb7";  // U+00B7 middle dot
+}  // namespace
+
+size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const bool hasGuideDots,
+                            const uint16_t textBytes) {
   // Layout documented in TextBlock.h: 16-bit arrays first, then 8-bit arrays, then text.
   size_t size = static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(int16_t) + sizeof(uint8_t));
   if (hasFocus) {
     size += static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(uint8_t));
+  }
+  if (hasGuideDots) {
+    size += static_cast<size_t>(wordCount) * sizeof(uint16_t);
   }
   return size + textBytes;
 }
@@ -27,6 +36,10 @@ void TextBlock::bindArenaPointers() {
     focusSuffixXArr = reinterpret_cast<const uint16_t*>(base + off);
     off += wc * 2;
   }
+  if (guideDotsPresent) {
+    guideDotXOffsetArr = reinterpret_cast<const uint16_t*>(base + off);
+    off += wc * 2;
+  }
   stylesArr = base + off;
   off += wc;
   if (focusPresent) {
@@ -38,53 +51,54 @@ void TextBlock::bindArenaPointers() {
 
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
-                     const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle)
+                     const std::vector<uint16_t>& focusSuffixX, const std::vector<uint16_t>& guideDotXOffset,
+                     const BlockStyle& blockStyle)
     : blockStyle(blockStyle) {
-  // Focus annotations are optional: empty vectors mean no word in this block has a split.
-  // When present, they must be sized in lockstep with words[].
   const bool hasFocus = !focusBoundary.empty();
+  const bool hasGuide = !guideDotXOffset.empty();
   if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() > 10000 ||
-      (hasFocus && (words.size() != focusBoundary.size() || words.size() != focusSuffixX.size()))) {
-    LOG_ERR("TXB", "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u)",
+      (hasFocus && (words.size() != focusBoundary.size() || words.size() != focusSuffixX.size())) ||
+      (hasGuide && words.size() != guideDotXOffset.size())) {
+    LOG_ERR("TXB", "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u, dots=%u)",
             static_cast<uint32_t>(words.size()), static_cast<uint32_t>(wordXpos.size()),
             static_cast<uint32_t>(wordStyles.size()), static_cast<uint32_t>(focusBoundary.size()),
-            static_cast<uint32_t>(focusSuffixX.size()));
+            static_cast<uint32_t>(focusSuffixX.size()), static_cast<uint32_t>(guideDotXOffset.size()));
     isValid = false;
     return;
   }
 
   numWords = static_cast<uint16_t>(words.size());
   focusPresent = hasFocus;
+  guideDotsPresent = hasGuide;
   if (numWords == 0) {
     return;  // valid empty block, no arena
   }
 
-  // Pass 1: total text size, one NUL per word. A line is at most a physical
-  // row of the page, so uint16_t offsets are ample; reject anything larger.
   size_t totalText = 0;
   for (const auto& w : words) totalText += w.size() + 1;
   if (totalText > UINT16_MAX) {
     LOG_ERR("TXB", "Construction failed: text size %u exceeds arena limit", static_cast<uint32_t>(totalText));
     numWords = 0;
     focusPresent = false;
+    guideDotsPresent = false;
     isValid = false;
     return;
   }
   textBytes = static_cast<uint16_t>(totalText);
 
-  const size_t size = arenaSize(numWords, focusPresent, textBytes);
+  const size_t size = arenaSize(numWords, focusPresent, guideDotsPresent, textBytes);
   arena = makeUniqueNoThrow<uint8_t[]>(size);
   if (!arena) {
     LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
     numWords = 0;
     textBytes = 0;
     focusPresent = false;
+    guideDotsPresent = false;
     isValid = false;
     return;
   }
   bindArenaPointers();
 
-  // Pass 2: fill. Mutable aliases of the const views bound above.
   auto* textOff = const_cast<uint16_t*>(textOffArr);
   auto* xpos = const_cast<int16_t*>(xposArr);
   auto* styles = const_cast<uint8_t*>(stylesArr);
@@ -104,6 +118,12 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
     for (uint16_t i = 0; i < numWords; i++) {
       suffixX[i] = focusSuffixX[i];
       boundary[i] = focusBoundary[i];
+    }
+  }
+  if (guideDotsPresent) {
+    auto* dots = const_cast<uint16_t*>(guideDotXOffsetArr);
+    for (uint16_t i = 0; i < numWords; i++) {
+      dots[i] = guideDotXOffset[i];
     }
   }
 }
@@ -157,10 +177,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
         static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
     const uint8_t boundary = focusBoundary(i);
 
-    // SUP/SUB shift the baseline passed to drawText; the glyph is also scaled 50% inside
-    // drawText, so these offsets are chosen relative to the full-size ascender:
-    //   SUP: raise by 40% of ascender — sits clearly above the cap-height
-    //   SUB: lower by 25% of ascender — descends below baseline without clashing with ascenders below
     int wordY = y;
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
@@ -169,10 +185,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     }
 
     if (boundary > 0) {
-      // Focus split: draw bold prefix, then the regular suffix at a pre-computed x offset.
-      // The bold prefix is bounded to 9 codepoints by the clamp on targetBoldChars in
-      // ParsedText::addWord; 9 UTF-8 codepoints occupy at most 9 * 4 = 36 bytes, +1 for null = 37.
-      // suffixX is computed at cache-creation time to avoid font metric lookups at render time.
       static constexpr size_t MAX_FOCUS_PREFIX_BYTES = 9 * 4 + 1;
       char boldBuf[40];
       static_assert(sizeof(boldBuf) >= MAX_FOCUS_PREFIX_BYTES,
@@ -189,6 +201,13 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       renderer.drawText(fontId, wordX, wordY, word, true, currentStyle, baseDir);
     }
 
+    // Guide Dots: · placed after this word (offset measured at layout time).
+    const uint16_t dotOffset = guideDotXOffset(i);
+    if (dotOffset > 0 && !scanning) {
+      renderer.drawText(fontId, wordX + static_cast<int>(dotOffset), wordY, GUIDE_DOT_UTF8, true,
+                        EpdFontFamily::REGULAR, baseDir);
+    }
+
     if (scanning) {
       continue;
     }
@@ -201,7 +220,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
         lineWidth = (lineWidth + 1) / 2;
       }
 
-      // Do not decorate the synthetic em-space used for paragraph indentation.
       if (wordTextLen(i) >= 3 && static_cast<uint8_t>(word[0]) == 0xE2 && static_cast<uint8_t>(word[1]) == 0x80 &&
           static_cast<uint8_t>(word[2]) == 0x83) {
         const char* visibleText = word + 3;
@@ -241,21 +259,18 @@ bool TextBlock::serialize(HalFile& file) const {
     return false;
   }
 
-  // Word data: scalars, then the arena verbatim -- its in-memory layout is
-  // exactly the on-disk layout (see TextBlock.h), so one write covers all
-  // per-word arrays and the text blob.
   serialization::writePod(file, numWords);
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
+  serialization::writePod(file, static_cast<uint8_t>(guideDotsPresent ? 1 : 0));
   serialization::writePod(file, textBytes);
   if (numWords > 0) {
-    const size_t size = arenaSize(numWords, focusPresent, textBytes);
+    const size_t size = arenaSize(numWords, focusPresent, guideDotsPresent, textBytes);
     if (file.write(arena.get(), size) != size) {
       LOG_ERR("TXB", "Serialization failed: arena write (%u bytes)", static_cast<uint32_t>(size));
       return false;
     }
   }
 
-  // Style (alignment + margins/padding/indent)
   serialization::writePod(file, blockStyle.alignment);
   serialization::writePod(file, blockStyle.textAlignDefined);
   serialization::writePod(file, blockStyle.marginTop);
@@ -277,13 +292,13 @@ bool TextBlock::serialize(HalFile& file) const {
 std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   uint16_t wc;
   uint8_t hasFocus;
+  uint8_t hasGuide;
   uint16_t textBytes;
   serialization::readPod(file, wc);
   serialization::readPod(file, hasFocus);
+  serialization::readPod(file, hasGuide);
   serialization::readPod(file, textBytes);
 
-  // Sanity checks: cap the arena allocation and reject impossible geometry
-  // (every word carries at least its NUL terminator).
   if (wc > 10000) {
     LOG_ERR("TXB", "Deserialization failed: word count %u exceeds maximum", wc);
     return nullptr;
@@ -301,9 +316,10 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->numWords = wc;
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
+  block->guideDotsPresent = hasGuide != 0;
 
   if (wc > 0) {
-    const size_t size = arenaSize(wc, block->focusPresent, textBytes);
+    const size_t size = arenaSize(wc, block->focusPresent, block->guideDotsPresent, textBytes);
     block->arena = makeUniqueNoThrow<uint8_t[]>(size);
     if (!block->arena) {
       LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
@@ -315,9 +331,6 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
     }
     block->bindArenaPointers();
 
-    // Validate offsets before anything dereferences wordText(): offset 0 first,
-    // strictly increasing, in bounds, and every word NUL-terminated (word i ends
-    // at the byte before offset i+1; the last word at the last text byte).
     const uint16_t* textOff = block->textOffArr;
     const char* text = block->textArr;
     if (textOff[0] != 0 || text[textBytes - 1] != '\0') {
@@ -332,7 +345,6 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
     }
   }
 
-  // Style (alignment + margins/padding/indent)
   BlockStyle& blockStyle = block->blockStyle;
   serialization::readPod(file, blockStyle.alignment);
   serialization::readPod(file, blockStyle.textAlignDefined);

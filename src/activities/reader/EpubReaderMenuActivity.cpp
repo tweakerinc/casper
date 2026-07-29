@@ -3,44 +3,151 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+#include <cstring>
+
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/icons/settings2.h"
 #include "fontIds.h"
+
+namespace {
+
+// Hamburger / list icon for Main tab (24x24, 1-bit, MSB-left, black=0).
+constexpr uint8_t MenuIcon24[] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf,
+    0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf,
+    0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf,
+    0xf3, 0xe7, 0xcf, 0xf3, 0xe7, 0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+static_assert(sizeof(MenuIcon24) == 24 * ((24 + 7) / 8), "MenuIcon24 must contain 24 rows of 1-bit icon data");
+
+constexpr int tabIconSize = 24;
+constexpr int selectedTabBoxWidth = 50;
+constexpr int selectedTabBoxHeight = 34;
+constexpr int selectedTabBoxRadius = 2;
+
+void drawBookmarkTabIcon(const GfxRenderer& renderer, int x, int y, const bool foregroundBlack = true) {
+  constexpr int ribbonWidth = 16;
+  constexpr int ribbonHeight = 22;
+  constexpr int notchSize = 6;
+  const int iconX = x + (tabIconSize - ribbonWidth) / 2;
+  const int iconY = y + 1;
+  const int centerX = iconX + ribbonWidth / 2;
+
+  const int polyX[5] = {iconX, iconX + ribbonWidth, iconX + ribbonWidth, centerX, iconX};
+  const int polyY[5] = {iconY, iconY, iconY + ribbonHeight, iconY + ribbonHeight - notchSize, iconY + ribbonHeight};
+  renderer.fillPolygon(polyX, polyY, 5, foregroundBlack);
+}
+
+void drawReaderMenuBitmapIcon(const GfxRenderer& renderer, const uint8_t bitmap[], const int x, const int y,
+                              const int width, const int height, const bool foregroundBlack = true) {
+  if (bitmap == nullptr || width <= 0 || height <= 0) {
+    return;
+  }
+
+  const int stride = (width + 7) / 8;
+  for (int row = 0; row < height; ++row) {
+    const int srcOffset = row * stride;
+    for (int col = 0; col < width; ++col) {
+      const uint8_t mask = static_cast<uint8_t>(0x80 >> (col & 7));
+      if ((bitmap[srcOffset + (col >> 3)] & mask) != 0) {
+        continue;
+      }
+
+      // Icon assets are authored for the legacy portrait blitter. Keep that
+      // source rotation, but route placement through logical coordinates so
+      // landscape and inverted reader menus keep the tabs centered.
+      renderer.drawPixel(x + width - 1 - row, y + col, foregroundBlack);
+    }
+  }
+}
+
+}  // namespace
 
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool hasBookmarks)
+                                               const bool hasFootnotes, const bool hasBookmarks,
+                                               const bool hasClippings, const bool isCurrentPageBookmarked,
+                                               const bool isBookCompleted)
     : Activity("EpubReaderMenu", renderer, mappedInput),
-      menuItems(buildMenuItems(hasFootnotes, hasBookmarks)),
+      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasClippings, isCurrentPageBookmarked, isBookCompleted)),
       title(title),
       pendingOrientation(currentOrientation),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
-std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
-                                                                                     bool hasBookmarks) {
-  std::vector<MenuItem> items;
-  items.reserve(13);
-  items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasBookmarks,
+                                                                            bool hasClippings,
+                                                                            bool isCurrentPageBookmarked,
+                                                                            bool isBookCompleted) {
+  TabMenuItems items;
+  auto& mainItems = items[MAIN_TAB_INDEX];
+  auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
+  auto& settingsItems = items[SETTINGS_TAB_INDEX];
+
+  mainItems.reserve(10 + (hasFootnotes ? 1u : 0u));
+  bookmarkItems.reserve(8 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
+  settingsItems.reserve(4 + (hasBookmarks ? 1u : 0u));
+
+  // ---- Main ----
+  mainItems.push_back({MenuAction::DICTIONARY, StrId::STR_DICTIONARY});
+  mainItems.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
-    items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
+    mainItems.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
+  mainItems.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  mainItems.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
+  mainItems.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
+  // Mark finished is not session tracking — drives finished folder / recents rules.
+  mainItems.push_back(
+      {MenuAction::TOGGLE_COMPLETED, isBookCompleted ? StrId::STR_MARK_UNFINISHED : StrId::STR_MARK_FINISHED});
+  mainItems.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
+
+  // ---- Bookmarks ----
+  bookmarkItems.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
+  bookmarkItems.push_back(
+      {MenuAction::TOGGLE_BOOKMARK, isCurrentPageBookmarked ? StrId::STR_REMOVE_BOOKMARK : StrId::STR_ADD_BOOKMARK});
   if (hasBookmarks) {
-    items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
+    bookmarkItems.push_back({MenuAction::BOOKMARKS, StrId::STR_VIEW_BOOKMARKS});
   }
-  items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
-  items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
-  items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
-  items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
-  items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
-  items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
-  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  bookmarkItems.push_back({MenuAction::SAVE_CLIPPING, StrId::STR_SAVE_CLIPPING});
+  if (hasClippings) {
+    bookmarkItems.push_back({MenuAction::VIEW_CLIPPINGS, StrId::STR_VIEW_CLIPPINGS});
+  }
+  bookmarkItems.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+  bookmarkItems.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
+
+  // ---- Settings (stats + book maintenance only here — not on Main) ----
+  // When stat tracking is off, omit every stats-facing row so users never see them.
+  if (SETTINGS.readingStatsTrackingEnabled()) {
+    settingsItems.push_back({MenuAction::READING_STATS, StrId::STR_READING_STATS});
+    settingsItems.push_back({MenuAction::RESET_READING_PACE, StrId::STR_RESET_READING_PACE});
+    settingsItems.push_back({MenuAction::DELETE_STATS, StrId::STR_DELETE_BOOK_STATS});
+  }
+  settingsItems.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  if (hasBookmarks) {
+    settingsItems.push_back({MenuAction::DELETE_BOOKMARKS, StrId::STR_DELETE_BOOKMARKS});
+  }
+
   return items;
+}
+
+const std::vector<EpubReaderMenuActivity::MenuItem>& EpubReaderMenuActivity::activeMenuItems() const {
+  return menuItems[activeTabIndex()];
+}
+
+void EpubReaderMenuActivity::focusTabRow() { selectedIndex = -1; }
+
+void EpubReaderMenuActivity::cycleActiveTab(const int direction) {
+  const int count = static_cast<int>(MENU_TAB_COUNT);
+  int idx = static_cast<int>(activeTabIndex()) + direction;
+  idx = ((idx % count) + count) % count;
+  activeTab = static_cast<MenuTab>(idx);
+  focusTabRow();
+  requestUpdate();
 }
 
 void EpubReaderMenuActivity::onEnter() {
@@ -63,94 +170,215 @@ bool EpubReaderMenuActivity::handleHomeGesture() {
   return true;
 }
 
+void EpubReaderMenuActivity::drawIconTabBar(const Rect rect) const {
+  renderer.drawLine(rect.x, rect.y, rect.x + rect.width - 1, rect.y, true);
+  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
+
+  for (size_t i = 0; i < MENU_TAB_COUNT; i++) {
+    const int slotX = rect.x + static_cast<int>((i * rect.width) / MENU_TAB_COUNT);
+    const int nextSlotX = rect.x + static_cast<int>(((i + 1) * rect.width) / MENU_TAB_COUNT);
+    const int slotWidth = nextSlotX - slotX;
+    const int centerX = slotX + slotWidth / 2;
+    const bool selected = i == activeTabIndex();
+    const bool tabFocused = selected && selectedIndex < 0;
+    const int boxX = centerX - selectedTabBoxWidth / 2;
+    const int boxY = rect.y + (rect.height - selectedTabBoxHeight) / 2;
+    const int iconX = centerX - tabIconSize / 2;
+    const int iconY = rect.y + (rect.height - tabIconSize) / 2;
+
+    if (tabFocused) {
+      renderer.fillRoundedRect(boxX, boxY, selectedTabBoxWidth, selectedTabBoxHeight, selectedTabBoxRadius,
+                               Color::Black);
+    } else if (selected) {
+      renderer.drawRoundedRect(boxX, boxY, selectedTabBoxWidth, selectedTabBoxHeight, 1, selectedTabBoxRadius, true);
+    }
+
+    if (i == static_cast<size_t>(MenuTab::Main)) {
+      drawReaderMenuBitmapIcon(renderer, MenuIcon24, iconX, iconY, tabIconSize, tabIconSize, !tabFocused);
+    } else if (i == static_cast<size_t>(MenuTab::Bookmarks)) {
+      drawBookmarkTabIcon(renderer, iconX, iconY, !tabFocused);
+    } else {
+      drawReaderMenuBitmapIcon(renderer, Settings2Icon24, iconX, iconY, tabIconSize, tabIconSize, !tabFocused);
+    }
+  }
+}
+
+void EpubReaderMenuActivity::activateSelected() {
+  if (selectedIndex < 0) {
+    cycleActiveTab();
+    return;
+  }
+
+  const auto& items = activeMenuItems();
+  if (selectedIndex >= static_cast<int>(items.size())) {
+    focusTabRow();
+    requestUpdate();
+    return;
+  }
+
+  const auto selectedAction = items[static_cast<size_t>(selectedIndex)].action;
+  if (selectedAction == MenuAction::ROTATE_SCREEN) {
+    optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
+                     pendingOrientation, [this](int idx) {
+                       pendingOrientation = idx;
+                       requestUpdate();
+                     });
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
+    optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
+                     static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
+                       selectedPageTurnOption = idx;
+                       requestUpdate();
+                     });
+    requestUpdate();
+    return;
+  }
+
+  setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
+  finish();
+}
+
 void EpubReaderMenuActivity::loop() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
-    // The popup acts on button press; if that input closed it, the trailing
-    // release must be swallowed below (Back would close the menu, Confirm
-    // would re-activate the selected item).
     popupClosing = !optionPopup.isActive();
     return;
   }
   if (popupClosing) {
     if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
         mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-      return;  // closing press still held
+      return;
     }
     popupClosing = false;
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      return;  // swallow the release that closed the popup
+      return;
     }
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (selectedIndex >= 0) {
+      focusTabRow();
+      requestUpdate();
+      return;
+    }
     closeCancelled();
     return;
   }
 
-  auto activateSelected = [this] {
-    const auto selectedAction = menuItems[selectedIndex].action;
-    if (selectedAction == MenuAction::ROTATE_SCREEN) {
-      optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
-                       pendingOrientation, [this](int idx) {
-                         pendingOrientation = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
-      optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
-                       static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
-                         selectedPageTurnOption = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
-    finish();
-  };
-
   auto metrics = UITheme::getInstance().getMetrics();
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int contentTop =
-      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
-  switch (handleListTouch(selectedIndex, static_cast<int>(menuItems.size()), contentTop, contentHeight, false)) {
+      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight * 2 + metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - metrics.buttonHintsHeight;
+  const int tabTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight;
+
+  // Touch: icon tab bar
+  int tx = 0;
+  int ty = 0;
+  if (mappedInput.wasScreenTouchDown(tx, ty) || mappedInput.wasScreenTapped(tx, ty)) {
+    if (ty >= tabTop && ty < tabTop + metrics.tabBarHeight && tx >= screen.x && tx < screen.x + screen.width) {
+      const int slot = std::clamp((tx - screen.x) * static_cast<int>(MENU_TAB_COUNT) / std::max(1, screen.width), 0,
+                                  static_cast<int>(MENU_TAB_COUNT) - 1);
+      if (activeTab != static_cast<MenuTab>(slot) || selectedIndex != -1) {
+        activeTab = static_cast<MenuTab>(slot);
+        focusTabRow();
+        requestUpdate();
+      }
+      return;
+    }
+  }
+
+  // Touch: list rows
+  int listSelected = std::max(0, selectedIndex);
+  switch (handleListTouch(listSelected, static_cast<int>(activeMenuItems().size()), contentTop, contentHeight, false)) {
     case ListTouchResult::Activated:
+      selectedIndex = listSelected;
       activateSelected();
       return;
     case ListTouchResult::Consumed:
+      selectedIndex = listSelected;
+      requestUpdate();
       return;
     case ListTouchResult::None:
       break;
   }
 
+  // Front: within-tab list ring. Side: always previous/next tab (any focus).
+  // selectedIndex: -1 = tab bar, 0..n-1 = list rows (ring via selectedIndex+1).
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    const int menuCount = static_cast<int>(activeMenuItems().size());
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex + 1, menuCount + 1) - 1;
     requestUpdate();
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Down) {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    const int menuCount = static_cast<int>(activeMenuItems().size());
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex + 1, menuCount + 1) - 1;
     requestUpdate();
     return;
   }
 
-  // Handle navigation
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+  auto moveListNext = [this] {
+    const int menuCount = static_cast<int>(activeMenuItems().size());
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex + 1, menuCount + 1) - 1;
     requestUpdate();
-  });
+  };
+  auto moveListPrev = [this] {
+    const int menuCount = static_cast<int>(activeMenuItems().size());
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex + 1, menuCount + 1) - 1;
+    requestUpdate();
+  };
+  // Always switch tabs; keep relative focus (tab row stays tab row; list index clamped).
+  auto moveTabNext = [this] {
+    const bool onTabs = selectedIndex < 0;
+    const int listPos = selectedIndex;
+    cycleActiveTab(1);
+    if (onTabs) {
+      focusTabRow();
+    } else {
+      const int menuCount = static_cast<int>(activeMenuItems().size());
+      if (menuCount <= 0) {
+        selectedIndex = -1;
+      } else if (listPos >= menuCount) {
+        selectedIndex = menuCount - 1;
+      } else {
+        selectedIndex = listPos;
+      }
+      requestUpdate();
+    }
+  };
+  auto moveTabPrev = [this] {
+    const bool onTabs = selectedIndex < 0;
+    const int listPos = selectedIndex;
+    cycleActiveTab(-1);
+    if (onTabs) {
+      focusTabRow();
+    } else {
+      const int menuCount = static_cast<int>(activeMenuItems().size());
+      if (menuCount <= 0) {
+        selectedIndex = -1;
+      } else if (listPos >= menuCount) {
+        selectedIndex = menuCount - 1;
+      } else {
+        selectedIndex = listPos;
+      }
+      requestUpdate();
+    }
+  };
 
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
+  buttonNavigator.onRelease(ButtonNavigator::getFrontNextButtons(), moveListNext);
+  buttonNavigator.onRelease(ButtonNavigator::getFrontPreviousButtons(), moveListPrev);
+  buttonNavigator.onContinuous(ButtonNavigator::getFrontNextButtons(), moveListNext);
+  buttonNavigator.onContinuous(ButtonNavigator::getFrontPreviousButtons(), moveListPrev);
+
+  buttonNavigator.onRelease(ButtonNavigator::getSideNextButtons(), moveTabNext);
+  buttonNavigator.onRelease(ButtonNavigator::getSidePreviousButtons(), moveTabPrev);
+  buttonNavigator.onContinuous(ButtonNavigator::getSideNextButtons(), moveTabNext);
+  buttonNavigator.onContinuous(ButtonNavigator::getSidePreviousButtons(), moveTabPrev);
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateSelected();
@@ -169,7 +397,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  title.c_str());
 
-  // Progress summary
+  // Progress summary under header
   std::string progressLine;
   if (totalPages > 0) {
     progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
@@ -181,29 +409,38 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
       Rect{screen.x, screen.y + metrics.topPadding + metrics.headerHeight, screen.width, metrics.tabBarHeight},
       progressLine.c_str());
 
+  const Rect tabRect{screen.x, screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight,
+                     screen.width, metrics.tabBarHeight};
+  drawIconTabBar(tabRect);
+
   const int contentTop =
-      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight * 2 + metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - metrics.buttonHintsHeight;
+  const auto& items = activeMenuItems();
 
   GUI.drawList(
-      renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, menuItems.size(), selectedIndex,
-      [this](int index) { return I18N.get(menuItems[index].labelId); }, nullptr, nullptr,
-      [this](int index) {
-        const auto value = menuItems[index].action;
-        if (value == MenuAction::ROTATE_SCREEN) {
-          // Render current orientation value on the right edge of the content area.
-          return I18N.get(orientationLabels[pendingOrientation]);
-        } else if (value == MenuAction::AUTO_PAGE_TURN) {
-          // Render current page turn value on the right edge of the content area.
-          return pageTurnLabels[selectedPageTurnOption];
-        } else {
+      renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, static_cast<int>(items.size()), selectedIndex,
+      [&items](int index) { return I18N.get(items[index].labelId); }, nullptr, nullptr,
+      [this](int index) -> std::string {
+        const auto& list = activeMenuItems();
+        if (index < 0 || index >= static_cast<int>(list.size())) {
           return "";
         }
+        const auto value = list[static_cast<size_t>(index)].action;
+        if (value == MenuAction::ROTATE_SCREEN) {
+          return I18N.get(orientationLabels[pendingOrientation]);
+        }
+        if (value == MenuAction::AUTO_PAGE_TURN) {
+          return pageTurnLabels[selectedPageTurnOption];
+        }
+        // No right-column "Edit" (or other) labels — keeps the list clean.
+        return "";
       },
       true);
 
-  // Footer / Hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // Front stays Up/Down for the list; side switches tabs (no side-chrome labels).
+  const char* confirmHint = selectedIndex < 0 ? tr(STR_NEXT) : tr(STR_SELECT);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

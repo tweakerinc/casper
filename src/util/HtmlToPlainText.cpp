@@ -148,3 +148,28 @@ std::string htmlToPlainText(const std::string& html) {
   while (!output.empty() && (output.back() == ' ' || output.back() == '\n')) output.pop_back();
   return output;
 }
+
+std::string decodeHtmlEntities(const std::string& input) {
+  std::string output;
+  output.reserve(input.size());
+  for (size_t i = 0; i < input.size();) {
+    if (input[i] == '&') {
+      const size_t semicolon = input.find(';', i + 1);
+      if (semicolon != std::string::npos && semicolon - i <= 16) {
+        const size_t len = semicolon - i + 1;
+        const char* value = lookupHtmlEntity(input.data() + i, len);
+        if (value != nullptr) {
+          output.append(value);
+          i = semicolon + 1;
+          continue;
+        }
+        if (appendNumericEntity(output, input.data() + i, len)) {
+          i = semicolon + 1;
+          continue;
+        }
+      }
+    }
+    output.push_back(input[i++]);
+  }
+  return output;
+}

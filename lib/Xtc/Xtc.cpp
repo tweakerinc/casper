@@ -270,13 +270,30 @@ bool Xtc::generateCoverBmp() const {
   return true;
 }
 
-std::string Xtc::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
-std::string Xtc::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
+// c3: match EPUB contrast-boosted cover thumbs.
+std::string Xtc::getThumbBmpPath() const { return cachePath + "/thumb_c6_[HEIGHT].bmp"; }
+std::string Xtc::getThumbBmpPath(int height) const {
+  return cachePath + "/thumb_c6_" + std::to_string(height) + ".bmp";
+}
 
 bool Xtc::generateThumbBmp(int height) const {
-  // Already generated
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
-    return true;
+  // Already generated — only trust real BMPs (drop corrupt partial files).
+  const std::string existingPath = getThumbBmpPath(height);
+  if (Storage.exists(existingPath.c_str())) {
+    HalFile probe;
+    bool valid = false;
+    if (Storage.openFileForRead("XTC", existingPath, probe)) {
+      char sig[2] = {};
+      const size_t n = probe.read(sig, 2);
+      const size_t sz = probe.size();
+      probe.close();
+      valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
+    }
+    if (valid) {
+      return true;
+    }
+    LOG_ERR("XTC", "Removing corrupt thumb: %s", existingPath.c_str());
+    Storage.remove(existingPath.c_str());
   }
 
   if (!loaded || !parser) {
@@ -302,9 +319,9 @@ bool Xtc::generateThumbBmp(int height) const {
   // Get bit depth
   const uint8_t bitDepth = parser->getBitDepth();
 
-  // Calculate target dimensions for thumbnail (fit within 240x400 Continue Reading card)
-  int THUMB_TARGET_WIDTH = height * 0.6;
-  int THUMB_TARGET_HEIGHT = height;
+  // Match EPUB hero thumbs: 3:4 contain-fit box (Bare/Stats/Focus shared gen).
+  const int THUMB_TARGET_HEIGHT = height;
+  const int THUMB_TARGET_WIDTH = std::max(1, (height * 3 + 1) / 4);
 
   // Calculate scale factor
   float scaleX = static_cast<float>(THUMB_TARGET_WIDTH) / pageInfo.width;

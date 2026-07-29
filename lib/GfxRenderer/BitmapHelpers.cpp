@@ -52,6 +52,62 @@ int adjustPixel(int gray) {
 
   return gray;
 }
+
+// 1-bit home covers (c21): mild open only — c20 hard rails + 1.55× contrast
+// made jackets too dark and brought back heavy dither grids on small type.
+// Keep natural midtones so Atkinson can resolve them without crushing.
+int adjustPixel1Bit(int gray) {
+  if (gray < 0) gray = 0;
+  if (gray > 255) gray = 255;
+
+  // Soft gamma (~20% toward sqrt) + small lift — visible without blowout/crush.
+  const int product = gray * 255;
+  int root = gray;
+  if (root > 0) {
+    root = (root + product / root) >> 1;
+    root = (root + product / root) >> 1;
+  }
+  int adjusted = (gray * 80 + root * 20) / 100;
+  adjusted += 8;
+
+  // Very light cream nudge only (no hard white rail).
+  if (adjusted > 155 && adjusted < 230) {
+    adjusted += 6;
+  }
+
+  if (adjusted < 0) adjusted = 0;
+  if (adjusted > 255) adjusted = 255;
+  return adjusted;
+}
+
+int adjustPixelCoverThumb(int gray) { return adjustPixel1Bit(gray); }
+
+// Optional 2-bit HQ path (not used for home covers — too dark on jackets).
+int adjustPixelCoverHQ(int gray) {
+  if (gray < 0) gray = 0;
+  if (gray > 255) gray = 255;
+
+  int g = gray;
+  if (g < 6) {
+    g = 0;
+  } else if (g > 249) {
+    g = 255;
+  } else {
+    g = ((g - 6) * 255) / (249 - 6);
+  }
+
+  constexpr int kFactor = 142;
+  int adjusted = ((g - 128) * kFactor) / 100 + 128;
+  adjusted += 16;
+
+  if (adjusted > 110 && adjusted < 220) {
+    adjusted += ((adjusted - 110) * 48) / 100;
+  }
+
+  if (adjusted < 0) adjusted = 0;
+  if (adjusted > 255) adjusted = 255;
+  return adjusted;
+}
 // Simple quantization without dithering - divide into 4 levels
 // The thresholds are fine-tuned to the X4 display
 uint8_t quantizeSimple(int gray) {
@@ -92,19 +148,14 @@ uint8_t quantize(int gray, int x, int y) {
   }
 }
 
-// 1-bit noise dithering for fast home screen rendering
-// Uses hash-based noise for consistent dithering that works well at small sizes
+// Fallback 1-bit path (noise). Prefer Atkinson1Bit for covers.
 uint8_t quantize1bit(int gray, int x, int y) {
-  gray = adjustPixel(gray);
+  gray = adjustPixel1Bit(gray);
 
-  // Generate noise threshold using integer hash (no regular pattern to alias)
   uint32_t hash = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u;
   hash = (hash ^ (hash >> 13)) * 1274126177u;
-  const int threshold = static_cast<int>(hash >> 24);  // 0-255
-
-  // Simple threshold with noise: gray >= (128 + noise offset) -> white
-  // The noise adds variation around the 128 midpoint
-  const int adjustedThreshold = 128 + ((threshold - 128) / 2);  // Range: 64-192
+  const int threshold = static_cast<int>(hash >> 24);
+  const int adjustedThreshold = 128 + ((threshold - 128) / 2);
   return (gray >= adjustedThreshold) ? 1 : 0;
 }
 

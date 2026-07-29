@@ -54,6 +54,11 @@ class MappedInputManager {
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
   // Returns the raw front button index that was pressed this frame (or -1 if none).
   int getPressedFrontButton() const;
+  // Returns the raw front button index that was released this frame (or -1 if none).
+  // Bypasses remapping so home hint slots stay fixed to physical button positions.
+  int getReleasedFrontButton() const;
+  // True while a raw front button is held (hardware index, not logical remap).
+  bool isFrontButtonPressed(uint8_t buttonIndex) const;
 
   // True when the control axis is flipped relative to the physical buttons: the user opted into
   // orientation-following front buttons AND the screen is *currently rendered* rotated (INVERTED /

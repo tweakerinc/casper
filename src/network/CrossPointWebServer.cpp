@@ -25,6 +25,7 @@
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/DictionaryRegistry.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -334,7 +335,7 @@ void CrossPointWebServer::handleClient() {
         if (strcmp(buffer, "hello") == 0) {
           String hostname = WiFi.getHostname();
           if (hostname.isEmpty()) {
-            hostname = "crosspoint";
+            hostname = "casper";
           }
           String message = "crosspoint (on " + hostname + ");" + String(wsPort);
           udp.beginPacket(udp.remoteIP(), udp.remotePort());
@@ -785,6 +786,10 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += state.fileName;
         clearBookCache(filePath.c_str());
+        // New packs under /dictionaries must invalidate the discover() cache.
+        if (filePath.indexOf("/dictionaries") >= 0 || filePath.indexOf("/.dictionaries") >= 0) {
+          DictionaryRegistry::invalidate();
+        }
       }
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {

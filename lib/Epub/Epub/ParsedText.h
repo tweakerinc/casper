@@ -21,7 +21,8 @@ class ParsedText {
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
-  bool focusReadingEnabled;
+  bool focusReadingEnabled;   // Bionic Reading
+  bool guideReadingEnabled;   // Guide Dots (· between words)
   bool isNaturalAlign;
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
@@ -50,11 +51,13 @@ class ParsedText {
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool focusReadingEnabled = false, const bool guideReadingEnabled = false,
+                      const BlockStyle& blockStyle = BlockStyle())
       : blockStyle(blockStyle),
         extraParagraphSpacing(extraParagraphSpacing),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        guideReadingEnabled(guideReadingEnabled),
         isNaturalAlign(false),
         hasRtlWord(false) {}
   ~ParsedText() = default;

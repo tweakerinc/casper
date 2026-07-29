@@ -19,8 +19,8 @@
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
-  // Built-in font labels (StrId)
-  std::vector<StrId> enumValues = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS};
+  // Built-in font labels (StrId) — order matches FONT_FAMILY enum.
+  std::vector<StrId> enumValues = {StrId::STR_SOURCE_SERIF_4, StrId::STR_NOTO_SANS};
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
 
@@ -41,7 +41,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // with all options when SD fonts are present.
   std::vector<std::string> allStringValues;
   if (sdFontCount > 0) {
-    allStringValues.push_back(I18N.get(StrId::STR_NOTO_SERIF));
+    allStringValues.push_back(I18N.get(StrId::STR_SOURCE_SERIF_4));
     allStringValues.push_back(I18N.get(StrId::STR_NOTO_SANS));
     allStringValues.insert(allStringValues.end(), enumStringValues.begin(), enumStringValues.end());
   }
@@ -147,7 +147,42 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
   static const std::vector<SettingInfo> baseList = [] {
     std::vector<SettingInfo> v = {
-        // --- Display ---
+        // --- Display (device order: Status Bar → Theme → Sleep → …) ---
+        // Status Bar (system top chrome) is an Action row inserted by SettingsActivity.
+        // Web/JSON still exposes hideBatteryPercentage + system slots below.
+        // Theme (stored enum values stay append-only / stable).
+        // Shipping picker: Bare · Stats · Stats-Life (enum ids match display names).
+        SettingInfo::DynamicEnum(
+            StrId::STR_UI_THEME,
+            {StrId::STR_THEME_BARE, StrId::STR_THEME_FOCUS, StrId::STR_THEME_DASHBOARD},
+            [] {
+              using T = CrossPointSettings::UI_THEME;
+              const auto t = static_cast<T>(SETTINGS.uiTheme);
+              if (t == T::BARE) return static_cast<uint8_t>(0);
+              if (t == T::STATS) return static_cast<uint8_t>(1);
+              return static_cast<uint8_t>(2);  // STATS_LIFE (+ legacy remaps)
+            },
+            [](uint8_t displayIdx) {
+              using T = CrossPointSettings::UI_THEME;
+              static constexpr T kOrder[] = {T::BARE, T::STATS, T::STATS_LIFE};
+              if (displayIdx >= sizeof(kOrder) / sizeof(kOrder[0])) displayIdx = 0;
+              SETTINGS.uiTheme = static_cast<uint8_t>(kOrder[displayIdx]);
+              // Theme status-bar defaults (user can still change afterward).
+              if (kOrder[displayIdx] == T::BARE) {
+                SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_HIDE;
+                SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+                SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_HIDE;
+                SETTINGS.syncSystemStatusLegacyFromSlots();
+              } else {
+                // Stats / Stats-Life: battery left (with %), clock right.
+                SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_BATTERY;
+                SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+                SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_CLOCK;
+                SETTINGS.systemBatteryDisplay = CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT;
+                SETTINGS.syncSystemStatusLegacyFromSlots();
+              }
+            },
+            "uiTheme", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
                           {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER,
                            StrId::STR_COVER_CUSTOM, StrId::STR_NONE_OPT, StrId::STR_QUICK_RESUME},
@@ -157,20 +192,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                          StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
-                          {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
-                          StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(
             StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
             {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
             "refreshFrequency", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
-                          {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                           StrId::STR_THEME_ROUNDEDRAFF},
-                          "uiTheme", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
+                          StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
 
@@ -200,7 +228,12 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
-        SettingInfo::Toggle(StrId::STR_FOCUS_READING, &CrossPointSettings::focusReadingEnabled, "focusReadingEnabled",
+        // CrossInk naming: Bionic Reading (bold prefixes) + Guide Dots (· between words).
+        // JSON key focusReadingEnabled kept for older settings files.
+        SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::focusReadingEnabled, "focusReadingEnabled",
+                            StrId::STR_CAT_READER)
+            .withTextSettings(),
+        SettingInfo::Toggle(StrId::STR_GUIDE_READING, &CrossPointSettings::guideReadingEnabled, "guideReadingEnabled",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
@@ -219,29 +252,38 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
-        // --- Controls ---
-        SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
-                          StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
-                            "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
-                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY},
-                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
+        // --- Controls (order matches product UI) ---
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
-                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(
+            StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPwrBtn,
+            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
+            "longPwrBtn", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
+                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY,
+                           StrId::STR_SLEEP, StrId::STR_FORCE_REFRESH, StrId::STR_BROWSE_FILES,
+                           StrId::STR_SCREENSHOT_BUTTON, StrId::STR_FOOTNOTES, StrId::STR_FILE_TRANSFER,
+                           StrId::STR_READING_STATS},
+                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
+                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
+                          StrId::STR_CAT_CONTROLS),
+        // Remap Front Buttons is inserted by SettingsActivity *before* Orient.
+        SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
+                            "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
+        // Tilt (if IMU) is inserted after Orient by getSettingsList below.
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                             "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
+                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
+                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
 
         // --- System ---
         SettingInfo::Value(
@@ -254,6 +296,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
                             "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
+        // Session idle gap for stats (device UI builds ordered System list separately).
+        SettingInfo::Value(StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
+                           {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES,
+                            1},
+                           "readingSessionIdleMinutes", StrId::STR_CAT_SYSTEM),
+        // Stats folder settings (web/JSON). On-device UI uses StatsSettingsActivity.
+        SettingInfo::Toggle(StrId::STR_ENABLE_STAT_TRACKING, &CrossPointSettings::readingStatsEnabled,
+                            "readingStatsEnabled", StrId::STR_STATS),
+        SettingInfo::Toggle(StrId::STR_AUTO_BACKUP_STATS, &CrossPointSettings::autoBackupStats, "autoBackupStats",
+                            StrId::STR_STATS),
 
         // OPDS download folder: persisted + web-exposed, but category-less so it
         // is hidden from the on-device Settings screen (edited via OPDS UI).
@@ -295,6 +347,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
               KOREADER_STORE.saveToFile();
             },
             "koMatchMethod", StrId::STR_KOREADER_SYNC),
+        // Display order: Off, Smart Sync, Ask Every Time, Percent, Time (maps via syncBehaviorTo/FromDisplay).
+        SettingInfo::DynamicEnum(
+            StrId::STR_SYNC_BEHAVIOR,
+            {StrId::STR_OFF, StrId::STR_SMART_SYNC, StrId::STR_ASK_EVERY_TIME, StrId::STR_PERCENT, StrId::STR_TIME},
+            [] { return syncBehaviorToDisplay(KOREADER_STORE.getSyncBehavior()); },
+            [](uint8_t v) {
+              KOREADER_STORE.setSyncBehavior(syncBehaviorFromDisplay(v));
+              KOREADER_STORE.saveToFile();
+            },
+            "koSyncBehavior", StrId::STR_KOREADER_SYNC),
         SettingInfo::DynamicEnum(
             StrId::STR_SEND_METADATA, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
             [] { return static_cast<uint8_t>(KOREADER_STORE.getSendMetadata()); },
@@ -303,53 +365,131 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
               KOREADER_STORE.saveToFile();
             },
             "koSendMetadata", StrId::STR_KOREADER_SYNC),
+        // Legacy keys kept for web/JSON; device UI drives these via Sync Behavior.
         SettingInfo::DynamicEnum(
-            StrId::STR_SYNC_BEHAVIOR, {StrId::STR_ASK_EVERY_TIME, StrId::STR_SMART_SYNC},
-            [] { return static_cast<uint8_t>(KOREADER_STORE.getSyncBehavior()); },
+            StrId::STR_AUTO_UPLOAD_ON_CLOSE, {StrId::STR_NO, StrId::STR_YES},
+            [] { return static_cast<uint8_t>(KOREADER_STORE.getAutoUploadOnClose() ? 1 : 0); },
             [](uint8_t v) {
-              KOREADER_STORE.setSyncBehavior(static_cast<KOReaderSyncBehavior>(v));
+              KOREADER_STORE.setAutoUploadOnClose(v != 0);
               KOREADER_STORE.saveToFile();
             },
-            "koSyncBehavior", StrId::STR_KOREADER_SYNC),
+            "koAutoUploadOnClose", StrId::STR_KOREADER_SYNC),
+        SettingInfo::DynamicEnum(
+            StrId::STR_UPLOAD_TYPE, {StrId::STR_TIME, StrId::STR_PERCENT, StrId::STR_ADAPTIVE},
+            [] { return static_cast<uint8_t>(KOREADER_STORE.getAutoUploadType()); },
+            [](uint8_t v) {
+              KOREADER_STORE.setAutoUploadType(static_cast<AutoUploadType>(v));
+              KOREADER_STORE.saveToFile();
+            },
+            "koAutoUploadType", StrId::STR_KOREADER_SYNC),
         // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
-        SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
-                            "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
-                            "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR),
+        // Six exclusive slots. Labels must match STATUS_BAR_CORNER_CONTENT enum index order
+        // (on-device popup reorders for UX; web uses this index order).
+        SettingInfo::Enum(StrId::STR_UPPER_LEFT, &CrossPointSettings::statusBarUpperLeft,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarUpperLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_UPPER_MIDDLE, &CrossPointSettings::statusBarUpperMiddle,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarUpperMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_UPPER_RIGHT, &CrossPointSettings::statusBarUpperRight,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarUpperRight", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_LOWER_LEFT, &CrossPointSettings::statusBarLowerLeft,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarLowerLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_LOWER_MIDDLE, &CrossPointSettings::statusBarLowerMiddle,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarLowerMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_LOWER_RIGHT, &CrossPointSettings::statusBarLowerRight,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
+                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
+                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
+                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+                           StrId::STR_XTC_STATUS_BAR},
+                          "statusBarLowerRight", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
-                          {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarProgressBar",
+                          {StrId::STR_HIDE, StrId::STR_BOOK, StrId::STR_CHAPTER}, "statusBarProgressBar",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarProgressBarThickness,
                           {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
                           "statusBarProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
-                          {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
-                            StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_XTC_STATUS_BAR, &CrossPointSettings::xtcStatusBarMode,
-                          {StrId::STR_HIDE, StrId::STR_BOTTOM, StrId::STR_TOP}, "xtcStatusBarMode",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
-        // Clock entries (web settings only; device UI uses ClockOffsetActivity for the offset).
-        // Range 0..104 = quarter-hour steps from UTC-12:00 to UTC+14:00, biased by 48.
-        SettingInfo::Enum(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock,
-                          {StrId::STR_HIDE, StrId::STR_DIR_LEFT, StrId::STR_DIR_RIGHT}, "statusBarClock",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
+        // System top chrome slots (web + JSON). On-device UI uses SystemStatusBarSettingsActivity.
+        SettingInfo::Enum(StrId::STR_LEFT, &CrossPointSettings::systemStatusBarLeft,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CLOCK}, "systemStatusBarLeft",
+                          StrId::STR_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_MIDDLE, &CrossPointSettings::systemStatusBarMiddle,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CLOCK}, "systemStatusBarMiddle",
+                          StrId::STR_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_RIGHT, &CrossPointSettings::systemStatusBarRight,
+                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CLOCK}, "systemStatusBarRight",
+                          StrId::STR_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_BATTERY_DISPLAY, &CrossPointSettings::systemBatteryDisplay,
+                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT},
+                          "systemBatteryDisplay", StrId::STR_STATUS_BAR),
+        // Reader chrome battery display (Customize Reader UI nests this under Battery slots).
+        SettingInfo::Enum(StrId::STR_BATTERY_DISPLAY, &CrossPointSettings::readerBatteryDisplay,
+                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT},
+                          "readerBatteryDisplay", StrId::STR_CUSTOMISE_STATUS_BAR),
+        // Legacy system clock show/hide (derived from slots; web-compatible).
+        SettingInfo::DynamicEnum(
+            StrId::STR_CLOCK, {StrId::STR_HIDE, StrId::STR_SHOW},
+            [] {
+              return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)
+                         ? static_cast<uint8_t>(1)   // Show
+                         : static_cast<uint8_t>(0);  // Hide
+            },
+            [](uint8_t displayIdx) {
+              if (displayIdx == 1) {
+                if (!SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
+                  SETTINGS.assignSystemStatusBarSlot(SETTINGS.systemStatusBarMiddle,
+                                                     CrossPointSettings::SYS_SLOT_CLOCK);
+                }
+              } else {
+                if (SETTINGS.systemStatusBarLeft == CrossPointSettings::SYS_SLOT_CLOCK)
+                  SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_HIDE;
+                if (SETTINGS.systemStatusBarMiddle == CrossPointSettings::SYS_SLOT_CLOCK)
+                  SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+                if (SETTINGS.systemStatusBarRight == CrossPointSettings::SYS_SLOT_CLOCK)
+                  SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_HIDE;
+                SETTINGS.syncSystemStatusLegacyFromSlots();
+              }
+            },
+            "systemClock", StrId::STR_STATUS_BAR),
         SettingInfo::Value(StrId::STR_CLOCK_UTC_OFFSET, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1},
-                           "clockUtcOffsetQ", StrId::STR_CUSTOMISE_STATUS_BAR),
+                           "clockUtcOffsetQ", StrId::STR_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat,
                           {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H}, "clockFormat",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
+                          StrId::STR_STATUS_BAR),
         // Persistence flag for NTP debounce. Resetting from the web UI forces a re-sync
         // on next WiFi connect, which is useful when crossing time zones.
         SettingInfo::Toggle(StrId::STR_CLOCK_SYNCED, &CrossPointSettings::clockHasBeenSynced, "clockHasBeenSynced",
-                            StrId::STR_CUSTOMISE_STATUS_BAR),
+                            StrId::STR_STATUS_BAR),
     };
-    // Only show tilt page turn setting when the QMI8658 IMU is present (X3)
+    // Only show tilt page turn when the QMI8658 IMU is present (X3).
+    // After Orient (Remap sits above Orient via SettingsActivity).
     if (halTiltSensor.isAvailable()) {
-      // Insert after the short power button setting (end of Controls section)
       for (auto it = v.begin(); it != v.end(); ++it) {
-        if (it->nameId == StrId::STR_SHORT_PWR_BTN) {
+        if (it->nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION) {
           v.insert(it + 1, SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                                              {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED},
                                              "tiltPageTurn", StrId::STR_CAT_CONTROLS));
@@ -380,11 +520,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       *it = buildFontFamilySetting(registry);
     }
   }
-  if (dictionaries && !dictionaries->empty()) {
-    // Insert at the end of the Reader category (just before the first Controls entry).
-    auto it =
-        std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
-    v.insert(it, buildDictionarySetting(*dictionaries));
-  }
+  // On-device dictionary selection is DictionarySelectActivity (multi-select page).
+  // Web API can still expose a single dictionaryName string via manual JSON fields.
+  (void)dictionaries;
   return v;
 }

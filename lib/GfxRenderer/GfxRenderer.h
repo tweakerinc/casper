@@ -213,10 +213,15 @@ class GfxRenderer {
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  /// Draw a 1bpp icon. \p black=true draws ink in black; false draws white (for dark selection pills).
+  void drawIcon(const uint8_t bitmap[], int x, int y, int size, bool black = true) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
+  // Contain (letterbox): scale with min(w,h) so the whole image is visible.
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+  // Cover-fill (crop): scale with max(w,h) so the rect is full; overflow is clipped
+  // to [x, x+width) × [y, y+height). Does not upscale 1-bit (scale capped at 1).
+  void drawBitmap1BitCoverFill(const Bitmap& bitmap, int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in

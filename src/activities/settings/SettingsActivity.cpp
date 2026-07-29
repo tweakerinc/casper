@@ -2,17 +2,24 @@
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "BackupStatsActivity.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
+#include "ClockSettingsActivity.h"
+#include "SystemStatusBarSettingsActivity.h"
 #include "CrossPointSettings.h"
+#include "DictionarySelectActivity.h"
 #include "FontDownloadActivity.h"
 #include "KOReaderSettingsActivity.h"
+#include "StatsSettingsActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
@@ -40,51 +47,109 @@ void SettingsActivity::rebuildSettingsLists() {
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
-  // Rescan /dictionaries on every rebuild: cheap (one directory listing) and
-  // picks up dictionaries copied to the SD card since the last visit.
+  // Rescan only needed for web/list metadata; on-device dictionary picker is a page.
   std::vector<DictionaryEntry> dictionaries;
   DictionaryRegistry::discover(dictionaries);
+
+  // System fields pulled from the shared list (reordered explicitly below).
+  SettingInfo timeToSleep{};
+  SettingInfo sessionTime{};
+  SettingInfo showHidden{};
+  SettingInfo removeRecents{};
+  SettingInfo moveFinished{};
+  bool haveTimeToSleep = false;
+  bool haveSessionTime = false;
+  bool haveShowHidden = false;
+  bool haveRemoveRecents = false;
+  bool haveMoveFinished = false;
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
-      // Settings merged into "Text Settings"
-      // (they stay in the shared list for the web settings API)
+      // Settings merged into Manage Fonts (TextSettingsActivity)
       if (setting.inTextSettings) continue;
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
-          SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
+          SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
+          SETTINGS.longPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
       controlsSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(setting);
+      // Capture for ordered System list (do not push yet).
+      if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
+        timeToSleep = setting;
+        haveTimeToSleep = true;
+      } else if (setting.nameId == StrId::STR_SESSION_TIME) {
+        sessionTime = setting;
+        haveSessionTime = true;
+      } else if (setting.nameId == StrId::STR_SHOW_HIDDEN_FILES) {
+        showHidden = setting;
+        haveShowHidden = true;
+      } else if (setting.nameId == StrId::STR_REMOVE_READ_FROM_RECENTS) {
+        removeRecents = setting;
+        haveRemoveRecents = true;
+      } else if (setting.nameId == StrId::STR_MOVE_FINISHED_TO_READ) {
+        moveFinished = setting;
+        haveMoveFinished = true;
+      }
     }
   }
 
-  // Append device-only ACTION items
+  // Controls order: … → Remap Front Buttons → Orient Front Buttons → Tilt → …
+  // Insert Remap immediately before Orient Front Buttons.
   if (!BoardConfig::hasTouch()) {
-    controlsSettings.insert(controlsSettings.begin(),
+    auto insertAt = controlsSettings.end();
+    for (auto it = controlsSettings.begin(); it != controlsSettings.end(); ++it) {
+      if (it->nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION) {
+        insertAt = it;
+        break;
+      }
+    }
+    controlsSettings.insert(insertAt,
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   }
+
+  // Display order: Status Bar (system top chrome) → Theme → …
+  displaySettings.insert(displaySettings.begin(),
+                         SettingInfo::Action(StrId::STR_STATUS_BAR, SettingAction::SystemStatusBar));
+
+  // System order: Wi‑Fi → Stats (folder) → Session Time → …
+  // … → Language → KOReader Sync → OPDS → SD firmware → Check for Updates (last).
+  // Backup / Auto Backup / Enable Tracking live inside Stats — not duplicated here.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_STATS, SettingAction::Stats));
+  if (haveSessionTime) {
+    systemSettings.push_back(sessionTime);
+  } else {
+    systemSettings.push_back(SettingInfo::Value(
+        StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
+        {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES, 1},
+        "readingSessionIdleMinutes"));
+  }
+  if (haveTimeToSleep) systemSettings.push_back(timeToSleep);
+  if (haveShowHidden) systemSettings.push_back(showHidden);
+  if (haveRemoveRecents) systemSettings.push_back(removeRecents);
+  if (haveMoveFinished) systemSettings.push_back(moveFinished);
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
-  if (!BoardConfig::hasTouch()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
-  }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+
+  // Reader: Status Bar, Manage Fonts (includes Download tab), Dictionary.
+  // Download Fonts is no longer a separate top-level Reader row.
   readerSettings.insert(readerSettings.begin(),
-                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+                        SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
   readerSettings.insert(readerSettings.begin() + 1,
-                        SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
+  if (!dictionaries.empty()) {
+    readerSettings.insert(readerSettings.begin() + 2,
+                          SettingInfo::Action(StrId::STR_DICTIONARY, SettingAction::Dictionary));
+  }
 
   // Update currentSettings pointer and count for the active category
   switch (selectedCategoryIndex) {
@@ -164,13 +229,10 @@ void SettingsActivity::loop() {
   }
 
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-    if (selectedSettingIndex > 0) {
-      selectedSettingIndex = 0;
-      requestUpdate();
-    } else {
-      SETTINGS.saveToFile();
-      onGoHome();
-    }
+    // One Back always leaves Settings (option popups consume Back first).
+    // Previously, focus on a row required a second press to actually exit.
+    SETTINGS.saveToFile();
+    onGoHome();
     return;
   }
 
@@ -179,9 +241,12 @@ void SettingsActivity::loop() {
   int ty = 0;
   const int tabTop = metrics.topPadding + metrics.headerHeight;
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  // System tab reserves a band for the firmware version under the last row.
+  const int systemVersionBand =
+      (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
   const int listHeight =
       renderer.getScreenHeight() - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
-                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2);
+                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + systemVersionBand);
   auto buildTabs = [&]() {
     std::vector<TabInfo> tabs;
     tabs.reserve(categoryCount);
@@ -252,50 +317,74 @@ void SettingsActivity::loop() {
 
   // Handle navigation
   const auto& navMetrics = UITheme::getInstance().getMetrics();
+  const int navSystemVersionBand =
+      (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
   const int settingsListHeight =
       renderer.getScreenHeight() - (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
-                                    navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2);
+                                    navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
   const int settingsPageItems = GUI.getListPageItems(settingsListHeight, false);
+  // Front Up/Down: within-category list ring only
+  //   0 = this tab's label, 1..N = list rows (Down past last → tab label).
+  // Side Up/Down: always previous/next tab, whether focus is on the tab bar or a list row.
+  const int ringSize = settingsCount + 1;
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
-    selectedSettingIndex = selectedSettingIndex == 0 ? 1
-                                                     : ButtonNavigator::nextPageIndex(
-                                                           selectedSettingIndex, settingsCount + 1, settingsPageItems);
+    selectedSettingIndex = selectedSettingIndex == 0
+                               ? 1
+                               : ButtonNavigator::nextPageIndex(selectedSettingIndex, ringSize, settingsPageItems);
     requestUpdate();
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Down) {
-    selectedSettingIndex =
-        ButtonNavigator::previousPageIndex(selectedSettingIndex, settingsCount + 1, settingsPageItems);
+    selectedSettingIndex = ButtonNavigator::previousPageIndex(selectedSettingIndex, ringSize, settingsPageItems);
     requestUpdate();
     return;
   }
 
-  buttonNavigator.onNextRelease([this] {
-    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+  auto moveListNext = [this, ringSize] {
+    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, ringSize);
     requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this] {
-    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+  };
+  auto moveListPrev = [this, ringSize] {
+    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, ringSize);
     requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
+  };
+  // Tab changes (side or Confirm on tab bar) preserve focus depth:
+  // tab-bar focus stays on the tab bar so Select can cycle tabs without interruption.
+  auto moveTabNext = [this, &hasChangedCategory] {
     hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
     requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
+  };
+  auto moveTabPrev = [this, &hasChangedCategory] {
     hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
     requestUpdate();
-  });
+  };
+
+  buttonNavigator.onRelease(ButtonNavigator::getFrontNextButtons(), moveListNext);
+  buttonNavigator.onRelease(ButtonNavigator::getFrontPreviousButtons(), moveListPrev);
+  buttonNavigator.onContinuous(ButtonNavigator::getFrontNextButtons(), moveListNext);
+  buttonNavigator.onContinuous(ButtonNavigator::getFrontPreviousButtons(), moveListPrev);
+
+  buttonNavigator.onRelease(ButtonNavigator::getSideNextButtons(), moveTabNext);
+  buttonNavigator.onRelease(ButtonNavigator::getSidePreviousButtons(), moveTabPrev);
+  buttonNavigator.onContinuous(ButtonNavigator::getSideNextButtons(), moveTabNext);
+  buttonNavigator.onContinuous(ButtonNavigator::getSidePreviousButtons(), moveTabPrev);
 
   if (hasChangedCategory) {
-    selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
+    const int priorFocus = selectedSettingIndex;
     applyCategorySelection();
+    // Keep tab-bar vs list depth; clamp list index into the new tab.
+    if (priorFocus <= 0) {
+      selectedSettingIndex = 0;
+    } else if (settingsCount <= 0) {
+      selectedSettingIndex = 0;
+    } else if (priorFocus > settingsCount) {
+      selectedSettingIndex = settingsCount;
+    } else {
+      selectedSettingIndex = priorFocus;
+    }
   }
 }
 
@@ -313,14 +402,21 @@ void SettingsActivity::toggleCurrentSetting() {
     openSleepTimeoutPicker();
     return;
   }
+  if (setting.nameId == StrId::STR_SESSION_TIME ||
+      setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
+    openSessionTimePicker();
+    return;
+  }
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
+    // Always open a popup for multi-choice enums (including 2 options, e.g. Theme).
+    // Only true TOGGLE settings cycle on Confirm without a list.
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    if (setting.enumValues.size() > 2) {
+    if (setting.enumValues.size() >= 2) {
       const auto valuePtr = setting.valuePtr;
       optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()),
                        currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
@@ -338,10 +434,14 @@ void SettingsActivity::toggleCurrentSetting() {
                                     ? static_cast<uint8_t>(setting.enumValues.size())
                                     : static_cast<uint8_t>(setting.enumStringValues.size());
     const uint8_t cur = setting.valueGetter();
-    if (totalValues > 2) {
+    if (totalValues >= 2) {
       const auto valueSetter = setting.valueSetter;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+      const bool isUiTheme = setting.nameId == StrId::STR_UI_THEME;
+      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, isUiTheme](int idx) {
         valueSetter(idx);
+        if (isUiTheme) {
+          UITheme::getInstance().reload();
+        }
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         SETTINGS.saveToFile();
         rebuildSettingsLists();
@@ -356,6 +456,9 @@ void SettingsActivity::toggleCurrentSetting() {
       return;
     }
     setting.valueSetter((cur + 1) % totalValues);
+    if (setting.nameId == StrId::STR_UI_THEME) {
+      UITheme::getInstance().reload();
+    }
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
@@ -373,6 +476,14 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::CustomiseStatusBar:
         startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
+      case SettingAction::SystemStatusBar:
+        startActivityForResult(std::make_unique<SystemStatusBarSettingsActivity>(renderer, mappedInput),
+                               resultHandler);
+        break;
+      case SettingAction::ClockSettings:
+        // Legacy entry; clock options now live under Display → Status Bar.
+        startActivityForResult(std::make_unique<ClockSettingsActivity>(renderer, mappedInput), resultHandler);
+        break;
       case SettingAction::KOReaderSync:
         startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
@@ -384,6 +495,12 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::ClearCache:
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::BackupStats:
+        startActivityForResult(std::make_unique<BackupStatsActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::Stats:
+        startActivityForResult(std::make_unique<StatsSettingsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::CheckForUpdates:
         startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
@@ -408,6 +525,9 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::Language:
         startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::Dictionary:
+        startActivityForResult(std::make_unique<DictionarySelectActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::None:
         // Do nothing
@@ -462,6 +582,25 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
+void SettingsActivity::openSessionTimePicker() {
+  // Idle gap before a reading stretch stops counting toward stats (minutes).
+  startActivityForResult(
+      std::make_unique<IntervalSelectionActivity>(
+          renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
+          static_cast<int>(SETTINGS.readingSessionIdleMinutes),
+          static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
+          static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5, StrId::STR_SLEEP_TIMER_VALUE_FORMAT,
+          false, true),
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          SETTINGS.readingSessionIdleMinutes =
+              static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+          SETTINGS.saveToFile();
+        }
+        requestUpdate();
+      });
+}
+
 void SettingsActivity::render(RenderLock&&) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
 
@@ -472,8 +611,8 @@ void SettingsActivity::render(RenderLock&&) {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
+  // Version lives under System (centered above button hints), not in the header.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE));
 
   std::vector<TabInfo> tabs;
   tabs.reserve(categoryCount);
@@ -483,12 +622,15 @@ void SettingsActivity::render(RenderLock&&) {
   GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
                  selectedSettingIndex == 0);
 
+  const bool systemTab = selectedCategoryIndex == categoryCount - 1;
+  const int versionBand = systemTab ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
+  const int listTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int listHeight = pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                                       metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
+
   const auto& settings = *currentSettings;
   GUI.drawList(
-      renderer,
-      Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
-           pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
-                         metrics.verticalSpacing * 2)},
+      renderer, Rect{0, listTop, pageWidth, listHeight},
       settingsCount, selectedSettingIndex - 1,
       [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
       [&settings](int i) {
@@ -517,24 +659,49 @@ void SettingsActivity::render(RenderLock&&) {
                        static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
               valueText = valueBuffer;
             }
+          } else if (setting.nameId == StrId::STR_SESSION_TIME ||
+                     setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
+            char valueBuffer[32];
+            snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
+                     static_cast<unsigned int>(SETTINGS.readingSessionIdleMinutes));
+            valueText = valueBuffer;
           } else {
             valueText = std::to_string(SETTINGS.*(setting.valuePtr));
           }
+        } else if (setting.type == SettingType::ACTION) {
+          // Submenu / folder affordance: keeps focus chip on the right like On/Off rows.
+          valueText = ">";
         }
         return valueText;
       },
       true);
 
-  // Draw help text
-  const auto confirmLabel =
-      (selectedSettingIndex == 0)
-          ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+  // Confirm hint: next tab name on the tab bar; Toggle only for true on/off
+  // settings; Select for enums, actions, values, and multi-choice pickers.
+  const char* confirmLabel = tr(STR_SELECT);
+  if (selectedSettingIndex == 0) {
+    confirmLabel = I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount]);
+  } else if (selectedSettingIndex > 0) {
+    const auto& setting = (*currentSettings)[selectedSettingIndex - 1];
+    if (setting.type == SettingType::TOGGLE) {
+      confirmLabel = tr(STR_TOGGLE);
+    } else {
+      confirmLabel = tr(STR_SELECT);
+    }
+  }
 
+  // Front Up/Down: list. Side: switch tabs. Confirm on tab bar also advances tab.
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+
+  // System: firmware version centered between the last row and the button hints.
+  if (systemTab) {
+    const int bandTop = listTop + listHeight;
+    const int bandBottom = pageHeight - metrics.buttonHintsHeight;
+    const int textH = renderer.getLineHeight(UI_10_FONT_ID);
+    const int textY = bandTop + std::max(0, (bandBottom - bandTop - textH) / 2);
+    renderer.drawCenteredText(UI_10_FONT_ID, textY, CROSSPOINT_VERSION, true);
+  }
 
   // Always use standard refresh for settings screen
   renderer.displayBuffer();

@@ -1,38 +1,62 @@
 #include "RecentBooksActivity.h"
 
+#include <Arduino.h>
 #include <GfxRenderer.h>
-#include <HalStorage.h>
+#include <HalGPIO.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <memory>
 
+#include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
-#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
-// Hold threshold for the long-press "remove from list" action (firmware convention).
-constexpr unsigned long LONG_PRESS_MS = 1000;
+// Hold threshold for the long-press action menu (half of original 1s).
+constexpr unsigned long LONG_PRESS_MS = 500;
+
+// True while any button that can open this screen or activate a row is held.
+// Bare long-press Library uses physical Confirm; release must not open a book.
+bool anyOpenOrNavButtonHeld(const MappedInputManager& input) {
+  using B = MappedInputManager::Button;
+  if (input.isPressed(B::Confirm) || input.isPressed(B::Back) || input.isPressed(B::Left) ||
+      input.isPressed(B::Right) || input.isPressed(B::Up) || input.isPressed(B::Down)) {
+    return true;
+  }
+  return input.isFrontButtonPressed(HalGPIO::BTN_BACK) || input.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+         input.isFrontButtonPressed(HalGPIO::BTN_LEFT) || input.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+}
 }  // namespace
 
-void RecentBooksActivity::loadRecentBooks() { recentBooks = RECENT_BOOKS.getBooks(); }
+void RecentBooksActivity::loadRecentBooks() {
+  recentBooks.clear();
+  const auto& books = RECENT_BOOKS.getBooks();
+  recentBooks.reserve(books.size());
+  for (const auto& book : books) {
+    if (RecentBooksStore::isMissing(book)) {
+      continue;
+    }
+    recentBooks.push_back(book);
+  }
+}
 
 void RecentBooksActivity::onEnter() {
   Activity::onEnter();
 
-  // Prune entries whose backing files are gone; this is one of two interaction
-  // points where the persistent store gets cleaned (the other is addBook).
   if (RECENT_BOOKS.pruneMissing()) {
     RECENT_BOOKS.saveToFile();
   }
 
-  // Load data
   loadRecentBooks();
-
   selectorIndex = 0;
+  longPressFired = false;
+  // Opened via Bare long-press Library (Confirm still held): wait for full release
+  // so the release edge does not open the first book.
+  awaitOpenButtonRelease = anyOpenOrNavButtonHeld(mappedInput);
   requestUpdate();
 }
 
@@ -48,22 +72,31 @@ void RecentBooksActivity::loop() {
   const int contentHeight =
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
-  // After a long-press has fired, swallow input until Confirm is physically released
-  // (so the release doesn't also open the book; re-arm only once the button is up).
+  // Opened while a button was still held (Bare long-press Library): ignore
+  // everything until release, then one quiet frame so the release edge is not
+  // treated as "open first book".
+  if (awaitOpenButtonRelease) {
+    if (anyOpenOrNavButtonHeld(mappedInput)) {
+      return;
+    }
+    awaitOpenButtonRelease = false;
+    return;
+  }
+
+  // After an in-list long-press has fired, swallow until Confirm is up again.
   if (longPressFired) {
-    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+        !mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM)) {
       longPressFired = false;
     }
     return;
   }
 
-  // Long-press Confirm on the selected book: prompt to remove it from the list.
-  // Fires when the hold times out while still held (firmware hold-to-act pattern,
-  // cf. FileBrowserActivity BACK long-press).
+  // Long-press Confirm: CrossInk-style book action menu (not just remove).
   if (!recentBooks.empty() && selectorIndex < recentBooks.size() &&
       mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
     longPressFired = true;
-    promptRemoveBook(recentBooks[selectorIndex].path, recentBooks[selectorIndex].title);
+    showBookActionMenu(selectorIndex, true);
     return;
   }
 
@@ -89,6 +122,7 @@ void RecentBooksActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     onGoHome();
+    return;
   }
 
   int listSize = static_cast<int>(recentBooks.size());
@@ -125,27 +159,52 @@ void RecentBooksActivity::loop() {
   });
 }
 
-void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
-  auto handler = [this, path](const ActivityResult& res) {
-    if (res.isCancelled) {
-      LOG_DBG("RBA", "Remove from recents cancelled");
-      return;
-    }
-    if (RECENT_BOOKS.removeByPath(path)) {
-      LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
-      loadRecentBooks();
-      if (recentBooks.empty()) {
-        selectorIndex = 0;
-      } else if (selectorIndex >= recentBooks.size()) {
-        selectorIndex = recentBooks.size() - 1;
-      }
-      requestUpdate(true);
-    }
-  };
+void RecentBooksActivity::reloadAfterBookAction() {
+  loadRecentBooks();
+  if (recentBooks.empty()) {
+    selectorIndex = 0;
+  } else if (selectorIndex >= recentBooks.size()) {
+    selectorIndex = recentBooks.size() - 1;
+  }
+  requestUpdate(true);
+}
 
+void RecentBooksActivity::showBookActionMenu(const size_t bookIndex, const bool ignoreInitialConfirmRelease) {
+  if (bookIndex >= recentBooks.size()) return;
+
+  const RecentBook book = recentBooks[bookIndex];
+  // Menu handles cache/stats/pace/description itself and stays open until Back,
+  // Open, Delete, or RemoveFromRecents — so we return to this recents list.
   startActivityForResult(
-      std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_REMOVE_FROM_RECENTS), title),
-      std::move(handler));
+      std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, book.title, book.path,
+                                                  /*includeRemoveFromRecents=*/true, ignoreInitialConfirmRelease),
+      [this, book](const ActivityResult& result) {
+        if (result.isCancelled) {
+          requestUpdate();
+          return;
+        }
+
+        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+        if (!actionResult) {
+          LOG_ERR("RBA", "Book action result missing");
+          requestUpdate();
+          return;
+        }
+
+        switch (static_cast<FileBrowserAction>(actionResult->action)) {
+          case FileBrowserAction::Open:
+            onSelectBook(book.path);
+            return;
+          case FileBrowserAction::Delete:
+          case FileBrowserAction::RemoveFromRecents:
+            // Already applied inside the menu activity.
+            reloadAfterBookAction();
+            return;
+          default:
+            requestUpdate();
+            return;
+        }
+      });
 }
 
 void RecentBooksActivity::render(RenderLock&&) {
@@ -160,7 +219,6 @@ void RecentBooksActivity::render(RenderLock&&) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
-  // Recent tab
   if (recentBooks.empty()) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_RECENT_BOOKS));
   } else {
@@ -170,7 +228,6 @@ void RecentBooksActivity::render(RenderLock&&) {
         [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
   }
 
-  // Help text
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

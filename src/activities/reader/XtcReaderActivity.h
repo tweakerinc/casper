@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "EndOfBookOptions.h"
+#include "ReaderUtils.h"
 #include "activities/Activity.h"
 
 class XtcReaderActivity final : public Activity {
@@ -20,6 +21,7 @@ class XtcReaderActivity final : public Activity {
 
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
+  ReaderUtils::PageTurnLatch pageTurnLatch;
   // Next-book suggestion menu for the End-of-Book screen
   EndOfBookOptions endOfBookOptions;
 
@@ -27,7 +29,8 @@ class XtcReaderActivity final : public Activity {
   struct StatusBarInfo {
     int currentPage;
     int pageCount;
-    std::string title;
+    std::string bookTitle;
+    std::string chapterTitle;
   };
 
   void renderPage();

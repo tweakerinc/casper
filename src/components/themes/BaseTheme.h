@@ -8,6 +8,8 @@
 
 class GfxRenderer;
 struct RecentBook;
+struct BookReadingStats;
+struct GlobalReadingStats;
 
 struct Rect {
   int x;
@@ -111,17 +113,19 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .batteryHeight = 12,
                                  .topPadding = 5,
                                  .batteryBarHeight = 20,
-                                 .headerHeight = 45,
-                                 .verticalSpacing = 10,
+                                 // Room for 14 pt header + battery/clock row (was tight at 45).
+                                 .headerHeight = 54,
+                                 .verticalSpacing = 12,
                                  .previewPadding = 12,
                                  .previewHeightPercent = 30,
                                  .contentSidePadding = 20,
-                                 .listRowHeight = 30,
-                                 .listWithSubtitleRowHeight = 50,
-                                 .menuRowHeight = 45,
-                                 .menuSpacing = 8,
-                                 .tabSpacing = 10,
-                                 .tabBarHeight = 50,
+                                 // 12 pt list text with comfortable padding (not cramped).
+                                 .listRowHeight = 36,
+                                 .listWithSubtitleRowHeight = 54,
+                                 .menuRowHeight = 48,
+                                 .menuSpacing = 10,
+                                 .tabSpacing = 12,
+                                 .tabBarHeight = 54,
                                  .scrollBarWidth = 4,
                                  .scrollBarRightOffset = 5,
                                  .homeTopPadding = 40,
@@ -179,22 +183,27 @@ class BaseTheme {
 
   // Component drawing methods
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
+  // displayMode: CrossPointSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
-                       bool showPercentage = true) const;  // Left aligned (reader mode)
+                       uint8_t displayMode = 2) const;  // Left aligned (reader mode)
   void drawBatteryRight(const GfxRenderer& renderer, Rect rect,
-                        bool showPercentage = true) const;  // Right aligned (UI headers)
+                        uint8_t displayMode = 2) const;  // Right aligned (UI headers)
   virtual void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const;
   virtual void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                const char* btn4) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   virtual int getListRowStep(bool hasSubtitle) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
+  // rowApplied: when true, draws a filled radio circle on the right (current
+  // setting). Focus highlight stays on selectedIndex only — it does not jump
+  // to the applied row.
   virtual void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                         const std::function<std::string(int index)>& rowTitle,
                         const std::function<std::string(int index)>& rowSubtitle = nullptr,
                         const std::function<UIIcon(int index)>& rowIcon = nullptr,
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
-                        const std::function<bool(int index)>& rowDimmed = nullptr) const;
+                        const std::function<bool(int index)>& rowDimmed = nullptr,
+                        const std::function<bool(int index)>& rowApplied = nullptr) const;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                           const char* subtitle = nullptr) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
@@ -203,20 +212,48 @@ class BaseTheme {
                           bool selected) const;
   virtual bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,
                                  int& index) const;
+  // storeCoverBuffer(x,y,w,h): snapshot only the drawn cover region (not the full home tile).
+  using StoreCoverBufferFn = std::function<bool(int x, int y, int w, int h)>;
   virtual void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                    const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
-                                   bool& bufferRestored, std::function<bool()> storeCoverBuffer) const;
+                                   bool& bufferRestored, StoreCoverBufferFn storeCoverBuffer,
+                                   const BookReadingStats* stats = nullptr, float progressPercent = -1.0f,
+                                   const GlobalReadingStats* globalStats = nullptr,
+                                   const char* currentChapterTitle = nullptr) const;
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
-  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
+  // topOffsetRatio: <0 = metrics default; >=0 = fraction of screen height from top.
+  // Special: kPopupCenterY centers the dialog vertically (home cover Loading).
+  // refresh=false draws into the framebuffer only (caller displays once).
+  static constexpr float kPopupCenterY = -2.0f;
+  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message, float topOffsetRatio = -1.0f,
+                         bool refresh = true) const;
   virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
                                int selectedIndex) const;
-  virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
+  virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress,
+                                 bool refresh = true) const;
+  // currentPage/pageCount = chapter pages ("Pg. n/m"). bookPage/bookPageCount = whole-book
+  // pages (same "Pg." form; pass <=0 to reuse chapter numbers). chapterIndex/chapterTotal
+  // = TOC position ("Ch. 5/40"; pass <=0 to hide). bookTitle / chapterTitle for title slots.
+  // previewIgnoreBatteryMasterHide: Customize Reader UI preview still draws a
+  // Battery slot when Display → Battery is Hide, so the layout can be configured.
   void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
-                     std::string title, const int paddingBottom = 0, const int textYOffset = 0,
+                     std::string bookTitle, const int paddingBottom = 0, const int textYOffset = 0,
                      const bool fillMargin = true, const bool isPageBookmarked = false,
-                     const bool pageCountEstimated = false) const;
+                     const bool pageCountEstimated = false, const char* timeLeftBookLabel = nullptr,
+                     const char* timeLeftChapterLabel = nullptr, const bool drawTopBattery = true,
+                     const int bookPage = 0, const int bookPageCount = 0,
+                     const bool bookPageCountEstimated = false, const int chapterIndex = 0,
+                     const int chapterTotal = 0, std::string chapterTitle = {},
+                     bool previewIgnoreBatteryMasterHide = false) const;
+  // Top-center clock for reader chrome (X3 RTC). No-op when clock hidden/unavailable.
+  void drawTopStatusBarClock(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr) const;
+  // System top chrome (Display → Status Bar): Left / Middle / Right Battery|Clock|Hide.
+  // align: 0=left, 1=center, 2=right. previewTime forces a fixed clock string (settings preview).
+  void drawSystemStatusBar(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr) const;
+  // Width reserved on one side for title truncation (battery+percent or clock text).
+  int systemStatusSideReserve(const GfxRenderer& renderer) const;
   void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const;
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;
@@ -224,6 +261,9 @@ class BaseTheme {
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;
+  // Shared top chrome geometry — MUST match reader status bar and home/dashboard headers.
+  static constexpr int kTopChromeInsetX = 12;
+  static constexpr int kTopChromeBatteryY = 5;
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
 };

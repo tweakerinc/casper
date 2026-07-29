@@ -1,8 +1,11 @@
 #include "OtaUpdateActivity.h"
 
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>
+
+#include <algorithm>
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -17,10 +20,13 @@ struct OtaActionRects {
   Rect update;
 };
 
+// Bottom half-screen touch targets (button-hint chrome is not drawn on touch boards).
 OtaActionRects getOtaActionRects(const GfxRenderer& renderer) {
-  const int top = renderer.getScreenHeight() - 80;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int height = std::max(metrics.buttonHintsHeight, 48);
+  const int top = renderer.getScreenHeight() - height;
   const int width = renderer.getScreenWidth() / 2;
-  return {Rect{0, top, width, 80}, Rect{width, top, renderer.getScreenWidth() - width, 80}};
+  return {Rect{0, top, width, height}, Rect{width, top, renderer.getScreenWidth() - width, height}};
 }
 
 bool contains(const Rect& rect, const int x, const int y) {
@@ -126,16 +132,21 @@ void OtaUpdateActivity::render(RenderLock&&) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, top + height * 2 + metrics.verticalSpacing * 2,
                       (std::string(tr(STR_NEW_VERSION)) + updater.getLatestVersion()).c_str());
 
-    const auto actionRects = getOtaActionRects(renderer);
-    const int cancelTextWidth = renderer.getTextWidth(UI_10_FONT_ID, tr(STR_CANCEL));
-    renderer.drawText(UI_10_FONT_ID, actionRects.cancel.x + (actionRects.cancel.width - cancelTextWidth) / 2,
-                      actionRects.cancel.y + 28, tr(STR_CANCEL));
-    const int updateTextWidth = renderer.getTextWidth(UI_10_FONT_ID, tr(STR_UPDATE));
-    renderer.drawText(UI_10_FONT_ID, actionRects.update.x + (actionRects.update.width - updateTextWidth) / 2,
-                      actionRects.update.y + 28, tr(STR_UPDATE));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_UPDATE), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    // One set of labels only: front-button chrome on X3/X4; large bottom labels on touch
+    // boards (where drawButtonHints is a no-op). Never draw both — they used to overlap.
+    if (BoardConfig::hasTouch()) {
+      const auto actionRects = getOtaActionRects(renderer);
+      const int cancelTextWidth = renderer.getTextWidth(UI_10_FONT_ID, tr(STR_CANCEL));
+      const int updateTextWidth = renderer.getTextWidth(UI_10_FONT_ID, tr(STR_UPDATE));
+      const int labelY = actionRects.cancel.y + (actionRects.cancel.height - height) / 2;
+      renderer.drawText(UI_10_FONT_ID, actionRects.cancel.x + (actionRects.cancel.width - cancelTextWidth) / 2, labelY,
+                        tr(STR_CANCEL));
+      renderer.drawText(UI_10_FONT_ID, actionRects.update.x + (actionRects.update.width - updateTextWidth) / 2, labelY,
+                        tr(STR_UPDATE));
+    } else {
+      const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_UPDATE), "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
   } else if (state == UPDATE_IN_PROGRESS) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATING));
 
@@ -161,8 +172,9 @@ void OtaUpdateActivity::render(RenderLock&&) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FINISHED) {
+    // Auto-reboots after a short hold — do not use the sleep "hold power" copy.
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_COMPLETE), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, top + height + metrics.verticalSpacing, tr(STR_POWER_ON_HINT));
+    renderer.drawCenteredText(UI_10_FONT_ID, top + height + metrics.verticalSpacing, tr(STR_RESTARTING_HINT));
   }
 
   renderer.displayBuffer();
@@ -199,8 +211,8 @@ void OtaUpdateActivity::runUpdateInstall() {
     state = FINISHED;
   }
   requestUpdateAndWait();
-  // Hold the completion screen briefly so the user sees it, then restart.
-  delay(3000);
+  // E-ink needs a few seconds for the full message to be readable before reboot.
+  delay(5000);
   {
     RenderLock lock(*this);
     state = SHUTTING_DOWN;

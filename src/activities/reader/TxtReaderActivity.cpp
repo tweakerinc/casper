@@ -69,7 +69,8 @@ void TxtReaderActivity::loop() {
   auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
-  if (!prevTriggered && !nextTriggered) {
+  const bool fromTouch = touch.prev || touch.next;
+  if (!pageTurnLatch.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
     return;
   }
 
@@ -409,11 +410,18 @@ void TxtReaderActivity::renderPage() {
 
 void TxtReaderActivity::renderStatusBar() const {
   const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
-  std::string title;
-  if (SETTINGS.statusBarSpec().showsTitle()) {
-    title = txt->getTitle();
+  const auto sb = SETTINGS.statusBarSpec();
+  std::string bookTitle;
+  std::string chapterTitle;
+  if (sb.wantsBookTitle || sb.wantsChapterTitle) {
+    const std::string t = txt->getTitle();
+    if (sb.wantsBookTitle) bookTitle = t;
+    if (sb.wantsChapterTitle) chapterTitle = t;
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+  // TXT is a single continuous document: chapter and book page counts match.
+  const int page = currentPage + 1;
+  GUI.drawStatusBar(renderer, progress, page, totalPages, bookTitle, 0, 0, true, false, false, nullptr, nullptr, true,
+                    page, totalPages, false, /*chapterIndex=*/0, /*chapterTotal=*/0, chapterTitle);
 }
 
 void TxtReaderActivity::saveProgress() const {

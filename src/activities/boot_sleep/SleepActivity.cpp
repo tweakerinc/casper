@@ -157,13 +157,15 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  // Casper: logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
+  // (1.5 has no drawImageInverted — invertScreen flips logo + name together).
   renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  constexpr int kLogoSize = 120;
+  const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
+  renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
+  renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
 
-  // Make sleep screen dark unless light is selected in settings
-  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::DARK) {
     renderer.invertScreen();
   }
 

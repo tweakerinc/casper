@@ -10,6 +10,12 @@ uint8_t quantize(int gray, int x, int y);
 uint8_t quantizeSimple(int gray);
 uint8_t quantize1bit(int gray, int x, int y);
 int adjustPixel(int gray);
+// Stronger contrast for 1-bit cover thumbs (soft/pastel jackets dither poorly).
+int adjustPixel1Bit(int gray);
+// Home cover 2-bit thumbs: soft midtone lift (no crush) so jackets aren't muddy.
+int adjustPixelCoverThumb(int gray);
+// Legacy strong stretch — too dark on many jackets; not used for home covers.
+int adjustPixelCoverHQ(int gray);
 
 enum class BmpRowOrder { BottomUp, TopDown };
 
@@ -42,18 +48,18 @@ class Atkinson1BitDitherer {
   Atkinson1BitDitherer& operator=(const Atkinson1BitDitherer& other) = delete;
 
   uint8_t processPixel(int gray, int x) {
-    // Apply brightness/contrast/gamma adjustments
-    gray = adjustPixel(gray);
+    // Mild lift only (see adjustPixel1Bit) — no hard black/white rails.
+    gray = adjustPixel1Bit(gray);
 
-    // Add accumulated error
     int adjusted = gray + errorRow0[x + 2];
     if (adjusted < 0) adjusted = 0;
     if (adjusted > 255) adjusted = 255;
 
-    // Quantize to 2 levels (1-bit): 0 = black, 1 = white
+    // True mid threshold; classic full Atkinson diffusion (stable, less "grid crush").
+    constexpr int kThreshold = 128;
     uint8_t quantized;
     int quantizedValue;
-    if (adjusted < 128) {
+    if (adjusted < kThreshold) {
       quantized = 0;
       quantizedValue = 0;
     } else {
@@ -61,16 +67,13 @@ class Atkinson1BitDitherer {
       quantizedValue = 255;
     }
 
-    // Calculate error (only distribute 6/8 = 75%)
-    int error = (adjusted - quantizedValue) >> 3;  // error/8
-
-    // Distribute 1/8 to each of 6 neighbors
-    errorRow0[x + 3] += error;  // Right
-    errorRow0[x + 4] += error;  // Right+1
-    errorRow1[x + 1] += error;  // Bottom-left
-    errorRow1[x + 2] += error;  // Bottom
-    errorRow1[x + 3] += error;  // Bottom-right
-    errorRow2[x + 2] += error;  // Two rows down
+    const int error = (adjusted - quantizedValue) >> 3;  // 1/8 each of 6 neighbors
+    errorRow0[x + 3] += error;
+    errorRow0[x + 4] += error;
+    errorRow1[x + 1] += error;
+    errorRow1[x + 2] += error;
+    errorRow1[x + 3] += error;
+    errorRow2[x + 2] += error;
 
     return quantized;
   }
@@ -102,9 +105,12 @@ class Atkinson1BitDitherer {
 // 1/8 1/8 1/8
 //     1/8
 // Less error buildup = fewer artifacts than Floyd-Steinberg
+//
+// balancedLevels=true: equal 0/85/170/255 bins (home covers — lighter, no grid mud).
+// balancedLevels=false: legacy X4-dark-biased bins (general 2-bit content).
 class AtkinsonDitherer {
  public:
-  explicit AtkinsonDitherer(int width) : width(width) {
+  explicit AtkinsonDitherer(int width, bool balancedLevels = false) : width(width), balancedLevels(balancedLevels) {
     errorRow0 = new int16_t[width + 4]();  // Current row
     errorRow1 = new int16_t[width + 4]();  // Next row
     errorRow2 = new int16_t[width + 4]();  // Row after next
@@ -130,21 +136,23 @@ class AtkinsonDitherer {
     // Quantize to 4 levels
     uint8_t quantized;
     int quantizedValue;
-    if (false) {  // original thresholds
-      if (adjusted < 43) {
+    if (balancedLevels) {
+      // Match BMP palette steps exactly — midtones stay mid, not crushed to dark.
+      if (adjusted < 64) {
         quantized = 0;
         quantizedValue = 0;
       } else if (adjusted < 128) {
         quantized = 1;
         quantizedValue = 85;
-      } else if (adjusted < 213) {
+      } else if (adjusted < 192) {
         quantized = 2;
         quantizedValue = 170;
       } else {
         quantized = 3;
         quantizedValue = 255;
       }
-    } else {  // fine-tuned to X4 eink display
+    } else {
+      // Legacy fine-tune (darker midtones) for non-cover 2-bit paths.
       if (adjusted < 30) {
         quantized = 0;
         quantizedValue = 15;
@@ -190,6 +198,7 @@ class AtkinsonDitherer {
 
  private:
   int width;
+  bool balancedLevels;
   int16_t* errorRow0;
   int16_t* errorRow1;
   int16_t* errorRow2;

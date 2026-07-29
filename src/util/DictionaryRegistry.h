@@ -15,7 +15,12 @@ namespace DictionaryRegistry {
 // Scan /dictionaries/*/ and /.dictionaries/*/ for dictionaries. Folders with
 // multiple index stems are ambiguous and skipped. Result is sorted
 // case-insensitively by name.
+// Results are cached until invalidate() — SD directory walks are relatively
+// expensive on every dictionary open / settings enter.
 void discover(std::vector<DictionaryEntry>& out);
+
+// Drop the cached discover() result (call after install/delete of packs).
+void invalidate();
 
 // Resolve a folder name to its extensionless base path
 // ("/dictionaries/<folder>/<stem>" or "/.dictionaries/<folder>/<stem>").

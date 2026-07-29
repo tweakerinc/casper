@@ -16,15 +16,20 @@ enum class SettingAction {
   None,
   RemapFrontButtons,
   CustomiseStatusBar,
+  SystemStatusBar,
+  ClockSettings,
   KOReaderSync,
   OPDSBrowser,
   Network,
   ClearCache,
+  BackupStats,  // legacy; Backup Now lives under Stats folder
+  Stats,
   CheckForUpdates,
   SdFirmwareUpdate,
   Language,
   DownloadFonts,
   TextSettings,
+  Dictionary,
 };
 
 struct SettingInfo {
@@ -175,6 +180,7 @@ class SettingsActivity final : public Activity {
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
+  void openSessionTimePicker();
   void rebuildSettingsLists();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 

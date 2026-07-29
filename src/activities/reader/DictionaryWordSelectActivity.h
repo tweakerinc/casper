@@ -7,12 +7,12 @@
 #include <vector>
 
 #include "activities/Activity.h"
-#include "util/Dictionary.h"
 
 // Word selection over the current reader page: Left/Right step through words
-// in reading order, Up/Down jump rows, Confirm looks the word up and opens
-// DictionaryDefinitionActivity, Back returns to the reader. On touch devices a
-// touch-down moves the highlight and a tap on a word looks it up directly.
+// in reading order, Up/Down jump rows. Short Select looks up the word (or
+// multi-word range). Long-press Select starts a multi-word range; move, then
+// short Select to look up the phrase. Back clears a range or returns to the
+// reader. On touch devices a touch-down moves the highlight and a tap looks up.
 class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -27,6 +27,8 @@ class DictionaryWordSelectActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
+  static constexpr int kMaxPhraseWords = 6;
+
   // Screen box of one selectable word. `text` points into the owned Page's
   // TextBlock arena (NUL-terminated), valid for this activity's lifetime.
   struct WordBox {
@@ -44,8 +46,15 @@ class DictionaryWordSelectActivity final : public Activity {
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
   void moveVertical(int direction);
+  // Inclusive range bounds for current selection (single word or multi-word).
+  void selectionBounds(int& lo, int& hi) const;
+  // Join soft-/line-break hyphens; multi-word joins with spaces.
+  std::string buildLookupToken() const;
   void performLookup();
   bool drawHighlightWithSnapshot();
+  void drawSelectionHighlights();
+  // Compact top title while reader chrome is hidden (mode cue for the tool).
+  void drawModeTitle() const;
   void drawHints() const;
 
   std::unique_ptr<Page> page;
@@ -56,22 +65,15 @@ class DictionaryWordSelectActivity final : public Activity {
 
   std::vector<WordBox> words;
   int selected = 0;
+  // -1 = single-word mode; otherwise multi-word range anchor index.
+  int startMarkIdx = -1;
   uint16_t rowCount = 0;
-
-  Dictionary dict;
-  bool dictOpenAttempted = false;
-  bool dictOpenOk = false;
 
   Popup popup = Popup::None;
   StrId popupMsg = StrId::STR_DICT_NOT_FOUND;
   unsigned long popupTime = 0;
 
-  // Differential highlight repaint: the pixels under the current highlight
-  // box, so a cursor move restores them and repaints only the two affected
-  // boxes instead of re-running the full two-pass page render (which also
-  // reloads every SD-font glyph on the page). snapshotIdx is the word whose
-  // under-pixels are saved; -1 means the framebuffer no longer holds a clean
-  // page (popup drawn, sub-activity shown) and the next render must be full.
+  // Differential highlight repaint (single-word mode only).
   static constexpr size_t SNAPSHOT_CAPACITY = 4096;
   std::unique_ptr<uint8_t[]> snapshot;
   int16_t snapshotX = 0;
@@ -80,7 +82,10 @@ class DictionaryWordSelectActivity final : public Activity {
   int16_t snapshotH = 0;
   int snapshotIdx = -1;
 
-  // The activity is entered while Confirm is still held (long-press trigger):
-  // ignore the stale release until a fresh press is seen.
-  bool confirmPressSeen = false;
+  // Confirm/Select state machine (do not use global getHeldTime — it remembers
+  // prior nav holds). Ignore residual press that opened dictionary.
+  bool ignoreConfirmUntilReleased = true;
+  bool confirmDown = false;
+  unsigned long confirmDownAtMs = 0;
+  bool multiSelectArmedThisHold = false;
 };

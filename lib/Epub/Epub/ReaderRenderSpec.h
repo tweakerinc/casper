@@ -20,5 +20,6 @@ struct ReaderRenderSpec {
   bool hyphenationEnabled = false;
   bool embeddedStyle = true;
   uint8_t imageRendering = 0;
-  bool focusReadingEnabled = false;
+  bool focusReadingEnabled = false;  // Bionic Reading (bold word prefixes)
+  bool guideReadingEnabled = false;  // Guide Dots (· between words)
 };

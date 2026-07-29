@@ -54,11 +54,11 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .popupProgressClampPercent = true,
                                  .popupProgressFillInverted = false,
                                  .popupProgressOutlineInverted = false,
-                                 .optionPopupItemSpacing = 6,
-                                 .optionPopupInnerPadding = 24,
-                                 .optionPopupSelectionHPadding = 20,
-                                 .optionPopupSelectionVPadding = 10,
-                                 .optionPopupTitleGap = 16,
+                                 .optionPopupItemSpacing = 2,
+                                 .optionPopupInnerPadding = 14,
+                                 .optionPopupSelectionHPadding = 14,
+                                 .optionPopupSelectionVPadding = 4,
+                                 .optionPopupTitleGap = 10,
                                  .optionPopupUseSmallFont = false,
                                  .optionPopupOptionFontBold = true,
                                  .optionPopupSelectionRadius = 30,
@@ -82,7 +82,9 @@ class RoundedRaffTheme : public BaseTheme {
                          int& index) const override;
   void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
-                           std::function<bool()> storeCoverBuffer) const override;
+                           StoreCoverBufferFn storeCoverBuffer, const BookReadingStats* stats = nullptr,
+                           float progressPercent = -1.0f, const GlobalReadingStats* globalStats = nullptr,
+                           const char* currentChapterTitle = nullptr) const override;
   void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                       const std::function<std::string(int index)>& buttonLabel,
                       const std::function<UIIcon(int index)>& rowIcon) const override;
@@ -95,7 +97,8 @@ class RoundedRaffTheme : public BaseTheme {
                 const std::function<std::string(int index)>& rowSubtitle = nullptr,
                 const std::function<UIIcon(int index)>& rowIcon = nullptr,
                 const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
-                const std::function<bool(int index)>& rowDimmed = nullptr) const override;
+                const std::function<bool(int index)>& rowDimmed = nullptr,
+                const std::function<bool(int index)>& rowApplied = nullptr) const override;
   void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                        const char* btn4) const override;
   bool homeMenuShowsContinueReading() const { return true; }

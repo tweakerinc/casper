@@ -59,12 +59,36 @@ ContentOpfParser::~ContentOpfParser() {
 size_t ContentOpfParser::write(const uint8_t data) { return write(&data, 1); }
 
 size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
-  if (!parser) return 0;
+  if (!parser) {
+    // After a clean metadata-only stop we destroy the parser; still accept the
+    // remainder of the ZIP inflate so the stream reader reports success.
+    return metadataOnly && metadataFinished ? size : 0;
+  }
+
+  // Already finished metadata-only extract — drain remaining OPF bytes.
+  if (metadataOnly && metadataFinished) {
+    if (remainingSize > size) {
+      remainingSize -= size;
+    } else {
+      remainingSize = 0;
+    }
+    return size;
+  }
 
   const uint8_t* currentBufferPos = buffer;
   auto remainingInBuffer = size;
 
   while (remainingInBuffer > 0) {
+    if (metadataOnly && metadataFinished) {
+      // Stopped mid-buffer after </metadata>.
+      if (remainingSize > remainingInBuffer) {
+        remainingSize -= remainingInBuffer;
+      } else {
+        remainingSize = 0;
+      }
+      return size;
+    }
+
     void* const buf = XML_GetBuffer(parser, 1024);
 
     if (!buf) {
@@ -76,7 +100,26 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
     memcpy(buf, currentBufferPos, toRead);
 
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead) == XML_STATUS_ERROR) {
+    const XML_Status status =
+        XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead);
+    if (status == XML_STATUS_ERROR) {
+      // Intentional abort after </metadata> for description-only extracts.
+      if (metadataOnly && metadataFinished && XML_GetErrorCode(parser) == XML_ERROR_ABORTED) {
+        currentBufferPos += toRead;
+        remainingInBuffer -= toRead;
+        if (remainingSize > toRead) {
+          remainingSize -= toRead;
+        } else {
+          remainingSize = 0;
+        }
+        // Swallow the rest of this write without further XML_Parse.
+        if (remainingSize > remainingInBuffer) {
+          remainingSize -= remainingInBuffer;
+        } else {
+          remainingSize = 0;
+        }
+        return size;
+      }
       LOG_DBG("COF", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);
@@ -120,6 +163,14 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_METADATA && strcmp(name, "dc:language") == 0) {
     self->state = IN_BOOK_LANGUAGE;
+    return;
+  }
+
+  // Calibre and most OPFs use dc:description for synopsis; keep only the first.
+  if (self->state == IN_METADATA && self->description.empty() &&
+      (strcmp(name, "dc:description") == 0 || strcmp(name, "description") == 0 ||
+       strcmp(name, "opf:description") == 0)) {
+    self->state = IN_BOOK_DESCRIPTION;
     return;
   }
 
@@ -352,6 +403,11 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
     self->language.append(s, len);
     return;
   }
+
+  if (self->state == IN_BOOK_DESCRIPTION) {
+    self->description.append(s, len);
+    return;
+  }
 }
 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
@@ -391,8 +447,21 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
     return;
   }
 
+  if (self->state == IN_BOOK_DESCRIPTION &&
+      (strcmp(name, "dc:description") == 0 || strcmp(name, "description") == 0 ||
+       strcmp(name, "opf:description") == 0)) {
+    self->state = IN_METADATA;
+    return;
+  }
+
   if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
     self->state = IN_PACKAGE;
+    if (self->metadataOnly && self->parser != nullptr) {
+      // Description/title already captured — abort parse; write() drains the rest
+      // of the OPF stream so unindexed books can still load a synopsis quickly.
+      self->metadataFinished = true;
+      XML_StopParser(self->parser, XML_FALSE);
+    }
     return;
   }
 

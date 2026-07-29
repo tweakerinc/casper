@@ -4,6 +4,11 @@
 #include <MD5Builder.h>
 #include <ObfuscationUtils.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+
 namespace {
 // Default sync server URL. crosspoint-sync speaks the full KOSync protocol, so
 // pointing at any other kosync server (e.g. https://sync.koreader.rocks:443)
@@ -16,7 +21,92 @@ constexpr char LEGACY_DEFAULT_SERVER_URL[] = "https://sync.koreader.rocks:443";
 
 // Bumped when a change to defaults would alter behavior for existing configs.
 constexpr uint8_t CONFIG_VERSION = 2;
+
+constexpr time_t MIN_VALID_UNIX = 1577836800;  // 2020-01-01 UTC
+
+time_t wallClockUnix() {
+  const time_t now = time(nullptr);
+  return (now < MIN_VALID_UNIX) ? 0 : now;
+}
+
+// Legacy discrete interval enum (pre continuous minutes).
+uint16_t legacyIntervalToMinutes(const uint8_t legacy) {
+  switch (legacy) {
+    case 0:  // EVERY_CLOSE
+      return 1;
+    case 1:
+      return 60;
+    case 2:
+      return 3 * 60;
+    case 3:
+      return 6 * 60;
+    case 4:
+      return 12 * 60;
+    case 5:
+      return 24 * 60;
+    default:
+      return KOReaderCredentialStore::DEFAULT_INTERVAL_MINUTES;
+  }
+}
+
+// FNV-1a 64-bit → 16 hex chars (stable per path, short for JSON keys).
+void fnv1a64Hex(const char* s, char* out, const size_t outLen) {
+  if (!out || outLen < 17) {
+    if (out && outLen) out[0] = '\0';
+    return;
+  }
+  uint64_t h = 14695981039346656037ULL;
+  if (s) {
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s); *p; ++p) {
+      h ^= static_cast<uint64_t>(*p);
+      h *= 1099511628211ULL;
+    }
+  }
+  snprintf(out, outLen, "%016llx", static_cast<unsigned long long>(h));
+}
 }  // namespace
+
+uint16_t KOReaderCredentialStore::clampIntervalMinutes(const uint16_t minutes) {
+  return std::clamp(minutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES);
+}
+
+uint8_t KOReaderCredentialStore::clampPercentThreshold(const uint8_t percent) {
+  return std::clamp(percent, MIN_PERCENT_THRESHOLD, MAX_PERCENT_THRESHOLD);
+}
+
+void KOReaderCredentialStore::makeBookKey(const char* bookPath, char* outKey, const size_t outKeyLen) {
+  fnv1a64Hex(bookPath && bookPath[0] ? bookPath : "", outKey, outKeyLen);
+}
+
+const KOReaderCredentialStore::BookAutoUploadState* KOReaderCredentialStore::findBookState(const char* key) const {
+  if (!key || !key[0]) return nullptr;
+  for (size_t i = 0; i < bookStateCount; ++i) {
+    if (strncmp(bookStates[i].key, key, kBookKeyLen) == 0) {
+      return &bookStates[i];
+    }
+  }
+  return nullptr;
+}
+
+KOReaderCredentialStore::BookAutoUploadState* KOReaderCredentialStore::findOrCreateBookState(const char* key) {
+  if (!key || !key[0]) return nullptr;
+  for (size_t i = 0; i < bookStateCount; ++i) {
+    if (strncmp(bookStates[i].key, key, kBookKeyLen) == 0) {
+      return &bookStates[i];
+    }
+  }
+  if (bookStateCount >= kMaxBookStates) {
+    for (size_t i = 1; i < kMaxBookStates; ++i) {
+      bookStates[i - 1] = bookStates[i];
+    }
+    bookStateCount = kMaxBookStates - 1;
+  }
+  BookAutoUploadState& slot = bookStates[bookStateCount++];
+  slot = BookAutoUploadState{};
+  strncpy(slot.key, key, kBookKeyLen);
+  slot.key[kBookKeyLen] = '\0';
+  return &slot;
+}
 
 void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["cfgVersion"] = CONFIG_VERSION;
@@ -26,6 +116,33 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
   doc["sendMetadata"] = getSendMetadata();
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
+  doc["autoUploadOnClose"] = autoUploadOnClose;
+  doc["autoUploadType"] = static_cast<uint8_t>(autoUploadType);
+  doc["autoUploadIntervalMinutes"] = autoUploadIntervalMinutes;
+  doc["autoUploadPercentThreshold"] = autoUploadPercentThreshold;
+
+  if (bookStateCount > 0) {
+    doc["lastAutoUploadUnix"] = bookStates[bookStateCount - 1].lastUnix;
+    if (bookStates[bookStateCount - 1].lastPercent >= 0.0f) {
+      doc["lastAutoUploadPercent"] = bookStates[bookStateCount - 1].lastPercent;
+    }
+  } else if (legacyLastAutoUploadUnix > 0) {
+    doc["lastAutoUploadUnix"] = legacyLastAutoUploadUnix;
+    if (legacyLastAutoUploadPercent >= 0.0f) {
+      doc["lastAutoUploadPercent"] = legacyLastAutoUploadPercent;
+    }
+  }
+
+  JsonObject books = doc["autoUploadBooks"].to<JsonObject>();
+  for (size_t i = 0; i < bookStateCount; ++i) {
+    const BookAutoUploadState& st = bookStates[i];
+    if (st.key[0] == '\0') continue;
+    JsonObject entry = books[st.key].to<JsonObject>();
+    entry["u"] = st.lastUnix;
+    if (st.lastPercent >= 0.0f) {
+      entry["p"] = st.lastPercent;
+    }
+  }
 }
 
 bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
@@ -38,16 +155,13 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   setServerUrl(doc["serverUrl"] | "");
 
   // The default server changed in config v2 (sync.koreader.rocks -> crosspoint-sync).
-  // A pre-v2 config with credentials and no explicit URL was actively syncing
-  // against the old default — pin that URL so the upgrade doesn't switch servers
-  // out from under the user. Fresh setups get the new default.
   const uint8_t cfgVersion = doc["cfgVersion"] | (uint8_t)1;
   if (cfgVersion < CONFIG_VERSION) {
     if (getServerUrl().empty() && hasCredentials()) {
       LOG_DBG("KRS", "Pre-v2 config used the old default server; pinning %s", LEGACY_DEFAULT_SERVER_URL);
       setServerUrl(LEGACY_DEFAULT_SERVER_URL);
     }
-    needsResave = true;  // stamp cfgVersion so this migration runs once
+    needsResave = true;
   }
 
   uint8_t method = doc["matchMethod"] | (uint8_t)0;
@@ -61,13 +175,74 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
 
   const JsonVariantConst behaviorValue = doc["syncBehavior"];
   const bool missingBehavior = behaviorValue.isNull();
-  uint8_t behavior = behaviorValue | static_cast<uint8_t>(KOReaderSyncBehavior::ASK_EVERY_TIME);
-  if (behavior <= static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
-    setSyncBehavior(static_cast<KOReaderSyncBehavior>(behavior));
-    needsResave = needsResave || missingBehavior;
+  // New installs / missing key → Disabled. Existing 0–3 values keep their meaning.
+  uint8_t behaviorRaw = behaviorValue | static_cast<uint8_t>(KOReaderSyncBehavior::OFF);
+  if (behaviorRaw >= static_cast<uint8_t>(KOReaderSyncBehavior::COUNT)) {
+    LOG_DBG("KRS", "Invalid syncBehavior %u in JSON, resetting to OFF", behaviorRaw);
+    behaviorRaw = static_cast<uint8_t>(KOReaderSyncBehavior::OFF);
+    needsResave = true;
+  }
+
+  // Legacy fields used only to migrate old dual Ask/Smart + Upload Type configs.
+  const uint8_t legacyAutoOn = (doc["autoUploadOnClose"] | (uint8_t)0) != 0 ? 1 : 0;
+  const uint8_t typeRaw = doc["autoUploadType"] | (uint8_t)0;
+  AutoUploadType legacyType = AutoUploadType::TIME;
+  if (typeRaw == static_cast<uint8_t>(AutoUploadType::PERCENT)) {
+    legacyType = AutoUploadType::PERCENT;
+  } else if (typeRaw == static_cast<uint8_t>(AutoUploadType::ADAPTIVE)) {
+    legacyType = AutoUploadType::ADAPTIVE;
+  }
+
+  // If still Ask/Smart but auto-upload + Time/Percent were enabled, migrate to that mode.
+  if (behaviorRaw == static_cast<uint8_t>(KOReaderSyncBehavior::ASK_EVERY_TIME) ||
+      behaviorRaw == static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
+    if (legacyAutoOn != 0 && legacyType == AutoUploadType::PERCENT) {
+      behaviorRaw = static_cast<uint8_t>(KOReaderSyncBehavior::PERCENT);
+      needsResave = true;
+    } else if (legacyAutoOn != 0 && legacyType == AutoUploadType::TIME) {
+      behaviorRaw = static_cast<uint8_t>(KOReaderSyncBehavior::TIME);
+      needsResave = true;
+    }
+  }
+
+  setSyncBehavior(static_cast<KOReaderSyncBehavior>(behaviorRaw));
+  needsResave = needsResave || missingBehavior;
+
+  if (!doc["autoUploadIntervalMinutes"].isNull()) {
+    autoUploadIntervalMinutes = clampIntervalMinutes(doc["autoUploadIntervalMinutes"] | DEFAULT_INTERVAL_MINUTES);
+  } else if (!doc["autoUploadInterval"].isNull()) {
+    autoUploadIntervalMinutes = clampIntervalMinutes(legacyIntervalToMinutes(doc["autoUploadInterval"] | (uint8_t)1));
+    needsResave = true;
   } else {
-    LOG_DBG("KRS", "Invalid syncBehavior %u in JSON, resetting to ASK_EVERY_TIME", behavior);
-    setSyncBehavior(KOReaderSyncBehavior::ASK_EVERY_TIME);
+    autoUploadIntervalMinutes = DEFAULT_INTERVAL_MINUTES;
+  }
+
+  autoUploadPercentThreshold = clampPercentThreshold(doc["autoUploadPercentThreshold"] | DEFAULT_PERCENT_THRESHOLD);
+
+  legacyLastAutoUploadUnix = doc["lastAutoUploadUnix"] | (uint32_t)0;
+  if (!doc["lastAutoUploadPercent"].isNull()) {
+    legacyLastAutoUploadPercent = doc["lastAutoUploadPercent"] | -1.0f;
+  } else {
+    legacyLastAutoUploadPercent = -1.0f;
+  }
+
+  bookStateCount = 0;
+  if (doc["autoUploadBooks"].is<JsonObjectConst>()) {
+    for (JsonPairConst kv : doc["autoUploadBooks"].as<JsonObjectConst>()) {
+      if (bookStateCount >= kMaxBookStates) break;
+      const char* key = kv.key().c_str();
+      if (!key || !key[0]) continue;
+      JsonVariantConst v = kv.value();
+      BookAutoUploadState& st = bookStates[bookStateCount++];
+      st = BookAutoUploadState{};
+      strncpy(st.key, key, kBookKeyLen);
+      st.key[kBookKeyLen] = '\0';
+      st.lastUnix = v["u"] | (uint32_t)0;
+      if (!v["p"].isNull()) {
+        st.lastPercent = v["p"] | -1.0f;
+      }
+    }
+  } else if (legacyLastAutoUploadUnix > 0 || legacyLastAutoUploadPercent >= 0.0f) {
     needsResave = true;
   }
 
@@ -89,13 +264,10 @@ std::string KOReaderCredentialStore::getMd5Password() const {
   if (password.empty()) {
     return "";
   }
-
-  // Calculate MD5 hash of password using ESP32's MD5Builder
   MD5Builder md5;
   md5.begin();
   md5.add(password.c_str());
   md5.calculate();
-
   return md5.toString().c_str();
 }
 
@@ -118,17 +290,13 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
   if (serverUrl.empty()) {
     url = DEFAULT_SERVER_URL;
   } else if (serverUrl.find("://") == std::string::npos) {
-    // Normalize URL: add http:// if no protocol specified (local servers typically don't have SSL)
     url = "http://" + serverUrl;
   } else {
     url = serverUrl;
   }
-
-  // Strip trailing slashes to avoid double-slash in API paths
   while (!url.empty() && url.back() == '/') {
     url.pop_back();
   }
-
   return url;
 }
 
@@ -143,9 +311,141 @@ void KOReaderCredentialStore::setSendMetadata(bool enabled) {
 }
 
 void KOReaderCredentialStore::setSyncBehavior(KOReaderSyncBehavior behavior) {
-  if (static_cast<uint8_t>(behavior) > static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
-    behavior = KOReaderSyncBehavior::ASK_EVERY_TIME;
+  if (static_cast<uint8_t>(behavior) >= static_cast<uint8_t>(KOReaderSyncBehavior::COUNT)) {
+    behavior = KOReaderSyncBehavior::OFF;
   }
   syncBehavior = behavior;
-  LOG_DBG("KRS", "Set sync behavior: %s", behavior == KOReaderSyncBehavior::SMART ? "Smart" : "Ask");
+  // Legacy flags: Percent/Time enable gated upload-only on leave; others do not.
+  if (behavior == KOReaderSyncBehavior::PERCENT) {
+    autoUploadOnClose = 1;
+    autoUploadType = AutoUploadType::PERCENT;
+  } else if (behavior == KOReaderSyncBehavior::TIME) {
+    autoUploadOnClose = 1;
+    autoUploadType = AutoUploadType::TIME;
+  } else {
+    // Disabled / Ask / Smart: no upload-only gates (Disabled also skips interactive leave sync).
+    autoUploadOnClose = 0;
+    autoUploadType = AutoUploadType::ADAPTIVE;
+  }
+  LOG_DBG("KRS", "Set sync behavior: %u autoOn=%u", static_cast<unsigned>(behavior),
+          static_cast<unsigned>(autoUploadOnClose));
+}
+
+void KOReaderCredentialStore::setAutoUploadOnClose(bool enabled) { autoUploadOnClose = enabled ? 1 : 0; }
+
+void KOReaderCredentialStore::setAutoUploadType(AutoUploadType type) {
+  if (type == AutoUploadType::PERCENT) {
+    autoUploadType = AutoUploadType::PERCENT;
+  } else if (type == AutoUploadType::ADAPTIVE) {
+    autoUploadType = AutoUploadType::ADAPTIVE;
+  } else {
+    autoUploadType = AutoUploadType::TIME;
+  }
+}
+
+void KOReaderCredentialStore::setAutoUploadIntervalMinutes(uint16_t minutes) {
+  autoUploadIntervalMinutes = clampIntervalMinutes(minutes);
+}
+
+void KOReaderCredentialStore::setAutoUploadPercentThreshold(uint8_t percent) {
+  autoUploadPercentThreshold = clampPercentThreshold(percent);
+}
+
+AutoUploadDecision KOReaderCredentialStore::evaluateAutoUpload(const char* bookPath,
+                                                               const float currentBookPercent) const {
+  // Upload-only gates only for Percent / Time (Ask / Smart use interactive leave sync).
+  if (syncBehavior != KOReaderSyncBehavior::PERCENT && syncBehavior != KOReaderSyncBehavior::TIME) {
+    return AutoUploadDecision::SkipDisabled;
+  }
+  if (autoUploadOnClose == 0) {
+    return AutoUploadDecision::SkipDisabled;
+  }
+  if (!hasCredentials()) {
+    return AutoUploadDecision::SkipNoCredentials;
+  }
+  if (!bookPath || !bookPath[0]) {
+    return AutoUploadDecision::SkipInvalid;
+  }
+
+  char key[kBookKeyLen + 1];
+  makeBookKey(bookPath, key, sizeof(key));
+  const BookAutoUploadState* st = findBookState(key);
+
+  // Per-book only. Never inherit a global/legacy last-upload from another book —
+  // a never-uploaded title must always get a first baseline upload.
+  if (!st) {
+    return AutoUploadDecision::Upload;
+  }
+
+  const uint32_t lastUnix = st->lastUnix;
+  const float lastPercent = st->lastPercent;
+
+  // Percent: first stamp for this book, then require +threshold % since last upload.
+  if (syncBehavior == KOReaderSyncBehavior::PERCENT) {
+    if (autoUploadPercentThreshold == ALWAYS_PERCENT_THRESHOLD) {
+      return AutoUploadDecision::Upload;
+    }
+    if (currentBookPercent < 0.0f) {
+      return AutoUploadDecision::SkipInvalid;
+    }
+    if (lastPercent < 0.0f) {
+      return AutoUploadDecision::Upload;
+    }
+    const float need = lastPercent + static_cast<float>(autoUploadPercentThreshold);
+    if (currentBookPercent + 0.001f < need) {
+      return AutoUploadDecision::SkipPercentNotMet;
+    }
+    return AutoUploadDecision::Upload;
+  }
+
+  // Time: first stamp for this book, then require interval since lastUnix.
+  if (autoUploadIntervalMinutes == ALWAYS_INTERVAL_MINUTES) {
+    return AutoUploadDecision::Upload;
+  }
+  if (lastUnix == 0) {
+    return AutoUploadDecision::Upload;
+  }
+  const time_t now = wallClockUnix();
+  if (now == 0 || static_cast<uint32_t>(now) < lastUnix) {
+    return AutoUploadDecision::Upload;
+  }
+  const uint32_t needSec = static_cast<uint32_t>(autoUploadIntervalMinutes) * 60UL;
+  const uint32_t elapsed = static_cast<uint32_t>(now) - lastUnix;
+  if (elapsed < needSec) {
+    return AutoUploadDecision::SkipTimeNotElapsed;
+  }
+  return AutoUploadDecision::Upload;
+}
+
+void KOReaderCredentialStore::markAutoUploadSucceeded(const char* bookPath, const float currentBookPercent) {
+  if (!bookPath || !bookPath[0]) {
+    LOG_ERR("KRS", "markAutoUploadSucceeded: empty path");
+    return;
+  }
+
+  char key[kBookKeyLen + 1];
+  makeBookKey(bookPath, key, sizeof(key));
+  BookAutoUploadState* st = findOrCreateBookState(key);
+  if (!st) {
+    LOG_ERR("KRS", "markAutoUploadSucceeded: no slot");
+    return;
+  }
+
+  const time_t now = wallClockUnix();
+  if (now != 0) {
+    st->lastUnix = static_cast<uint32_t>(now);
+  } else if (st->lastUnix == 0) {
+    st->lastUnix = 1;
+  }
+
+  if (currentBookPercent >= 0.0f) {
+    st->lastPercent = currentBookPercent;
+  }
+
+  legacyLastAutoUploadUnix = 0;
+  legacyLastAutoUploadPercent = -1.0f;
+
+  saveToFile();
+  LOG_DBG("KRS", "Auto-upload stamped book=%s unix=%lu percent=%.2f", key, static_cast<unsigned long>(st->lastUnix),
+          static_cast<double>(st->lastPercent));
 }

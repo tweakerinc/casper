@@ -57,9 +57,24 @@ bool findStem(const char* folderPath, std::string& stemOut) {
   return true;
 }
 
+// Cached discover() result — SD directory walks are relatively expensive and
+// the set of packs rarely changes mid-session.
+std::vector<DictionaryEntry> g_cache;
+bool g_cacheValid = false;
+
 }  // namespace
 
+void invalidate() {
+  g_cache.clear();
+  g_cacheValid = false;
+}
+
 void discover(std::vector<DictionaryEntry>& out) {
+  if (g_cacheValid) {
+    out = g_cache;
+    return;
+  }
+
   out.clear();
   out.reserve(8);
 
@@ -92,6 +107,9 @@ void discover(std::vector<DictionaryEntry>& out) {
   std::sort(out.begin(), out.end(), [](const DictionaryEntry& a, const DictionaryEntry& b) {
     return StringUtils::asciiCaseCmp(a.name.c_str(), b.name.c_str()) < 0;
   });
+
+  g_cache = out;
+  g_cacheValid = true;
 }
 
 bool resolveBasePath(const char* folderName, std::string& basePathOut) {

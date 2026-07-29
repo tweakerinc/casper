@@ -18,19 +18,25 @@ struct PreviewKey {
   float lineCompression = -1.0f;
   uint8_t alignment = 0xFF;
   bool extraParagraphSpacing = false;
-  bool focusReading = false;
+  bool focusReading = false;  // Bionic Reading
+  bool guideReading = false;  // Guide Dots
   bool hyphenation = false;
   bool operator==(const PreviewKey&) const = default;
 };
 
-// Cached engine preview lines + the key that produced them
+// Cached engine preview lines + the key that produced them.
+// Two paragraphs so Extra Paragraph Spacing can show gap vs first-line indent.
 struct PreviewLayout {
-  std::vector<std::shared_ptr<TextBlock>> lines;
+  std::vector<std::shared_ptr<TextBlock>> para1;
+  std::vector<std::shared_ptr<TextBlock>> para2;
   PreviewKey key;
 };
 
-// Draws the sample-text pane via the reader engine, reusing layout across redraws
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName);
+// Preview chrome: double-line header (like Settings tabs) with bold "Preview" plus
+// font/size, then an unboxed body that lays out sample text at full reader width
+// (screen width − 2× screen margin) so line length matches the book page.
+// notInPreviewNote: optional note at top of the body (e.g. STR_NOT_IN_PREVIEW).
+void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int top, int height, const char* familyName,
+                   const char* sizeName, const char* notInPreviewNote = nullptr);
 
 }  // namespace textsettings

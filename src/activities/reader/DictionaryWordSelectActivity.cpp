@@ -6,17 +6,30 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <cctype>
 #include <climits>
 #include <cstdlib>
+#include <string>
 
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
+#include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
+#include "util/Dictionary.h"
+#include "util/DictionaryRegistry.h"
+
+// Tiny pad so a highlight box (+2) clears the hint strip without making the
+// reserved chrome taller than dashboard / settings buttons (buttonHintsHeight).
+constexpr int kHintWordClearance = 2;
 
 namespace {
 
 constexpr unsigned long POPUP_DURATION_MS = 1500;
+// Long-press Select to arm multi-word range (~0.4s, same as reader shortcuts).
+constexpr unsigned long MULTI_SELECT_HOLD_MS = 400;
 
 // A token is selectable when it has an ASCII alphanumeric or a non-ASCII
 // codepoint outside U+2000-U+206F (dashes, bullets and other General
@@ -47,6 +60,11 @@ void DictionaryWordSelectActivity::onEnter() {
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
   // full-repaint path as the fallback.
   snapshot = makeUniqueNoThrow<uint8_t[]>(SNAPSHOT_CAPACITY);
+  startMarkIdx = -1;
+  multiSelectArmedThisHold = false;
+  confirmDown = false;
+  // Residual long-press Menu that opened dictionary: wait for Select release.
+  ignoreConfirmUntilReleased = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   extractWords();
   // Start on the middle row's word nearest mid-screen instead of top-left:
   // any word on the page is then at most half a page of moves away.
@@ -61,6 +79,15 @@ void DictionaryWordSelectActivity::extractWords() {
   words.clear();
   words.reserve(128);
   rowCount = 0;
+
+  // Do not select words that sit under the front-button hint strip. The reader
+  // page was laid out for status-bar chrome, not the taller dictionary hints;
+  // without this limit, last-line tokens highlight behind Back/Lookup buttons.
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int maxWordBottom =
+      renderer.getScreenHeight() - metrics.buttonHintsHeight - kHintWordClearance;
+  // lineHeight is set in onEnter() before extractWords().
+  const int lh = std::max(1, lineHeight);
 
   // Single walk: collect the selectable words while accumulating their text
   // and styles (~2KB transient string, freed on return). Widths are measured
@@ -77,6 +104,12 @@ void DictionaryWordSelectActivity::extractWords() {
     const auto& block = line->getBlock();
     if (!block || !block->valid()) continue;
 
+    const int lineY = line->yPos + marginTop;
+    // Whole line below the safe band: skip without walking tokens.
+    if (lineY + lh > maxWordBottom) {
+      continue;
+    }
+
     bool rowHasWords = false;
     for (uint16_t i = 0; i < block->wordCount(); i++) {
       const char* text = block->wordText(i);
@@ -84,7 +117,7 @@ void DictionaryWordSelectActivity::extractWords() {
 
       WordBox box;
       box.x = static_cast<int16_t>(line->xPos + block->wordXpos(i) + marginLeft);
-      box.y = static_cast<int16_t>(line->yPos + marginTop);
+      box.y = static_cast<int16_t>(lineY);
       box.style = block->wordStyle(i);
       box.width = 0;  // measured below, once the advance table is ready
       box.row = rowCount;
@@ -148,32 +181,207 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
   }
 }
 
-void DictionaryWordSelectActivity::performLookup() {
-  popup = Popup::Busy;
-  if (!dictOpenAttempted) {
-    dictOpenAttempted = true;
-    dictOpenOk = dict.open(SETTINGS.dictionaryName);
+void DictionaryWordSelectActivity::selectionBounds(int& lo, int& hi) const {
+  lo = selected;
+  hi = selected;
+  if (startMarkIdx >= 0) {
+    lo = std::min(startMarkIdx, selected);
+    hi = std::max(startMarkIdx, selected);
+    // Cap phrase length for lookup key size.
+    if (hi - lo + 1 > kMaxPhraseWords) {
+      if (selected >= startMarkIdx) {
+        lo = hi - (kMaxPhraseWords - 1);
+      } else {
+        hi = lo + (kMaxPhraseWords - 1);
+      }
+    }
   }
-  const bool indexing = dictOpenOk && dict.needsIndex();
-  popupMsg = indexing ? StrId::STR_DICT_INDEXING : StrId::STR_DICT_LOOKING_UP;
-  requestUpdateAndWait();  // paint the page + busy popup before blocking on SD
+  if (lo < 0) lo = 0;
+  if (hi >= static_cast<int>(words.size())) hi = static_cast<int>(words.size()) - 1;
+}
 
-  bool ok = dictOpenOk;
-  if (ok && indexing) ok = dict.buildIndex(&indexBuildYield);
+// Build a lookup token from the selection. Soft-hyphen / end-of-line hyphen
+// splits are glued; multi-word ranges join with spaces.
+std::string DictionaryWordSelectActivity::buildLookupToken() const {
+  if (words.empty() || selected < 0 || selected >= static_cast<int>(words.size())) {
+    return {};
+  }
 
-  std::string definition;
-  std::string headword;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword);
+  auto endsWithBreakHyphen = [](const std::string& s) -> bool {
+    if (s.empty()) return false;
+    if (s.back() == '-') return true;
+    // UTF-8 soft hyphen U+00AD = C2 AD
+    return s.size() >= 2 && static_cast<unsigned char>(s[s.size() - 2]) == 0xC2 &&
+           static_cast<unsigned char>(s[s.size() - 1]) == 0xAD;
+  };
+  auto stripTrailingBreakHyphen = [](std::string& s) {
+    if (s.empty()) return;
+    if (s.back() == '-') {
+      s.pop_back();
+      return;
+    }
+    if (s.size() >= 2 && static_cast<unsigned char>(s[s.size() - 2]) == 0xC2 &&
+        static_cast<unsigned char>(s[s.size() - 1]) == 0xAD) {
+      s.resize(s.size() - 2);
+    }
+  };
 
-  if (found) {
-    popup = Popup::None;
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                                          std::move(definition)),
-                           [this](const ActivityResult&) { requestUpdate(); });
+  int lo = 0;
+  int hi = 0;
+  selectionBounds(lo, hi);
+
+  std::string phrase;
+  for (int i = lo; i <= hi; ++i) {
+    std::string token = words[static_cast<size_t>(i)].text ? words[static_cast<size_t>(i)].text : "";
+    // Join continuation fragments on the same page (hyphenation / soft-hyphen).
+    while (i + 1 <= hi && endsWithBreakHyphen(token)) {
+      stripTrailingBreakHyphen(token);
+      const char* next = words[static_cast<size_t>(i + 1)].text;
+      if (next && *next) token += next;
+      ++i;
+    }
+    if (token.empty()) continue;
+    if (!phrase.empty()) phrase += ' ';
+    phrase += token;
+  }
+  return phrase;
+}
+
+void DictionaryWordSelectActivity::performLookup() {
+  std::vector<std::string> dictNames;
+  SETTINGS.getEnabledDictionaries(dictNames);
+  if (dictNames.empty()) {
+    // Safety net: auto-use every installed pack so EN + bilingual cascade still
+    // works if settings were cleared or never multi-selected.
+    std::vector<DictionaryEntry> installed;
+    DictionaryRegistry::discover(installed);
+    dictNames.reserve(installed.size());
+    for (const auto& e : installed) {
+      dictNames.push_back(e.name);
+    }
+  }
+  if (dictNames.empty()) {
+    popup = Popup::Error;
+    popupMsg = StrId::STR_DICT_NONE_SELECTED;
+    popupTime = millis();
+    requestUpdate();
     return;
   }
-  popup = ok ? Popup::NotFound : Popup::Error;
-  popupMsg = ok ? StrId::STR_DICT_NOT_FOUND : StrId::STR_DICT_ERROR;
+
+  popup = Popup::Busy;
+  popupMsg = StrId::STR_DICT_LOOKING_UP;
+  requestUpdateAndWait();
+
+  // One pass per pack: open → index if needed → lookup. Avoids a second open
+  // cycle (resolve + exists probes) before searching. SD still only holds one
+  // reader at a time, so packs are sequential.
+  //
+  // buildLookupToken joins a multi-word range with spaces. Dictionary::lookup
+  // expands that into collocation windows + per-token stems (so "Ayudame por
+  // favor" can hit "por favor" / "ayudar" even when the full phrase is absent).
+  const std::string rawToken = buildLookupToken();
+  std::string combined;
+  std::string headword;
+  bool anyOpened = false;
+  bool anyFound = false;
+  const bool multi = dictNames.size() > 1;
+  bool showedIndexing = false;
+
+  auto runLookup = [&](const char* token) {
+    for (const std::string& name : dictNames) {
+      Dictionary dict;
+      if (!dict.open(name.c_str())) {
+        continue;
+      }
+      anyOpened = true;
+
+      if (dict.needsIndex()) {
+        if (!showedIndexing) {
+          popupMsg = StrId::STR_DICT_INDEXING;
+          requestUpdateAndWait();
+          showedIndexing = true;
+        }
+        (void)dict.buildIndex(&indexBuildYield);
+        popupMsg = StrId::STR_DICT_LOOKING_UP;
+        requestUpdateAndWait();
+      }
+
+      std::string definition;
+      std::string matched;
+      if (!dict.lookup(token, definition, matched)) {
+        continue;
+      }
+      anyFound = true;
+      if (headword.empty()) {
+        headword = matched.empty() ? Dictionary::cleanWord(token) : matched;
+      }
+      if (multi) {
+        if (!combined.empty()) combined += "\n\n";
+        // '@' → bold pack header in DictionaryDefinitionActivity.
+        combined += '@';
+        combined += name;
+        combined += '\n';
+        combined += definition;
+      } else {
+        if (combined.empty()) {
+          combined = std::move(definition);
+        } else {
+          // Multi-word token fallback may hit several keys in one pack.
+          combined += "\n\n";
+          combined += definition;
+        }
+      }
+    }
+  };
+
+  runLookup(rawToken.c_str());
+
+  // Extra safety for multi-word ranges: if the phrase path still misses, try
+  // each word alone and merge hits. Dictionary::lookup already expands windows
+  // and stems for a single call; this covers packs/candidates that still miss.
+  if (!anyFound) {
+    const std::string cleaned = Dictionary::cleanWord(rawToken.c_str());
+    if (cleaned.find(' ') != std::string::npos) {
+      size_t start = 0;
+      while (start < cleaned.size()) {
+        while (start < cleaned.size() && cleaned[start] == ' ') ++start;
+        if (start >= cleaned.size()) break;
+        size_t end = cleaned.find(' ', start);
+        if (end == std::string::npos) end = cleaned.size();
+        if (end > start) {
+          const std::string tok = cleaned.substr(start, end - start);
+          runLookup(tok.c_str());
+        }
+        start = (end < cleaned.size()) ? end + 1 : end;
+      }
+    }
+  }
+
+  if (anyFound) {
+    // Clear "Looking up…" and repaint a clean page *before* the definition
+    // activity snapshots the framebuffer — otherwise the busy popup and the
+    // word-select button chrome get baked into the background (double buttons
+    // + stuck "Looking up…" under the definition card).
+    popup = Popup::None;
+    snapshotIdx = -1;
+    requestUpdateAndWait();
+    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
+                                                                          std::move(combined)),
+                           [this](const ActivityResult& result) {
+                             popup = Popup::None;
+                             snapshotIdx = -1;
+                             // Done (or tap): leave dictionary mode entirely → reader.
+                             // Back: keep word-select so the user can look up another word.
+                             if (!result.isCancelled) {
+                               finish();
+                               return;
+                             }
+                             requestUpdate();
+                           });
+    return;
+  }
+  popup = anyOpened ? Popup::NotFound : Popup::Error;
+  popupMsg = anyOpened ? StrId::STR_DICT_NOT_FOUND : StrId::STR_DICT_ERROR;
   popupTime = millis();
   requestUpdate();
 }
@@ -187,14 +395,60 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
+  using Button = MappedInputManager::Button;
+  const bool selectDown = mappedInput.isPressed(Button::Confirm);
+  const bool selectReleased = mappedInput.wasReleased(Button::Confirm);
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
+  if (ignoreConfirmUntilReleased) {
+    if (!selectDown) {
+      ignoreConfirmUntilReleased = false;
+      confirmDown = false;
+      multiSelectArmedThisHold = false;
+    }
+    if (mappedInput.wasReleased(Button::Back)) {
+      finish();
+    }
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen && !words.empty()) {
-    performLookup();
+
+  if (selectDown && !confirmDown) {
+    confirmDown = true;
+    confirmDownAtMs = millis();
+    multiSelectArmedThisHold = false;
+  }
+  if (confirmDown && selectDown && !multiSelectArmedThisHold && startMarkIdx < 0 && !words.empty() &&
+      (millis() - confirmDownAtMs) >= MULTI_SELECT_HOLD_MS) {
+    // Long-press Select: arm multi-word range at cursor (lookup on a later short Select).
+    startMarkIdx = selected;
+    multiSelectArmedThisHold = true;
+    snapshotIdx = -1;  // force full repaint for range highlight
+    requestUpdate();
+  }
+
+  if (selectReleased) {
+    const bool armedMulti = multiSelectArmedThisHold;
+    confirmDown = false;
+    multiSelectArmedThisHold = false;
+    if (armedMulti) {
+      // Release after arming range — user extends with Left/Right next.
+      return;
+    }
+    if (!words.empty()) {
+      performLookup();
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(Button::Back)) {
+    if (startMarkIdx >= 0) {
+      startMarkIdx = -1;
+      confirmDown = false;
+      multiSelectArmedThisHold = false;
+      snapshotIdx = -1;
+      requestUpdate();
+      return;
+    }
+    finish();
     return;
   }
 
@@ -221,25 +475,55 @@ void DictionaryWordSelectActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Left) && selected > 0) {
+  if (mappedInput.wasPressed(Button::Left) && selected > 0) {
     selected--;
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Right) &&
-             selected + 1 < static_cast<int>(words.size())) {
+  } else if (mappedInput.wasPressed(Button::Right) && selected + 1 < static_cast<int>(words.size())) {
     selected++;
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+  } else if (mappedInput.wasPressed(Button::Up)) {
     moveVertical(-1);
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+  } else if (mappedInput.wasPressed(Button::Down)) {
     moveVertical(1);
+  }
+}
+
+void DictionaryWordSelectActivity::drawSelectionHighlights() {
+  int lo = 0;
+  int hi = 0;
+  selectionBounds(lo, hi);
+  for (int i = lo; i <= hi; ++i) {
+    const WordBox& word = words[static_cast<size_t>(i)];
+    int hx = word.x - 2;
+    int hy = word.y - 2;
+    int hw = word.width + 4;
+    int hh = lineHeight + 4;
+    if (hx < 0) {
+      hw += hx;
+      hx = 0;
+    }
+    if (hy < 0) {
+      hh += hy;
+      hy = 0;
+    }
+    if (hw > 0 && hh > 0) {
+      renderer.fillRect(hx, hy, hw, hh, true);
+      renderer.drawText(fontId, word.x, word.y, word.text, false, word.style);
+    }
   }
 }
 
 // Saves the pixels under words[selected]'s highlight box, then draws the
 // highlight over them. Returns false when the pixels could not be saved
-// (no buffer / oversize box) — the highlight is drawn regardless, but the
-// next cursor move must do a full repaint.
+// (no buffer / oversize box / multi-word range) — the highlight is drawn
+// regardless, but the next cursor move must do a full repaint.
 bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
+  if (startMarkIdx >= 0) {
+    drawSelectionHighlights();
+    snapshotIdx = -1;
+    return false;
+  }
+
   const WordBox& word = words[selected];
   int hx = word.x - 2;
   int hy = word.y - 2;
@@ -270,37 +554,48 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   return saved;
 }
 
-// Front-button bar (Back/Confirm/Left/Right). Drawn last on every repaint
-// path, including the differential highlight-only path, so it always ends
-// up as the top layer even when a highlighted word's box falls under a
-// hint's screen area. No side-button hints: Up/Down row jump has no spare
-// screen area on this page (it reuses the reader's full-bleed layout), and
-// a hint box there would hide text instead of sitting in a reserved gutter.
+// Front-button pills only — no full-width white strip (that blanked the last
+// lines of page text). Page layout now reserves bottom chrome so words end
+// above this zone; drawButtonHints paints white only inside each pill.
 void DictionaryWordSelectActivity::drawHints() const {
-  // No selectable word on this page: Confirm/Left/Right are all no-ops
-  // (guarded by words.empty() in loop()/performLookup), so only Back does
-  // anything and only Back is hinted.
   if (words.empty()) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     return;
   }
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_LOOKUP), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // previous/next args label UP/DOWN functions after remap. LEFT/RIGHT functions
+  // still get hardcoded Left/Right from mapLabels (word-step actions).
+  // Passing Left/Right here made remapped Up/Down buttons read "Left"/"Right".
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
+// Reader top chrome (battery/clock) is gone in this activity — use that band
+// for a quiet mode title so users know they left the reader.
+void DictionaryWordSelectActivity::drawModeTitle() const {
+  const char* title =
+      (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
+  // UI_10 bold: a step up from SMALL_FONT so the mode label is easy to spot
+  // without colliding with body text (page still has top chrome headroom).
+  constexpr int kTitleFont = UI_10_FONT_ID;
+  const int lineH = renderer.getLineHeight(kTitleFont);
+  const int titleY = std::max(2, (marginTop - lineH) / 2);
+  // Light wipe so page ink under the title band does not show through.
+  renderer.fillRect(0, 0, renderer.getScreenWidth(), std::max(lineH + titleY + 2, marginTop - 2), false);
+  renderer.drawCenteredText(kTitleFont, titleY, title, true, EpdFontFamily::BOLD);
+}
+
 void DictionaryWordSelectActivity::render(RenderLock&&) {
-  // Differential fast path: only the highlight moved and the framebuffer
-  // still holds a clean page (no popup or sub-activity since the last full
-  // repaint). Restore the pixels under the old highlight, draw the new one,
-  // and push — skipping the two-pass page render entirely.
-  if (popup == Popup::None && snapshotIdx >= 0 && !words.empty() && selected != snapshotIdx) {
+  // Differential fast path (single-word only): restore old highlight pixels,
+  // paint the new cursor, skip full page re-render.
+  if (popup == Popup::None && startMarkIdx < 0 && snapshotIdx >= 0 && !words.empty() && selected != snapshotIdx) {
     renderer.writeFramebufferRegion(snapshotX, snapshotY, snapshotW, snapshotH, snapshot.get());
     // The full path's PrewarmScope cleared the glyph cache on exit; batch-load
     // just the highlighted word's glyphs before drawing them white-on-black.
     renderer.getFontCacheManager()->prewarmCache(
         fontId, words[selected].text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[selected].style) & 0x03)));
     if (drawHighlightWithSnapshot()) {
+      drawModeTitle();
       drawHints();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       return;
@@ -322,6 +617,7 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     drawHighlightWithSnapshot();
   }
 
+  drawModeTitle();
   drawHints();
 
   if (popup != Popup::None) {

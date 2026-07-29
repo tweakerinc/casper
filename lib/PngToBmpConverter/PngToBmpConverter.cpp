@@ -400,8 +400,14 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
 }
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                                   bool oneBit, bool crop) {
-  LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
+                                                   bool oneBit, bool crop, bool floydSteinberg, bool coverThumb) {
+  if (coverThumb) {
+    // Match JPEG c22: 2-bit balanced Atkinson + mild lift, contain-fit.
+    oneBit = false;
+    floydSteinberg = false;
+  }
+  LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d%s)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight,
+          coverThumb ? ", cover 2-bit Atkinson" : "");
 
   // Verify PNG signature
   uint8_t sig[8];
@@ -631,10 +637,12 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   if (oneBit) {
     atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
   } else if (!USE_8BIT_OUTPUT) {
-    if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
-    } else if (USE_FLOYD_STEINBERG) {
+    if (coverThumb) {
+      atkinsonDitherer = new AtkinsonDitherer(outWidth, /*balancedLevels=*/true);
+    } else if (floydSteinberg || USE_FLOYD_STEINBERG) {
       fsDitherer = new FloydSteinbergDitherer(outWidth);
+    } else if (USE_ATKINSON) {
+      atkinsonDitherer = new AtkinsonDitherer(outWidth, /*balancedLevels=*/false);
     }
   }
 
@@ -700,7 +708,8 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
         if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
       } else {
         for (int x = 0; x < outWidth; x++) {
-          const uint8_t gray = adjustPixel(grayRow[x]);
+          const uint8_t gray = coverThumb ? static_cast<uint8_t>(adjustPixelCoverThumb(grayRow[x]))
+                                          : static_cast<uint8_t>(adjustPixel(grayRow[x]));
           uint8_t twoBit;
           if (atkinsonDitherer) {
             twoBit = atkinsonDitherer->processPixel(gray, x);
@@ -767,7 +776,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
           if (atkinson1BitDitherer) atkinson1BitDitherer->nextRow();
         } else {
           for (int x = 0; x < outWidth; x++) {
-            const uint8_t gray = adjustPixel((rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0);
+            const int raw = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
+            const uint8_t gray = coverThumb ? static_cast<uint8_t>(adjustPixelCoverThumb(raw))
+                                            : static_cast<uint8_t>(adjustPixel(raw));
             uint8_t twoBit;
             if (atkinsonDitherer) {
               twoBit = atkinsonDitherer->processPixel(gray, x);
@@ -842,4 +853,11 @@ bool PngToBmpConverter::pngFileToBmpStreamWithSize(HalFile& pngFile, Print& bmpO
 bool PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
                                                        int targetMaxHeight) {
   return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+}
+
+bool PngToBmpConverter::pngFileToCoverThumbBmpStreamWithSize(HalFile& pngFile, Print& bmpOut, int targetMaxWidth,
+                                                             int targetMaxHeight) {
+  // crop=false: contain-fit full jacket (match JPEG c19).
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetMaxWidth, targetMaxHeight, /*oneBit=*/false, /*crop=*/false,
+                                    /*floydSteinberg=*/false, /*coverThumb=*/true);
 }

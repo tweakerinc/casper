@@ -18,6 +18,7 @@ class ContentOpfParser final : public Print {
     IN_BOOK_TITLE,
     IN_BOOK_AUTHOR,
     IN_BOOK_LANGUAGE,
+    IN_BOOK_DESCRIPTION,
     IN_MANIFEST,
     IN_SPINE,
     IN_GUIDE,
@@ -29,6 +30,8 @@ class ContentOpfParser final : public Print {
   XML_Parser parser = nullptr;
   ParserState state = START;
   BookMetadataCache* cache;
+  bool metadataOnly = false;  // stop after </metadata> (synopsis extract without spine rewrite)
+  bool metadataFinished = false;  // set when metadataOnly stops; further stream data is ignored
   HalFile tempItemStore;
   std::string coverItemId;
 
@@ -59,6 +62,8 @@ class ContentOpfParser final : public Print {
   std::string title;
   std::string author;
   std::string language;
+  // First dc:description (Calibre synopsis); may include light HTML.
+  std::string description;
   std::string tocNcxPath;
   std::string tocNavPath;  // EPUB 3 nav document path
   std::string coverItemHref;
@@ -67,8 +72,12 @@ class ContentOpfParser final : public Print {
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
-                            BookMetadataCache* cache)
-      : cachePath(cachePath), baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache) {}
+                            BookMetadataCache* cache, const bool metadataOnly = false)
+      : cachePath(cachePath),
+        baseContentPath(baseContentPath),
+        remainingSize(xmlSize),
+        cache(cache),
+        metadataOnly(metadataOnly) {}
   ~ContentOpfParser() override;
 
   bool setup();

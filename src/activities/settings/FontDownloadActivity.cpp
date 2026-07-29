@@ -17,6 +17,16 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 
+namespace {
+// Names match CrossInk fonts.json for families compiled into firmware (main.cpp).
+// Compared case-insensitively; "LexendDeca" accepted as a defensive alias.
+bool isFirmwareBuiltinFamily(const char* name) {
+  if (name == nullptr || name[0] == '\0') return false;
+  return strcasecmp(name, "Bitter") == 0 || strcasecmp(name, "SourceSerif4") == 0 ||
+         strcasecmp(name, "Source Serif 4") == 0;
+}
+}  // namespace
+
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
 
@@ -70,10 +80,24 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
 
 bool FontDownloadActivity::fetchAndParseManifest() {
   // Download manifest to a temp file on SD card to avoid holding both
-  // TLS buffers and the full JSON string in RAM simultaneously.
+  // network buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
+  static constexpr int kManifestMaxAttempts = 5;
+  static constexpr unsigned long kRetryDelayMs = 1500;
 
-  auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
+  LOG_DBG("FONT", "Fetching font manifest: %s", FONT_MANIFEST_URL);
+  Storage.remove(MANIFEST_TMP);
+  HttpDownloader::DownloadError result = HttpDownloader::HTTP_ERROR;
+  for (int attempt = 1; attempt <= kManifestMaxAttempts; ++attempt) {
+    if (attempt > 1) {
+      LOG_DBG("FONT", "Retrying font manifest download (%d/%d)", attempt, kManifestMaxAttempts);
+      delay(kRetryDelayMs);
+    }
+    result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
+    if (result == HttpDownloader::OK) break;
+    LOG_ERR("FONT", "Font manifest download attempt failed (%d/%d, error=%d)", attempt, kManifestMaxAttempts,
+            static_cast<int>(result));
+  }
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
     errorMessage_ = "Failed to fetch font list";
@@ -141,11 +165,15 @@ bool FontDownloadActivity::fetchAndParseManifest() {
       family.files.push_back(std::move(file));
     }
 
-    family.installed = fontInstaller_.isFamilyInstalled(family.name.c_str());
+    // Firmware ships Lexend Deca + Bitter in flash; treat those as installed even
+    // when there is no SD copy (isFamilyInstalled only sees /.fonts).
+    const bool firmwareBuiltin = isFirmwareBuiltinFamily(family.name.c_str());
+    family.installed = firmwareBuiltin || fontInstaller_.isFamilyInstalled(family.name.c_str());
 
     // Detect updates by comparing manifest file sizes with files on disk.
     // Not a checksum, but a size mismatch reliably indicates a rebuild in practice.
-    if (family.installed) {
+    // Skip for firmware builtins — they are not SD packages and would always look "missing".
+    if (family.installed && !firmwareBuiltin) {
       for (const auto& file : family.files) {
         char path[128];
         FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), path, sizeof(path));
@@ -275,6 +303,13 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
+  // Font .cpfont files + TLS need large contiguous heap. Log free heap and
+  // yield so other tasks can release short-lived buffers before the download.
+  LOG_DBG("FONT", "Heap before download %s: free=%u largest=%u", family.name.c_str(),
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  delay(50);
+  yield();
+
   if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
     RenderLock lock(*this);
     state_ = ERROR;
@@ -297,9 +332,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     std::string url = baseUrl_ + file.name;
 
+    // Throttle UI refresh during download: full-screen e-ink redraws each tick
+    // thrash the heap with TLS + framebuffers and have caused device crashes.
+    unsigned long lastProgressUiMs = 0;
     auto result = HttpDownloader::downloadToFile(
         url, destPath,
-        [this](size_t downloaded, size_t total) {
+        [this, &lastProgressUiMs](size_t downloaded, size_t total) {
           fileProgress_ = downloaded;
           fileTotal_ = total;
           mappedInput.update();
@@ -307,7 +345,11 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
               mappedInput.wasPressed(MappedInputManager::Button::Back)) {
             cancelRequested_ = true;
           }
-          requestUpdate(true);
+          const unsigned long now = millis();
+          if (now - lastProgressUiMs >= 750) {
+            lastProgressUiMs = now;
+            requestUpdate(true);
+          }
         },
         &cancelRequested_);
 
@@ -417,7 +459,8 @@ bool FontDownloadActivity::isSelectedFamilyDeletable() const {
   if (isDownloadAllRow(selectedIndex_) || isUpdateAllRow(selectedIndex_)) return false;
   if (selectedIndex_ < specialRowCount() || selectedIndex_ >= listItemCount()) return false;
   const auto& family = families_[familyIndexFromList(selectedIndex_)];
-  return family.installed && !family.hasUpdate;
+  // Firmware builtins cannot be removed from flash via this UI.
+  return family.installed && !family.hasUpdate && !isFirmwareBuiltinFamily(family.name.c_str());
 }
 
 // --- Input handling ---
@@ -446,8 +489,11 @@ void FontDownloadActivity::loop() {
           currentFileIndex_ = 0;
           currentFileTotal_ = family.files.size();
           downloadFamily(family);
-        } else {
+        } else if (isSelectedFamilyDeletable()) {
           promptDeleteSelectedFamily();
+          return;
+        } else {
+          // Firmware builtin (or non-deletable): Confirm is a no-op.
           return;
         }
       }

@@ -18,15 +18,19 @@ class RecentBooksActivity final : public Activity {
   // Set when a long-press has fired; input is swallowed until Confirm is released
   // again so the release doesn't also open the book.
   bool longPressFired = false;
+  // Opened via Bare long-press Library (physical Confirm still held): ignore all
+  // nav/select until every open/nav button is released, then require a new press.
+  bool awaitOpenButtonRelease = false;
 
   // Recent tab state
   std::vector<RecentBook> recentBooks;
 
   // Data loading
   void loadRecentBooks();
+  void reloadAfterBookAction();
 
-  // Show an OK/Cancel prompt to remove the given book from the Recent Books list.
-  void promptRemoveBook(const std::string& path, const std::string& title);
+  // CrossInk-style long-press menu; side effects stay in the menu activity.
+  void showBookActionMenu(size_t bookIndex, bool ignoreInitialConfirmRelease = false);
 
  public:
   explicit RecentBooksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

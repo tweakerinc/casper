@@ -39,6 +39,28 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   return true;
 }
 
+bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute) const {
+  if (!_available) return false;
+
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) {
+    return false;
+  }
+
+  year = dt.year;
+  month = dt.month;
+  day = dt.day;
+  hour = dt.hour;
+  minute = dt.minute;
+
+  // Keep the time cache coherent with the full date-time poll.
+  _cachedHour = dt.hour;
+  _cachedMinute = dt.minute;
+  _lastPollMs = millis();
+  _hasCachedTime = true;
+  return true;
+}
+
 bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased, bool use12Hour) const {
   if (bufSize < (use12Hour ? 9u : 6u)) return false;
   uint8_t h, m;

@@ -20,7 +20,8 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .menuRowHeight = 64,
                                  .menuSpacing = 8,
                                  .tabSpacing = 8,
-                                 .tabBarHeight = 40,
+                                 // Room for UI_12 labels + Preview-style air between header/tab rules.
+                                 .tabBarHeight = 52,
                                  .scrollBarWidth = 4,
                                  .scrollBarRightOffset = 5,
                                  .homeTopPadding = 56,
@@ -54,15 +55,19 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .popupProgressClampPercent = false,
                                  .popupProgressFillInverted = false,
                                  .popupProgressOutlineInverted = false,
-                                 .optionPopupItemSpacing = 8,
-                                 .optionPopupInnerPadding = 20,
-                                 .optionPopupSelectionHPadding = 16,
-                                 .optionPopupSelectionVPadding = 12,
-                                 .optionPopupTitleGap = 16,
+                                 // Tighter than list rows so long pickers (status-bar slots)
+                                 // fit on-screen with scrolling rather than overflowing.
+                                 .optionPopupItemSpacing = 2,
+                                 .optionPopupInnerPadding = 12,
+                                 .optionPopupSelectionHPadding = 12,
+                                 .optionPopupSelectionVPadding = 4,
+                                 .optionPopupTitleGap = 10,
                                  .optionPopupUseSmallFont = true,
                                  .optionPopupOptionFontBold = false,
                                  .optionPopupSelectionRadius = 6,
-                                 .optionPopupSelectionLight = true,
+                                 // Black chip + white text — same language as Settings list / home menu.
+                                 // Light gray washed out on e-ink and looked unlike other focus bars.
+                                 .optionPopupSelectionLight = false,
                                  .optionPopupDrawAllRows = false,
                                  .optionPopupDialogSideMargin = 20,
                                  .optionPopupTitleSeparator = true,
@@ -89,7 +94,8 @@ class LyraTheme : public BaseTheme {
                 const std::function<std::string(int index)>& rowTitle,
                 const std::function<std::string(int index)>& rowSubtitle,
                 const std::function<UIIcon(int index)>& rowIcon, const std::function<std::string(int index)>& rowValue,
-                bool highlightValue, const std::function<bool(int index)>& rowDimmed = nullptr) const override;
+                bool highlightValue, const std::function<bool(int index)>& rowDimmed = nullptr,
+                const std::function<bool(int index)>& rowApplied = nullptr) const override;
   void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                        const char* btn4) const override;
   void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const override;
@@ -98,7 +104,9 @@ class LyraTheme : public BaseTheme {
                       const std::function<UIIcon(int index)>& rowIcon) const override;
   void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
-                           std::function<bool()> storeCoverBuffer) const override;
+                           StoreCoverBufferFn storeCoverBuffer, const BookReadingStats* stats = nullptr,
+                           float progressPercent = -1.0f, const GlobalReadingStats* globalStats = nullptr,
+                           const char* currentChapterTitle = nullptr) const override;
   void drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) const;
   bool showsFileIcons() const override { return true; }
 };

@@ -1,51 +1,189 @@
 # Dictionary
 
-Look up words while reading an EPUB using an offline StarDict dictionary stored on the SD card.
+Casper looks up words while reading using **offline StarDict packs** on the SD card. This document describes the **current on-device file structure**, how packs are discovered, and how lookup works in firmware.
 
-## Supported Format
+Casper does **not** use CXDict (the experimental single-binary format). Everything is **one folder per dictionary** under `/dictionaries/` (or `/.dictionaries/`).
 
-The reader supports **StarDict** dictionaries. When searching for dictionaries online, look for "StarDict format" or files with `.dict`, `.idx`, and `.ifo` extensions.
+---
 
-A dictionary folder must contain:
+## SD card layout
 
-- `.idx` — word index (required, **must be uncompressed** — a `.idx.gz` will not work; decompress it on your computer with `gzip -d` first)
-- `.dict` or `.dict.dz` — definition data (`.dict.dz` is supported as-is; entries are decompressed on the fly during lookup)
-- `.ifo` — metadata (optional)
+### Roots (both supported)
 
-Not supported: `.syn` synonym files (ignored), dictionaries with 64-bit index offsets (`idxoffsetbits=64` in the `.ifo` — rare, and rejected with an error), and HTML-formatted definitions render as raw markup rather than styled text.
+| Root | Notes |
+|------|--------|
+| `/dictionaries/` | Preferred. Visible in Browse when hidden files are shown. |
+| `/.dictionaries/` | Same rules; hidden by default in the file browser. |
 
-## Setting Up a Dictionary
+Discovery scans both roots. Folder names must not start with `.` and must not contain `/` or `\` (they are stored in settings JSON).
 
-1. Copy your dictionary folder(s) to `/dictionaries/` on the SD card — one dictionary per folder, e.g. `/dictionaries/webster/webster.idx` + `webster.dict.dz`. A hidden `/.dictionaries/` folder (dot-prefixed) works the same way, for keeping it out of the file browser.
-2. Open **Settings → Reader → Dictionary** on the device.
-3. Select a dictionary from the list, or **None** to disable lookups.
+### One folder per pack
 
-The Dictionary setting only appears when at least one usable dictionary folder exists. Folders containing more than one dictionary (multiple `.idx` stems) are skipped as ambiguous.
+```
+/dictionaries/
+  English/
+    english.ifo          # optional metadata
+    english.idx          # required, uncompressed
+    english.dict         # required (or english.dict.dz)
+    english.qidx         # optional; device-generated index sidecar
+  English-Spanish/
+    english-spanish.ifo
+    english-spanish.idx
+    english-spanish.dict
+  Spanish-English/
+    spanish-english.ifo
+    spanish-english.idx
+    spanish-english.dict
+```
 
-## Looking Up a Word
+| Rule | Detail |
+|------|--------|
+| Folder name | Label in **Settings → Reader → Dictionary** (e.g. `English`). |
+| Single stem | Exactly **one** `.idx` basename inside the folder. Multiple stems → folder skipped. |
+| Data file | Same stem with `.dict` **or** `.dict.dz` must exist. |
+| Uncompressed index | `.idx.gz` is **not** supported; decompress with `gzip -d` before copy. |
+| Ambiguous / empty | No `.idx`, only `.idx`, or multiple stems → not listed. |
+| Optional `.ifo` | Recommended. Used for validation (e.g. reject `idxoffsetbits=64`). |
+| Ignored | `.syn` synonym files. |
 
-Two ways to start a lookup while reading:
+### What each file is
 
-- Open the reader menu (**Confirm**) and choose **Look Up**.
-- Or set **Settings → Controls → Long-press Menu** to "Dictionary", then hold **Confirm** (~0.4s) on the reading page.
+#### `.ifo` (optional text)
 
-One word on the page becomes highlighted:
+StarDict info file. Casper release packs use:
 
-1. Use **Left/Right** to move between words in reading order, and the side **Up/Down** buttons to jump between lines.
-2. Press **Confirm** to look up the highlighted word.
-3. Press **Back** to return to the reader.
+```text
+version=2.4.2
+wordcount=…
+idxfilesize=…
+bookname=…
+sametypesequence=m
+```
 
-On the very first lookup with a dictionary (and again if the dictionary file changes), the reader shows *"Indexing dictionary…"* while it builds a small `.qidx` sidecar file next to the `.idx`. This takes a few seconds for large dictionaries and makes all subsequent lookups fast. The sidecar can be deleted safely at any time — it will simply be rebuilt.
+- `sametypesequence=m` → plain UTF-8 definition text (what the UI expects).
+- **32-bit** word offsets only. `idxoffsetbits=64` is rejected.
 
-### How Lookup Works
+#### `.idx` (required)
 
-1. **Direct match** — the word is found as-is (case-insensitive) in the dictionary index. Surrounding punctuation is ignored.
-2. **Stemming** — on a miss, common English word forms are retried automatically: possessives and plurals (`dogs` → `dog`, `stories` → `story`) and verb endings (`walked` → `walk`, `running` → `run`, `making` → `make`).
-3. **Not found** — a short popup appears and you return to word selection.
+Sorted headword index. Each entry:
 
-## The Definition Screen
+```text
+UTF-8 headword + 0x00 + uint32_be(offset) + uint32_be(size)
+```
 
-When a word is found, the definition screen shows the matched headword at the top and the definition text below, with a page counter for long definitions.
+- Offset/size refer to bytes inside `.dict` (or uncompressed stream of `.dict.dz`).
+- Matching is **case-insensitive** (ASCII fold).
 
-- **Left/Right** or side **Up/Down** — previous / next page
-- **Back** — return to word selection
+#### `.dict` / `.dict.dz` (required)
+
+- `.dict` — raw concatenation of definition blobs (fastest path).
+- `.dict.dz` — dictzip (random-access gzip); supported, slightly slower first read.
+
+Definitions in the shipped packs are plain text (`m`), often multi-line (POS, gender, senses, optional pronunciation).
+
+#### `.qidx` (device-built)
+
+Not part of the release zip. On first lookup (or when the `.idx` changes / sample interval changes), the firmware writes a small **sampled offset table** next to the `.idx`:
+
+- Magic / version / sample interval / sample count / `.idx` size.
+- One `uint32` file offset per sample (every **64** index entries in current firmware).
+
+Safe to delete; it is rebuilt automatically (UI may show “Indexing…” once per pack).
+
+---
+
+## Bundled release packs
+
+The GitHub / dist zip ships three folders (copy as-is under `/dictionaries/`):
+
+| Folder | Role |
+|--------|------|
+| **English** | English headword → English definition |
+| **English-Spanish** | English headword → Spanish |
+| **Spanish-English** | Spanish headword → English |
+
+Why all three:
+
+- EN-ES alone only helps when the **selected page word is English**.
+- Spanish tokens (`casa`, `porque`, `ayúdame`) need **Spanish-English**.
+- Firmware also expands **Spanish clitics** (`ayudame` → `ayuda` / `ayudar`).
+
+**Recommendation:** enable all three in multi-select.
+
+Sources (this generation of packs):
+
+- EN: Wiktionary (kaikki.org) + Open English WordNet + public-domain Webster gaps  
+- EN-ES / ES-EN: Wiktionary via open-dsl-dict (CC BY-SA / GFDL)  
+
+Developer rebuild: `scripts/build_stardict_packs.py`.
+
+---
+
+## Enabling packs on the device
+
+1. Copy folders to `/dictionaries/` (or `/.dictionaries/`).
+2. **Settings → Reader → Dictionary** — multi-select list with `(*)` / `( )`.
+3. After a change, **Back** becomes **Save**.
+
+If no pack is selected yet, the **first** dictionary open from the reader **auto-enables every installed pack** so bilingual cascade works without a Settings visit.
+
+The Dictionary entry only appears when at least one valid folder exists.
+
+---
+
+## Looking up words
+
+### Enter dictionary mode
+
+- Reader menu → **Dictionary**, or  
+- **Settings → Controls → Long-press Menu** = Dictionary, then hold **Confirm** on the page.
+
+Top title (reader chrome is hidden):
+
+- **Dictionary Lookup** — default  
+- **Multi-Word Selection** — after long-press **Select** to arm a range  
+
+Move with Left/Right (and Up/Down by line). **Select** looks up. **Back** clears a multi-word range or exits.
+
+### Lookup pipeline (per enabled pack)
+
+1. **Normalize** — lowercase ASCII; keep Spanish accents; keep compound hyphens; strip quotes/punctuation/digits; join soft-/line-break hyphens; collapse spaces.
+2. **Candidates**  
+   - Single word: cleaned key, then English stems, Spanish clitics, hyphen splits, accent folding.  
+   - Multi-word: full phrase → collocation windows (e.g. `por favor`) → each token with the same stem/clitic rules.  
+3. **Index search** — binary search on `.qidx` samples, then short linear scan of `.idx` (buffered SD reads).  
+4. **Definition** — read `.dict` range (or extract from `.dict.dz`).  
+5. **Merge** — every pack that hits is shown under a **centered bold pack name** (`English`, `Spanish-English`, …).
+
+### Definition card
+
+- **Bold** headword; **regular** pronunciation beside it when present (`/…/`, `[…]`, or `(…)`).  
+- Pack labels centered; senses left-aligned, numbered, capped for e-ink readability.  
+- Drawn over a snapshot of the reader page (not a full white wipe when memory allows).
+
+---
+
+## Not supported / limitations
+
+| Item | Behavior |
+|------|----------|
+| CXDict (`.cxdict`) | Not used by Casper |
+| `.idx.gz` | Must decompress first |
+| `idxoffsetbits=64` | Rejected |
+| `.syn` | Ignored |
+| Full HTML definitions | Stripped / shown as simplified plain text |
+| Arbitrary multi-word idioms | Only if they exist as headwords or are recoverable via windows/stems |
+
+---
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|--------|
+| No Dictionary in Settings | Folders under `/dictionaries/` with one `.idx` + `.dict` each |
+| Always “Not found” | Pack language mismatch; try Spanish-English for Spanish words; rebuild `.qidx` by deleting `*.qidx` |
+| First lookup slow | Normal: building `.qidx` once per pack |
+| Multi-word “not found” | Phrase may not be a headword; firmware still tries collocations and each word (e.g. `por favor`, `ayudar`) |
+| Ambiguous folder skipped | More than one `.idx` stem inside the same folder |
+
+For packaging notes shipped with the zip, see `dist/dictionaries/README.txt`.

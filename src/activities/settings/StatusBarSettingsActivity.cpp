@@ -4,121 +4,248 @@
 #include <HalClock.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
+#include <string>
+#include <vector>
 
-#include "ClockOffsetActivity.h"
-#include "ClockSyncActivity.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
 namespace {
-// Menu items in their natural order. Clock entries are appended only when the
-// DS3231 RTC is present so X4 devices don't see them at all.
+// Logical menu rows (visible set is rebuilt dynamically).
 enum MenuItem {
-  ITEM_CHAPTER_PAGE_COUNT = 0,
-  ITEM_BOOK_PROGRESS_PERCENTAGE,
+  ITEM_UPPER_LEFT = 0,
+  ITEM_UPPER_MIDDLE,
+  ITEM_UPPER_RIGHT,
+  ITEM_LOWER_LEFT,
+  ITEM_LOWER_MIDDLE,
+  ITEM_LOWER_RIGHT,
+  ITEM_BATTERY_DISPLAY,  // nested under the slot that has Battery
   ITEM_PROGRESS_BAR,
   ITEM_PROGRESS_BAR_THICKNESS,
-  ITEM_TITLE,
-  ITEM_BATTERY,
-  ITEM_XTC_STATUS_BAR,
-  ITEM_CLOCK,             // X3 only
-  ITEM_CLOCK_FORMAT,      // X3 only
-  ITEM_CLOCK_UTC_OFFSET,  // X3 only, launches ClockOffsetActivity
-  ITEM_CLOCK_SYNC,        // X3 only, launches ClockSyncActivity
-  ITEM_COUNT
+  ITEM_ID_COUNT
 };
 
-constexpr int BASE_MENU_ITEMS = ITEM_CLOCK;  // Items shown on every device
-constexpr int FULL_MENU_ITEMS = ITEM_COUNT;  // Items shown when RTC is available
-
-const StrId menuNames[FULL_MENU_ITEMS] = {
-    StrId::STR_CHAPTER_PAGE_COUNT,
-    StrId::STR_BOOK_PROGRESS_PERCENTAGE,
-    StrId::STR_PROGRESS_BAR,
-    StrId::STR_PROGRESS_BAR_THICKNESS,
-    StrId::STR_TITLE,
-    StrId::STR_BATTERY,
-    StrId::STR_XTC_STATUS_BAR,
-    StrId::STR_CLOCK,
-    StrId::STR_CLOCK_FORMAT,
-    StrId::STR_CLOCK_UTC_OFFSET,
-    StrId::STR_CLOCK_SYNC_NOW,
-};
-
-constexpr int CLOCK_FORMAT_ITEMS = 2;
-const StrId clockFormatNames[CLOCK_FORMAT_ITEMS] = {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H};
-
-std::string formatUtcOffset(uint8_t biasedQ) {
-  // biasedQ is in quarter-hour steps, biased by 48 (so 48 = UTC+0).
-  if (biasedQ > 104) biasedQ = 48;
-  int totalMinutes = (static_cast<int>(biasedQ) - 48) * 15;
-  bool neg = totalMinutes < 0;
-  int absMinutes = neg ? -totalMinutes : totalMinutes;
-  int hours = absMinutes / 60;
-  int mins = absMinutes % 60;
-  char buf[16];
-  snprintf(buf, sizeof(buf), "UTC%c%d:%02d", neg ? '-' : '+', hours, mins);
-  return buf;
+StrId menuNameForItem(int item) {
+  switch (item) {
+    case ITEM_UPPER_LEFT:
+      return StrId::STR_UPPER_LEFT;
+    case ITEM_UPPER_MIDDLE:
+      return StrId::STR_UPPER_MIDDLE;
+    case ITEM_UPPER_RIGHT:
+      return StrId::STR_UPPER_RIGHT;
+    case ITEM_LOWER_LEFT:
+      return StrId::STR_LOWER_LEFT;
+    case ITEM_LOWER_MIDDLE:
+      return StrId::STR_LOWER_MIDDLE;
+    case ITEM_LOWER_RIGHT:
+      return StrId::STR_LOWER_RIGHT;
+    case ITEM_BATTERY_DISPLAY:
+      return StrId::STR_BATTERY_DISPLAY;
+    case ITEM_PROGRESS_BAR:
+      return StrId::STR_PROGRESS_BAR;
+    case ITEM_PROGRESS_BAR_THICKNESS:
+      return StrId::STR_PROGRESS_BAR_THICKNESS;
+    default:
+      return StrId::STR_CUSTOMISE_STATUS_BAR;
+  }
 }
+
+// Menu display order (not enum order). Values are STATUS_BAR_CORNER_CONTENT.
+// Hide, Battery, Clock, Book Pg. Count, Chapter Pg. Count, Chapter Counter,
+// Progress %, Time Left in Book, Time Left in Chapter, Book Title, Chapter Title,
+// XTC Status Bar (last — placement sets XTC top/bottom overlay).
+constexpr uint8_t kSlotContentOrder[] = {
+    CrossPointSettings::CORNER_HIDE,
+    CrossPointSettings::CORNER_BATTERY,
+    CrossPointSettings::CORNER_CLOCK,
+    CrossPointSettings::CORNER_BOOK_PAGE_COUNTER,
+    CrossPointSettings::CORNER_CHAPTER_PAGE_COUNTER,
+    CrossPointSettings::CORNER_CHAPTER_COUNTER,
+    CrossPointSettings::CORNER_PROGRESS_PERCENT,
+    CrossPointSettings::CORNER_TIME_LEFT_BOOK,
+    CrossPointSettings::CORNER_TIME_LEFT_CHAPTER,
+    CrossPointSettings::CORNER_BOOK_TITLE,
+    CrossPointSettings::CORNER_CHAPTER_TITLE,
+    CrossPointSettings::CORNER_XTC_STATUS_BAR,
+};
+constexpr int kSlotContentOrderCount = static_cast<int>(sizeof(kSlotContentOrder) / sizeof(kSlotContentOrder[0]));
+
+// Labels for enum values (index = STATUS_BAR_CORNER_CONTENT).
+const StrId kContentLabelByEnum[CrossPointSettings::STATUS_BAR_CORNER_CONTENT_COUNT] = {
+    StrId::STR_HIDE,                    // 0
+    StrId::STR_BATTERY,                 // 1
+    StrId::STR_CHAPTER_PAGE_COUNTER,    // 2
+    StrId::STR_PROGRESS_PERCENTAGE,     // 3
+    StrId::STR_TIME_LEFT_BOOK_OPTION,   // 4
+    StrId::STR_TIME_LEFT_CHAPTER_OPTION,  // 5
+    StrId::STR_CLOCK,                   // 6
+    StrId::STR_BOOK_TITLE,              // 7
+    StrId::STR_BOOK_PAGE_COUNTER,       // 8
+    StrId::STR_CHAPTER_COUNTER,         // 9
+    StrId::STR_CHAPTER_TITLE,           // 10
+    StrId::STR_XTC_STATUS_BAR,          // 11
+};
+
+// Order matches STATUS_BAR_PROGRESS_BAR: Hide, Book, Chapter.
 constexpr int PROGRESS_BAR_ITEMS = 3;
-const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_HIDE, StrId::STR_BOOK, StrId::STR_CHAPTER};
 
 constexpr int PROGRESS_BAR_THICKNESS_ITEMS = 3;
 const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {
     StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK};
 
-constexpr int TITLE_ITEMS = 3;
-const StrId titleNames[TITLE_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+// Order matches BATTERY_DISPLAY_MODE: Icon, Percent, Icon + Percent.
+constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
+const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
+    StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT};
 
-constexpr int XTC_STATUS_BAR_ITEMS = 3;
-const StrId xtcStatusBarNames[XTC_STATUS_BAR_ITEMS] = {StrId::STR_HIDE, StrId::STR_BOTTOM, StrId::STR_TOP};
+// Air between list and preview footer (label band for "Preview").
+const int kPreviewLabelBand = 22;
+// Extra lift above button hints so progress bar / titles do not sit on the footer.
+const int kPreviewAboveHints = 14;
 
-constexpr int STATUS_BAR_CLOCK_ITEMS = 3;
-const StrId statusBarClockNames[STATUS_BAR_CLOCK_ITEMS] = {StrId::STR_HIDE, StrId::STR_DIR_RIGHT, StrId::STR_DIR_LEFT};
+// paddingBottom for drawStatusBar: clear the button-hints strip + a small gap.
+int previewPaddingBottom(const ThemeMetrics& metrics) { return metrics.buttonHintsHeight + kPreviewAboveHints; }
 
-const int verticalPreviewPadding = 50;
-const int verticalPreviewTextPadding = 40;
+int previewReserveHeight(const ThemeMetrics& metrics) {
+  return UITheme::getInstance().getStatusBarHeight() + previewPaddingBottom(metrics) + kPreviewLabelBand;
+}
+
+// Dynamic visible menu: map list index → MenuItem.
+constexpr int kMaxVisible = 16;
+uint8_t gVisibleItems[kMaxVisible];
+int gVisibleCount = 0;
+
+void pushNestedForSlot(uint8_t slotContent) {
+  auto push = [](uint8_t id) {
+    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
+  };
+  if (slotContent == CrossPointSettings::CORNER_BATTERY) {
+    push(ITEM_BATTERY_DISPLAY);
+  }
+}
+
+void rebuildVisibleMenu() {
+  gVisibleCount = 0;
+  auto push = [](uint8_t id) {
+    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
+  };
+  push(ITEM_UPPER_LEFT);
+  pushNestedForSlot(SETTINGS.statusBarUpperLeft);
+  push(ITEM_UPPER_MIDDLE);
+  pushNestedForSlot(SETTINGS.statusBarUpperMiddle);
+  push(ITEM_UPPER_RIGHT);
+  pushNestedForSlot(SETTINGS.statusBarUpperRight);
+  push(ITEM_LOWER_LEFT);
+  pushNestedForSlot(SETTINGS.statusBarLowerLeft);
+  push(ITEM_LOWER_MIDDLE);
+  pushNestedForSlot(SETTINGS.statusBarLowerMiddle);
+  push(ITEM_LOWER_RIGHT);
+  pushNestedForSlot(SETTINGS.statusBarLowerRight);
+  push(ITEM_PROGRESS_BAR);
+  if (SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS) {
+    push(ITEM_PROGRESS_BAR_THICKNESS);
+  }
+}
+
+int itemAt(int listIndex) {
+  if (listIndex < 0 || listIndex >= gVisibleCount) return -1;
+  return gVisibleItems[listIndex];
+}
+
+bool isSlotItem(int item) {
+  return item == ITEM_UPPER_LEFT || item == ITEM_UPPER_MIDDLE || item == ITEM_UPPER_RIGHT ||
+         item == ITEM_LOWER_LEFT || item == ITEM_LOWER_MIDDLE || item == ITEM_LOWER_RIGHT;
+}
+
+uint8_t& cornerFieldForItem(int item) {
+  switch (item) {
+    case ITEM_UPPER_LEFT:
+      return SETTINGS.statusBarUpperLeft;
+    case ITEM_UPPER_MIDDLE:
+      return SETTINGS.statusBarUpperMiddle;
+    case ITEM_UPPER_RIGHT:
+      return SETTINGS.statusBarUpperRight;
+    case ITEM_LOWER_LEFT:
+      return SETTINGS.statusBarLowerLeft;
+    case ITEM_LOWER_MIDDLE:
+      return SETTINGS.statusBarLowerMiddle;
+    case ITEM_LOWER_RIGHT:
+    default:
+      return SETTINGS.statusBarLowerRight;
+  }
+}
+
+const char* cornerContentLabel(uint8_t content) {
+  if (content >= CrossPointSettings::STATUS_BAR_CORNER_CONTENT_COUNT) {
+    content = CrossPointSettings::CORNER_HIDE;
+  }
+  return I18N.get(kContentLabelByEnum[content]);
+}
+
+// Time-left slots need pace samples from stat tracking — hide them when tracking is off.
+bool slotContentAvailable(uint8_t content) {
+  if (!SETTINGS.readingStatsTrackingEnabled()) {
+    if (content == CrossPointSettings::CORNER_TIME_LEFT_BOOK ||
+        content == CrossPointSettings::CORNER_TIME_LEFT_CHAPTER) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void appendAvailableSlotContents(std::vector<uint8_t>& out) {
+  out.clear();
+  out.reserve(kSlotContentOrderCount);
+  for (int i = 0; i < kSlotContentOrderCount; i++) {
+    if (slotContentAvailable(kSlotContentOrder[i])) {
+      out.push_back(kSlotContentOrder[i]);
+    }
+  }
+}
+
+int displayIndexForContent(uint8_t content) {
+  std::vector<uint8_t> opts;
+  appendAvailableSlotContents(opts);
+  for (int i = 0; i < static_cast<int>(opts.size()); i++) {
+    if (opts[i] == content) return i;
+  }
+  // Current value unavailable (e.g. time-left while tracking is off) → select Hide.
+  return 0;
+}
+
+std::vector<std::string> slotOptionLabels() {
+  std::vector<uint8_t> opts;
+  appendAvailableSlotContents(opts);
+  std::vector<std::string> labels;
+  labels.reserve(opts.size());
+  for (uint8_t c : opts) {
+    labels.emplace_back(cornerContentLabel(c));
+  }
+  return labels;
+}
 }  // namespace
 
 void StatusBarSettingsActivity::onEnter() {
   Activity::onEnter();
 
   selectedIndex = 0;
-  visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
 
-  // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
     SETTINGS.statusBarProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
   }
-
-  if (SETTINGS.statusBarTitle >= PROGRESS_BAR_THICKNESS_ITEMS) {
-    SETTINGS.statusBarTitle = CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL;
+  if (SETTINGS.statusBarProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
+    SETTINGS.statusBarProgressBarThickness = CrossPointSettings::PROGRESS_BAR_THIN;
   }
-
-  if (SETTINGS.statusBarTitle >= TITLE_ITEMS) {
-    SETTINGS.statusBarTitle = CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE;
-  }
-
-  if (SETTINGS.xtcStatusBarMode >= XTC_STATUS_BAR_ITEMS) {
-    SETTINGS.xtcStatusBarMode = CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_HIDE;
-  }
-
-  if (SETTINGS.clockUtcOffsetQ > 104) {
-    SETTINGS.clockUtcOffsetQ = 48;  // Default to UTC+0
-  }
-
-  if (SETTINGS.clockFormat >= CLOCK_FORMAT_ITEMS) {
-    SETTINGS.clockFormat = 0;
-  }
-
-  if (SETTINGS.statusBarClock >= STATUS_BAR_CLOCK_ITEMS) {
-    SETTINGS.statusBarClock = CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
-  }
-
+  rebuildVisibleMenu();
+  visibleItemCount = gVisibleCount;
+  if (selectedIndex >= visibleItemCount) selectedIndex = 0;
   requestUpdate();
 }
 
@@ -127,10 +254,18 @@ void StatusBarSettingsActivity::onExit() { Activity::onExit(); }
 void StatusBarSettingsActivity::loop() {
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
 
+  rebuildVisibleMenu();
+  visibleItemCount = gVisibleCount;
+  if (selectedIndex >= visibleItemCount) selectedIndex = std::max(0, visibleItemCount - 1);
+
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight =
-      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  // Compact title band (not full Settings headerHeight — that left too little list room on X3).
+  const int topChromeBottom =
+      metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
+  const int titleLineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int contentTop = topChromeBottom + titleLineH + 12;
+  const int hintsTop = renderer.getScreenHeight() - metrics.buttonHintsHeight;
+  const int contentHeight = std::max(40, hintsTop - contentTop - previewReserveHeight(metrics));
   switch (handleListTouch(selectedIndex, visibleItemCount, contentTop, contentHeight, false)) {
     case ListTouchResult::Activated:
       handleSelection();
@@ -153,22 +288,18 @@ void StatusBarSettingsActivity::loop() {
     return;
   }
 
-  // Handle navigation
   buttonNavigator.onNextRelease([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
-
   buttonNavigator.onPreviousRelease([this] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
-
   buttonNavigator.onNextContinuous([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, visibleItemCount);
     requestUpdate();
   });
-
   buttonNavigator.onPreviousContinuous([this] {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, visibleItemCount);
     requestUpdate();
@@ -176,18 +307,44 @@ void StatusBarSettingsActivity::loop() {
 }
 
 void StatusBarSettingsActivity::handleSelection() {
-  switch (selectedIndex) {
-    case ITEM_CHAPTER_PAGE_COUNT:
-      SETTINGS.statusBarChapterPageCount = (SETTINGS.statusBarChapterPageCount + 1) % 2;
-      break;
-    case ITEM_BOOK_PROGRESS_PERCENTAGE:
-      SETTINGS.statusBarBookProgressPercentage = (SETTINGS.statusBarBookProgressPercentage + 1) % 2;
-      break;
+  const int item = itemAt(selectedIndex);
+  if (isSlotItem(item)) {
+    const int cornerItem = item;
+    uint8_t& field = cornerFieldForItem(cornerItem);
+    const int currentDisplay = displayIndexForContent(field);
+    optionPopup.show(menuNameForItem(cornerItem), slotOptionLabels(), currentDisplay, [this, cornerItem](int idx) {
+      std::vector<uint8_t> opts;
+      appendAvailableSlotContents(opts);
+      if (idx < 0 || idx >= static_cast<int>(opts.size())) return;
+      SETTINGS.assignStatusBarCorner(cornerFieldForItem(cornerItem), opts[static_cast<size_t>(idx)]);
+      SETTINGS.saveToFile();
+      rebuildVisibleMenu();
+      visibleItemCount = gVisibleCount;
+      if (selectedIndex >= visibleItemCount) selectedIndex = std::max(0, visibleItemCount - 1);
+    });
+    return;
+  }
+
+  switch (item) {
+    case ITEM_BATTERY_DISPLAY: {
+      const uint8_t cur =
+          SETTINGS.readerBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.readerBatteryDisplay : 0;
+      optionPopup.show(StrId::STR_BATTERY_DISPLAY, batteryDisplayNames, BATTERY_DISPLAY_ITEMS, cur,
+                       [this](int idx) {
+                         if (idx < 0 || idx >= BATTERY_DISPLAY_ITEMS) return;
+                         SETTINGS.readerBatteryDisplay = static_cast<uint8_t>(idx);
+                         SETTINGS.saveToFile();
+                       });
+      return;
+    }
     case ITEM_PROGRESS_BAR:
       optionPopup.show(StrId::STR_PROGRESS_BAR, progressBarNames, PROGRESS_BAR_ITEMS, SETTINGS.statusBarProgressBar,
                        [this](int idx) {
                          SETTINGS.statusBarProgressBar = idx;
                          SETTINGS.saveToFile();
+                         rebuildVisibleMenu();
+                         visibleItemCount = gVisibleCount;
+                         if (selectedIndex >= visibleItemCount) selectedIndex = visibleItemCount - 1;
                        });
       return;
     case ITEM_PROGRESS_BAR_THICKNESS:
@@ -197,43 +354,17 @@ void StatusBarSettingsActivity::handleSelection() {
                          SETTINGS.saveToFile();
                        });
       return;
-    case ITEM_TITLE:
-      optionPopup.show(StrId::STR_TITLE, titleNames, TITLE_ITEMS, SETTINGS.statusBarTitle, [this](int idx) {
-        SETTINGS.statusBarTitle = idx;
-        SETTINGS.saveToFile();
-      });
-      return;
-    case ITEM_BATTERY:
-      SETTINGS.statusBarBattery = (SETTINGS.statusBarBattery + 1) % 2;
-      break;
-    case ITEM_XTC_STATUS_BAR:
-      optionPopup.show(StrId::STR_XTC_STATUS_BAR, xtcStatusBarNames, XTC_STATUS_BAR_ITEMS, SETTINGS.xtcStatusBarMode,
-                       [this](int idx) {
-                         SETTINGS.xtcStatusBarMode = idx;
-                         SETTINGS.saveToFile();
-                       });
-      return;
-    case ITEM_CLOCK:
-      SETTINGS.statusBarClock = (SETTINGS.statusBarClock + 1) % STATUS_BAR_CLOCK_ITEMS;
-      break;
-    case ITEM_CLOCK_FORMAT:
-      SETTINGS.clockFormat = (SETTINGS.clockFormat + 1) % CLOCK_FORMAT_ITEMS;
-      break;
-    case ITEM_CLOCK_UTC_OFFSET:
-      // Launch the dedicated offset picker. It saves on exit, no result handler needed.
-      startActivityForResult(std::make_unique<ClockOffsetActivity>(renderer, mappedInput), nullptr);
-      return;
-    case ITEM_CLOCK_SYNC:
-      startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), nullptr);
-      return;
     default:
       return;
   }
-  SETTINGS.saveToFile();
 }
 
 void StatusBarSettingsActivity::render(RenderLock&&) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
+
+  rebuildVisibleMenu();
+  visibleItemCount = gVisibleCount;
+  if (selectedIndex >= visibleItemCount) selectedIndex = std::max(0, visibleItemCount - 1);
 
   renderer.clearScreen();
 
@@ -241,62 +372,98 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_CUSTOMISE_STATUS_BAR));
+  // Title only — do not use drawHeader (system chrome would ghost under the
+  // six-slot preview when Upper Left is Hide). Compact band under top chrome.
+  const int topChromeBottom =
+      metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
+  const int titleLineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int contentTop = topChromeBottom + titleLineH + 12;
+  {
+    const char* headerTitle = tr(STR_CUSTOMISE_STATUS_BAR);
+    const int titleY = topChromeBottom + 4;
+    renderer.drawCenteredText(UI_12_FONT_ID, titleY, headerTitle, true, EpdFontFamily::BOLD);
+  }
+  const int hintsTop = pageHeight - metrics.buttonHintsHeight;
+  // List stays above the bottom status-bar preview + "Preview" label.
+  const int verticalPreviewPad = previewPaddingBottom(metrics);
+  const int contentHeight = std::max(40, hintsTop - contentTop - previewReserveHeight(metrics));
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  // drawList pages when itemCount > rows that fit; Lyra draws a scroll bar.
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount, static_cast<int>(selectedIndex),
-      [](int index) { return std::string(I18N.get(menuNames[index])); }, nullptr, nullptr,
+      [](int index) {
+        const int item = itemAt(index);
+        if (item < 0) return std::string();
+        return std::string(I18N.get(menuNameForItem(item)));
+      },
+      nullptr, nullptr,
       [](int index) -> std::string {
-        switch (index) {
-          case ITEM_CHAPTER_PAGE_COUNT:
-            return SETTINGS.statusBarChapterPageCount ? tr(STR_SHOW) : tr(STR_HIDE);
-          case ITEM_BOOK_PROGRESS_PERCENTAGE:
-            return SETTINGS.statusBarBookProgressPercentage ? tr(STR_SHOW) : tr(STR_HIDE);
+        switch (itemAt(index)) {
+          case ITEM_UPPER_LEFT:
+            return cornerContentLabel(SETTINGS.statusBarUpperLeft);
+          case ITEM_UPPER_MIDDLE:
+            return cornerContentLabel(SETTINGS.statusBarUpperMiddle);
+          case ITEM_UPPER_RIGHT:
+            return cornerContentLabel(SETTINGS.statusBarUpperRight);
+          case ITEM_LOWER_LEFT:
+            return cornerContentLabel(SETTINGS.statusBarLowerLeft);
+          case ITEM_LOWER_MIDDLE:
+            return cornerContentLabel(SETTINGS.statusBarLowerMiddle);
+          case ITEM_LOWER_RIGHT:
+            return cornerContentLabel(SETTINGS.statusBarLowerRight);
+          case ITEM_BATTERY_DISPLAY: {
+            const uint8_t mode =
+                SETTINGS.readerBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.readerBatteryDisplay : 0;
+            return std::string(I18N.get(batteryDisplayNames[mode]));
+          }
           case ITEM_PROGRESS_BAR:
-            return I18N.get(progressBarNames[SETTINGS.statusBarProgressBar]);
+            return I18N.get(progressBarNames[SETTINGS.statusBarProgressBar < PROGRESS_BAR_ITEMS
+                                                 ? SETTINGS.statusBarProgressBar
+                                                 : 0]);
           case ITEM_PROGRESS_BAR_THICKNESS:
             return I18N.get(progressBarThicknessNames[SETTINGS.statusBarProgressBarThickness]);
-          case ITEM_TITLE:
-            return I18N.get(titleNames[SETTINGS.statusBarTitle]);
-          case ITEM_BATTERY:
-            return SETTINGS.statusBarBattery ? tr(STR_SHOW) : tr(STR_HIDE);
-          case ITEM_XTC_STATUS_BAR:
-            return I18N.get(xtcStatusBarNames[SETTINGS.xtcStatusBarMode]);
-          case ITEM_CLOCK:
-            return I18N.get(statusBarClockNames[SETTINGS.statusBarClock]);
-          case ITEM_CLOCK_FORMAT: {
-            const uint8_t fmt = SETTINGS.clockFormat < CLOCK_FORMAT_ITEMS ? SETTINGS.clockFormat : 0;
-            return std::string(I18N.get(clockFormatNames[fmt]));
-          }
-          case ITEM_CLOCK_UTC_OFFSET:
-            return formatUtcOffset(SETTINGS.clockUtcOffsetQ);
-          case ITEM_CLOCK_SYNC:
-            return SETTINGS.clockHasBeenSynced ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
           default:
-            return tr(STR_HIDE);
+            return "";
         }
       },
       true);
 
-  // Draw button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  std::string title;
-  if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
-    title = tr(STR_EXAMPLE_BOOK);
-  } else if (SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
-    title = tr(STR_EXAMPLE_CHAPTER);
+  const auto sb = SETTINGS.statusBarSpec();
+  std::string bookTitle = sb.wantsBookTitle ? tr(STR_EXAMPLE_BOOK) : "";
+  std::string chapterTitle = sb.wantsChapterTitle ? tr(STR_EXAMPLE_CHAPTER) : "";
+
+  char bookTl[32];
+  char chapTl[32];
+  snprintf(bookTl, sizeof(bookTl), "12m %s", tr(STR_TIME_LEFT_IN_BOOK));
+  snprintf(chapTl, sizeof(chapTl), "5m %s", tr(STR_TIME_LEFT_IN_CHAPTER));
+  const char* bookPtr = sb.wantsTimeLeftBook ? bookTl : nullptr;
+  const char* chapPtr = sb.wantsTimeLeftChapter ? chapTl : nullptr;
+
+  // Preview ignores Display → Battery Hide so corner slots set to Battery still
+  // render (real reader chrome continues to honor the master Battery setting).
+  // verticalPreviewPad lifts chrome above the button-hint strip.
+  GUI.drawStatusBar(renderer, 75, 8, 32, bookTitle, verticalPreviewPad, 0, false, false, false, bookPtr, chapPtr,
+                    /*drawTopBattery=*/true, /*bookPage=*/120, /*bookPageCount=*/480, /*bookPageCountEstimated=*/true,
+                    /*chapterIndex=*/5, /*chapterTotal=*/40, chapterTitle,
+                    /*previewIgnoreBatteryMasterHide=*/true);
+
+  // "Preview" label in the reserved band between list and footer chrome.
+  {
+    const int bandTop = contentTop + contentHeight;
+    const int bandBottom = hintsTop - UITheme::getInstance().getStatusBarHeight() - verticalPreviewPad;
+    const char* previewLabel = tr(STR_PREVIEW);
+    const int textW = renderer.getTextWidth(UI_10_FONT_ID, previewLabel);
+    const int textH = renderer.getLineHeight(UI_10_FONT_ID);
+    const int bandH = bandBottom - bandTop;
+    if (bandH > textH + 2) {
+      const int textX = (pageWidth - textW) / 2;
+      const int textY = bandTop + (bandH - textH) / 2;
+      renderer.drawText(UI_10_FONT_ID, textX, textY, previewLabel);
+    }
   }
-
-  GUI.drawStatusBar(renderer, 75, 8, 32, title, verticalPreviewPadding, 0, false);
-
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding,
-                    renderer.getScreenHeight() - UITheme::getInstance().getStatusBarHeight() - verticalPreviewPadding -
-                        verticalPreviewTextPadding,
-                    tr(STR_PREVIEW));
 
   renderer.displayBuffer();
 }

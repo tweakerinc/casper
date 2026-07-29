@@ -49,6 +49,16 @@ class OptionPopup {
     active = true;
   }
 
+  void show(const char* titleStr, const std::vector<std::string>& options, int currentIndex,
+            std::function<void(int)> onSelect) {
+    title = titleStr ? titleStr : "";
+    ownedStrings = options;
+    selectedIndex = currentIndex;
+    onSelectCallback = std::move(onSelect);
+    layoutValid = false;
+    active = true;
+  }
+
   bool handleInput(MappedInputManager& input, const std::function<void()>& requestUpdate) {
     if (!active) return false;
 
@@ -61,6 +71,7 @@ class OptionPopup {
         if (contains(hitLayout.options[i], tx, ty)) {
           if (selectedIndex != i) {
             selectedIndex = i;
+            layoutValid = false;
             requestUpdate();
           }
           break;
@@ -88,11 +99,13 @@ class OptionPopup {
 
     if (input.wasPressed(MappedInputManager::Button::Up) || input.wasPressed(MappedInputManager::Button::Left)) {
       selectedIndex = (selectedIndex - 1 + count) % count;
+      layoutValid = false;  // scroll window may move with selection
       requestUpdate();
       return true;
     } else if (input.wasPressed(MappedInputManager::Button::Down) ||
                input.wasPressed(MappedInputManager::Button::Right)) {
       selectedIndex = (selectedIndex + 1) % count;
+      layoutValid = false;
       requestUpdate();
       return true;
     } else if (input.wasPressed(MappedInputManager::Button::Confirm)) {
@@ -150,6 +163,7 @@ class OptionPopup {
     const int optionLineHeight = renderer.getLineHeight(optionFontId);
     const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
     const int rowHeight = optionLineHeight + selectionVPadding * 2;
+    const int rowStep = rowHeight + itemSpacing;
 
     int maxTextWidth = renderer.getTextWidth(UI_12_FONT_ID, title.c_str(), EpdFontFamily::BOLD);
     for (const auto& opt : ownedStrings) {
@@ -158,22 +172,51 @@ class OptionPopup {
     }
 
     const int optionCount = static_cast<int>(ownedStrings.size());
-    const int listHeight = rowHeight * optionCount + itemSpacing * (optionCount - 1);
+    const int topMargin = 8;
+    const int bottomMargin = metrics.buttonHintsHeight + 8;
+    const int maxDialogH = std::max(rowHeight + innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap,
+                                    pageHeight - topMargin - bottomMargin);
+    const int chromeH = innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap;
+    const int maxListH = std::max(rowHeight, maxDialogH - chromeH);
+    int visibleCount = optionCount;
+    if (rowStep > 0) {
+      visibleCount = std::max(1, (maxListH + itemSpacing) / rowStep);
+    }
+    if (visibleCount > optionCount) visibleCount = optionCount;
+
+    int firstVisible = 0;
+    if (optionCount > visibleCount) {
+      firstVisible = selectedIndex - (visibleCount - 1) / 2;
+      if (firstVisible < 0) firstVisible = 0;
+      if (firstVisible > optionCount - visibleCount) firstVisible = optionCount - visibleCount;
+    }
+
+    const int listHeight = visibleCount > 0
+                               ? rowHeight * visibleCount + itemSpacing * std::max(0, visibleCount - 1)
+                               : 0;
     const int dialogW = std::min((maxTextWidth + innerPadding * 2 + selectionHPadding * 2) * 12 / 10,
                                  pageWidth - metrics.optionPopupDialogSideMargin * 2);
     const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + listHeight;
-    const int dialogH = contentHeight + innerPadding * 2;
+    const int dialogH = std::min(contentHeight + innerPadding * 2, maxDialogH);
     const int dialogX = (pageWidth - dialogW) / 2;
-    const int dialogY = (pageHeight - dialogH) / 2;
+    const int availH = pageHeight - topMargin - bottomMargin;
+    const int dialogY = topMargin + std::max(0, (availH - dialogH) / 2);
+    const bool showScroll = optionCount > visibleCount;
+    constexpr int kScrollReserve = 10;
     const int itemRectX = dialogX + innerPadding;
-    const int itemRectW = dialogW - innerPadding * 2;
+    const int itemRectW = dialogW - innerPadding * 2 - (showScroll ? kScrollReserve : 0);
     const int firstItemY = dialogY + innerPadding + titleLineHeight + metrics.optionPopupTitleGap;
 
     layout.dialog = Rect{dialogX, dialogY, dialogW, dialogH};
     layout.options.clear();
-    layout.options.reserve(optionCount);
+    layout.options.resize(optionCount);
     for (int i = 0; i < optionCount; i++) {
-      layout.options.push_back(Rect{itemRectX, firstItemY + i * (rowHeight + itemSpacing), itemRectW, rowHeight});
+      if (i >= firstVisible && i < firstVisible + visibleCount) {
+        const int vis = i - firstVisible;
+        layout.options[i] = Rect{itemRectX, firstItemY + vis * rowStep, itemRectW, rowHeight};
+      } else {
+        layout.options[i] = Rect{0, 0, 0, 0};
+      }
     }
     layoutValid = true;
     return layout;

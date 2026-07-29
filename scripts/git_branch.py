@@ -63,17 +63,27 @@ def get_git_short_sha(project_dir):
     )
 
 
-def get_base_version(project_dir):
+def _read_ini(project_dir):
     ini_path = os.path.join(project_dir, 'platformio.ini')
     if not os.path.isfile(ini_path):
-        warn(f'platformio.ini not found at {ini_path}; base version will be "0.0.0"')
-        return '0.0.0'
+        return None, ini_path
     config = configparser.ConfigParser()
     config.read(ini_path)
-    if not config.has_option('crosspoint', 'version'):
-        warn('No [crosspoint] version in platformio.ini; base version will be "0.0.0"')
+    return config, ini_path
+
+
+def get_base_version(project_dir):
+    """Prefer [casper] version (Casper product), then legacy [crosspoint]."""
+    config, ini_path = _read_ini(project_dir)
+    if config is None:
+        warn(f'platformio.ini not found at {ini_path}; base version will be "0.0.0"')
         return '0.0.0'
-    return config.get('crosspoint', 'version')
+    if config.has_option('casper', 'version'):
+        return config.get('casper', 'version')
+    if config.has_option('crosspoint', 'version'):
+        return config.get('crosspoint', 'version')
+    warn('No [casper]/[crosspoint] version in platformio.ini; base version will be "0.0.0"')
+    return '0.0.0'
 
 
 def inject_version(env):
@@ -84,12 +94,31 @@ def inject_version(env):
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
-    branch = get_git_branch(project_dir)
-    short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
+    # Casper product builds: inject clean product version as-is (e.g. "v0.1.2"),
+    # no -dev-branch-sha suffix. Upstream CrossPoint keeps the long dev stamp.
+    product = ''
+    config, _ = _read_ini(project_dir)
+    if config is not None:
+        if config.has_option('casper', 'product'):
+            product = config.get('casper', 'product')
+        elif config.has_option('crosspoint', 'product'):
+            product = config.get('crosspoint', 'product')
+    is_casper = product.lower() == 'casper' or base_version.startswith('casper') or (
+        base_version.startswith('v') and len(base_version) > 1 and base_version[1].isdigit()
+    )
+    if is_casper:
+        version_string = base_version
+    else:
+        branch = get_git_branch(project_dir)
+        short_sha = get_git_short_sha(project_dir)
+        version_string = f'{base_version}-dev-{branch}-{short_sha}'
 
-    env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
-    print(f'CrossPoint build version: {version_string}')
+    # Both macros so Boot/Settings/OTA see the same clean string.
+    env.Append(CPPDEFINES=[
+        ('CASPER_VERSION', f'\\"{version_string}\\"'),
+        ('CROSSPOINT_VERSION', f'\\"{version_string}\\"'),
+    ])
+    print(f'Casper build version: {version_string}')
 
 
 # PlatformIO/SCons entry point — Import and env are SCons builtins injected at runtime.

@@ -9,6 +9,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include "FontCacheManager.h"
 
@@ -1140,68 +1141,58 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
 void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, const int height, const int cornerRadius,
                                   bool roundTopLeft, bool roundTopRight, bool roundBottomLeft, bool roundBottomRight,
                                   const Color color) const {
-  if (width <= 0 || height <= 0) {
+  if (width <= 0 || height <= 0 || color == Color::Clear) {
     return;
   }
 
-  // Assume if we're not rounding all corners then we are only rounding one side
-  const int roundedSides = (!roundTopLeft || !roundTopRight || !roundBottomLeft || !roundBottomRight) ? 1 : 2;
-  const int maxRadius = std::min({cornerRadius, width / roundedSides, height / roundedSides});
-  if (maxRadius <= 0) {
+  // Cap radius so a circle fits in both axes — same limit for every corner so
+  // left/right and top/bottom stay mirror images.
+  const int r = std::min({cornerRadius, width / 2, height / 2});
+  if (r <= 0) {
     fillRectDither(x, y, width, height, color);
     return;
   }
 
-  const int horizontalWidth = width - 2 * maxRadius;
-  if (horizontalWidth > 0) {
-    fillRectDither(x + maxRadius + 1, y, horizontalWidth - 2, height, color);
-  }
-
-  const int leftFillTop = y + (roundTopLeft ? (maxRadius + 1) : 0);
-  const int leftFillBottom = y + height - 1 - (roundBottomLeft ? (maxRadius + 1) : 0);
-  if (leftFillBottom >= leftFillTop) {
-    fillRectDither(x, leftFillTop, maxRadius + 1, leftFillBottom - leftFillTop + 1, color);
-  }
-
-  const int rightFillTop = y + (roundTopRight ? (maxRadius + 1) : 0);
-  const int rightFillBottom = y + height - 1 - (roundBottomRight ? (maxRadius + 1) : 0);
-  if (rightFillBottom >= rightFillTop) {
-    fillRectDither(x + width - maxRadius - 1, rightFillTop, maxRadius + 1, rightFillBottom - rightFillTop + 1, color);
-  }
-
-  auto fillArcTemplated = [this](int maxRadius, int cx, int cy, int xDir, int yDir, Color color) {
-    switch (color) {
-      case Color::Clear:
-        break;
-      case Color::Black:
-        fillArc<Color::Black>(maxRadius, cx, cy, xDir, yDir);
-        break;
-      case Color::White:
-        fillArc<Color::White>(maxRadius, cx, cy, xDir, yDir);
-        break;
-      case Color::LightGray:
-        fillArc<Color::LightGray>(maxRadius, cx, cy, xDir, yDir);
-        break;
-      case Color::DarkGray:
-        fillArc<Color::DarkGray>(maxRadius, cx, cy, xDir, yDir);
-        break;
+  // Scanline fill: each row uses the same quarter-circle inset math on both
+  // ends. The old path (center rect + side strips + fillArc) had off-by-ones
+  // that made bottom/right corners look different from top-left on dithered
+  // greys (list selection pills).
+  const int r2 = r * r;
+  auto cornerInset = [r, r2](const int t) -> int {
+    // t = distance from outer edge (0 = top/bottom tip row).
+    // Corner circle center is `r` px in from that edge; chord half-width is
+    // sqrt(r^2 - (r-t)^2), so left/right inset is r - half.
+    const int dy = r - t;
+    const int rest = r2 - dy * dy;
+    if (rest <= 0) {
+      return r;  // tip row: only the flat middle between the two centers
     }
+    int half = 0;
+    // Integer sqrt (rest is small: r <= ~screen/2).
+    while ((half + 1) * (half + 1) <= rest) {
+      ++half;
+    }
+    return r - half;
   };
 
-  if (roundTopLeft) {
-    fillArcTemplated(maxRadius, x + maxRadius, y + maxRadius, -1, -1, color);
-  }
+  for (int row = 0; row < height; ++row) {
+    int leftInset = 0;
+    int rightInset = 0;
 
-  if (roundTopRight) {
-    fillArcTemplated(maxRadius, x + width - maxRadius - 1, y + maxRadius, 1, -1, color);
-  }
+    if (row < r) {
+      const int inset = cornerInset(row);
+      if (roundTopLeft) leftInset = inset;
+      if (roundTopRight) rightInset = inset;
+    } else if (row >= height - r) {
+      const int inset = cornerInset(height - 1 - row);
+      if (roundBottomLeft) leftInset = inset;
+      if (roundBottomRight) rightInset = inset;
+    }
 
-  if (roundBottomRight) {
-    fillArcTemplated(maxRadius, x + width - maxRadius - 1, y + height - maxRadius - 1, 1, 1, color);
-  }
-
-  if (roundBottomLeft) {
-    fillArcTemplated(maxRadius, x + maxRadius, y + height - maxRadius - 1, -1, 1, color);
+    const int span = width - leftInset - rightInset;
+    if (span > 0) {
+      fillRectDither(x + leftInset, y + row, span, 1, color);
+    }
   }
 }
 
@@ -1228,7 +1219,7 @@ void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, co
   display.drawImage(bitmap, rotatedX, rotatedY, width, height);
 }
 
-void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size) const {
+void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size, const bool black) const {
   // Plot the icon pixel-by-pixel through drawPixel (which applies the orientation
   // transform) instead of the byte-aligned framebuffer blit. The blit snaps the
   // icon's position to 8px (one byte) along the rotated axis, which prevents it
@@ -1242,7 +1233,7 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
       const uint8_t byte = bitmap[row * rowBytes + (col >> 3)];
       const bool ink = ((byte >> (7 - (col & 7))) & 1) == 0;
       if (ink) {
-        drawPixel(x + (size - 1 - row), y + col, true);
+        drawPixel(x + (size - 1 - row), y + col, black);
       }
     }
   }
@@ -1342,6 +1333,8 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
+      // BW: solid ink for non-white (base plane of grayscale multipass).
+      // GRAYSCALE_*: real 4-level gray via LSB/MSB planes (sleep / home cover multipass).
       if (renderMode == BW && val < 3) {
         drawPixel(screenX, screenY);
       } else if (renderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
@@ -1423,6 +1416,124 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 
   free(outputRow);
   free(rowBytes);
+}
+
+void GfxRenderer::drawBitmap1BitCoverFill(const Bitmap& bitmap, const int x, const int y, const int width,
+                                          const int height) const {
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+  if (!bitmap.is1Bit() || width <= 0 || height <= 0) return;
+
+  const int bw = bitmap.getWidth();
+  const int bh = bitmap.getHeight();
+  if (bw <= 0 || bh <= 0) return;
+
+  // Cover-fill: scale the *whole* thumb so the frame is full, cropping only the
+  // overflow on the long axis. Do NOT 1:1 center-crop oversized thumbs — that
+  // zoomed into a small window of a 520px BMP and cut off most of the jacket.
+  //
+  // Cap scale at 1.0 (no 1-bit upscale). Thumbs are already Atkinson-dithered.
+  float scale = std::max(static_cast<float>(width) / static_cast<float>(bw),
+                         static_cast<float>(height) / static_cast<float>(bh));
+  if (scale > 1.0f) scale = 1.0f;
+
+  const int scaledW = std::max(1, static_cast<int>(std::floor(static_cast<float>(bw) * scale)));
+  const int scaledH = std::max(1, static_cast<int>(std::floor(static_cast<float>(bh) * scale)));
+  // When scale == 1 and thumb is larger than the frame, center-crop the excess
+  // (same visual as cover-fill at 1:1, but only the overflow is discarded).
+  const int originX = x + (width - scaledW) / 2;
+  const int originY = y + (height - scaledH) / 2;
+  // Source window when scale==1 and thumb bigger: center crop into dest.
+  const int srcOx = (scale >= 0.999f && bw > width) ? (bw - width) / 2 : 0;
+  const int srcOy = (scale >= 0.999f && bh > height) ? (bh - height) / 2 : 0;
+  const int srcDrawW = (scale >= 0.999f && bw > width) ? width : bw;
+  const int srcDrawH = (scale >= 0.999f && bh > height) ? height : bh;
+
+  const int clipL = x;
+  const int clipT = y;
+  const int clipR = x + width;
+  const int clipB = y + height;
+
+  const int rowPacked = (bw + 3) / 4;
+  const size_t planeBytes = static_cast<size_t>(rowPacked) * static_cast<size_t>(bh);
+  auto* plane = static_cast<uint8_t*>(malloc(planeBytes));
+  auto* outputRow = static_cast<uint8_t*>(malloc(rowPacked));
+  auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
+  if (!plane || !outputRow || !rowBytes) {
+    LOG_ERR("GFX", "!! Failed to allocate 1-bit cover-fill buffers");
+    free(plane);
+    free(outputRow);
+    free(rowBytes);
+    return;
+  }
+
+  for (int bmpY = 0; bmpY < bh; bmpY++) {
+    if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+      LOG_ERR("GFX", "Failed to read row %d from 1-bit cover-fill bitmap", bmpY);
+      free(plane);
+      free(outputRow);
+      free(rowBytes);
+      return;
+    }
+    const int destRow = bitmap.isTopDown() ? bmpY : bh - 1 - bmpY;
+    memcpy(plane + static_cast<size_t>(destRow) * static_cast<size_t>(rowPacked), outputRow,
+           static_cast<size_t>(rowPacked));
+  }
+  free(outputRow);
+  free(rowBytes);
+
+  auto sampleInk = [&](int sx, int sy) -> bool {
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx >= bw) sx = bw - 1;
+    if (sy >= bh) sy = bh - 1;
+    const uint8_t packed =
+        plane[static_cast<size_t>(sy) * static_cast<size_t>(rowPacked) + static_cast<size_t>(sx / 4)];
+    const uint8_t val = static_cast<uint8_t>((packed >> (6 - ((sx * 2) % 8))) & 0x3);
+    return val < 3;
+  };
+
+  // Near-native: stream 1:1 from a centered source window (sharp, minimal crop).
+  if (scale >= 0.999f) {
+    const int drawW = std::min(srcDrawW, width);
+    const int drawH = std::min(srcDrawH, height);
+    const int dstX0 = x + (width - drawW) / 2;
+    const int dstY0 = y + (height - drawH) / 2;
+    for (int dy = 0; dy < drawH; ++dy) {
+      const int screenY = dstY0 + dy;
+      if (screenY < clipT || screenY >= clipB || screenY < 0 || screenY >= getScreenHeight()) continue;
+      const int sy = srcOy + dy;
+      for (int dx = 0; dx < drawW; ++dx) {
+        const int screenX = dstX0 + dx;
+        if (screenX < clipL || screenX >= clipR || screenX < 0 || screenX >= getScreenWidth()) continue;
+        if (sampleInk(srcOx + dx, sy)) {
+          drawPixel(screenX, screenY, true);
+        }
+      }
+    }
+    free(plane);
+    return;
+  }
+
+  // Downscale cover-fill: map every dest pixel back into the full source so the
+  // whole jacket is represented (only aspect overflow is cropped).
+  const float invScale = 1.0f / scale;
+  for (int screenY = clipT; screenY < clipB; ++screenY) {
+    if (screenY < 0 || screenY >= getScreenHeight()) continue;
+    const int relY = screenY - originY;
+    if (relY < 0 || relY >= scaledH) continue;
+    const int srcY = static_cast<int>((static_cast<float>(relY) + 0.5f) * invScale);
+    for (int screenX = clipL; screenX < clipR; ++screenX) {
+      if (screenX < 0 || screenX >= getScreenWidth()) continue;
+      const int relX = screenX - originX;
+      if (relX < 0 || relX >= scaledW) continue;
+      const int srcX = static_cast<int>((static_cast<float>(relX) + 0.5f) * invScale);
+      if (sampleInk(srcX, srcY)) {
+        drawPixel(screenX, screenY, true);
+      }
+    }
+  }
+
+  free(plane);
 }
 
 void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state) const {

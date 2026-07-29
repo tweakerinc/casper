@@ -1,14 +1,108 @@
 #include "HalStorage.h"
 
+#include <Arduino.h>
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
+#include <HalClock.h>
 #include <Logging.h>
 #include <SDCardManager.h>
+#include <SdFat.h>
 
 #include <cassert>
 
 #define SDCard SDCardManager::getInstance()
 
 HalStorage HalStorage::instance;
+
+namespace {
+// FAT timestamps require a valid year; used only if the RTC is missing/invalid.
+constexpr uint16_t kFallbackYear = 2024;
+constexpr uint8_t kFallbackMonth = 1;
+constexpr uint8_t kFallbackDay = 1;
+constexpr uint8_t kFallbackHour = 0;
+constexpr uint8_t kFallbackMinute = 0;
+const uint8_t* clockUtcOffsetQ = nullptr;
+
+bool isLeapYear(const uint16_t year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
+
+uint8_t daysInMonth(const uint16_t year, const uint8_t month) {
+  static const uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month < 1 || month > 12) return 0;
+  if (month == 2 && isLeapYear(year)) return 29;
+  return days[month - 1];
+}
+
+bool isValidFatDateTime(const uint16_t year, const uint8_t month, const uint8_t day, const uint8_t hour,
+                        const uint8_t minute) {
+  if (year < 1980 || year > 2107 || hour > 23 || minute > 59) return false;
+  const uint8_t monthDays = daysInMonth(year, month);
+  return monthDays > 0 && day >= 1 && day <= monthDays;
+}
+
+void adjustDateByDays(uint16_t& year, uint8_t& month, uint8_t& day, const int dayDelta) {
+  if (dayDelta > 0) {
+    const uint8_t monthDays = daysInMonth(year, month);
+    if (day < monthDays) {
+      day++;
+      return;
+    }
+    day = 1;
+    if (month < 12) {
+      month++;
+    } else {
+      month = 1;
+      year++;
+    }
+  } else if (dayDelta < 0) {
+    if (day > 1) {
+      day--;
+      return;
+    }
+    if (month > 1) {
+      month--;
+    } else {
+      month = 12;
+      year--;
+    }
+    day = daysInMonth(year, month);
+  }
+}
+
+void setPackedFatDateTime(uint16_t* date, uint16_t* time, const uint16_t year, const uint8_t month, const uint8_t day,
+                          const uint8_t hour, const uint8_t minute) {
+  *date = FS_DATE(year, month, day);
+  *time = FS_TIME(hour, minute, 0);
+}
+
+void storageDateTimeCallback(uint16_t* date, uint16_t* time) {
+  uint16_t year = kFallbackYear;
+  uint8_t month = kFallbackMonth;
+  uint8_t day = kFallbackDay;
+  uint8_t hour = kFallbackHour;
+  uint8_t minute = kFallbackMinute;
+
+  if (halClock.getDateTime(year, month, day, hour, minute) && isValidFatDateTime(year, month, day, hour, minute)) {
+    const uint8_t configuredOffsetQ = clockUtcOffsetQ ? *clockUtcOffsetQ : 48;
+    const uint8_t offsetQ = configuredOffsetQ > 104 ? 104 : configuredOffsetQ;
+    const int offsetQuarterHours = static_cast<int>(offsetQ) - 48;
+    int localMinutes = static_cast<int>(hour) * 60 + static_cast<int>(minute) + offsetQuarterHours * 15;
+    const int dayDelta = localMinutes < 0 ? -1 : (localMinutes >= 1440 ? 1 : 0);
+    localMinutes = ((localMinutes % 1440) + 1440) % 1440;
+    adjustDateByDays(year, month, day, dayDelta);
+    hour = static_cast<uint8_t>(localMinutes / 60);
+    minute = static_cast<uint8_t>(localMinutes % 60);
+  }
+
+  if (!isValidFatDateTime(year, month, day, hour, minute)) {
+    year = kFallbackYear;
+    month = kFallbackMonth;
+    day = kFallbackDay;
+    hour = kFallbackHour;
+    minute = kFallbackMinute;
+  }
+
+  setPackedFatDateTime(date, time, year, month, day, hour, minute);
+}
+}  // namespace
 
 HalStorage::HalStorage() {
   // Recursive so the same task can re-enter StorageLock without self-deadlock.
@@ -58,6 +152,17 @@ bool HalStorage::writeFile(const char* path, const String& content) {
 }
 
 bool HalStorage::ensureDirectoryExists(const char* path) { HAL_STORAGE_WRAPPED_CALL(ensureDirectoryExists, path); }
+
+void HalStorage::installDateTimeCallback(const uint8_t* utcOffsetQuarterHoursBiased) {
+  if (!halClock.isAvailable()) {
+    LOG_DBG("SD", "No RTC — SD timestamps use fallback %u-%02u-%02u", static_cast<unsigned>(kFallbackYear),
+            static_cast<unsigned>(kFallbackMonth), static_cast<unsigned>(kFallbackDay));
+    // Still install so FAT gets a stable fallback instead of garbage/1980.
+  }
+  clockUtcOffsetQ = utcOffsetQuarterHoursBiased;
+  FsDateTime::setCallback(storageDateTimeCallback);
+  LOG_INF("SD", "Installed RTC-backed SD timestamp callback");
+}
 
 class HalFile::Impl {
  public:

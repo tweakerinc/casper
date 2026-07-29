@@ -20,7 +20,14 @@ constexpr int cornerRadius = 6;
 
 void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                            const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
-                                           bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
+                                           bool& bufferRestored, StoreCoverBufferFn storeCoverBuffer,
+                                           const BookReadingStats* stats, float progressPercent,
+                                           const GlobalReadingStats* globalStats,
+                                           const char* currentChapterTitle) const {
+  (void)stats;
+  (void)progressPercent;
+  (void)globalStats;
+  (void)currentChapterTitle;
   const int tileWidth = (rect.width - 2 * Lyra3CoversMetrics::values.contentSidePadding) / 3;
   const int tileY = rect.y;
   const bool hasContinueReading = !recentBooks.empty();
@@ -76,7 +83,12 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
         }
       }
 
-      coverBufferStored = storeCoverBuffer();
+      // Snapshot the full multi-cover row (covers only, not the whole screen).
+      const int rowX = Lyra3CoversMetrics::values.contentSidePadding + hPaddingInSelection;
+      const int rowY = tileY + hPaddingInSelection;
+      const int rowW = tileWidth * Lyra3CoversMetrics::values.homeRecentBooksCount - 2 * hPaddingInSelection;
+      const int rowH = Lyra3CoversMetrics::values.homeCoverHeight;
+      coverBufferStored = storeCoverBuffer(rowX, rowY, rowW, rowH);
       coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
     }
 

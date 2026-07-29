@@ -12,11 +12,18 @@
 
 namespace ReaderUtils {
 
-constexpr unsigned long GO_HOME_MS = 1000;
+// Long-hold Back to leave reader / go home (half of original 1s).
+constexpr unsigned long GO_HOME_MS = 500;
 constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
+
+// Extra air under top chrome (battery/clock) and matching reserve above bottom
+// chrome so page text never sits under the status bar or dictionary button strip.
+constexpr int kReaderTopChromeExtra = 24;
+constexpr int kReaderBottomChromeExtra = 24;  // mirror top air
+constexpr int kReaderBottomChromePad = 4;
 
 enum ReaderTouchAction : freeink::ui::ActionId {
   READER_TOUCH_PREV = 1,
@@ -59,14 +66,94 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
       tiltPrev ||
       (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))
                 : (input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(prevButton)));
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
+  const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
+  const unsigned long held = input.getHeldTime();
+  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+                              held < SETTINGS.getPowerButtonLongPressDuration();
+  const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+                             held >= SETTINGS.getPowerButtonLongPressDuration();
+  const bool powerTurn = shortPowerTurn || longPowerTurn;
   const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
                                              input.wasPressed(nextButton))
                                           : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
                                              input.wasReleased(nextButton)));
   return {prev, next, tiltPrev || tiltNext};
 }
+
+// True while any physical/logical control that can emit a page-turn edge is held.
+// Used to swallow bounce after a turn until the gesture fully ends.
+inline bool anyPageTurnControlHeld(const MappedInputManager& input) {
+  return input.isPressed(MappedInputManager::Button::PageBack) ||
+         input.isPressed(MappedInputManager::Button::PageForward) ||
+         input.isPressed(MappedInputManager::Button::Left) ||
+         input.isPressed(MappedInputManager::Button::Right) ||
+         input.isPressed(MappedInputManager::Button::Up) ||
+         input.isPressed(MappedInputManager::Button::Down) ||
+         input.isPressed(MappedInputManager::Button::Power);
+}
+
+// One intentional gesture → one page turn. Contact bounce / ADC chatter on
+// Xteink ladders can emit several wasPressed/wasReleased edges per press; without
+// a latch the reader advances once per edge before e-ink paints.
+//
+// Policy:
+//  - Accept a turn edge only when not waiting for release and min interval elapsed.
+//  - After accept, ignore further edges until all page-turn controls are released.
+//  - Pure tilt events are rate-limited only (sensor has its own re-arm).
+struct PageTurnLatch {
+  bool waitingRelease = false;
+  unsigned long lastAcceptedMs = 0;
+  // Long enough to cover typical membrane bounce; short enough for deliberate rapid turns.
+  static constexpr unsigned long kMinIntervalMs = 180;
+
+  // Call every loop when there is no turn edge so we re-arm after release.
+  void pollIdle(const MappedInputManager& input) {
+    if (waitingRelease && !anyPageTurnControlHeld(input)) {
+      waitingRelease = false;
+    }
+  }
+
+  // Returns true if prev/next should be acted on. Clears both when rejected.
+  bool accept(bool& prev, bool& next, const bool fromTilt, const bool fromTouch, const MappedInputManager& input) {
+    if (!prev && !next) {
+      pollIdle(input);
+      return false;
+    }
+
+    const unsigned long now = millis();
+
+    // Pure tilt: sensor already re-arms; only rate-limit.
+    if (fromTilt && !fromTouch && !anyPageTurnControlHeld(input)) {
+      if (now - lastAcceptedMs < kMinIntervalMs) {
+        prev = false;
+        next = false;
+        return false;
+      }
+      lastAcceptedMs = now;
+      return true;
+    }
+
+    if (waitingRelease) {
+      if (!anyPageTurnControlHeld(input)) {
+        waitingRelease = false;
+      }
+      // Never accept the same-frame residual edge that coincided with release.
+      prev = false;
+      next = false;
+      return false;
+    }
+
+    if (now - lastAcceptedMs < kMinIntervalMs) {
+      prev = false;
+      next = false;
+      return false;
+    }
+
+    waitingRelease = true;
+    lastAcceptedMs = now;
+    return true;
+  }
+};
 
 struct TouchPageTurn {
   bool prev;

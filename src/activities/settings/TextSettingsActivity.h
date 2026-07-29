@@ -12,13 +12,11 @@
 #include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
-// Reader text settings with a shared live preview pane: tab bar
-// (Font | Size | Layout | Style) is position 0 of the Up/Down nav ring, same
-// idiom as SettingsActivity. Family/Size rows apply on Confirm; Layout/Style
-// rows toggle or open an OptionPopup picker. (Tab::Family/Style are the enum
-// names for the Font/Style tabs.)
+// Manage Fonts: header + tabs + list box (~half height) + Preview (~half).
+// Layout is stable across tabs. Tab bar is nav ring position 0.
 class TextSettingsActivity final : public Activity {
  public:
+  // Download Fonts lives at the bottom of the Font list (not a fifth tab).
   enum class Tab : uint8_t { Family, Size, Layout, Style, Count };
 
   TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SdCardFontRegistry* registry,
@@ -33,7 +31,8 @@ class TextSettingsActivity final : public Activity {
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
   enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
-  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  // CrossInk order: Bionic Reading, Guide Dots, then layout/style toggles.
+  enum class StyleRow { BionicReading, GuideDots, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
 
   void applyFamily(int listIndex);
   void applySize(int listIndex);
@@ -45,10 +44,11 @@ class TextSettingsActivity final : public Activity {
   // Handles tab/list/swipe touch input; returns true if an event was consumed (caller returns).
   bool handleTouch();
 
-  // Vertical layout of the preview/tab-bar/list panes.
-  // Shared by render() (to draw) and loop() (to hit-test touch) to avoid drift
+  // Fixed panes: tabs, settings box sized for Style rows, preview fills the rest.
+  // Shared by render() and loop() so hit-testing matches drawing.
   struct PaneGeometry {
     int previewTop;
+    int previewHeight;
     int tabTop;
     int listTop;
     int listHeight;
@@ -58,7 +58,9 @@ class TextSettingsActivity final : public Activity {
   std::string styleValueText(int row) const;
   // True when the focused list row is a setting the preview cannot reflect.
   bool focusedRowHasNoPreview() const;
-  void switchTab(int direction = 1);
+  // direction: +1 / -1. focusTabBar: keep selection on the tab row (side flips);
+  // false lands on the first list row (Confirm / open new tab).
+  void switchTab(int direction = 1, bool focusTabBar = false);
   int currentListSize() const;
   // Navigation ring position for the active tab: 0 = tab bar, 1..N = list item N-1.
   int& selectedIndex();
@@ -68,7 +70,10 @@ class TextSettingsActivity final : public Activity {
     std::string name;
     bool isBuiltin;
     uint8_t settingIndex;
+    bool isDownloadAction = false;  // last row: open FontDownloadActivity
   };
+
+  void rebuildFontList();
 
   struct SizeEntry {
     std::string name;
@@ -83,8 +88,8 @@ class TextSettingsActivity final : public Activity {
   textsettings::PreviewLayout previewLayout_;  // cached preview line layout; relaid only on setting/geometry change
 
   Tab tab_;
-  int selectedIndex_[static_cast<int>(Tab::Count)] =
-      {};  // per-Tab nav position (0 = tab bar, 1..N = row); set in onEnter
+  // per-Tab nav position (0 = tab bar, 1..N = row); onEnter starts at 0 for all tabs
+  int selectedIndex_[static_cast<int>(Tab::Count)] = {};
   int currentFamilyIndex_ = 0;
   int currentSizeIndex_ = 0;
 
@@ -92,5 +97,4 @@ class TextSettingsActivity final : public Activity {
   int afterHeader = 0;
   int bottomReserved = 0;
   int usableHeight = 0;
-  int previewHeight = 0;
 };

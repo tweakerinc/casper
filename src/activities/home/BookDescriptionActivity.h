@@ -8,16 +8,21 @@
 #include "activities/Activity.h"
 
 // Scrollable book synopsis (Calibre / OPF dc:description).
-// Uses the user's reading font + line/paragraph spacing; page-jumps with a
-// right-edge scrollbar. Basic HTML from Calibre (<p>, <br>, <b>/<strong>,
-// <i>/<em>) is preserved as paragraph gaps and bold/italic runs.
+// Builtin UI font (not reader/SD) so open is not multi-second glyph loads.
+// Page-jumps with a right-edge scrollbar. Basic HTML (<p>, <br>, <b>/<i>).
+//
+// From menus: bookPath + empty body → paint Loading first, then load + layout.
 class BookDescriptionActivity final : public Activity {
  public:
+  // body preloaded, or empty + bookPath for deferred load after first paint.
   BookDescriptionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title,
-                          std::string body)
+                          std::string body, std::string bookPath = {})
       : Activity("BookDescription", renderer, mappedInput),
         title(std::move(title)),
-        body(std::move(body)) {}
+        body(std::move(body)),
+        bookPath(std::move(bookPath)),
+        pendingBodyLoad(this->body.empty() && !this->bookPath.empty()),
+        linesDirty(!this->body.empty()) {}
 
   void onEnter() override;
   void loop() override;
@@ -46,6 +51,11 @@ class BookDescriptionActivity final : public Activity {
 
   std::string title;
   std::string body;
+  std::string bookPath;
+  // Menu path: load after Loading frame is on panel (set true only from render).
+  bool pendingBodyLoad = false;
+  bool loadingFramePainted = false;
+  bool linesDirty = true;
   std::vector<Line> lines;
   std::vector<std::string> titleLines;
   int titleFontId = 0;

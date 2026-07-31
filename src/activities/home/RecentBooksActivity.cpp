@@ -16,8 +16,8 @@
 #include "fontIds.h"
 
 namespace {
-// Hold threshold for the long-press action menu (half of original 1s).
-constexpr unsigned long LONG_PRESS_MS = 500;
+// Match HomeActivity Read long-press (was 1000 → 500 → 300).
+constexpr unsigned long LONG_PRESS_MS = 300;
 
 // True while any button that can open this screen or activate a row is held.
 // Bare long-press Library uses physical Confirm; release must not open a book.

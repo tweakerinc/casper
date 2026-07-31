@@ -4,7 +4,6 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
-#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 
@@ -53,22 +52,10 @@ constexpr int kMinGapCoverToText = 10;
 constexpr int kMinGapTextToFooter = 22;
 constexpr int kTitleMaxLines = 3;
 constexpr int kAuthorMaxLines = 2;
-// Lifetime card (Stats-Life only) under the cover|stats box.
-constexpr int kLifeTitleH = 22;
+// Lifetime block under the cover|stats box (toggled from title/author via side buttons).
 constexpr int kLifeCellPadY = 2;
-constexpr int kLifeValueLabelGap = 1;
 
 // Gen aspect helpers live in HomeCoverMetrics.
-
-bool isStatsLifeMode() {
-  using T = CrossPointSettings::UI_THEME;
-  const auto theme = static_cast<T>(SETTINGS.uiTheme);
-  // Picker id + any legacy remaps that still load as Stats-Life via UITheme.
-  return theme == T::STATS_LIFE || theme == T::DASHBOARD_RECENTS || theme == T::DASHBOARD_SCROLL ||
-         theme == T::DASHBOARD_MAGAZINE || theme == T::DASHBOARD_CARD || theme == T::MINIMAL ||
-         theme == T::LYRA_CAROUSEL || theme == T::CLASSIC || theme == T::LYRA || theme == T::LYRA_3_COVERS ||
-         theme == T::ROUNDEDRAFF;
-}
 
 float pagesPerMinute(const uint32_t totalPagesTurned, const uint32_t totalReadingSeconds) {
   if (totalReadingSeconds <= 60) {
@@ -301,71 +288,63 @@ void sizeCoverFrame(const int /*maxW*/, const int pageW, const int pageH, int& c
   HomeCoverMetrics::statsFamilyHeroPlate(pageW, pageH, coverW, coverH);
 }
 
-// Compact lifetime card height for layout reserve (header + 2×3 value/label grid).
+// Compact lifetime block height (title + 2×3 value/label grid). No plate chrome —
+// black ink only so native e-ink white shows through (painted white plates read grey).
 int minLifetimeCardHeight(const GfxRenderer& renderer) {
-  const int valueH = renderer.getLineHeight(UI_10_FONT_ID);
-  const int labelH = renderer.getLineHeight(SMALL_FONT_ID);
-  const int rowH = valueH + kLifeValueLabelGap + labelH + kLifeCellPadY * 2;
-  constexpr int kBodyChrome = 1 + 11;
-  return std::max(72, kLifeTitleH + rowH * 2 + kBodyChrome);
+  const int titleH = renderer.getLineHeight(kStatsValueFont);
+  const int valueH = renderer.getLineHeight(kStatsValueFont);
+  const int labelH = renderer.getLineHeight(kStatsLabelFont);
+  // Match right-column pair spacing (value pulled up over label).
+  const int rowH = std::max(1, valueH - kStatsValueLabelPull) + labelH + kLifeCellPadY * 2;
+  constexpr int kTitleBodyGap = 6;
+  return std::max(64, titleH + kTitleBodyGap + rowH * 2);
 }
 
 void drawLifeStatCell(const GfxRenderer& renderer, const int x, const int w, const int y, const int h,
                       const char* value, const char* label) {
-  constexpr int kValueFont = UI_10_FONT_ID;
-  constexpr int kLabelFont = SMALL_FONT_ID;
   constexpr int kPadX = 2;
   const int textW = std::max(1, w - kPadX * 2);
-  const int valueLineH = renderer.getLineHeight(kValueFont);
-  const int labelLineH = renderer.getLineHeight(kLabelFont);
-  const int totalTextH = valueLineH + kLifeValueLabelGap + labelLineH;
-  const int textY = y + kLifeCellPadY + std::max(0, (h - totalTextH - kLifeCellPadY * 2) / 4);
-  const std::string visValue = renderer.truncatedText(kValueFont, value, textW, EpdFontFamily::BOLD);
-  const std::string visLabel = renderer.truncatedText(kLabelFont, label, textW);
-  const int valueW = renderer.getTextWidth(kValueFont, visValue.c_str(), EpdFontFamily::BOLD);
-  const int labelW = renderer.getTextWidth(kLabelFont, visLabel.c_str());
-  renderer.drawText(kValueFont, x + (w - valueW) / 2, textY, visValue.c_str(), true, EpdFontFamily::BOLD);
-  renderer.drawText(kLabelFont, x + (w - labelW) / 2, textY + valueLineH + kLifeValueLabelGap, visLabel.c_str(), true);
+  const int valueLineH = renderer.getLineHeight(kStatsValueFont);
+  const int labelLineH = renderer.getLineHeight(kStatsLabelFont);
+  const int pairH = std::max(1, valueLineH - kStatsValueLabelPull) + labelLineH;
+  const int textY = y + kLifeCellPadY + std::max(0, (h - pairH - kLifeCellPadY * 2) / 2);
+  const std::string visValue = renderer.truncatedText(kStatsValueFont, value, textW, EpdFontFamily::BOLD);
+  const std::string visLabel = renderer.truncatedText(kStatsLabelFont, label, textW);
+  const int valueW = renderer.getTextWidth(kStatsValueFont, visValue.c_str(), EpdFontFamily::BOLD);
+  const int labelW = renderer.getTextWidth(kStatsLabelFont, visLabel.c_str());
+  renderer.drawText(kStatsValueFont, x + (w - valueW) / 2, textY, visValue.c_str(), true, EpdFontFamily::BOLD);
+  const int labelY = textY + std::max(1, valueLineH - kStatsValueLabelPull);
+  renderer.drawText(kStatsLabelFont, x + (w - labelW) / 2, labelY, visLabel.c_str(), true);
 }
 
-// Lifetime Stats card — same metrics as the former Dashboard lifetime box, sized
-// to the under-cover band (replaces title/author on Stats-Life).
+// Lifetime Stats — under-cover band (replaces title/author when toggled).
+// Ink only: no white fill, no rounded frame. Painted white plates on e-ink read as
+// a grey "card" against native panel white after multipass / HALF windows.
 void drawLifetimeCard(const GfxRenderer& renderer, const Rect& cardRect, const GlobalReadingStats* globalStats) {
-  if (cardRect.width < 80 || cardRect.height < 56) return;
+  if (cardRect.width < 80 || cardRect.height < 48) return;
 
   const GlobalReadingStats empty{};
   const GlobalReadingStats& stats = globalStats != nullptr ? *globalStats : empty;
 
   constexpr int kTitlePadX = 8;
-  constexpr int kBodyInsetX = 2;
+  constexpr int kBodyInsetX = 4;
   constexpr int kColCount = 3;
   constexpr int kRowCount = 2;
-  constexpr int kCardStroke = 2;
+  constexpr int kTitleBodyGap = 6;
 
-  const int titleFontH = renderer.getLineHeight(UI_10_FONT_ID);
-  const int titleH =
-      std::min(std::max(kLifeTitleH, titleFontH + 2), std::max(titleFontH + 2, cardRect.height / 5));
-  const int titleTextY = cardRect.y + (titleH - titleFontH) / 2;
-  const int radius = std::min(kCoverCornerRadius, std::min(cardRect.width, cardRect.height) / 4);
-
-  renderer.drawRoundedRect(cardRect.x, cardRect.y, cardRect.width, cardRect.height, kCardStroke, radius, true);
-  const int divInset = std::max(2, radius / 2);
-  const int divY = cardRect.y + titleH;
-  for (int t = 0; t < kCardStroke; ++t) {
-    renderer.drawLine(cardRect.x + divInset, divY + t, cardRect.x + cardRect.width - 1 - divInset, divY + t, true);
-  }
+  const int titleFontH = renderer.getLineHeight(kStatsValueFont);
+  const int titleH = titleFontH;
+  const int titleTextY = cardRect.y;
 
   const int titleMaxW = std::max(1, cardRect.width - kTitlePadX * 2);
   const std::string titleVis =
-      renderer.truncatedText(UI_10_FONT_ID, tr(STR_STATS_ALL_TIME), titleMaxW, EpdFontFamily::BOLD);
-  const int titleW = renderer.getTextWidth(UI_10_FONT_ID, titleVis.c_str(), EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, cardRect.x + (cardRect.width - titleW) / 2, titleTextY, titleVis.c_str(), true,
+      renderer.truncatedText(kStatsValueFont, tr(STR_STATS_ALL_TIME), titleMaxW, EpdFontFamily::BOLD);
+  const int titleW = renderer.getTextWidth(kStatsValueFont, titleVis.c_str(), EpdFontFamily::BOLD);
+  renderer.drawText(kStatsValueFont, cardRect.x + (cardRect.width - titleW) / 2, titleTextY, titleVis.c_str(), true,
                     EpdFontFamily::BOLD);
 
-  constexpr int kBodyInsetTop = 1;
-  constexpr int kBodyInsetBottom = 11;
-  const int bodyY = cardRect.y + titleH + kBodyInsetTop;
-  const int bodyH = std::max(1, cardRect.height - titleH - kBodyInsetTop - kBodyInsetBottom);
+  const int bodyY = cardRect.y + titleH + kTitleBodyGap;
+  const int bodyH = std::max(1, cardRect.height - titleH - kTitleBodyGap);
   const int gridW = std::max(kColCount, cardRect.width - kBodyInsetX * 2);
   const int baseColW = gridW / kColCount;
   const int colRem = gridW % kColCount;
@@ -389,6 +368,7 @@ void drawLifetimeCard(const GfxRenderer& renderer, const Rect& cardRect, const G
     drawLifeStatCell(renderer, colX[col], colW[col], rowY, rowH, value, label);
   };
 
+  // Same 6 cells on X3 + X4 (no device-specific substitute rows).
   snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalSessions));
   cell(0, rowY0, rowH0, buf, tr(STR_STATS_SESSIONS_LBL));
   BookReadingStats::formatDuration(stats.totalReadingSeconds, buf, sizeof(buf));
@@ -405,27 +385,19 @@ void drawLifetimeCard(const GfxRenderer& renderer, const Rect& cardRect, const G
     snprintf(buf, sizeof(buf), "-");
   }
   cell(1, rowY1, rowH1, buf, tr(STR_STATS_COMPLETED_LBL));
-  if (gpio.deviceIsX3()) {
-    const uint16_t longest = stats.displayLongestReadingStreak();
-    if (longest > 0) {
-      snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(longest), dayCountText(longest));
-    } else {
-      snprintf(buf, sizeof(buf), "-");
-    }
-    cell(2, rowY1, rowH1, buf, tr(STR_STATS_LONGEST_STREAK_LBL));
+  // Longest streak needs calendar continuity (RTC on X3); show "-" when empty/unavailable.
+  const uint16_t longest = stats.displayLongestReadingStreak();
+  if (longest > 0) {
+    snprintf(buf, sizeof(buf), "%u %s", static_cast<unsigned>(longest), dayCountText(longest));
   } else {
-    if (stats.totalPagesTurned > 0) {
-      snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(stats.totalPagesTurned));
-    } else {
-      snprintf(buf, sizeof(buf), "-");
-    }
-    cell(2, rowY1, rowH1, buf, tr(STR_STATS_PAGES_LBL));
+    snprintf(buf, sizeof(buf), "-");
   }
+  cell(2, rowY1, rowH1, buf, tr(STR_STATS_LONGEST_STREAK_LBL));
 }
 
-// Full book-stats column — same order as Dashboard Stats theme.
-// X3: Time, Time Left, Progress, Daily Avg, Pages/Min, Days (Started label), Finish date
-// X4: Time, Time Left, Progress, Pages/Min, Sessions, Avg Session, Pages
+// Full book-stats column — same order on X3 and X4.
+// Time, Time Left, Progress, Daily Avg, Pages/Min, Days (Started), Finish date.
+// Calendar-dependent fields show "-" when RTC/date data is unavailable (typical X4).
 // rightX = pixel just past the rightmost text (text is right-aligned to rightX).
 void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int rightX,
                     const BookReadingStats* stats, const float progressPercent) {
@@ -436,10 +408,7 @@ void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int
   const int boxH = statsCol.height;
   const int pairH = statsPairHeight(renderer);
 
-  const bool showRtcStats = gpio.deviceIsX3();
-  constexpr int kRowCountX3 = 7;
-  constexpr int kRowCountX4 = 7;
-  const int rowCount = showRtcStats ? kRowCountX3 : kRowCountX4;
+  constexpr int kRowCount = 7;
 
   char value[48];
   char label[48];
@@ -448,7 +417,7 @@ void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int
   uint32_t estimatedSeconds = 0;
   const bool hasEstimate = estimatedTimeLeft(bookStats, progressPercent, estimatedSeconds);
   ReadingStatsDateTime today;
-  const bool hasToday = showRtcStats && getCurrentLocalReadingStatsDateTime(today);
+  const bool hasToday = getCurrentLocalReadingStatsDateTime(today);
   const ReadingStatsDate endDate = bookStats.isCompleted && bookStats.finishedDate.isValid()
                                        ? bookStats.finishedDate
                                        : (hasToday ? today.date : ReadingStatsDate{});
@@ -463,10 +432,10 @@ void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int
   int rowIdx = 0;
   auto nextY = [&]() {
     const int i = rowIdx++;
-    if (rowCount <= 1) return boxTop;
+    if (kRowCount <= 1) return boxTop;
     const int travel = std::max(0, boxH - pairH);
     // i=0 → boxTop; i=last → boxTop + travel  ⇒  last pair ends at boxTop + boxH
-    return boxTop + (i * travel) / (rowCount - 1);
+    return boxTop + (i * travel) / (kRowCount - 1);
   };
 
   // 1) Reading Time
@@ -489,72 +458,77 @@ void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int
   }
   drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_PROGRESS_LBL));
 
-  if (showRtcStats) {
-    // 4) Daily Avg
-    if (hasDaySpan) {
-      const uint16_t dailyAverageDays = std::max<uint16_t>(1, daysReading);
-      BookReadingStats::formatDuration(bookStats.totalReadingSeconds / dailyAverageDays, value, sizeof(value));
-    } else {
-      snprintf(value, sizeof(value), "-");
-    }
-    drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_DAILY_AVG_LBL));
-
-    // 5) Pages/Min
-    snprintf(value, sizeof(value), "%.1f", pagesPerMinute(bookStats.totalPagesTurned, bookStats.totalReadingSeconds));
-    drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_PAGES_PER_MIN));
-
-    // 6) Days reading + Started date as label (Stats order)
-    if (hasDaySpan) {
-      snprintf(value, sizeof(value), "%u %s", static_cast<unsigned>(daysReading), dayCountText(daysReading));
-    } else {
-      snprintf(value, sizeof(value), "-");
-    }
-    formatReadingStatsShortDate(bookStats.startDate, startedDate, sizeof(startedDate));
-    if (bookStats.startDate.isValid()) {
-      snprintf(label, sizeof(label), "%s %s", tr(STR_STATS_STARTED), startedDate);
-    } else {
-      snprintf(label, sizeof(label), "%s", tr(STR_STATS_STARTED));
-    }
-    drawRightStackLabel(renderer, rightX, nextY(), value, label);
-
-    // 7) Finish / Est. finish date
-    ReadingStatsDate finishDisplayDate;
-    if (bookStats.isCompleted) {
-      finishDisplayDate = bookStats.finishedDate;
-    } else if (hasToday && hasEstimate) {
-      if (!estimateFinishDateFromDailyPace(bookStats, today, estimatedSeconds, finishDisplayDate)) {
-        ReadingStatsDateTime estimatedFinish = today;
-        addSecondsToReadingStatsDateTime(estimatedFinish, estimatedSeconds);
-        finishDisplayDate = estimatedFinish.date;
-      }
-    }
-    formatReadingStatsShortDate(finishDisplayDate, finishDate, sizeof(finishDate));
-    if (!finishDisplayDate.isValid()) {
-      snprintf(finishDate, sizeof(finishDate), "-");
-    }
-    drawRightStackLabel(renderer, rightX, nextY(), finishDate,
-                        bookStats.isCompleted ? tr(STR_STATS_FINISHED_DATE) : tr(STR_STATS_EST_FINISH_DATE));
-    return;
+  // 4) Daily Avg (needs valid day span from start/finish dates)
+  if (hasDaySpan) {
+    const uint16_t dailyAverageDays = std::max<uint16_t>(1, daysReading);
+    BookReadingStats::formatDuration(bookStats.totalReadingSeconds / dailyAverageDays, value, sizeof(value));
+  } else {
+    snprintf(value, sizeof(value), "-");
   }
+  drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_DAILY_AVG_LBL));
 
-  // X4 path (no RTC calendar rows)
-  // 4) Pages/Min
+  // 5) Pages/Min
   snprintf(value, sizeof(value), "%.1f", pagesPerMinute(bookStats.totalPagesTurned, bookStats.totalReadingSeconds));
   drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_PAGES_PER_MIN));
 
-  // 5) Sessions
-  snprintf(value, sizeof(value), "%u", static_cast<unsigned>(bookStats.sessionCount));
-  drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_SESSIONS_LBL));
+  // 6) Days reading + Started date as label
+  if (hasDaySpan) {
+    snprintf(value, sizeof(value), "%u %s", static_cast<unsigned>(daysReading), dayCountText(daysReading));
+  } else {
+    snprintf(value, sizeof(value), "-");
+  }
+  formatReadingStatsShortDate(bookStats.startDate, startedDate, sizeof(startedDate));
+  if (bookStats.startDate.isValid()) {
+    snprintf(label, sizeof(label), "%s %s", tr(STR_STATS_STARTED), startedDate);
+  } else {
+    snprintf(label, sizeof(label), "%s", tr(STR_STATS_STARTED));
+  }
+  drawRightStackLabel(renderer, rightX, nextY(), value, label);
 
-  // 6) Avg Session
-  const uint32_t avgSeconds =
-      bookStats.sessionCount > 0 ? bookStats.totalReadingSeconds / bookStats.sessionCount : 0;
-  BookReadingStats::formatDuration(avgSeconds, value, sizeof(value));
-  drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_AVG_SESSION_LBL));
+  // 7) Finish / Est. finish date
+  ReadingStatsDate finishDisplayDate;
+  if (bookStats.isCompleted) {
+    finishDisplayDate = bookStats.finishedDate;
+  } else if (hasToday && hasEstimate) {
+    if (!estimateFinishDateFromDailyPace(bookStats, today, estimatedSeconds, finishDisplayDate)) {
+      ReadingStatsDateTime estimatedFinish = today;
+      addSecondsToReadingStatsDateTime(estimatedFinish, estimatedSeconds);
+      finishDisplayDate = estimatedFinish.date;
+    }
+  }
+  formatReadingStatsShortDate(finishDisplayDate, finishDate, sizeof(finishDate));
+  if (!finishDisplayDate.isValid()) {
+    snprintf(finishDate, sizeof(finishDate), "-");
+  }
+  drawRightStackLabel(renderer, rightX, nextY(), finishDate,
+                      bookStats.isCompleted ? tr(STR_STATS_FINISHED_DATE) : tr(STR_STATS_EST_FINISH_DATE));
+}
 
-  // 7) Pages Turned
-  snprintf(value, sizeof(value), "%lu", static_cast<unsigned long>(bookStats.totalPagesTurned));
-  drawRightStackLabel(renderer, rightX, nextY(), value, tr(STR_STATS_PAGES_LBL));
+// Shared under-box paint (full home draw + side-button partial redraw).
+void paintUnderBoxContent(const GfxRenderer& renderer, const int pageW, const int boxBottom, const int bandBottom,
+                          const bool lifeMode, const char* title, const char* author, const int textMaxW,
+                          const int titleAuthorH, const int lifeH, const GlobalReadingStats* globalStats) {
+  const int underBoxH = lifeMode ? lifeH : titleAuthorH;
+  const int freeBelow = std::max(underBoxH, bandBottom - boxBottom);
+  int metaTop = boxBottom + (freeBelow - underBoxH) / 2;
+  const int metaTopMin = boxBottom + kMinGapCoverToText;
+  const int metaTopMax = bandBottom - kMinGapTextToFooter - underBoxH;
+  if (metaTop < metaTopMin) metaTop = metaTopMin;
+  if (metaTopMax >= metaTopMin && metaTop > metaTopMax) metaTop = metaTopMax;
+
+  if (lifeMode) {
+    const Rect lifeRect{kEdgeGap, metaTop, pageW - 2 * kEdgeGap, underBoxH};
+    drawLifetimeCard(renderer, lifeRect, globalStats);
+  } else if (title && *title) {
+    int textY = metaTop;
+    textY = drawCenteredWrapped(renderer, kTitleFontId, pageW / 2, textY, textMaxW, title, kTitleMaxLines,
+                                EpdFontFamily::BOLD);
+    if (author && *author) {
+      textY += kTitleAuthorGap;
+      drawCenteredWrapped(renderer, kAuthorFontId, pageW / 2, textY, textMaxW, author, kAuthorMaxLines,
+                          EpdFontFamily::REGULAR);
+    }
+  }
 }
 
 }  // namespace
@@ -574,8 +548,8 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
   const int bandTop = contentTopY(renderer);
   const int bandBottom = pageH - footerH;
   const int bandH = std::max(200, bandBottom - bandTop);
-  // Stats-Life: lifetime card under the box. Stats: title + author there.
-  const bool lifeMode = isStatsLifeMode();
+  // Side Left/Right on Home toggles title/author ↔ lifetime card.
+  const bool lifeMode = FocusThemeUi::showLifeUnderBox();
 
   if (recentBooks.empty()) {
     const char* msg = tr(STR_NO_OPEN_BOOK);
@@ -598,8 +572,7 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
       book.author.empty() ? std::string() : StringUtils::formatAuthorDisplayName(book.author);
   const char* author = authorDisplay.empty() ? nullptr : authorDisplay.c_str();
 
-  // Under-box content: lifetime (Stats-Life) or title+author (Stats).
-  // Cover plate sizing uses a FIXED reserve so both themes share one thumb height.
+  // Under-box: lifetime card or title+author. Cover plate is fixed either way.
   const int textMaxW = std::max(40, pageW - kEdgeGap * 2);
   const int lifeH = minLifetimeCardHeight(renderer);
   const int titleH =
@@ -608,11 +581,9 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
                                                     EpdFontFamily::REGULAR)
                              : 0;
   const int titleAuthorH = titleH + (author ? (kTitleAuthorGap + authorH) : 0);
-  const int underBoxH = lifeMode ? lifeH : titleAuthorH;
 
   // Horizontal: fixed shared plate (1:1 gen), stats take remaining right column.
   //   [kEdgeGap][cover=gen plate][≥kEdgeGap][stats][kEdgeGap]
-  // Stats + Stats-Life use the same coverW/coverH (and same on-disk thumb).
   int coverW = 0;
   int coverH = 0;
   sizeCoverFrame(/*maxW unused*/ 0, pageW, pageH, coverW, coverH);
@@ -638,26 +609,64 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
   const Rect statsCol{statsLeftX, artRect.y, statsW, artRect.height};
   drawRightStats(renderer, statsCol, statsRightX, stats, progressPercent);
 
-  // Under the cover|stats box: lifetime card (Stats-Life) or title+author (Stats).
-  const int boxBottom = artRect.y + artRect.height;
-  const int freeBelow = std::max(underBoxH, bandBottom - boxBottom);
-  int metaTop = boxBottom + (freeBelow - underBoxH) / 2;
-  const int metaTopMin = boxBottom + kMinGapCoverToText;
-  const int metaTopMax = bandBottom - kMinGapTextToFooter - underBoxH;
-  if (metaTop < metaTopMin) metaTop = metaTopMin;
-  if (metaTopMax >= metaTopMin && metaTop > metaTopMax) metaTop = metaTopMax;
-
-  if (lifeMode) {
-    const Rect lifeRect{kEdgeGap, metaTop, pageW - 2 * kEdgeGap, underBoxH};
-    drawLifetimeCard(renderer, lifeRect, globalStats);
-  } else {
-    int textY = metaTop;
-    textY = drawCenteredWrapped(renderer, kTitleFontId, pageW / 2, textY, textMaxW, title, kTitleMaxLines,
-                                EpdFontFamily::BOLD);
-    if (author) {
-      textY += kTitleAuthorGap;
-      drawCenteredWrapped(renderer, kAuthorFontId, pageW / 2, textY, textMaxW, author, kAuthorMaxLines,
-                          EpdFontFamily::REGULAR);
-    }
-  }
+  // Under the cover|stats box: lifetime card or title+author (side-button toggle).
+  paintUnderBoxContent(renderer, pageW, artRect.y + artRect.height, bandBottom, lifeMode, title, author, textMaxW,
+                       titleAuthorH, lifeH, globalStats);
 }
+
+// Partial home update: only the free band under the cover|stats box.
+// Cover plate height is fixed, so boxBottom is stable across title ↔ lifetime.
+Rect FocusThemeUi::redrawUnderBox(GfxRenderer& renderer, const std::vector<RecentBook>& recentBooks,
+                                  const GlobalReadingStats* globalStats) {
+  const int pageW = renderer.getScreenWidth();
+  const int pageH = renderer.getScreenHeight();
+  const int footerH = FocusMetrics::values.buttonHintsHeight;
+  const int bandTop = contentTopY(renderer);
+  const int bandBottom = pageH - footerH;
+  const bool lifeMode = FocusThemeUi::showLifeUnderBox();
+
+  int coverW = 0;
+  int coverH = 0;
+  sizeCoverFrame(/*maxW unused*/ 0, pageW, pageH, coverW, coverH);
+  const int boxBottom = bandTop + kBoxTopPad + coverH;
+
+  // Wipe free band through the bottom of the content area so paper is pure white
+  // (content height differs between title/lifetime; cannot only erase the old rect).
+  const int clearTop = boxBottom + kMinGapCoverToText;
+  const int clearH = std::max(0, bandBottom - clearTop);
+  const Rect dirty{0, clearTop, pageW, clearH};
+  if (clearH > 0) {
+    // Explicit pure white (false = white ink off) so windowed FAST matches Spectral paper.
+    renderer.fillRect(0, clearTop, pageW, clearH, false);
+  }
+
+  if (recentBooks.empty()) {
+    if (lifeMode) {
+      const int lifeH = minLifetimeCardHeight(renderer);
+      const Rect lifeRect{kEdgeGap, bandBottom - kMinGapTextToFooter - lifeH, pageW - 2 * kEdgeGap, lifeH};
+      drawLifetimeCard(renderer, lifeRect, globalStats);
+    }
+    return dirty;
+  }
+
+  const RecentBook& book = recentBooks[0];
+  const char* title = book.title.empty() ? book.path.c_str() : book.title.c_str();
+  const std::string authorDisplay =
+      book.author.empty() ? std::string() : StringUtils::formatAuthorDisplayName(book.author);
+  const char* author = authorDisplay.empty() ? nullptr : authorDisplay.c_str();
+
+  const int textMaxW = std::max(40, pageW - kEdgeGap * 2);
+  const int lifeH = minLifetimeCardHeight(renderer);
+  const int titleH =
+      measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
+  const int authorH = author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines,
+                                                    EpdFontFamily::REGULAR)
+                             : 0;
+  const int titleAuthorH = titleH + (author ? (kTitleAuthorGap + authorH) : 0);
+
+  paintUnderBoxContent(renderer, pageW, boxBottom, bandBottom, lifeMode, title, author, textMaxW, titleAuthorH, lifeH,
+                       globalStats);
+
+  return dirty;
+}
+

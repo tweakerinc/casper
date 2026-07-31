@@ -46,7 +46,10 @@ class ActivityManager {
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
-  enum class PendingAction { None, Push, Pop, Replace };
+  // Replace: destroy current + clear stack, then launch.
+  // Swap: destroy current only, keep stack (Reader → EpubReader under stacked Home).
+  // PopToHome: destroy current + activities above Home, resume stacked Home.
+  enum class PendingAction { None, Push, Pop, Replace, Swap, PopToHome };
   PendingAction pendingAction = PendingAction::None;
 
   // Task to render and display the activity
@@ -66,6 +69,10 @@ class ActivityManager {
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
 
+  // True for the whole activity->render() call (including unlocked multipass e-ink waits).
+  // Main task must not destroy the current activity while this is set (use-after-free).
+  std::atomic<bool> renderInProgress{false};
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
@@ -77,8 +84,16 @@ class ActivityManager {
   void begin();
   void loop();
 
+  // Block until the render task finishes the current paint (main task only).
+  // Used before heavy main-thread SD work (e.g. Synopsis OPF load) so multipass
+  // can abort and we do not race the render task.
+  void waitForRenderIdle();
+
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
+
+  // Replace current only; keep the activity stack (e.g. Home → Reader → EpubReader).
+  void swapActivity(std::unique_ptr<Activity>&& newActivity);
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
@@ -105,6 +120,13 @@ class ActivityManager {
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
+
+  // True while `activity` is the foreground activity (used to abort long paints).
+  bool isCurrentActivity(const Activity* activity) const;
+  // True when Push/Pop/Replace/Swap/PopToHome is queued (leave mid-multipass).
+  bool hasPendingActivityChange() const;
+  // True while the render task is inside Activity::render (including multipass waits).
+  bool isRenderInProgress() const { return renderInProgress.load(std::memory_order_acquire); }
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

@@ -1654,6 +1654,16 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   display.displayBuffer(refreshMode, fadingFix);
 }
 
+void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+  const AlignedMemRect mem =
+      screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
+  if (!mem.valid) return;
+  LOG_DBG("GFX", "displayWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x, mem.y, mem.w,
+          mem.h);
+  display.displayWindow(mem.x, mem.y, mem.w, mem.h, fadingFix);
+}
+
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
@@ -2191,6 +2201,16 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
 void GfxRenderer::displayGrayBuffer() const { display.displayGrayBuffer(fadingFix); }
+
+void GfxRenderer::displayGrayBufferWindow(const int x, const int y, const int width, const int height) const {
+  if (width <= 0 || height <= 0) return;
+  const AlignedMemRect mem =
+      screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
+  if (!mem.valid) return;
+  LOG_DBG("GFX", "displayGrayBufferWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x,
+          mem.y, mem.w, mem.h);
+  display.displayGrayBufferWindow(mem.x, mem.y, mem.w, mem.h, fadingFix);
+}
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
   // Guard the uint16_t casts below: a negative would wrap to a huge length.

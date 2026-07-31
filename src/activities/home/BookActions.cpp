@@ -37,10 +37,11 @@ std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std:
   if (FsHelpers::hasEpubExtension(fullPath)) {
     items.push_back({FileBrowserAction::Description, StrId::STR_SYNOPSIS});
   }
-  // Stats-Life home: offer per-book Reading Stats under Synopsis.
+  // Stats home: offer per-book Reading Stats under Synopsis.
   // Hidden entirely when the user has disabled stat tracking.
   const auto theme = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
-  const bool statsTheme = theme == CrossPointSettings::UI_THEME::STATS_LIFE ||
+  const bool statsTheme = theme == CrossPointSettings::UI_THEME::STATS ||
+                          theme == CrossPointSettings::UI_THEME::STATS_LIFE ||
                           theme == CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE ||
                           theme == CrossPointSettings::UI_THEME::DASHBOARD_CARD ||
                           theme == CrossPointSettings::UI_THEME::MINIMAL ||

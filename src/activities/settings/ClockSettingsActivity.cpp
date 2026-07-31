@@ -14,6 +14,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 enum MenuItem {
@@ -152,7 +153,10 @@ void ClockSettingsActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount, static_cast<int>(selectedIndex),
-      [](int index) { return std::string(I18N.get(menuNames[index])); }, nullptr, nullptr,
+      [](int index) {
+        return NestedMenuLabel::format(I18N.get(menuNames[index]), index != ITEM_SHOW);
+      },
+      nullptr, nullptr,
       [](int index) -> std::string {
         switch (index) {
           case ITEM_SHOW:

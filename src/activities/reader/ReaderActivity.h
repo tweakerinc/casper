@@ -27,7 +27,20 @@ class ReaderActivity final : public Activity {
 
   void onGoBack();
 
+  // One-shot open hints set by Home (or others) before goToReader(); consumed by EpubReader.
+  static bool s_preferFastFirstRefresh;
+  static bool s_deferFirstPageTextAa;
+  static uint32_t s_openWallStartMs;
+
  public:
+  // Call immediately before activityManager.goToReader().
+  // preferFastFirstRefresh: home greys already settled → first page FAST instead of HALF.
+  // deferFirstPageTextAa: first ink is BW only; AA catch-up render follows.
+  static void setOpenHints(bool preferFastFirstRefresh, bool deferFirstPageTextAa);
+  // Returns true if hints were pending (always clears). openWallStartMs is millis() at setOpenHints.
+  static bool takeOpenHints(bool& preferFastFirstRefresh, bool& deferFirstPageTextAa, uint32_t& openWallStartMs);
+  static uint32_t openWallStartMs() { return s_openWallStartMs; }
+
   explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)
       : Activity("Reader", renderer, mappedInput), initialBookPath(std::move(initialBookPath)) {}
   void onEnter() override;

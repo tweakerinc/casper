@@ -701,22 +701,31 @@ const std::string& Epub::getLanguage() const {
 }
 
 std::string Epub::getDescription() {
+  const uint32_t t0 = millis();
   std::string cached = readDescriptionCache(cachePath);
   if (!cached.empty()) {
+    LOG_DBG("EBP", "getDescription: cache hit %u bytes in %lums", static_cast<unsigned>(cached.size()),
+            static_cast<unsigned long>(millis() - t0));
     return cached;
   }
 
-  // Works without a full book index: open the EPUB zip, parse OPF <metadata>
-  // only (title/author/description), then stop — no spine/TOC build.
+  // Works without a full book index: open the EPUB zip, parse OPF until
+  // dc:description (or </metadata>), then early-stop ZIP inflate — no spine/TOC.
   setupCacheDir();
   BookMetadataCache::BookMetadata meta;
+  const uint32_t tOpf = millis();
   if (!parseContentOpf(meta, /*writeSpineEntries=*/false)) {
-    LOG_DBG("EBP", "getDescription: metadata-only OPF parse failed for %s", filepath.c_str());
+    LOG_DBG("EBP", "getDescription: metadata-only OPF parse failed for %s (%lums)", filepath.c_str(),
+            static_cast<unsigned long>(millis() - t0));
     return {};
   }
   cached = readDescriptionCache(cachePath);
   if (cached.empty()) {
-    LOG_DBG("EBP", "getDescription: no dc:description in OPF for %s", filepath.c_str());
+    LOG_DBG("EBP", "getDescription: no dc:description in OPF for %s (opf %lums total %lums)", filepath.c_str(),
+            static_cast<unsigned long>(millis() - tOpf), static_cast<unsigned long>(millis() - t0));
+  } else {
+    LOG_DBG("EBP", "getDescription: OPF extract %u bytes opf=%lums total=%lums", static_cast<unsigned>(cached.size()),
+            static_cast<unsigned long>(millis() - tOpf), static_cast<unsigned long>(millis() - t0));
   }
   return cached;
 }
@@ -843,9 +852,8 @@ bool Epub::generateCoverBmp(bool cropped) const {
   return false;
 }
 
-// c30: 2-bit balanced Atkinson + mild lift, contain-fit. Bare 420×560 1:1.
-// Stats + Stats-Life share one height key (same thumb file). No hairline filter
-// (filters reintroduced banding). MCU max-height + empty-bin carry-forward.
+// c30: Casper v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
+// Stats + Stats-Life share one height key (same thumb file). Bare 420×560 1:1.
 // c24 (480×640) forced Bare to scale down and looked griddy — do not reintroduce.
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c30_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const {

@@ -15,6 +15,7 @@
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 // Logical menu rows (visible set is rebuilt dynamically).
@@ -120,43 +121,50 @@ int previewReserveHeight(const ThemeMetrics& metrics) {
 // Dynamic visible menu: map list index → MenuItem.
 constexpr int kMaxVisible = 16;
 uint8_t gVisibleItems[kMaxVisible];
+bool gVisibleNested[kMaxVisible];
 int gVisibleCount = 0;
 
+void pushVisible(const uint8_t id, const bool nested = false) {
+  if (gVisibleCount >= kMaxVisible) return;
+  gVisibleItems[gVisibleCount] = id;
+  gVisibleNested[gVisibleCount] = nested;
+  ++gVisibleCount;
+}
+
 void pushNestedForSlot(uint8_t slotContent) {
-  auto push = [](uint8_t id) {
-    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
-  };
   if (slotContent == CrossPointSettings::CORNER_BATTERY) {
-    push(ITEM_BATTERY_DISPLAY);
+    pushVisible(ITEM_BATTERY_DISPLAY, true);
   }
 }
 
 void rebuildVisibleMenu() {
   gVisibleCount = 0;
-  auto push = [](uint8_t id) {
-    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
-  };
-  push(ITEM_UPPER_LEFT);
+  pushVisible(ITEM_UPPER_LEFT);
   pushNestedForSlot(SETTINGS.statusBarUpperLeft);
-  push(ITEM_UPPER_MIDDLE);
+  pushVisible(ITEM_UPPER_MIDDLE);
   pushNestedForSlot(SETTINGS.statusBarUpperMiddle);
-  push(ITEM_UPPER_RIGHT);
+  pushVisible(ITEM_UPPER_RIGHT);
   pushNestedForSlot(SETTINGS.statusBarUpperRight);
-  push(ITEM_LOWER_LEFT);
+  pushVisible(ITEM_LOWER_LEFT);
   pushNestedForSlot(SETTINGS.statusBarLowerLeft);
-  push(ITEM_LOWER_MIDDLE);
+  pushVisible(ITEM_LOWER_MIDDLE);
   pushNestedForSlot(SETTINGS.statusBarLowerMiddle);
-  push(ITEM_LOWER_RIGHT);
+  pushVisible(ITEM_LOWER_RIGHT);
   pushNestedForSlot(SETTINGS.statusBarLowerRight);
-  push(ITEM_PROGRESS_BAR);
+  pushVisible(ITEM_PROGRESS_BAR);
   if (SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS) {
-    push(ITEM_PROGRESS_BAR_THICKNESS);
+    pushVisible(ITEM_PROGRESS_BAR_THICKNESS, true);
   }
 }
 
 int itemAt(int listIndex) {
   if (listIndex < 0 || listIndex >= gVisibleCount) return -1;
   return gVisibleItems[listIndex];
+}
+
+bool nestedAt(int listIndex) {
+  if (listIndex < 0 || listIndex >= gVisibleCount) return false;
+  return gVisibleNested[listIndex];
 }
 
 bool isSlotItem(int item) {
@@ -394,7 +402,7 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
       [](int index) {
         const int item = itemAt(index);
         if (item < 0) return std::string();
-        return std::string(I18N.get(menuNameForItem(item)));
+        return NestedMenuLabel::format(I18N.get(menuNameForItem(item)), nestedAt(index));
       },
       nullptr, nullptr,
       [](int index) -> std::string {

@@ -31,6 +31,27 @@ class HomeActivity final : public Activity {
   // Cleared on exit, cover free, or any BW-only home refresh (menu popup).
   // Used to avoid stacking multipass flashes from cover-gen retries / path-only updates.
   bool coverGrayOnPanel = false;
+  // uiTheme value that last completed a successful cover multipass. Theme switch
+  // (Stats ↔ Bare / SPECTRAL) must not settled-skip with the old greys/layout.
+  int paintedUiTheme = -1;
+  // storeBwBuffer OOM / aborted multipass: retry greys without thrashing every frame.
+  bool coverGrayNeedsRetry = false;
+  unsigned long coverGrayRetryAtMs = 0;
+  // Return from Settings / Library / etc.: one FAST BW shell first (snappy), then
+  // deferred multipass greys restore jacket quality without blocking the return.
+  bool snappyResumeNoGreys = false;
+  // In-home Menu is on glass (BW popup). Keeps paintedUiTheme so Back can snappy-
+  // return without a full multipass; also gates windowed cursor repaints.
+  bool homeMenuShellOnPanel = false;
+  // Set before leaving for a UI child so onResume uses snappy path.
+  bool leaveForUiChildSnappy = false;
+  // After snappy BW shell is on the panel: multipass greys only (no clear/redraw).
+  bool deferredGreysOnly = false;
+  // Soft FAST grayscale base (panel already shows matching BW shell).
+  bool softGrayscaleBase = false;
+  // Abort in-flight multipass between stages (Recents/Settings must not freeze
+  // waiting for a full grey pass, and must not race loadBookDescription).
+  bool cancelBackgroundPaint = false;
   // Home can be entered while Back is still held (e.g. leaving Settings with
   // Back): ignore that stale release until a fresh press is seen here.
   bool backPressSeen = false;
@@ -44,10 +65,16 @@ class HomeActivity final : public Activity {
   bool minimalSuppressInitialFrontRelease = false;
   // Long-press Read (BTN_RIGHT) opens the same book-action menu as Recent Books.
   bool readLongPressFired = false;
-  // Bare: long-press Library (BTN_CONFIRM) opens Recent Books.
-  bool libraryLongPressFired = false;
-  // Bare: long-press Menu (BTN_BACK) opens Settings.
+  // Long-press Menu (BTN_BACK) opens Settings.
   bool menuLongPressFired = false;
+  // Stats: side Left/Right toggled under-box title ↔ lifetime.
+  bool forceStatsUnderBoxRepaint = false;
+  // SPECTRAL: windowed digit-only (or clock-block) refresh — no full-frame flash.
+  bool forceSPECTRALClockRepaint = false;
+  // Last hero time string drawn on panel ("H:MM"); used for minute-change detect.
+  char SPECTRALLastDrawnTime[8] = "";
+  // Book-action menu (etc.) dismissed: must paint home over the child FB once.
+  bool forceHomeShellRepaint = false;
   int minimalMenuIndex = 0;
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   size_t coverBufferSize = 0;      // Bytes allocated to coverBuffer
@@ -106,8 +133,17 @@ class HomeActivity final : public Activity {
   bool storeCoverBuffer();    // Store frame buffer for cover image
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer
+  // Free snapshot RAM only (keep settle flags). Used when leaving for a child
+  // so resume can choose snappy vs full multipass.
+  void freeCoverBufferRamOnly();
+  // Mark next onResume as snappy (no multipass black flash).
+  void markLeavingForUiChild();
+  // Stop deferred greys and abort multipass between stages (fast UI handoff).
+  void cancelHomeBackgroundPaint();
   // 2-bit hero covers: BW base + LSB/MSB gray planes (sleep-screen style).
   // Without this, midtones paint solid black on a single BW half-refresh.
+  // Keep this path aligned with v0.1.3 (HALF base → planes → restore) — no
+  // post-multipass paper window experiments (those regressed splotch).
   void multipassHomeCoverGrayscale();
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
@@ -118,6 +154,8 @@ class HomeActivity final : public Activity {
       : Activity("Home", renderer, mappedInput), initialMenuItem(initialMenuItemValue) {}
   void onEnter() override;
   void onExit() override;
+  // Restored from stack after Read (Phase 2) — refresh stats, multipass once, keep thumbs.
+  void onResume() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool isHomeActivity() const override { return true; }

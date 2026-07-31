@@ -243,26 +243,41 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // UI Theme (append-only — existing saved values must keep their numbers).
-  // Display names (english.yaml): Bare · Stats · Stats-Life.
+  // Display names (english.yaml): Bare · Stats · Spectral (X3).
   enum UI_THEME {
     CLASSIC = 0,
     LYRA = 1,
     LYRA_3_COVERS = 2,
     ROUNDEDRAFF = 3,
-    MINIMAL = 4,  // removed from picker; remapped to STATS_LIFE on load
-    // Stats-Life: cover + book stats + lifetime (was DASHBOARD).
+    MINIMAL = 4,  // removed from picker; remapped to STATS on load
+    // Stats-Life: merged into STATS (side L/R toggles lifetime under-box).
     STATS_LIFE = 5,
-    LYRA_CAROUSEL = 6,  // removed from picker; remapped to STATS_LIFE on load
-    // Legacy A/B theme ids (no longer in the picker; still load as STATS_LIFE).
+    LYRA_CAROUSEL = 6,  // removed from picker; remapped to STATS on load
+    // Legacy A/B theme ids (no longer in the picker; remapped to STATS on load).
     DASHBOARD_MAGAZINE = 7,
     DASHBOARD_CARD = 8,
     BARE = 9,  // cover + title + author home
-    // Parked (not in picker; remapped → STATS_LIFE on load). Restore notes:
+    // Parked (not in picker; remapped → STATS on load). Restore notes:
     // dist/theme-backup-shelf-scroll/README.md
     DASHBOARD_RECENTS = 10,  // was "Shelf"
     DASHBOARD_SCROLL = 11,   // was "Stats Scroll"
-    // Stats: cover + this-book stats only (was FOCUS).
+    // Stats: cover + book stats; side L/R toggles title ↔ lifetime (was FOCUS / Stats-Life).
     STATS = 12,
+    // Spectral (was Clockface): X3-only large home clock + under-panel.
+    // JSON value 13 stable. Hidden on X4 picker; remapped to BARE on non-X3.
+    SPECTRAL = 13,
+    CLOCKFACE = SPECTRAL,  // legacy name
+    // Ghost: parked (enum kept for JSON stability; remapped to BARE on load).
+    GHOST = 14,
+  };
+
+  // Spectral home side-button actions (X3 Left/Right, X4 Up/Down via side map).
+  // Both sides same action → bidirectional (Left back / Right forward).
+  // Only one side set → one-way cycle (Title→Stats→Lifetime, or newest→oldest).
+  enum SPECTRAL_SIDE_ACTION : uint8_t {
+    SPECTRAL_SIDE_RECENTS = 0,       // recent books (up to 4)
+    SPECTRAL_SIDE_PANEL = 1,         // Title / Stats / Lifetime under-panel
+    SPECTRAL_SIDE_ACTION_COUNT = 2
   };
 
   // Image rendering in EPUB reader
@@ -327,7 +342,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockHasBeenSynced = 0;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
-  uint8_t textAntiAliasing = 1;
+  // Off by default: AA greys are the main open/page-turn cost on e-ink.
+  uint8_t textAntiAliasing = 0;
   // Short power button click behaviour (Casper: sleep)
   uint8_t shortPwrBtn = SLEEP;
   // Long power button press (held past getPowerButtonLongPressDuration); same SHORT_PWRBTN values.
@@ -384,9 +400,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Casper: open stock CrossPoint dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;
-  // UI Theme (Casper default: Stats — cover + book stats)
-  uint8_t uiTheme = STATS;
-  // One-time migration: force Dashboard home + Casper chrome defaults once.
+  // UI Theme. Compile-time default Bare (typical X4). loadFromFile() sets
+  // first-boot defaults: X4 → Bare, X3 → Stats (see casperHomeMigrated).
+  uint8_t uiTheme = BARE;
+  // Spectral theme side buttons (X3 Left/Right; labels say Up/Down on X4 if offered).
+  // Defaults: both Panel Scroll (Left = back, Right = forward through Title/Stats/Lifetime).
+  uint8_t spectralSideLeft = SPECTRAL_SIDE_PANEL;
+  uint8_t spectralSideRight = SPECTRAL_SIDE_PANEL;
+  // One-time migration: force Casper home chrome defaults once.
   // Users can still change theme in Settings afterwards.
   uint8_t casperHomeMigrated = 0;
   // One-time migration: force short=Sleep / long=ForceRefresh / long-press menu=Dictionary.
@@ -409,12 +430,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t casperBuiltinFontsSlimMigrated = 0;
   // One-time: classic Left/Right list axes → Up/Down list + Left/Right sides.
   uint8_t casperButtonAxisMigrated = 0;
+  // One-time: text AA + embedded style off (faster open / page turn defaults).
+  uint8_t casperSpeedDefaultsMigrated = 0;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
-  // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
-  uint8_t embeddedStyle = 1;
+  // Book CSS: off by default (simpler layout, faster cold index). Users can re-enable.
+  uint8_t embeddedStyle = 0;
   // Bionic Reading (UI label; JSON key remains focusReadingEnabled for migration).
   // Bolds the first portion of each word — CrossInk calls this Bionic Reading;
   // upstream CrossPoint called it Focus Reading.
@@ -568,6 +591,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   void assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content);
   // Keep hideBatteryPercentage + systemClock in sync with the three slots.
   void syncSystemStatusLegacyFromSlots();
+  // Spectral draws a large home clock — system status bar clock placement is disabled.
+  bool systemStatusBarAllowsClock() const;
+  // Clear any SYS_SLOT_CLOCK placement (used when switching to Clockface).
+  void stripSystemStatusBarClock();
 
   // Resolved text-rendering configuration for the Epub layout engine. The
   // viewport is renderer/orientation-derived, so the caller supplies it —

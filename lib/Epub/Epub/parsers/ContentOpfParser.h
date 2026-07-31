@@ -30,8 +30,10 @@ class ContentOpfParser final : public Print {
   XML_Parser parser = nullptr;
   ParserState state = START;
   BookMetadataCache* cache;
-  bool metadataOnly = false;  // stop after </metadata> (synopsis extract without spine rewrite)
-  bool metadataFinished = false;  // set when metadataOnly stops; further stream data is ignored
+  // stop after first dc:description or </metadata> (no spine/manifest rewrite)
+  bool metadataOnly = false;
+  // When set, write() returns 0 so ZipFile(allowEarlyStop) aborts inflate immediately.
+  bool metadataFinished = false;
   HalFile tempItemStore;
   std::string coverItemId;
 

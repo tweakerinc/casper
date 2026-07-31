@@ -30,6 +30,9 @@ class Activity {
   virtual ~Activity() = default;
   virtual void onEnter();
   virtual void onExit();
+  // Restored from the activity stack after a child finishes (or goHome pops to us).
+  // Default no-op; Home uses this to multipass without rebuilding from scratch.
+  virtual void onResume() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}

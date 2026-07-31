@@ -19,7 +19,8 @@
 
 namespace {
 // Long-press threshold for book menu / folder delete / hidden-files toggle.
-constexpr unsigned long GO_HOME_MS = 500;
+// Long-press Confirm → book menu; long-press Back → show/hide dotfiles. Match Home 300ms.
+constexpr unsigned long GO_HOME_MS = 300;
 constexpr size_t NAME_BUFFER_SIZE = 500;
 constexpr int ROOT_HINT_GAP = 20;
 

@@ -42,9 +42,25 @@ void ActivityManager::renderTaskTrampoline(void* param) {
   self->renderTaskLoop();
 }
 
+void ActivityManager::waitForRenderIdle() {
+  // Main task only — never call from the render task (would deadlock).
+  while (renderInProgress.load(std::memory_order_acquire)) {
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
 void ActivityManager::renderTaskLoop() {
   while (true) {
+    // Wait for at least one paint request. ulTaskNotifyTake(pdTRUE) clears the
+    // notification value so stacked wakes coalesce into a single take.
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // Clear deferred flag so loop() does not immediately re-notify for the same paint.
+    requestedUpdate.store(false);
+
+    // Cover the entire paint (including Home multipass after it unlocks the
+    // RenderLock) so replace/pop cannot destroy the activity mid-multipass.
+    renderInProgress.store(true, std::memory_order_release);
+
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
@@ -52,6 +68,9 @@ void ActivityManager::renderTaskLoop() {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
       currentActivity->render(std::move(lock));
     }
+
+    renderInProgress.store(false, std::memory_order_release);
+
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
     taskENTER_CRITICAL(&activityManagerSpinlock);
@@ -59,7 +78,7 @@ void ActivityManager::renderTaskLoop() {
     waitingTaskHandle = nullptr;
     taskEXIT_CRITICAL(&activityManagerSpinlock);
     if (waiter) {
-      xTaskNotify(waiter, 1, eIncrement);
+      xTaskNotify(waiter, 1, eSetValueWithOverwrite);
     }
   }
 }
@@ -79,6 +98,14 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction != PendingAction::None) {
+    // Always wait for the render task (including Home multipass after it unlocks
+    // the RenderLock). Push used to skip this so Settings opened snappily during
+    // greys — but multipass still touches heap/SD/BW chunks while Settings builds
+    // its list → concurrence lock abort (see crash_report: leave-reader multipass
+    // then Entering Settings). Multipass aborts quickly via hasPendingActivityChange,
+    // so the wait is typically sub-second after the user navigates, not a full grey pass.
+    waitForRenderIdle();
+
     if (pendingAction == PendingAction::Pop) {
       RenderLock lock;
 
@@ -114,6 +141,13 @@ void ActivityManager::loop() {
           currentActivity->resultHandler = nullptr;
           lock.unlock();  // Handler may acquire its own lock
           handler(pendingResult);
+        } else {
+          lock.unlock();
+        }
+
+        // Panel was owned by the child — parent gets a chance to refresh state.
+        if (pendingAction == PendingAction::None && currentActivity) {
+          currentActivity->onResume();
         }
 
         // Request an update to ensure the popped activity gets re-rendered
@@ -124,6 +158,35 @@ void ActivityManager::loop() {
         // Handler may request another pending action, we will handle it in the next loop iteration
         continue;
       }
+
+    } else if (pendingAction == PendingAction::PopToHome) {
+      // Phase 2: restore stacked Home instead of allocating a brand-new one.
+      RenderLock lock;
+      pendingAction = PendingAction::None;
+
+      if (currentActivity) {
+        exitActivity(lock);
+      }
+      // Drop non-home activities above Home (usually stack is just Home).
+      while (!stackActivities.empty() && !stackActivities.back()->isHomeActivity()) {
+        stackActivities.back()->onExit();
+        stackActivities.pop_back();
+      }
+      if (!stackActivities.empty() && stackActivities.back()->isHomeActivity()) {
+        currentActivity = std::move(stackActivities.back());
+        stackActivities.pop_back();
+        LOG_DBG("ACT", "Restored Home from stack (phase-2 fast path)");
+        lock.unlock();
+        currentActivity->onResume();
+        if (pendingAction == PendingAction::None) {
+          requestUpdate();
+        }
+        continue;
+      }
+      // No Home on stack — fall through to a fresh replace.
+      lock.unlock();
+      replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE));
+      continue;
 
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
@@ -137,6 +200,10 @@ void ActivityManager::loop() {
           stackActivities.back()->onExit();
           stackActivities.pop_back();
         }
+      } else if (pendingAction == PendingAction::Swap) {
+        // Destroy current only — keep Home (or other parents) under the reader.
+        exitActivity(lock);
+        LOG_DBG("ACT", "Swapped activity, stack size = %zu", stackActivities.size());
       } else if (pendingAction == PendingAction::Push) {
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));
@@ -150,14 +217,17 @@ void ActivityManager::loop() {
 
       // onEnter may request another pending action, we will handle it in the next loop iteration
       continue;
+    } else {
+      // Unknown pending action with no activity — clear to avoid a tight loop.
+      LOG_ERR("ACT", "Clearing stale pendingAction=%d", static_cast<int>(pendingAction));
+      pendingAction = PendingAction::None;
     }
   }
 
   if (requestedUpdate.exchange(false)) {
-    // Using direct notification to signal the render task to update
-    // Increment counter so multiple rapid calls won't be lost
+    // One dirty flag → one wake. eSetValueWithOverwrite avoids stacking paint counts.
     if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
+      xTaskNotify(renderTaskHandle, 1, eSetValueWithOverwrite);
     }
   }
 }
@@ -184,11 +254,30 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   }
 }
 
+void ActivityManager::swapActivity(std::unique_ptr<Activity>&& newActivity) {
+  // Same deferral rules as replace, but stack is preserved when the pending action runs.
+  if (currentActivity) {
+    pendingActivity = std::move(newActivity);
+    pendingAction = PendingAction::Swap;
+  } else {
+    currentActivity = std::move(newActivity);
+    currentActivity->onEnter();
+  }
+}
+
 void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
-void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+void ActivityManager::goToSettings() {
+  // Keep Home under Settings so theme changes resume Home with a real multipass
+  // (replace used to tear Home down; a BW-only settle left Stats covers black).
+  if (currentActivity && currentActivity->isHomeActivity()) {
+    pushActivity(std::make_unique<SettingsActivity>(renderer, mappedInput));
+  } else {
+    replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput));
+  }
+}
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
@@ -209,7 +298,12 @@ void ActivityManager::goToBrowser() {
 }
 
 void ActivityManager::goToReader(std::string path) {
-  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+  // Phase 2: keep Home alive under the reader so Back can resume it (no full rebuild).
+  if (currentActivity && currentActivity->isHomeActivity()) {
+    pushActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+  } else {
+    replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+  }
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
@@ -224,6 +318,19 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 }
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
+  // Phase 2: if Home is already under the stack (typical Read → Back), pop to it.
+  // Skips allocating a new HomeActivity and re-running full onEnter book/thumb work.
+  const bool homeOnStack =
+      std::any_of(stackActivities.begin(), stackActivities.end(),
+                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  if (homeOnStack) {
+    if (pendingActivity) {
+      pendingActivity.reset();
+    }
+    pendingAction = PendingAction::PopToHome;
+    return;
+  }
+
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
     const auto& activityName = currentActivity->name;
     if (activityName == "FileBrowser") {
@@ -234,9 +341,9 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
-    } else if (activityName == "Settings") {
-      initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
+    // Do not map Settings → SETTINGS_MENU: that selected the classic bottom-row
+    // Settings item and felt like "Back opened the menu" after leaving Settings.
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem));
 }
@@ -263,6 +370,12 @@ void ActivityManager::popActivity() {
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
 
+bool ActivityManager::isCurrentActivity(const Activity* activity) const {
+  return activity != nullptr && currentActivity.get() == activity;
+}
+
+bool ActivityManager::hasPendingActivityChange() const { return pendingAction != PendingAction::None; }
+
 bool ActivityManager::isReaderActivity() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->isReaderActivity(); }) ||
@@ -281,14 +394,12 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
 }
 
 void ActivityManager::requestUpdate(bool immediate) {
-  if (immediate) {
-    if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
-    }
-  } else {
-    // Deferring the update until current loop is finished
-    // This is to avoid multiple updates being requested in the same loop
-    requestedUpdate = true;
+  // Coalesce: many requestUpdate() calls collapse to one paint.
+  // Deferred path: set dirty; loop() wakes the render task once per main tick.
+  // Immediate path: set dirty and wake now (overwrite, do not stack counts).
+  requestedUpdate.store(true);
+  if (immediate && renderTaskHandle) {
+    xTaskNotify(renderTaskHandle, 1, eSetValueWithOverwrite);
   }
 }
 void ActivityManager::requestUpdateAndWait() {
@@ -317,7 +428,8 @@ void ActivityManager::requestUpdateAndWait() {
   // Cannot call while holding RenderLock or it will cause a deadlock
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
-  xTaskNotify(renderTaskHandle, 1, eIncrement);
+  requestedUpdate.store(true);
+  xTaskNotify(renderTaskHandle, 1, eSetValueWithOverwrite);
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 

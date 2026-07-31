@@ -57,4 +57,8 @@ class FileBrowserActionActivity final : public Activity {
   std::vector<MenuItem> items;
   int selectedIndex = 0;
   bool awaitOpenButtonRelease = false;
+  // While the menu is open, warm description.html so Synopsis is a file read.
+  // Only runs when the cache file already exists (never blocks menu on OPF).
+  bool synopsisWarmAttempted = false;
+  std::string warmedSynopsis;
 };

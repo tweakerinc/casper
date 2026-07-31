@@ -10,6 +10,8 @@
 #define SOURCESERIF4_14_FONT_ID (-1077864260)
 #define SOURCESERIF4_16_FONT_ID (1231166843)
 #define SOURCESERIF4_18_FONT_ID (326065580)
+// Clockface large time (digits + colon only; Source Serif Bold 72 pt 2-bit).
+#define SOURCESERIF4_72_CLOCK_FONT_ID (-746347856)
 // Lists / body chrome
 #define UI_10_FONT_ID (SOURCESERIF4_12_FONT_ID)
 // Headers / tabs (one step larger than list text)
@@ -25,4 +27,5 @@ static_assert(SOURCESERIF4_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_14_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_16_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(SOURCESERIF4_72_CLOCK_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");

@@ -51,6 +51,8 @@ struct SettingInfo {
   StrId category = StrId::STR_NONE_OPT;  // Category for web UI grouping
   bool obfuscated = false;               // Save/load via base64 obfuscation (passwords)
   bool inTextSettings = false;           // Surfaced in the Text Settings screen; hidden from the flat Reader list
+  // Child of the row above (e.g. Theme → Left/Right Button). Renderer prefixes a nested mark.
+  bool nestedUnderParent = false;
 
   // Direct char[] string fields (for settings stored in CrossPointSettings)
   size_t stringOffset = 0;
@@ -69,6 +71,11 @@ struct SettingInfo {
 
   SettingInfo& withTextSettings() {
     inTextSettings = true;
+    return *this;
+  }
+
+  SettingInfo& withNestedUnderParent() {
+    nestedUnderParent = true;
     return *this;
   }
 
@@ -174,8 +181,14 @@ class SettingsActivity final : public Activity {
 
   OptionPopup optionPopup;
 
+  // Debounce SD writes: mark dirty on change, flush once on exit / when leaving for a child.
+  bool settingsDirty = false;
+
   static constexpr int categoryCount = 4;
   static const StrId categoryNames[categoryCount];
+
+  void markSettingsDirty() { settingsDirty = true; }
+  void flushSettingsIfDirty();
 
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();

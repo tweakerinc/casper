@@ -34,5 +34,7 @@
 #include <builtinFonts/sourceserif4_18_bolditalic.h>
 #include <builtinFonts/sourceserif4_18_italic.h>
 #include <builtinFonts/sourceserif4_18_regular.h>
+// Clockface hero digits (X3): Source Serif Bold 72 pt, 0-9 + colon only.
+#include <builtinFonts/sourceserif4_72_clock.h>
 // Small UI chrome (battery %)
 #include <builtinFonts/notosans_8_regular.h>

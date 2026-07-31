@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "BitmapHelpers.h"
 
@@ -402,7 +403,7 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
 bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
                                                    bool oneBit, bool crop, bool floydSteinberg, bool coverThumb) {
   if (coverThumb) {
-    // Match JPEG c22: 2-bit balanced Atkinson + mild lift, contain-fit.
+    // Match JPEG c30 / v0.1.3: 2-bit balanced Atkinson + mild lift.
     oneBit = false;
     floydSteinberg = false;
   }
@@ -629,20 +630,43 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     return false;
   }
 
-  // Create ditherers (same as JpegToBmpConverter)
+  // Create ditherers (same as JpegToBmpConverter) — nothrow; soft-fail on OOM.
   AtkinsonDitherer* atkinsonDitherer = nullptr;
   FloydSteinbergDitherer* fsDitherer = nullptr;
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
+  auto failPngDither = [&]() {
+    delete atkinsonDitherer;
+    delete fsDitherer;
+    delete atkinson1BitDitherer;
+    free(ctx.currentRow);
+    free(ctx.previousRow);
+    free(rowBuffer);
+    LOG_ERR("PNG", "OOM: ditherer");
+    return false;
+  };
+
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(outWidth);
+    if (!atkinson1BitDitherer || !atkinson1BitDitherer->isValid()) {
+      return failPngDither();
+    }
   } else if (!USE_8BIT_OUTPUT) {
     if (coverThumb) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth, /*balancedLevels=*/true);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth, /*balancedLevels=*/true);
+      if (!atkinsonDitherer || !atkinsonDitherer->isValid()) {
+        return failPngDither();
+      }
     } else if (floydSteinberg || USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(outWidth);
+      if (!fsDitherer || !fsDitherer->isValid()) {
+        return failPngDither();
+      }
     } else if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth, /*balancedLevels=*/false);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth, /*balancedLevels=*/false);
+      if (!atkinsonDitherer || !atkinsonDitherer->isValid()) {
+        return failPngDither();
+      }
     }
   }
 
@@ -653,8 +677,13 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new uint32_t[outWidth]();
-    rowCount = new uint16_t[outWidth]();
+    rowAccum = new (std::nothrow) uint32_t[outWidth]();
+    rowCount = new (std::nothrow) uint16_t[outWidth]();
+    if (!rowAccum || !rowCount) {
+      delete[] rowAccum;
+      delete[] rowCount;
+      return failPngDither();
+    }
     nextOutY_srcStart = scaleY_fp;
   }
 

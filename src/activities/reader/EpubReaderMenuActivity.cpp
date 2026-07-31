@@ -88,7 +88,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
   auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
   auto& settingsItems = items[SETTINGS_TAB_INDEX];
 
-  mainItems.reserve(10 + (hasFootnotes ? 1u : 0u));
+  mainItems.reserve(11 + (hasFootnotes ? 1u : 0u));
   bookmarkItems.reserve(8 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
   settingsItems.reserve(4 + (hasBookmarks ? 1u : 0u));
 
@@ -99,6 +99,8 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
     mainItems.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
   mainItems.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  // Under Go to %: tweak type without leaving the book (Back → reader, not home).
+  mainItems.push_back({MenuAction::MANAGE_FONTS, StrId::STR_TEXT_SETTINGS});
   mainItems.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   mainItems.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   // Mark finished is not session tracking — drives finished folder / recents rules.

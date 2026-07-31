@@ -15,6 +15,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 // Layout:
@@ -305,7 +306,11 @@ void KOReaderSettingsActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, count, static_cast<int>(selectedIndex),
-      [](int index) { return std::string(I18N.get(menuNameAt(index))); }, nullptr, nullptr,
+      [](int index) {
+        const bool nested = index == gateDetailIndex() || index == uploadMetaIndex();
+        return NestedMenuLabel::format(I18N.get(menuNameAt(index)), nested);
+      },
+      nullptr, nullptr,
       [](int index) {
         if (index == kIdxUsername) {
           const auto& username = KOREADER_STORE.getUsername();

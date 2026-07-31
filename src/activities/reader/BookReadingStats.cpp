@@ -168,16 +168,9 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   return load(path);
 }
 
-BookReadingStats BookReadingStats::load(const std::string& cachePath) {
+// Parse one stats blob already read into `data` (n bytes). Returns empty on mismatch.
+BookReadingStats parseStatsBlob(const uint8_t* data, const int n) {
   BookReadingStats stats;
-  HalFile f;
-  if (!openStatsFileForRead(cachePath, f)) {
-    return stats;
-  }
-  uint8_t data[STATS_FILE_SIZE] = {};
-  const int n = f.read(data, STATS_FILE_SIZE);
-  f.close();
-
   if (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) {
     readCommonStats(data, stats);
     return stats;
@@ -201,7 +194,6 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
   const bool isV5 = (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5);
   const bool isV6 = (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION);
   if (!isV4 && !isV5 && !isV6) {
-    LOG_DBG("STATS", "Stats missing or version mismatch, starting fresh");
     return stats;
   }
   readCommonStats(data, stats);
@@ -228,7 +220,93 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
   return stats;
 }
 
+// Load a specific versioned filename only (no fallback chain).
+bool loadStatsFileNamed(const std::string& cachePath, const std::string& fileName, BookReadingStats& out) {
+  HalFile f;
+  if (!Storage.openFileForRead("STATS", cachePath + "/" + fileName, f)) {
+    return false;
+  }
+  uint8_t data[STATS_FILE_SIZE] = {};
+  const int n = f.read(data, STATS_FILE_SIZE);
+  f.close();
+  out = parseStatsBlob(data, n);
+  // parseStatsBlob returns default on mismatch — treat as failure if still empty version path.
+  // A real empty book can have 0 sessions; success is "file parsed as a known version".
+  if (n <= 0) {
+    return false;
+  }
+  if (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) return true;
+  if (n == STATS_FILE_SIZE_V2 && data[0] == STATS_FILE_VERSION_V2) return true;
+  if (n == STATS_FILE_SIZE_V3 && data[0] == STATS_FILE_VERSION_V3) return true;
+  if (n == STATS_FILE_SIZE_V4 && data[0] == STATS_FILE_VERSION_V4) return true;
+  if (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5) return true;
+  if (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION) return true;
+  return false;
+}
+
+BookReadingStats BookReadingStats::load(const std::string& cachePath) {
+  BookReadingStats stats;
+  HalFile f;
+  if (!openStatsFileForRead(cachePath, f)) {
+    return stats;
+  }
+  uint8_t data[STATS_FILE_SIZE] = {};
+  const int n = f.read(data, STATS_FILE_SIZE);
+  f.close();
+
+  const bool knownVersion =
+      (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) ||
+      (n == STATS_FILE_SIZE_V2 && data[0] == STATS_FILE_VERSION_V2) ||
+      (n == STATS_FILE_SIZE_V3 && data[0] == STATS_FILE_VERSION_V3) ||
+      (n == STATS_FILE_SIZE_V4 && data[0] == STATS_FILE_VERSION_V4) ||
+      (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5) ||
+      (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION);
+  if (!knownVersion) {
+    LOG_DBG("STATS", "Stats missing or version mismatch, starting fresh");
+    return stats;
+  }
+
+  stats = parseStatsBlob(data, n);
+
+  // Re-open migration trap: a fresh stats_v6.bin from a short reopen (0 sessions /
+  // ~0 reading time) would hide a rich stats_v5.bin after path/cache migration.
+  // Prefer the older file's lifetime totals when the current file looks empty.
+  const bool primaryLooksEmpty =
+      stats.sessionCount == 0 && stats.totalReadingSeconds < 60 && stats.totalPagesTurned <= 1;
+  if (primaryLooksEmpty && data[0] == STATS_FILE_VERSION) {
+    BookReadingStats older;
+    const std::string prevName = statsFileNameForVersion(PREVIOUS_VERSIONED_STATS_FILE_VERSION);
+    if (loadStatsFileNamed(cachePath, prevName, older)) {
+      const bool olderRicher =
+          older.totalReadingSeconds > stats.totalReadingSeconds || older.sessionCount > stats.sessionCount ||
+          older.totalPagesTurned > stats.totalPagesTurned;
+      if (olderRicher) {
+        LOG_DBG("STATS", "Recovering lifetime stats from %s (v6 was empty shell)", prevName.c_str());
+        const uint16_t progressMilli = stats.progressPercentMilli;
+        const uint32_t eta = stats.estimatedTimeLeftSeconds;
+        stats = older;
+        // Keep any progress/ETA captured by the brief v6 reopen.
+        if (progressMilli != 0xFFFF) {
+          stats.progressPercentMilli = progressMilli;
+        }
+        if (eta != 0 && stats.estimatedTimeLeftSeconds == 0) {
+          stats.estimatedTimeLeftSeconds = eta;
+        }
+        // Rewrite v6 so the next open does not re-hit this path.
+        stats.save(cachePath);
+      }
+    }
+  }
+
+  return stats;
+}
+
 float BookReadingStats::getProgressPercent() const {
+  // Mark Finished (or auto end-of-book) always displays as 100%, even if a bad
+  // reopen overwrote progressPercentMilli with a partial-section estimate.
+  if (isCompleted) {
+    return 100.0f;
+  }
   if (progressPercentMilli == 0xFFFF) {
     return -1.0f;
   }

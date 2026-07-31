@@ -2,6 +2,7 @@
 
 #include <BoardConfig.h>
 #include <HalClock.h>
+#include <HalGPIO.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <SdCardFontRegistry.h>
@@ -14,7 +15,108 @@
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "activities/settings/SettingsActivity.h"
+#include "components/themes/focus/FocusTheme.h"
 #include "util/DictionaryRegistry.h"
+
+// UI Theme picker. Spectral is X3-only (Ghost / Stats-Life parked — Stats
+// merges title + lifetime via side Left/Right toggle).
+inline SettingInfo buildUiThemeSetting() {
+  using T = CrossPointSettings::UI_THEME;
+  // Capture once — device type is fixed for the boot.
+  const bool x3 = gpio.deviceIsX3();
+
+  std::vector<StrId> labels;
+  labels.reserve(3);
+  // Picker: Bare · [Spectral X3] · Stats. Never list Stats-Life (merged into Stats).
+  labels.push_back(StrId::STR_THEME_BARE);
+  if (x3) labels.push_back(StrId::STR_THEME_SPECTRAL);
+  labels.push_back(StrId::STR_THEME_FOCUS);  // "Stats" — one skin, side L/R under-box
+
+  auto applyThemeDefaults = [](T theme) {
+    if (theme == T::BARE) {
+      SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.syncSystemStatusLegacyFromSlots();
+    } else if (theme == T::SPECTRAL) {
+      // Clean top by default — battery off; user can enable in Status Bar settings.
+      // Clock lives on the home face, never on the system bar.
+      SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.stripSystemStatusBarClock();
+      SETTINGS.syncSystemStatusLegacyFromSlots();
+      // Default Spectral side map: both panel scroll (Left back / Right forward).
+      SETTINGS.spectralSideLeft = CrossPointSettings::SPECTRAL_SIDE_PANEL;
+      SETTINGS.spectralSideRight = CrossPointSettings::SPECTRAL_SIDE_PANEL;
+    } else {
+      // Stats: battery left (with %). Clock only when RTC is present (X3);
+      // X4 has no clock hardware — hide that slot so we do not imply a clock theme.
+      SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_BATTERY;
+      SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemStatusBarRight =
+          gpio.deviceIsX3() ? CrossPointSettings::SYS_SLOT_CLOCK : CrossPointSettings::SYS_SLOT_HIDE;
+      SETTINGS.systemBatteryDisplay = CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT;
+      SETTINGS.syncSystemStatusLegacyFromSlots();
+    }
+  };
+
+  return SettingInfo::DynamicEnum(
+      StrId::STR_UI_THEME, std::move(labels),
+      [x3] {
+        const auto t = static_cast<T>(SETTINGS.uiTheme);
+        if (x3) {
+          // Bare · Spectral · Stats
+          if (t == T::BARE) return static_cast<uint8_t>(0);
+          if (t == T::SPECTRAL) return static_cast<uint8_t>(1);
+          return static_cast<uint8_t>(2);  // STATS (+ legacy remaps)
+        }
+        // Bare · Stats
+        if (t == T::BARE) return static_cast<uint8_t>(0);
+        return static_cast<uint8_t>(1);
+      },
+      [x3, applyThemeDefaults](uint8_t displayIdx) {
+        T theme = T::BARE;
+        if (x3) {
+          static constexpr T kOrderX3[] = {T::BARE, T::SPECTRAL, T::STATS};
+          if (displayIdx >= 3) displayIdx = 0;
+          theme = kOrderX3[displayIdx];
+        } else {
+          static constexpr T kOrderX4[] = {T::BARE, T::STATS};
+          if (displayIdx >= 2) displayIdx = 0;
+          theme = kOrderX4[displayIdx];
+        }
+        SETTINGS.uiTheme = static_cast<uint8_t>(theme);
+        // Never leave legacy Stats-Life / parked ids in storage after a pick.
+        if (SETTINGS.uiTheme == static_cast<uint8_t>(T::STATS_LIFE) ||
+            SETTINGS.uiTheme == static_cast<uint8_t>(T::DASHBOARD_RECENTS) ||
+            SETTINGS.uiTheme == static_cast<uint8_t>(T::DASHBOARD_SCROLL) ||
+            SETTINGS.uiTheme == static_cast<uint8_t>(T::DASHBOARD_MAGAZINE) ||
+            SETTINGS.uiTheme == static_cast<uint8_t>(T::DASHBOARD_CARD)) {
+          SETTINGS.uiTheme = static_cast<uint8_t>(T::STATS);
+          theme = T::STATS;
+        }
+        applyThemeDefaults(theme);
+        // Stats under-box always starts on title/author after a theme pick.
+        FocusThemeUi::showLifeUnderBox() = false;
+      },
+      "uiTheme", StrId::STR_CAT_DISPLAY);
+}
+
+// Spectral-only: map physical side/up-down buttons to Recent Books or Panel Scroll.
+// isLeft: X3 Left / X4 Up (Previous). Otherwise X3 Right / X4 Down (Next).
+inline SettingInfo buildSpectralSideButtonSetting(const bool isLeft) {
+  const bool x3 = gpio.deviceIsX3();
+  const StrId nameId = isLeft ? (x3 ? StrId::STR_SPECTRAL_LEFT_BUTTON : StrId::STR_SPECTRAL_UP_BUTTON)
+                              : (x3 ? StrId::STR_SPECTRAL_RIGHT_BUTTON : StrId::STR_SPECTRAL_DOWN_BUTTON);
+  uint8_t CrossPointSettings::* ptr =
+      isLeft ? &CrossPointSettings::spectralSideLeft : &CrossPointSettings::spectralSideRight;
+  const char* key = isLeft ? "spectralSideLeft" : "spectralSideRight";
+  return SettingInfo::Enum(nameId, ptr,
+                           {StrId::STR_SPECTRAL_RECENT_BOOKS, StrId::STR_SPECTRAL_PANEL_SCROLL}, key,
+                           StrId::STR_CAT_DISPLAY)
+      .withNestedUnderParent();  // Children of Theme (shown only when Spectral is active)
+}
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
@@ -151,47 +253,22 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // Status Bar (system top chrome) is an Action row inserted by SettingsActivity.
         // Web/JSON still exposes hideBatteryPercentage + system slots below.
         // Theme (stored enum values stay append-only / stable).
-        // Shipping picker: Bare · Stats · Stats-Life (enum ids match display names).
-        SettingInfo::DynamicEnum(
-            StrId::STR_UI_THEME,
-            {StrId::STR_THEME_BARE, StrId::STR_THEME_FOCUS, StrId::STR_THEME_DASHBOARD},
-            [] {
-              using T = CrossPointSettings::UI_THEME;
-              const auto t = static_cast<T>(SETTINGS.uiTheme);
-              if (t == T::BARE) return static_cast<uint8_t>(0);
-              if (t == T::STATS) return static_cast<uint8_t>(1);
-              return static_cast<uint8_t>(2);  // STATS_LIFE (+ legacy remaps)
-            },
-            [](uint8_t displayIdx) {
-              using T = CrossPointSettings::UI_THEME;
-              static constexpr T kOrder[] = {T::BARE, T::STATS, T::STATS_LIFE};
-              if (displayIdx >= sizeof(kOrder) / sizeof(kOrder[0])) displayIdx = 0;
-              SETTINGS.uiTheme = static_cast<uint8_t>(kOrder[displayIdx]);
-              // Theme status-bar defaults (user can still change afterward).
-              if (kOrder[displayIdx] == T::BARE) {
-                SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_HIDE;
-                SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
-                SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_HIDE;
-                SETTINGS.syncSystemStatusLegacyFromSlots();
-              } else {
-                // Stats / Stats-Life: battery left (with %), clock right.
-                SETTINGS.systemStatusBarLeft = CrossPointSettings::SYS_SLOT_BATTERY;
-                SETTINGS.systemStatusBarMiddle = CrossPointSettings::SYS_SLOT_HIDE;
-                SETTINGS.systemStatusBarRight = CrossPointSettings::SYS_SLOT_CLOCK;
-                SETTINGS.systemBatteryDisplay = CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT;
-                SETTINGS.syncSystemStatusLegacyFromSlots();
-              }
-            },
-            "uiTheme", StrId::STR_CAT_DISPLAY),
+        // Picker is device-specific: buildUiThemeSetting() (Spectral = X3 only).
+        buildUiThemeSetting(),
+        // Shown only when Theme = Spectral (filtered in SettingsActivity).
+        buildSpectralSideButtonSetting(true),
+        buildSpectralSideButtonSetting(false),
         SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
                           {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER,
                            StrId::STR_COVER_CUSTOM, StrId::STR_NONE_OPT, StrId::STR_QUICK_RESUME},
                           "sleepScreen", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
-                          {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY),
+                          {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY)
+            .withNestedUnderParent(),  // under Sleep Screen
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
-                          "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
+                          "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY)
+            .withNestedUnderParent(),  // under Sleep Screen
         SettingInfo::Enum(
             StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
             {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
@@ -271,6 +348,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),
         // Remap Front Buttons is inserted by SettingsActivity *before* Orient.
+        // Orient is marked nestedUnderParent there only when Remap is present (no-touch).
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
         // Tilt (if IMU) is inserted after Orient by getSettingsList below.
@@ -282,8 +360,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        // Shown only when short or long power is Footnotes (filtered in SettingsActivity).
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
-                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
+                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS)
+            .withNestedUnderParent(),
 
         // --- System ---
         SettingInfo::Value(

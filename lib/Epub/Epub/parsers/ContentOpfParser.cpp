@@ -59,20 +59,14 @@ ContentOpfParser::~ContentOpfParser() {
 size_t ContentOpfParser::write(const uint8_t data) { return write(&data, 1); }
 
 size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
-  if (!parser) {
-    // After a clean metadata-only stop we destroy the parser; still accept the
-    // remainder of the ZIP inflate so the stream reader reports success.
-    return metadataOnly && metadataFinished ? size : 0;
-  }
-
-  // Already finished metadata-only extract — drain remaining OPF bytes.
+  // Metadata-only extract (synopsis / light OPF): ZipFile(allowEarlyStop) treats a
+  // short write as "sink is done". Returning `size` here used to drain the entire
+  // inflated content.opf (often multi‑MB with full manifest) — 10–20s on SD.
   if (metadataOnly && metadataFinished) {
-    if (remainingSize > size) {
-      remainingSize -= size;
-    } else {
-      remainingSize = 0;
-    }
-    return size;
+    return 0;
+  }
+  if (!parser) {
+    return 0;
   }
 
   const uint8_t* currentBufferPos = buffer;
@@ -80,13 +74,8 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
 
   while (remainingInBuffer > 0) {
     if (metadataOnly && metadataFinished) {
-      // Stopped mid-buffer after </metadata>.
-      if (remainingSize > remainingInBuffer) {
-        remainingSize -= remainingInBuffer;
-      } else {
-        remainingSize = 0;
-      }
-      return size;
+      // Bytes already fed to Expat this call; refuse the rest → early ZIP stop.
+      return static_cast<size_t>(currentBufferPos - buffer);
     }
 
     void* const buf = XML_GetBuffer(parser, 1024);
@@ -103,22 +92,11 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     const XML_Status status =
         XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead);
     if (status == XML_STATUS_ERROR) {
-      // Intentional abort after </metadata> for description-only extracts.
+      // Intentional abort after description or </metadata> for metadata-only extracts.
       if (metadataOnly && metadataFinished && XML_GetErrorCode(parser) == XML_ERROR_ABORTED) {
-        currentBufferPos += toRead;
-        remainingInBuffer -= toRead;
-        if (remainingSize > toRead) {
-          remainingSize -= toRead;
-        } else {
-          remainingSize = 0;
-        }
-        // Swallow the rest of this write without further XML_Parse.
-        if (remainingSize > remainingInBuffer) {
-          remainingSize -= remainingInBuffer;
-        } else {
-          remainingSize = 0;
-        }
-        return size;
+        // Report only bytes consumed so ZipFile::readFileToStream early-stops
+        // inflate instead of decompressing the rest of the OPF.
+        return static_cast<size_t>(currentBufferPos - buffer) + toRead;
       }
       LOG_DBG("COF", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
@@ -128,7 +106,16 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
 
     currentBufferPos += toRead;
     remainingInBuffer -= toRead;
-    remainingSize -= toRead;
+    if (remainingSize > toRead) {
+      remainingSize -= toRead;
+    } else {
+      remainingSize = 0;
+    }
+
+    // Abort may set metadataFinished without ERROR if Stop was cooperative.
+    if (metadataOnly && metadataFinished) {
+      return static_cast<size_t>(currentBufferPos - buffer);
+    }
   }
 
   return size;
@@ -451,14 +438,19 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
       (strcmp(name, "dc:description") == 0 || strcmp(name, "description") == 0 ||
        strcmp(name, "opf:description") == 0)) {
     self->state = IN_METADATA;
+    // Synopsis path only needs dc:description — stop as soon as we have it so we
+    // never inflate the rest of metadata + the (huge) manifest/spine.
+    if (self->metadataOnly && !self->description.empty() && self->parser != nullptr) {
+      self->metadataFinished = true;
+      XML_StopParser(self->parser, XML_FALSE);
+    }
     return;
   }
 
   if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
     self->state = IN_PACKAGE;
     if (self->metadataOnly && self->parser != nullptr) {
-      // Description/title already captured — abort parse; write() drains the rest
-      // of the OPF stream so unindexed books can still load a synopsis quickly.
+      // No description (or empty): still stop before manifest/spine inflate.
       self->metadataFinished = true;
       XML_StopParser(self->parser, XML_FALSE);
     }

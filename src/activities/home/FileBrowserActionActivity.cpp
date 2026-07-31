@@ -116,10 +116,17 @@ void FileBrowserActionActivity::activateSelected() {
       return;
 
     case FileBrowserAction::Description: {
-      std::string desc = BookActions::loadBookDescription(bookPath);
-      startActivityForResult(
-          std::make_unique<BookDescriptionActivity>(renderer, mappedInput, title, std::move(desc)),
-          [this](const ActivityResult&) { stayInMenu(); });
+      // Never block Confirm. Push immediately; synopsis paints Loading then loads.
+      LOG_DBG("MENU", "Synopsis selected (warmed=%u bytes)", static_cast<unsigned>(warmedSynopsis.size()));
+      if (!warmedSynopsis.empty()) {
+        startActivityForResult(
+            std::make_unique<BookDescriptionActivity>(renderer, mappedInput, title, std::move(warmedSynopsis)),
+            [this](const ActivityResult&) { stayInMenu(); });
+      } else {
+        startActivityForResult(
+            std::make_unique<BookDescriptionActivity>(renderer, mappedInput, title, std::string{}, bookPath),
+            [this](const ActivityResult&) { stayInMenu(); });
+      }
       return;
     }
 
@@ -259,7 +266,28 @@ void FileBrowserActionActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // Idle warm: if description.html already exists, preload while the user reads
+  // the menu (file read only — never OPF here, that would freeze the menu).
+  if (bookMode && !synopsisWarmAttempted) {
+    synopsisWarmAttempted = true;
+    if (FsHelpers::hasEpubExtension(bookPath)) {
+      Epub epub(bookPath, "/.crosspoint");
+      const std::string descPath = epub.getCachePath() + "/description.html";
+      if (Storage.exists(descPath.c_str())) {
+        const uint32_t t0 = millis();
+        warmedSynopsis = BookActions::loadBookDescription(bookPath);
+        LOG_DBG("MENU", "warm synopsis cache %lums (%u bytes)", static_cast<unsigned long>(millis() - t0),
+                static_cast<unsigned>(warmedSynopsis.size()));
+      }
+    }
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      mappedInput.getReleasedFrontButton() == HalGPIO::BTN_BACK) {
+    // Drain both mapped and raw Back edges so Home does not re-open Menu on
+    // the residual release after finish() (minimal home Menu is BTN_BACK).
+    (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+    (void)mappedInput.getReleasedFrontButton();
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));

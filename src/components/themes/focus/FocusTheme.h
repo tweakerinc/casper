@@ -1,14 +1,20 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "components/themes/HomeCoverMetrics.h"
 #include "components/themes/minimal/MinimalTheme.h"
 
-// Stats home (and Stats-Life base): large uncropped jacket left + book-stats
-// column right (top-aligned). Under the box:
-//   Stats      → book title + author (Bare spacing)
-//   Stats-Life → Lifetime Stats card (same cover gen as Stats)
+class GfxRenderer;
+struct RecentBook;
+struct GlobalReadingStats;
+
+// Stats home (X3 + X4 same layout): large uncropped jacket left + book-stats
+// column right. Under the box (side Left/Right toggles on Home):
+//   default → book title + author
+//   toggled → Lifetime Stats card (same cover plate either way)
+// Calendar-dependent stats show "-" when date/RTC data is unavailable.
 namespace FocusMetrics {
 constexpr ThemeMetrics makeValues() {
   ThemeMetrics v = MinimalMetrics::values;
@@ -29,6 +35,22 @@ constexpr int homeCoverImageWidth = HomeCoverMetrics::imageWidth;
 constexpr int homeCoverImageHeight = HomeCoverMetrics::imageHeight;
 constexpr int homeCoverThumbHeight = HomeCoverMetrics::thumbHeight;
 }  // namespace FocusMetrics
+
+// Session toggle for Stats under-box (title/author vs lifetime card).
+// HomeActivity flips this on side Left/Right; not persisted.
+namespace FocusThemeUi {
+inline bool& showLifeUnderBox() {
+  static bool v = false;
+  return v;
+}
+
+// White-fill + redraw only the free band under the cover|stats box (title ↔
+// lifetime toggle). Leaves chrome, cover, right stats, and footer untouched.
+// Returns the logical dirty rect for GfxRenderer::displayWindow — do not full-
+// frame displayBuffer (that blackens multipass cover greys).
+Rect redrawUnderBox(GfxRenderer& renderer, const std::vector<RecentBook>& recentBooks,
+                    const GlobalReadingStats* globalStats);
+}  // namespace FocusThemeUi
 
 class FocusTheme : public MinimalTheme {
  public:

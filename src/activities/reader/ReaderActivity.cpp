@@ -19,6 +19,28 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 
+bool ReaderActivity::s_preferFastFirstRefresh = false;
+bool ReaderActivity::s_deferFirstPageTextAa = false;
+uint32_t ReaderActivity::s_openWallStartMs = 0;
+
+void ReaderActivity::setOpenHints(const bool preferFastFirstRefresh, const bool deferFirstPageTextAa) {
+  s_preferFastFirstRefresh = preferFastFirstRefresh;
+  s_deferFirstPageTextAa = deferFirstPageTextAa;
+  s_openWallStartMs = millis();
+}
+
+bool ReaderActivity::takeOpenHints(bool& preferFastFirstRefresh, bool& deferFirstPageTextAa,
+                                   uint32_t& openWallStartMs) {
+  preferFastFirstRefresh = s_preferFastFirstRefresh;
+  deferFirstPageTextAa = s_deferFirstPageTextAa;
+  openWallStartMs = s_openWallStartMs;
+  const bool had = s_preferFastFirstRefresh || s_deferFirstPageTextAa || s_openWallStartMs != 0;
+  s_preferFastFirstRefresh = false;
+  s_deferFirstPageTextAa = false;
+  // Keep s_openWallStartMs until first-ink log (EpubReader may read openWallStartMs()).
+  return had;
+}
+
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
 bool ReaderActivity::isTxtFile(const std::string& path) {
@@ -53,7 +75,10 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     // activity follows redraws the full screen anyway.
     std::optional<GfxRenderer::FrameBufferLoan> loan;
     if (uncached) loan.emplace(renderer);
+    const uint32_t t0 = millis();
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
+    LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(),
+            static_cast<unsigned long>(millis() - t0), uncached ? "miss" : "hit");
   }
   if (loaded) {
     return epub;
@@ -110,23 +135,24 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  // Swap keeps a stacked Home alive (Phase 2 goHome fast path).
+  activityManager.swapActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
-  activityManager.replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
+  activityManager.swapActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
 }
 
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
-  activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
+  activityManager.swapActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  activityManager.swapActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
 }
 
 void ReaderActivity::onEnter() {
@@ -137,7 +163,9 @@ void ReaderActivity::onEnter() {
     return;
   }
 
+  const uint32_t tEnter = millis();
   sdFontSystem.ensureLoaded(renderer);
+  LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));
 
   currentBookPath = initialBookPath;
   if (isBmpFile(initialBookPath)) {
@@ -162,6 +190,8 @@ void ReaderActivity::onEnter() {
       onGoBack();
       return;
     }
+    LOG_DBG("READER", "ReaderActivity open total %lums before EpubReader",
+            static_cast<unsigned long>(millis() - tEnter));
     onGoToEpubReader(std::move(epub));
   }
 }

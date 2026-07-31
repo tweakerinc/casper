@@ -87,6 +87,7 @@ static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN
     case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
       if (!activityManager.handleForcedRefresh()) {
+        // Match v0.1.3: HALF scrub of current FB (activities may override).
         RenderLock lock;
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       }
@@ -148,6 +149,9 @@ EpdFont sourceserif18ItalicFont(&sourceserif4_18_italic);
 EpdFont sourceserif18BoldItalicFont(&sourceserif4_18_bolditalic);
 EpdFontFamily sourceserif18FontFamily(&sourceserif18RegularFont, &sourceserif18BoldFont, &sourceserif18ItalicFont,
                                       &sourceserif18BoldItalicFont);
+// Clockface hero: digits-only 72 pt (Bold face used as REGULAR style slot).
+EpdFont sourceserif72ClockFont(&sourceserif4_72_clock);
+EpdFontFamily sourceserif72ClockFontFamily(&sourceserif72ClockFont);
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
@@ -310,6 +314,7 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(SOURCESERIF4_14_FONT_ID, sourceserif14FontFamily);
   renderer.insertFont(SOURCESERIF4_16_FONT_ID, sourceserif16FontFamily);
   renderer.insertFont(SOURCESERIF4_18_FONT_ID, sourceserif18FontFamily);
+  renderer.insertFont(SOURCESERIF4_72_CLOCK_FONT_ID, sourceserif72ClockFontFamily);
 #endif  // OMIT_FONTS
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
 
@@ -363,11 +368,13 @@ void setup() {
     return;
   }
 
-  HalSystem::checkPanic();
-
+  // Install RTC FAT timestamps as early as possible. Without a callback, SdFat
+  // stamps new files 12/31/2025 11:00 PM. Install once with no offset, then again
+  // after settings so UTC offset is correct for crash_report and all later files.
+  Storage.installDateTimeCallback(nullptr);
   SETTINGS.loadFromFile();
-  // Stamp new SD files/dirs with RTC local time (fixes 12/31/2025 / 1980 dates).
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
+  HalSystem::checkPanic();
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
@@ -590,12 +597,10 @@ void loop() {
     }
   }
 
-  // Refresh chrome when USB is plugged or unplugged.
-  // Home with a settled grayscale cover skips spurious multipass redraws; still
-  // request so activities that show battery chrome can update when relevant.
-  if (gpio.wasUsbStateChanged()) {
-    activityManager.requestUpdate();
-  }
+  // Do not force a full-screen refresh for USB plug/unplug, clock, or battery.
+  // Chrome is redrawn on the next user-driven paint (page turn, menu, navigation).
+  // A background requestUpdate here used to black-flash home multipass themes.
+  (void)gpio.wasUsbStateChanged();  // consume edge so it does not stick
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();

@@ -1,5 +1,10 @@
 #include "BookDescriptionActivity.h"
 
+#include <Logging.h>
+
+#include "BookActions.h"
+#include <HalDisplay.h>
+
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -435,15 +440,14 @@ void BookDescriptionActivity::rebuildLines() {
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
 
-  fontId = SETTINGS.getReaderFontId();
-  if (fontId == 0) {
-    fontId = UI_12_FONT_ID;
-  }
+  // Builtin UI font only — reader/SD fonts force per-glyph SD loads during wrap
+  // and made synopsis feel like a 15–20s "load" after the text was already in RAM.
+  fontId = UI_12_FONT_ID;
+  titleFontId = UI_12_FONT_ID;
 
   const int baseLineH = std::max(1, renderer.getLineHeight(fontId));
-  const float spacing = SETTINGS.getReaderLineCompression();
-  lineHeight = std::max(baseLineH, static_cast<int>(baseLineH * spacing + 0.5f));
-  paragraphGap = SETTINGS.extraParagraphSpacing ? lineHeight : std::max(lineHeight / 2, baseLineH / 3);
+  lineHeight = baseLineH;
+  paragraphGap = std::max(lineHeight / 2, baseLineH / 3);
 
   const int sidePad = metrics.contentSidePadding + static_cast<int>(SETTINGS.screenMargin);
   const int scrollReserve = metrics.scrollBarWidth + metrics.scrollBarRightOffset + 4;
@@ -455,12 +459,17 @@ void BookDescriptionActivity::rebuildLines() {
   textWidth = std::max(40, pageWidth - sidePad * 2 - scrollReserve);
   visibleLines = std::max(1, bodyHeight / lineHeight);
 
+  const uint32_t tLayout = millis();
   if (body.empty()) {
     lines.clear();
-    lines.push_back(Line{{{tr(STR_NO_DESCRIPTION), EpdFontFamily::REGULAR}}, false});
+    if (!pendingBodyLoad) {
+      lines.push_back(Line{{{tr(STR_NO_DESCRIPTION), EpdFontFamily::REGULAR}}, false});
+    }
   } else {
     layoutFromHtml(body);
   }
+  LOG_DBG("DESC", "layout %lums (%u lines, %u body bytes)", static_cast<unsigned long>(millis() - tLayout),
+          static_cast<unsigned>(lines.size()), static_cast<unsigned>(body.size()));
 
   {
     int used = 0;
@@ -477,6 +486,7 @@ void BookDescriptionActivity::rebuildLines() {
   if (scrollLine > 0 && scrollLine + visibleLines > static_cast<int>(lines.size())) {
     scrollLine = std::max(0, static_cast<int>(lines.size()) - visibleLines);
   }
+  linesDirty = false;
 }
 
 int BookDescriptionActivity::pageStep() const { return std::max(1, visibleLines - 1); }
@@ -498,11 +508,25 @@ void BookDescriptionActivity::drawScrollBar(const int totalLines) const {
 void BookDescriptionActivity::onEnter() {
   Activity::onEnter();
   scrollLine = 0;
-  rebuildLines();
+  // OPF/layout deferred until after Loading is on glass (see loop / render).
+  LOG_DBG("DESC", "onEnter pendingLoad=%d body=%u", pendingBodyLoad ? 1 : 0, static_cast<unsigned>(body.size()));
   requestUpdate();
 }
 
 void BookDescriptionActivity::loop() {
+  // Only load after Loading frame is painted — never before first ink.
+  if (pendingBodyLoad && loadingFramePainted) {
+    pendingBodyLoad = false;
+    const uint32_t t0 = millis();
+    body = BookActions::loadBookDescription(bookPath);
+    LOG_DBG("DESC", "loadDescription %lums (%u bytes)", static_cast<unsigned long>(millis() - t0),
+            static_cast<unsigned>(body.size()));
+    scrollLine = 0;
+    linesDirty = true;
+    requestUpdate();
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -531,16 +555,42 @@ void BookDescriptionActivity::loop() {
 }
 
 void BookDescriptionActivity::render(RenderLock&&) {
+  const uint32_t tRender = millis();
   renderer.clearScreen();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+
+  // --- Instant Loading shell (no HTML wrap, no reader font) ---
+  if (pendingBodyLoad && !loadingFramePainted) {
+    fontId = UI_12_FONT_ID;
+    titleFontId = UI_12_FONT_ID;
+    const int chromeH =
+        BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, chromeH}, nullptr);
+    layoutTitleBlock(pageWidth);
+    drawTitleBlock(pageWidth);
+    contentTop = titleBlockBottom;
+    textLeft = metrics.contentSidePadding + static_cast<int>(SETTINGS.screenMargin);
+    renderer.drawText(UI_12_FONT_ID, textLeft, contentTop, tr(STR_LOADING), true);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    const uint32_t tDisp = millis();
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    loadingFramePainted = true;
+    LOG_DBG("DESC", "Loading shell draw=%lums display=%lums", static_cast<unsigned long>(tDisp - tRender),
+            static_cast<unsigned long>(millis() - tDisp));
+    return;
+  }
 
   // Top chrome only (battery/clock) — book title is drawn larger below.
   const int chromeH =
       BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, chromeH}, nullptr);
 
-  rebuildLines();
+  if (linesDirty) {
+    rebuildLines();
+  }
   drawTitleBlock(pageWidth);
 
   const int total = static_cast<int>(lines.size());
@@ -582,5 +632,9 @@ void BookDescriptionActivity::render(RenderLock&&) {
   const auto labels =
       mappedInput.mapLabels(tr(STR_BACK), "", canUp ? tr(STR_DIR_UP) : "", canDown ? tr(STR_DIR_DOWN) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  const uint32_t tDisp = millis();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  LOG_DBG("DESC", "content paint draw=%lums display=%lums total=%lums", static_cast<unsigned long>(tDisp - tRender),
+          static_cast<unsigned long>(millis() - tDisp), static_cast<unsigned long>(millis() - tRender));
+  (void)pageHeight;
 }

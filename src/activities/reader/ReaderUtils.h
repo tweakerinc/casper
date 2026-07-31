@@ -249,15 +249,26 @@ struct BackNavCallback {
 };
 
 // Returns true if the back button was consumed (caller should return).
-// Long press (>= GO_BACK_OR_HOME_MS):
+//
+// Long press (observed while still held for >= GO_BACK_OR_HOME_MS):
 // - default: go to file browser
 // - with backShortToFileBrowser: go home
-// Short press (< GO_BACK_OR_HOME_MS):
+// Short press (Back release that was not already handled as long-press):
 // - default: go home
-// - with backShortToFileBrowser: go to file browser.
+// - with backShortToFileBrowser: go to file browser
+//
+// Important: any Back *release* always navigates short. We must not require
+// held < threshold on release. When the main loop is busy (section build, SD,
+// first-page work), a physical short press can be sampled only on release with
+// held already >= threshold because isPressed was never polled during the hold.
+// The old (wasReleased && held < 500) check then no-oped — feeling like
+// "Back needs two presses". Long-press is only the while-held branch so a
+// missed long sample still leaves via short (home), which matches intent.
 inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
                                  const char* filePath, BackNavCallback goHome) {
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS) {
+  // Long-press only while held — must be observed across the threshold in-loop.
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS) {
     if (SETTINGS.backShortToFileBrowser) {
       goHome.fn(goHome.ctx);
     } else {
@@ -265,7 +276,8 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
     }
     return true;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_BACK_OR_HOME_MS) {
+  // Any Back release → short navigation. Do not gate on held time (see above).
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (SETTINGS.backShortToFileBrowser) {
       activityManager.goToFileBrowser(filePath);
     } else {

@@ -15,6 +15,7 @@
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/bare/BareTheme.h"
+#include "components/themes/clockface/ClockfaceTheme.h"
 #include "components/themes/focus/FocusTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
 
@@ -37,25 +38,38 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<BareTheme>();
       currentMetrics = &BareMetrics::values;
       break;
-    case CrossPointSettings::UI_THEME::STATS:
-      LOG_DBG("UI", "Using Stats theme");
-      currentTheme = std::make_unique<FocusTheme>();
-      currentMetrics = &FocusMetrics::values;
+    case CrossPointSettings::UI_THEME::SPECTRAL:
+      // X3-only home face. X4 (or bad settings) falls through to Bare.
+      if (gpio.deviceIsX3()) {
+        LOG_DBG("UI", "Using Spectral theme");
+        currentTheme = std::make_unique<ClockfaceTheme>();
+        currentMetrics = &ClockfaceMetrics::values;
+        break;
+      }
+      LOG_DBG("UI", "Spectral not available on X4 — using Bare");
+      currentTheme = std::make_unique<BareTheme>();
+      currentMetrics = &BareMetrics::values;
       break;
-    // Stats-Life shares FocusTheme layout + same cover gen; lifetime strip replaces title/author.
+    case CrossPointSettings::UI_THEME::GHOST:  // parked — fall through to Bare
+      LOG_DBG("UI", "Ghost theme parked — using Bare");
+      currentTheme = std::make_unique<BareTheme>();
+      currentMetrics = &BareMetrics::values;
+      break;
+    case CrossPointSettings::UI_THEME::STATS:
+    // Stats-Life + parked/legacy skins all share FocusTheme (title ↔ lifetime toggle).
     case CrossPointSettings::UI_THEME::STATS_LIFE:
-    case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:   // parked → Stats-Life
-    case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:    // parked → Stats-Life
-    case CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE:  // legacy
-    case CrossPointSettings::UI_THEME::DASHBOARD_CARD:      // legacy
-    case CrossPointSettings::UI_THEME::MINIMAL:             // removed
-    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:       // removed
-    case CrossPointSettings::UI_THEME::CLASSIC:             // removed from picker
-    case CrossPointSettings::UI_THEME::LYRA:                // removed from picker
-    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:       // removed from picker
-    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:         // removed from picker
+    case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
+    case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
+    case CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE:
+    case CrossPointSettings::UI_THEME::DASHBOARD_CARD:
+    case CrossPointSettings::UI_THEME::MINIMAL:
+    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
+    case CrossPointSettings::UI_THEME::CLASSIC:
+    case CrossPointSettings::UI_THEME::LYRA:
+    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
+    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     default:
-      LOG_DBG("UI", "Using Stats-Life theme (Focus layout + lifetime)");
+      LOG_DBG("UI", "Using Stats theme");
       currentTheme = std::make_unique<FocusTheme>();
       currentMetrics = &FocusMetrics::values;
       break;

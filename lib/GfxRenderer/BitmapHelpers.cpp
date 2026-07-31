@@ -80,6 +80,7 @@ int adjustPixel1Bit(int gray) {
   return adjusted;
 }
 
+// Home covers (c30 / Casper v0.1.3): same mild curve as 1-bit covers.
 int adjustPixelCoverThumb(int gray) { return adjustPixel1Bit(gray); }
 
 // Optional 2-bit HQ path (not used for home covers — too dark on jackets).

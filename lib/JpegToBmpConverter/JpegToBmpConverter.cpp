@@ -818,28 +818,32 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (oneBit) {
     ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
-    if (!ctx.atkinson1BitDitherer) {
+    if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->isValid()) {
       LOG_ERR("JPG", "OOM: Atkinson1BitDitherer");
+      ctx.atkinson1BitDitherer.reset();
       return false;
     }
   } else if (!USE_8BIT_OUTPUT) {
     if (coverHighQuality) {
       // Equal 0/85/170/255 — smooth midtones with fine dither (not 1-bit crosshatch).
       ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/true);
-      if (!ctx.atkinsonDitherer) {
+      if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->isValid()) {
         LOG_ERR("JPG", "OOM: AtkinsonDitherer (cover)");
+        ctx.atkinsonDitherer.reset();
         return false;
       }
     } else if (USE_FLOYD_STEINBERG) {
       ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
-      if (!ctx.fsDitherer) {
+      if (!ctx.fsDitherer || !ctx.fsDitherer->isValid()) {
         LOG_ERR("JPG", "OOM: FloydSteinbergDitherer");
+        ctx.fsDitherer.reset();
         return false;
       }
     } else if (USE_ATKINSON) {
       ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/false);
-      if (!ctx.atkinsonDitherer) {
+      if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->isValid()) {
         LOG_ERR("JPG", "OOM: AtkinsonDitherer");
+        ctx.atkinsonDitherer.reset();
         return false;
       }
     }
@@ -914,7 +918,7 @@ bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Prin
   return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false);
 }
 
-// Home covers (c30): 2-bit balanced Atkinson + mild lift, contain-fit.
+// Home covers (c30 / v0.1.3): 2-bit balanced Atkinson + mild lift at gen.
 // Shared by Bare / Stats / Stats-Life. MCU max-height + empty-bin carry-forward.
 // Pair with home grayscale multipass for clean midtones (minimal dither grain).
 bool JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut,

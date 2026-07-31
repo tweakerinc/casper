@@ -5,25 +5,25 @@
 // Home hero cover generation for Bare / Stats / Stats-Life.
 //
 // Epub::generateThumbBmp(H) writes floor(H*3/4)×H (3:4 contain-fit, c30 balanced
-// Atkinson). Same JpegToBmpConverter for all themes. Nearest-neighbor scale of
-// that 2-bit dither = gridlines / horizontal bands — gen size must match blit plate.
+// Atkinson — Casper v0.1.3). Same JpegToBmpConverter for all themes. Nearest-
+// neighbor scale of that 2-bit dither = gridlines / bands — gen size must match plate.
 //   Bare           → fixed 420×560
 //   Stats+Stats-Life → ONE shared height key (same thumb file for both themes)
 //
 // LAW: plate width/height for blit == thumbWidthForHeight(H)×H. Never shrink the
 // plate after gen (that forces scale-down and invents hairlines).
 namespace HomeCoverMetrics {
+// Epub gen width for a given height key.
+constexpr int thumbWidthForHeight(const int height) {
+  return height > 0 ? (height * 3 + 1) / 4 : 1;
+}
+
 // Bare-native (do not enlarge — Bare quality depends on 1:1).
 constexpr int bareImageWidth = 420;
 constexpr int bareImageHeight = 560;
 constexpr int imageWidth = bareImageWidth;
 constexpr int imageHeight = bareImageHeight;
 constexpr int thumbHeight = bareImageHeight;
-
-// Epub gen width for a given height key.
-constexpr int thumbWidthForHeight(const int height) {
-  return height > 0 ? (height * 3 + 1) / 4 : 1;
-}
 
 // Height key so gen width == maxCoverW (3:4 plate fills the column).
 inline int thumbHeightForCoverWidth(const int maxCoverW) {

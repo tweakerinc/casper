@@ -1,5 +1,6 @@
 #include "CrossPointSettings.h"
 
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -290,6 +291,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperOpendyslexicMigrated"] = casperOpendyslexicMigrated;
   doc["casperBuiltinFontsSlimMigrated"] = casperBuiltinFontsSlimMigrated;
   doc["casperButtonAxisMigrated"] = casperButtonAxisMigrated;
+  doc["casperSpeedDefaultsMigrated"] = casperSpeedDefaultsMigrated;
   // System top chrome slots (also in SettingsList when present).
   doc["systemStatusBarLeft"] = systemStatusBarLeft;
   doc["systemStatusBarMiddle"] = systemStatusBarMiddle;
@@ -499,10 +501,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
 
   // Theme / battery %: DynamicEnum (no valuePtr) — load real storage values.
-  // Unknown / out-of-range theme ids fall back to Dashboard.
+  // Unknown / out-of-range theme ids fall back to Stats (then remapped if needed).
   if (!doc["uiTheme"].isNull()) {
-    const uint8_t storedTheme = doc["uiTheme"] | static_cast<uint8_t>(STATS_LIFE);
-    // Accept any known append-only id; picker remaps legacy ones on display.
+    const uint8_t storedTheme = doc["uiTheme"] | static_cast<uint8_t>(STATS);
+    // Accept any known append-only id; remaps below collapse legacy skins → Stats.
     uiTheme = storedTheme;
   }
   if (!doc["hideBatteryPercentage"].isNull()) {
@@ -542,10 +544,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       clamp(doc["statusBarTimeLeft"] | (uint8_t)TIME_LEFT_BOOK, STATUS_BAR_TIME_LEFT_COUNT, TIME_LEFT_BOOK);
 
   // One-time Casper home migration: old SD settings often still have uiTheme=Lyra (1).
-  // Force Stats (+ sensible chrome) once, then let the user change theme freely.
+  // X4 → Bare (clean cover home); X3 → Stats (stats chrome fits the taller panel).
+  // After this runs once, the user can change theme freely in Settings.
   const uint8_t migrated = doc["casperHomeMigrated"] | (uint8_t)0;
   if (migrated == 0) {
-    uiTheme = STATS;
+    uiTheme = gpio.deviceIsX4() ? static_cast<uint8_t>(BARE) : static_cast<uint8_t>(STATS);
     statusBarProgressBar = BOOK_PROGRESS;
     statusBarProgressBarThickness = PROGRESS_BAR_THIN;
     statusBarBattery = 1;
@@ -556,19 +559,40 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperHomeMigrated = 1;
     casperProgressBarOrderMigrated = 1;  // BOOK_PROGRESS already uses new enum values
     needsResave = true;
-    LOG_DBG("CPS", "casperHomeMigrated: defaulted uiTheme=Stats, screenMargin=10");
+    LOG_DBG("CPS", "casperHomeMigrated: defaulted uiTheme=%s, screenMargin=10",
+            gpio.deviceIsX4() ? "Bare" : "Stats");
   } else {
     casperHomeMigrated = 1;
   }
 
-  // Removed skins remap to Stats-Life (Bare stays). Enum values remain stable in JSON.
-  // Shelf + Stats Scroll parked (picker no longer offers them).
+  // Removed skins + Stats-Life merge into Stats (Bare / SPECTRAL stay).
+  // Enum values remain stable in JSON. Shelf + Stats Scroll parked.
   if (uiTheme == MINIMAL || uiTheme == LYRA_CAROUSEL || uiTheme == LYRA || uiTheme == LYRA_3_COVERS ||
       uiTheme == ROUNDEDRAFF || uiTheme == CLASSIC || uiTheme == DASHBOARD_MAGAZINE || uiTheme == DASHBOARD_CARD ||
-      uiTheme == DASHBOARD_RECENTS || uiTheme == DASHBOARD_SCROLL) {
-    uiTheme = STATS_LIFE;
+      uiTheme == DASHBOARD_RECENTS || uiTheme == DASHBOARD_SCROLL || uiTheme == STATS_LIFE) {
+    uiTheme = STATS;
     needsResave = true;
-    LOG_DBG("CPS", "Remapped removed/legacy theme → Stats-Life");
+    LOG_DBG("CPS", "Remapped removed/legacy/Stats-Life theme → Stats");
+  }
+
+  // Ghost parked — fall back to Bare until the theme returns.
+  if (uiTheme == GHOST) {
+    uiTheme = BARE;
+    needsResave = true;
+    LOG_DBG("CPS", "Remapped Ghost → Bare (theme parked)");
+  }
+
+  // SPECTRAL is X3-only. X4 (or missing RTC path) falls back to Bare.
+  if (uiTheme == SPECTRAL && !gpio.deviceIsX3()) {
+    uiTheme = BARE;
+    needsResave = true;
+    LOG_DBG("CPS", "Remapped SPECTRAL → Bare (X3-only theme)");
+  }
+
+  // SPECTRAL: never keep a system-bar clock (home owns the clock).
+  if (uiTheme == SPECTRAL && systemStatusBarHas(SYS_SLOT_CLOCK)) {
+    stripSystemStatusBarClock();
+    needsResave = true;
   }
 
   // One-time: progress bar enum was Book=0, Chapter=1, Hide=2 → Hide=0, Book=1, Chapter=2.
@@ -618,6 +642,19 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     LOG_DBG("CPS", "casperClockDefaultsMigrated: 12h UTC-7 system+reader clock visible");
   } else {
     casperClockDefaultsMigrated = 1;
+  }
+
+  // One-time speed defaults: text AA and embedded CSS off (open/page-turn cost).
+  // Users can re-enable either in Manage Fonts after this migration runs once.
+  const uint8_t speedMigrated = doc["casperSpeedDefaultsMigrated"] | (uint8_t)0;
+  if (speedMigrated == 0) {
+    textAntiAliasing = 0;
+    embeddedStyle = 0;
+    casperSpeedDefaultsMigrated = 1;
+    needsResave = true;
+    LOG_DBG("CPS", "casperSpeedDefaultsMigrated: textAA=off embeddedStyle=off");
+  } else {
+    casperSpeedDefaultsMigrated = 1;
   }
 
   // Clock is always top-center when shown. Collapse legacy Left (2) / invalid into Show.
@@ -872,6 +909,10 @@ void CrossPointSettings::syncSystemStatusLegacyFromSlots() {
 
 void CrossPointSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content) {
   if (content >= SYSTEM_STATUS_SLOT_COUNT) content = SYS_SLOT_HIDE;
+  // SPECTRAL owns the clock on the home screen — never place it on the system bar.
+  if (content == SYS_SLOT_CLOCK && !systemStatusBarAllowsClock()) {
+    content = SYS_SLOT_HIDE;
+  }
   if (content != SYS_SLOT_HIDE) {
     uint8_t* slots[] = {&systemStatusBarLeft, &systemStatusBarMiddle, &systemStatusBarRight};
     for (uint8_t* s : slots) {
@@ -879,6 +920,17 @@ void CrossPointSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t c
     }
   }
   slotField = content;
+  syncSystemStatusLegacyFromSlots();
+}
+
+bool CrossPointSettings::systemStatusBarAllowsClock() const {
+  return static_cast<UI_THEME>(uiTheme) != UI_THEME::SPECTRAL;
+}
+
+void CrossPointSettings::stripSystemStatusBarClock() {
+  if (systemStatusBarLeft == SYS_SLOT_CLOCK) systemStatusBarLeft = SYS_SLOT_HIDE;
+  if (systemStatusBarMiddle == SYS_SLOT_CLOCK) systemStatusBarMiddle = SYS_SLOT_HIDE;
+  if (systemStatusBarRight == SYS_SLOT_CLOCK) systemStatusBarRight = SYS_SLOT_HIDE;
   syncSystemStatusLegacyFromSlots();
 }
 

@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "components/UITheme.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/HtmlToPlainText.h"
 
@@ -23,7 +24,11 @@ constexpr int kPopupPadY = 12;
 constexpr int kHeaderLineGap = 4;
 constexpr int kTitleBodyGap = 10;
 constexpr int kCorner = 10;
-constexpr int kMaxBodyLines = 64;
+// Long multi-pack entries (e.g. "head") need many wrap lines; card height is capped.
+constexpr int kMaxBodyLines = 160;
+// Air between card and top chrome / bottom Back·Done strip.
+constexpr int kPopupGapTop = 12;
+constexpr int kPopupGapAboveHints = 10;
 
 // StarDict type-code bytes that may prefix a definition when sametypesequence is absent.
 bool isStarDictTypeCode(const unsigned char c) {
@@ -580,6 +585,7 @@ void DictionaryDefinitionActivity::normalizeDefinition() {
 void DictionaryDefinitionActivity::layoutPopup() {
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
+  const auto& metrics = UITheme::getInstance().getMetrics();
   popupW = std::max(200, pageW - kPopupMarginX * 2);
   popupX = (pageW - popupW) / 2;
 
@@ -589,14 +595,33 @@ void DictionaryDefinitionActivity::layoutPopup() {
   const int lineH = std::max(1, renderer.getLineHeight(UI_10_FONT_ID));
   const int chromeH = kPopupPadY + titleLineH + kHeaderLineGap + 2 + kTitleBodyGap + kPopupPadY;
   constexpr int minBodyLines = 3;
-  const int maxPopupH = std::max(chromeH + lineH * 4, pageH - 80);
+
+  // Free band between top status/chrome and bottom Back·Done hints — never let the
+  // card grow into either strip (long defs like "head" used pageH-80 and overflowed).
+  const int topReserve = std::max(
+      kPopupGapTop,
+      metrics.topPadding + BaseTheme::kTopChromeBatteryY +
+          std::max(metrics.batteryHeight + 4, metrics.statusBarVerticalMargin) + kPopupGapTop);
+  // Touch themes zero buttonHintsHeight; still leave a floor so the card is not full-bleed.
+  const int hintsH = metrics.buttonHintsHeight > 0 ? metrics.buttonHintsHeight : 40;
+  const int bottomReserve = hintsH + kPopupGapAboveHints;
+  const int bandH = std::max(chromeH + lineH * minBodyLines, pageH - topReserve - bottomReserve);
+
   const int contentLines = std::max(minBodyLines, static_cast<int>(lines.size()));
   const int desiredH = chromeH + contentLines * lineH;
-  popupH = std::clamp(desiredH, chromeH + minBodyLines * lineH, maxPopupH);
-  popupY = std::max(16, (pageH - popupH) / 2);
+  popupH = std::clamp(desiredH, chromeH + minBodyLines * lineH, bandH);
+
+  // Center in the free band; clamp so top/bottom gaps always hold.
+  popupY = topReserve + std::max(0, (bandH - popupH) / 2);
+  if (popupY + popupH > pageH - bottomReserve) {
+    popupY = pageH - bottomReserve - popupH;
+  }
+  if (popupY < topReserve) {
+    popupY = topReserve;
+  }
 
   bodyTop = popupY + kPopupPadY + titleLineH + kHeaderLineGap + 2 + kTitleBodyGap;
-  bodyH = popupY + popupH - kPopupPadY - bodyTop;
+  bodyH = std::max(lineH, popupY + popupH - kPopupPadY - bodyTop);
   visibleLines = std::max(1, bodyH / lineH);
   if (scrollLine > 0 && scrollLine + visibleLines > static_cast<int>(lines.size())) {
     scrollLine = std::max(0, static_cast<int>(lines.size()) - visibleLines);
@@ -743,18 +768,29 @@ void DictionaryDefinitionActivity::loop() {
     return;
   }
 
-  buttonNavigator.onNext([this] {
+  // Side buttons / front Up-Down: scroll long definitions within the capped card.
+  auto scrollDown = [this] {
     if (scrollLine + visibleLines < static_cast<int>(lines.size())) {
       scrollLine++;
       requestUpdate();
     }
-  });
-  buttonNavigator.onPrevious([this] {
+  };
+  auto scrollUp = [this] {
     if (scrollLine > 0) {
       scrollLine--;
       requestUpdate();
     }
-  });
+  };
+  buttonNavigator.onNext(scrollDown);
+  buttonNavigator.onPrevious(scrollUp);
+
+  // Touch: vertical swipe scrolls (tap still dismisses via wasScreenTapped above).
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    scrollDown();
+  } else if (swipe == MappedInputManager::SwipeDir::Down) {
+    scrollUp();
+  }
 }
 
 void DictionaryDefinitionActivity::render(RenderLock&&) {

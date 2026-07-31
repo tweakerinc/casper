@@ -18,7 +18,7 @@ struct ReaderRenderSpec {
   uint16_t viewportWidth = 0;
   uint16_t viewportHeight = 0;
   bool hyphenationEnabled = false;
-  bool embeddedStyle = true;
+  bool embeddedStyle = false;
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;  // Bionic Reading (bold word prefixes)
   bool guideReadingEnabled = false;  // Guide Dots (· between words)

@@ -175,8 +175,15 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
 
   const JsonVariantConst behaviorValue = doc["syncBehavior"];
   const bool missingBehavior = behaviorValue.isNull();
-  // New installs / missing key → Disabled. Existing 0–3 values keep their meaning.
-  uint8_t behaviorRaw = behaviorValue | static_cast<uint8_t>(KOReaderSyncBehavior::OFF);
+  // Factory / missing key → OFF (disabled). Never default to Ask/Smart.
+  // Existing 0–3 values keep their meaning when the key is present.
+  uint8_t behaviorRaw = static_cast<uint8_t>(KOReaderSyncBehavior::OFF);
+  if (!missingBehavior) {
+    behaviorRaw = behaviorValue | static_cast<uint8_t>(KOReaderSyncBehavior::OFF);
+  } else {
+    LOG_DBG("KRS", "syncBehavior missing — default OFF (disabled)");
+    needsResave = true;
+  }
   if (behaviorRaw >= static_cast<uint8_t>(KOReaderSyncBehavior::COUNT)) {
     LOG_DBG("KRS", "Invalid syncBehavior %u in JSON, resetting to OFF", behaviorRaw);
     behaviorRaw = static_cast<uint8_t>(KOReaderSyncBehavior::OFF);

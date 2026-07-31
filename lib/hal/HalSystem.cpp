@@ -1,8 +1,10 @@
 #include "HalSystem.h"
 
+#include <cstdio>
 #include <string>
 
 #include "Arduino.h"
+#include "HalClock.h"
 #include "HalStorage.h"
 #include "Logging.h"
 #include "esp_debug_helpers.h"
@@ -96,6 +98,9 @@ void begin() {
 void checkPanic() {
   if (isRebootFromPanic()) {
     auto panicInfo = getPanicInfo(true);
+    // Remove first so create always goes through FsDateTime callback (some hosts
+    // keep a stale 12/31/2025 create time across O_TRUNC rewrites).
+    Storage.remove("/crash_report.txt");
     auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
       file.write(panicInfo.c_str(), panicInfo.size());
@@ -122,6 +127,21 @@ std::string getPanicInfo(bool full) {
     std::string info;
 
     info += "Casper version: " CROSSPOINT_VERSION;
+    // Wall-clock stamp (RTC when available) so the report itself carries time even if
+    // FAT metadata is wrong. Written after boot re-inits the clock; not panic-time.
+    {
+      uint16_t year = 0;
+      uint8_t month = 0, day = 0, hour = 0, minute = 0;
+      if (halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, minute)) {
+        char ts[48];
+        snprintf(ts, sizeof(ts), "\nReport written (RTC): %04u-%02u-%02u %02u:%02u",
+                 static_cast<unsigned>(year), static_cast<unsigned>(month), static_cast<unsigned>(day),
+                 static_cast<unsigned>(hour), static_cast<unsigned>(minute));
+        info += ts;
+      } else {
+        info += "\nReport written (RTC): unavailable";
+      }
+    }
     info += "\n\nPanic reason: " + std::string(panicMessage);
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";

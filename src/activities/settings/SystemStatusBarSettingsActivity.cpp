@@ -17,6 +17,7 @@
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 // Logical menu rows (visible set is rebuilt dynamically).
@@ -57,7 +58,15 @@ const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
 // Order: Left, [battery % / clock under Left], Middle, …, Right, …
 constexpr int kMaxVisible = 16;
 uint8_t gVisibleItems[kMaxVisible];
+bool gVisibleNested[kMaxVisible];
 int gVisibleCount = 0;
+
+void pushVisible(const uint8_t id, const bool nested = false) {
+  if (gVisibleCount >= kMaxVisible) return;
+  gVisibleItems[gVisibleCount] = id;
+  gVisibleNested[gVisibleCount] = nested;
+  ++gVisibleCount;
+}
 
 std::string formatUtcOffset(uint8_t biasedQ) {
   if (biasedQ > 104) biasedQ = 48;
@@ -115,44 +124,47 @@ int filteredDisplayIndex(uint8_t content, bool includeClock) {
   return 0;
 }
 
-void pushClockItems() {
-  auto push = [](uint8_t id) {
-    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
-  };
-  push(ITEM_CLOCK_FORMAT);
-  push(ITEM_CLOCK_UTC_OFFSET);
-  push(ITEM_CLOCK_SYNC);
+void pushClockItems(const bool nested) {
+  pushVisible(ITEM_CLOCK_FORMAT, nested);
+  pushVisible(ITEM_CLOCK_UTC_OFFSET, nested);
+  pushVisible(ITEM_CLOCK_SYNC, nested);
 }
 
 void pushNestedForSlot(uint8_t slotContent) {
-  auto push = [](uint8_t id) {
-    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
-  };
   if (slotContent == CrossPointSettings::SYS_SLOT_BATTERY) {
-    push(ITEM_BATTERY_DISPLAY);
+    pushVisible(ITEM_BATTERY_DISPLAY, true);
   }
   if (slotContent == CrossPointSettings::SYS_SLOT_CLOCK && halClock.isAvailable()) {
-    pushClockItems();
+    pushClockItems(/*nested=*/true);
   }
 }
 
 void rebuildVisibleMenu() {
   gVisibleCount = 0;
-  auto push = [](uint8_t id) {
-    if (gVisibleCount < kMaxVisible) gVisibleItems[gVisibleCount++] = id;
-  };
 
-  push(ITEM_LEFT);
+  pushVisible(ITEM_LEFT);
   pushNestedForSlot(SETTINGS.systemStatusBarLeft);
-  push(ITEM_MIDDLE);
+  pushVisible(ITEM_MIDDLE);
   pushNestedForSlot(SETTINGS.systemStatusBarMiddle);
-  push(ITEM_RIGHT);
+  pushVisible(ITEM_RIGHT);
   pushNestedForSlot(SETTINGS.systemStatusBarRight);
+
+  // SPECTRAL has no status-bar clock slot, but still needs format / offset / sync
+  // for the large home clock. Top-level when clock is not on the bar.
+  if (halClock.isAvailable() && !SETTINGS.systemStatusBarAllowsClock() &&
+      !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
+    pushClockItems(/*nested=*/false);
+  }
 }
 
 int itemAt(int listIndex) {
   if (listIndex < 0 || listIndex >= gVisibleCount) return -1;
   return gVisibleItems[listIndex];
+}
+
+bool nestedAt(int listIndex) {
+  if (listIndex < 0 || listIndex >= gVisibleCount) return false;
+  return gVisibleNested[listIndex];
 }
 
 bool isSlotItem(int item) { return item == ITEM_LEFT || item == ITEM_MIDDLE || item == ITEM_RIGHT; }
@@ -286,7 +298,8 @@ void SystemStatusBarSettingsActivity::handleSelection() {
   if (isSlotItem(item)) {
     const int slotItem = item;
     uint8_t& field = slotFieldForItem(slotItem);
-    const bool includeClock = halClock.isAvailable();
+    // SPECTRAL theme: large home clock owns the time — Clock is not a slot option.
+    const bool includeClock = halClock.isAvailable() && SETTINGS.systemStatusBarAllowsClock();
     const int currentDisplay = filteredDisplayIndex(field, includeClock);
     optionPopup.show(slotNameForItem(slotItem), slotOptionLabels(includeClock), currentDisplay,
                      [this, slotItem, includeClock](int idx) {
@@ -372,7 +385,7 @@ void SystemStatusBarSettingsActivity::render(RenderLock&&) {
       [](int index) {
         const int item = itemAt(index);
         if (item < 0) return std::string();
-        return std::string(I18N.get(menuNameForItem(item)));
+        return NestedMenuLabel::format(I18N.get(menuNameForItem(item)), nestedAt(index));
       },
       nullptr, nullptr,
       [](int index) -> std::string {

@@ -15,6 +15,7 @@
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 // Dynamic rows: Enable, [Auto Backup if tracking on + X3], [Backup Now if tracking on].
@@ -164,7 +165,9 @@ void StatsSettingsActivity::render(RenderLock&&) {
       [](int index) {
         const int item = itemAt(index);
         if (item < 0) return std::string();
-        return std::string(I18N.get(nameForItem(item)));
+        // Auto Backup / Backup Now nest under Enable Stat Tracking.
+        const bool nested = item == ITEM_AUTO_BACKUP || item == ITEM_BACKUP_NOW;
+        return NestedMenuLabel::format(I18N.get(nameForItem(item)), nested);
       },
       nullptr, nullptr,
       [](int index) -> std::string {

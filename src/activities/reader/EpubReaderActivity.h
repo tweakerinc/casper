@@ -37,6 +37,11 @@ class EpubReaderActivity final : public Activity {
   bool forcedRefreshPending = false;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
+  // Set when pageTurn advances past the current watermark while a section is still
+  // building. If the chapter then finishes with no further pages, render goes to the
+  // next spine instead of clamping back to the same last page (looks like "next
+  // reformatted the page" / stuck page).
+  bool pendingForwardPastEnd = false;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Absorbs bounce so one physical press cannot advance multiple pages.
@@ -110,6 +115,19 @@ class EpubReaderActivity final : public Activity {
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
+
+  // Non-critical open I/O (recents write, bookmarks, clippings, global stats)
+  // deferred until after the first page paints so reopen feels snappier.
+  bool pendingOpenSideWork = false;
+  void runDeferredOpenSideWork();
+
+  // Snappy open (Home Read): first page FAST when greys settled; first ink BW-only
+  // with text AA scheduled as a follow-up render so the page is readable sooner.
+  bool openPreferFastFirstRefresh = false;
+  bool openDeferTextAa = false;
+  bool pendingDeferredOpenAa = false;
+  uint32_t openWallStartMs = 0;
+  bool openFirstInkLogged = false;
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);

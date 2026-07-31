@@ -37,13 +37,16 @@
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
+#include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "WordRef.h"
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "SdCardFontSystem.h"
 #include "util/BookmarkUtil.h"
 #include "util/DictionaryRegistry.h"
 #include "util/ScreenshotUtil.h"
@@ -725,13 +728,47 @@ void EpubReaderActivity::onEnter() {
     }
   }
 
-  // Per-book stats under this firmware's cache path only (no cross-fork migration).
+  // Per-book stats needed early for session/pace; keep on open path.
+  // Global stats, recents, bookmarks, clippings: after first page (see loop).
+  const uint32_t tStats = millis();
   readingStats = BookReadingStats::loadForBook(epub->getPath());
-  globalReadingStats = GlobalReadingStats::load();
+  LOG_DBG("ERS", "loadForBook stats %lums", static_cast<unsigned long>(millis() - tStats));
   readingSessionStartMs = millis();
   lastPageTurnTime = readingSessionStartMs;  // dwell baseline for first forward page
+  pendingOpenSideWork = true;
 
-  // Save current epub as last opened epub and add to recent books
+  // Home Read sets open hints: FAST when greys settled, defer text AA for first ink.
+  // Other entry paths (file browser, sleep resume) leave defaults → HALF + full AA.
+  bool preferFast = false;
+  bool deferAa = false;
+  uint32_t openT0 = 0;
+  ReaderActivity::takeOpenHints(preferFast, deferAa, openT0);
+  openPreferFastFirstRefresh = preferFast;
+  openDeferTextAa = deferAa && SETTINGS.textAntiAliasing;
+  openWallStartMs = openT0 != 0 ? openT0 : millis();
+  openFirstInkLogged = false;
+  pendingDeferredOpenAa = false;
+
+  if (openPreferFastFirstRefresh) {
+    // pagesUntilFullRefresh > 1 → FAST in displayWithRefreshCycle (not HALF clean).
+    const int freq = SETTINGS.getRefreshFrequency();
+    pagesUntilFullRefresh = freq > 1 ? freq : 2;
+    LOG_DBG("ERS", "Open: FAST first page (greys settled) deferAa=%d", openDeferTextAa ? 1 : 0);
+  } else {
+    // After multipass home / settings: force HALF so BW text does not differential-ghost.
+    pagesUntilFullRefresh = 1;
+    LOG_DBG("ERS", "Open: HALF first page deferAa=%d", openDeferTextAa ? 1 : 0);
+  }
+
+  // Trigger first update
+  requestUpdate();
+}
+
+void EpubReaderActivity::runDeferredOpenSideWork() {
+  if (!pendingOpenSideWork || !epub) return;
+  pendingOpenSideWork = false;
+
+  // Last-opened + recents (SD writes) after first ink — not needed for page 1.
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
@@ -739,11 +776,15 @@ void EpubReaderActivity::onEnter() {
   loadCachedBookmarks();
   CLIPPINGS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub");
 
-  // Trigger first update
-  requestUpdate();
+  if (SETTINGS.readingStatsTrackingEnabled()) {
+    globalReadingStats = GlobalReadingStats::load();
+  }
 }
 
 void EpubReaderActivity::onExit() {
+  // Ensure recents/app-state still update if user leaves before first paint finished.
+  runDeferredOpenSideWork();
+
   Activity::onExit();
 
   // The extractor holds a raw pointer to this activity's epub; drop it before
@@ -841,7 +882,44 @@ void EpubReaderActivity::onExit() {
       }
     }
     // Persist progress % so Home dashboard never needs epub.load() for the column.
-    readingStats.setProgressPercent(getCurrentBookProgressPercent());
+    // End-of-book screen (spine past last item) is always 100%.
+    if (epub->getSpineItemsCount() > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
+      readingStats.setProgressPercent(100.0f);
+      readingStats.estimatedTimeLeftSeconds = 0;
+      if (!readingStats.isCompleted) {
+        // Reaching the end screen counts as finished for dashboard progress.
+        readingStats.isCompleted = true;
+        if (SETTINGS.readingStatsTrackingEnabled() && !readingStats.finishedDateManual) {
+          ReadingStatsDateTime now;
+          if (getCurrentLocalReadingStatsDateTime(now)) {
+            readingStats.finishedDate = now.date;
+          }
+        }
+        if (SETTINGS.readingStatsTrackingEnabled() && globalReadingStats.completedBooks < UINT32_MAX) {
+          globalReadingStats.completedBooks++;
+        }
+      }
+    } else {
+      const float newPct = getCurrentBookProgressPercent();
+      const float oldPct = readingStats.getProgressPercent();
+      // Partial/watermark sections only know a few pages (often pageCount==1 right after
+      // reopen). Chapter fraction then under-reports (e.g. spine 40 → ~60% instead of ~99%).
+      // Never let that clobber a higher stored progress.
+      const bool unreliableChapterFraction =
+          section && section->isPartial() && static_cast<int>(section->pageCount) <= 2;
+      if (newPct >= 0.0f) {
+        if (unreliableChapterFraction && oldPct >= 0.0f && newPct + 1.0f < oldPct) {
+          LOG_DBG("ERS", "Keep stored progress %.1f%% (unreliable partial section gave %.1f%%)",
+                  static_cast<double>(oldPct), static_cast<double>(newPct));
+        } else {
+          readingStats.setProgressPercent(newPct);
+        }
+      }
+    }
+    if (readingStats.isCompleted) {
+      readingStats.setProgressPercent(100.0f);
+      readingStats.estimatedTimeLeftSeconds = 0;
+    }
     readingStats.save(epub->getCachePath());
     globalReadingStats.save();
     readingSessionStartMs = 0;
@@ -922,10 +1000,12 @@ void EpubReaderActivity::openReaderMenu() {
                              // Clip selection / list pause/resume themselves; resume here would
                              // restart the stats clock for the whole nested session.
                              const auto action = static_cast<EpubReaderMenuActivity::MenuAction>(menu->action);
+                             // Keep stats paused while a nested reader child is open.
                              const bool defersStatsResume =
                                  !result.isCancelled &&
                                  (action == EpubReaderMenuActivity::MenuAction::SAVE_CLIPPING ||
-                                  action == EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS);
+                                  action == EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS ||
+                                  action == EpubReaderMenuActivity::MenuAction::MANAGE_FONTS);
                              if (!defersStatsResume) {
                                resumeReadingStatsClock();
                              }
@@ -1151,10 +1231,10 @@ void EpubReaderActivity::loop() {
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
 
   // -------------------------------------------------------------------------
-  // Input first. Background prewarm/section build can monopolize the main task
-  // for 100s of ms; if Back is handled after that work, a short press can be
-  // fully press+release between gpio.update() samples and never register —
-  // feeling like "Back needs two presses to leave the reader".
+  // Input first. Background prewarm/section build (and deferred open SD work)
+  // can monopolize the main task for 100s of ms; if Back is handled after that
+  // work, a short press can be fully press+release between gpio.update() samples
+  // and never register — feeling like "Back needs two presses to leave the reader".
   // -------------------------------------------------------------------------
 
   if (automaticPageTurnActive) {
@@ -1222,6 +1302,21 @@ void EpubReaderActivity::loop() {
   if (ReaderUtils::handleBackNavigation(
           mappedInput, activityManager, epub ? epub->getPath().c_str() : "",
           {this, [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->leaveReaderToHome(); }})) {
+    return;
+  }
+
+  // After Back has been sampled: finish recents/bookmarks/clippings/global stats.
+  // Must not run before handleBackNavigation — those SD writes blocked input and
+  // made Back feel dead right after open.
+  if (pendingOpenSideWork && lastRenderCompleteMs != 0) {
+    runDeferredOpenSideWork();
+  }
+
+  // Open path #2: first ink was BW-only; now re-render with text AA while the
+  // user can already read. One-shot so a page turn does not double-paint forever.
+  if (pendingDeferredOpenAa && lastRenderCompleteMs != 0) {
+    pendingDeferredOpenAa = false;
+    requestUpdate();
     return;
   }
 
@@ -1365,6 +1460,28 @@ void EpubReaderActivity::loop() {
   // move path becomes a safe no-op since the entry was already removed.
   if (atEndOfBook) {
     pendingReadFolderMove = SETTINGS.moveFinishedToReadFolder && !isInReadFolder(epub->getPath());
+    // Dashboard progress is loaded from stats_v6 without reopening the EPUB — stamp 100%
+    // as soon as the end screen is shown so a later partial reopen cannot leave ~60%.
+    if (!readingStats.isCompleted) {
+      readingStats.isCompleted = true;
+      readingStats.setProgressPercent(100.0f);
+      readingStats.estimatedTimeLeftSeconds = 0;
+      if (SETTINGS.readingStatsTrackingEnabled() && !readingStats.finishedDateManual) {
+        ReadingStatsDateTime now;
+        if (getCurrentLocalReadingStatsDateTime(now) && !readingStats.finishedDate.isValid()) {
+          readingStats.finishedDate = now.date;
+        }
+      }
+      if (SETTINGS.readingStatsTrackingEnabled() && globalReadingStats.completedBooks < UINT32_MAX) {
+        globalReadingStats.completedBooks++;
+        globalReadingStats.save();
+      }
+      readingStats.save(epub->getCachePath());
+    } else if (readingStats.getProgressPercent() < 99.5f) {
+      readingStats.setProgressPercent(100.0f);
+      readingStats.estimatedTimeLeftSeconds = 0;
+      readingStats.save(epub->getCachePath());
+    }
   } else {
     pendingReadFolderMove = false;
   }
@@ -1727,6 +1844,28 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             if (!result.isCancelled) {
               jumpToPercent(std::get<PercentResult>(result.data).percent);
             }
+          });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::MANAGE_FONTS: {
+      // Child of the reader (not Settings/home): Back returns here and reflows in place.
+      startActivityForResult(
+          std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                 TextSettingsActivity::Tab::Family),
+          [this](const ActivityResult&) {
+            SETTINGS.saveToFile();
+            {
+              RenderLock lock(*this);
+              if (section) {
+                cachedSpineIndex = currentSpineIndex;
+                cachedChapterTotalPageCount = section->pageCount;
+                nextPageNumber = section->currentPage;
+              }
+              // Drop laid-out chapter so render() rebuilds with new type metrics.
+              section.reset();
+            }
+            resumeReadingStatsClock();
+            requestUpdate();
           });
       break;
     }
@@ -2119,6 +2258,11 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
+  // User owns navigation now — do not remap this position when a background section
+  // build later finalizes with a different page count (settings-change reposition).
+  cachedChapterTotalPageCount = 0;
+  pendingForwardPastEnd = false;
+
   // Pace / pages-per-min: count forward turns with a sane dwell (2s–session idle).
   // Session Time setting is the idle gap: longer dwells are treated as not reading.
   // Pages Turned is not shown on Dashboard, but totalPagesTurned still feeds pages/min.
@@ -2139,14 +2283,25 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
     }
   }
 
+  if (!section) {
+    lastPageTurnTime = millis();
+    requestUpdate();
+    return;
+  }
+
   if (isForwardTurn) {
     // Advance within the section while there are (or may still be) more pages: either a built
     // page ahead, or the section is still building (windowed), in which case more pages exist
     // beyond the current watermark and render()'s ensure-built pump will lay them out. Only when
     // the section is fully built AND we're on its last page do we move to the next spine -- using
     // the live pageCount alone would mistake the build watermark for the end of a giant spine.
-    if (section->currentPage < section->pageCount - 1 || section->isBuilding()) {
+    if (section->currentPage < static_cast<int>(section->pageCount) - 1) {
       section->currentPage++;
+    } else if (section->isBuilding() && !section->isBuildComplete()) {
+      // Optimistic step past the watermark. If the chapter ends without more pages,
+      // render() advances to the next spine instead of re-drawing this last page.
+      section->currentPage++;
+      pendingForwardPastEnd = true;
     } else {
       // We don't want to delete the section mid-render, so grab the semaphore
       {
@@ -2508,14 +2663,29 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
   }
 
-  // The requested page is now as built as it will get. If it still lands past the end,
-  // clamp to the last real page: the UINT16_MAX "last page" sentinel from backward chapter
-  // navigation, an explicit jump beyond a finished chapter, or a stale saved position.
+  // The requested page is now as built as it will get. If it still lands past the end:
+  // - After a forward page-turn while the chapter was still building (pendingForwardPastEnd),
+  //   treat it as end-of-chapter and open the next spine — clamping back to the last page
+  //   re-draws the same content with a different refresh and feels like a silent reformat.
+  // - Otherwise clamp: UINT16_MAX "last page" sentinel, explicit jump past end, stale save.
   // Guarded on !isBuilding() because a still-building section's pageCount is only the current
   // watermark (not the final count) and has already been driven far enough by the loops above.
   if (!section->isBuilding() && section->pageCount > 0 &&
       section->currentPage >= static_cast<int>(section->pageCount)) {
+    if (pendingForwardPastEnd) {
+      pendingForwardPastEnd = false;
+      nextPageNumber = 0;
+      currentSpineIndex++;
+      section.reset();
+      requestUpdate();
+      return;
+    }
     section->currentPage = section->pageCount - 1;
+    pendingForwardPastEnd = false;
+  } else if (!section->isBuilding()) {
+    // Landed on a real in-range page; drop the past-end hint. Keep it while building
+    // so a later finalize can still promote to the next spine.
+    pendingForwardPastEnd = false;
   }
 
   // Apply a deferred settings-change reposition now that the real page count is known (a no-op for
@@ -2755,7 +2925,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = forcedRefreshPending;
   forcedRefreshPending = false;
-  const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
+  // Open path #2: first ink skips text AA so BW refresh is the critical path.
+  // Images still need their grey path when present; only pure text AA is deferred.
+  const bool skipTextAaThisFrame = openDeferTextAa && !pageHasImages;
+  const bool needsTextGrayscale = SETTINGS.textAntiAliasing && !skipTextAaThisFrame;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   const bool tiledGrayscale = needsAnyGrayscale && renderer.supportsStripGrayscale();
   // Whole-plane buffering only pays when the BW refresh genuinely runs async
@@ -2821,6 +2994,24 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
   }
   const auto tDisplay = millis();
+
+  // First readable ink is on the panel after the BW (or image) refresh above.
+  // Log once per open; schedule AA catch-up when this frame skipped text greys.
+  if (!openFirstInkLogged) {
+    openFirstInkLogged = true;
+    const uint32_t wall = openWallStartMs != 0 ? (millis() - openWallStartMs) : (millis() - t0);
+    LOG_DBG("ERS",
+            "OPEN first_ink %lums (bw_render=%lums display=%lums) fast=%d defer_aa=%d aa_skipped=%d",
+            static_cast<unsigned long>(wall), static_cast<unsigned long>(tBwRender - tPrewarm),
+            static_cast<unsigned long>(tDisplay - tBwRender), openPreferFastFirstRefresh ? 1 : 0,
+            openDeferTextAa ? 1 : 0, skipTextAaThisFrame ? 1 : 0);
+  }
+  if (skipTextAaThisFrame) {
+    openDeferTextAa = false;
+    if (SETTINGS.textAntiAliasing) {
+      pendingDeferredOpenAa = true;
+    }
+  }
 
   // Tiled grayscale: render each plane band-by-band, leaving the BW
   // framebuffer intact so no full-frame storeBwBuffer is needed; controller
@@ -2995,6 +3186,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       const auto tGrayDisplay = millis();
       renderer.setRenderMode(GfxRenderer::BW);
       renderer.restoreBwBuffer();
+      // Match the tiled path: re-sync controller RAM from the BW framebuffer so
+      // the next differential (especially with AA off) does not ghost against
+      // stale gray planes — that can look like the same page "reformatted".
+      renderer.cleanupGrayscaleWithFrameBuffer();
       const auto tBwRestore = millis();
 
       const auto tEnd = millis();

@@ -33,6 +33,7 @@
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
@@ -63,8 +64,16 @@ void SettingsActivity::rebuildSettingsLists() {
   bool haveRemoveRecents = false;
   bool haveMoveFinished = false;
 
+  const bool spectralTheme =
+      static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::SPECTRAL;
+
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    // Spectral side-button map only when Spectral is the active home theme.
+    if (setting.key && (strcmp(setting.key, "spectralSideLeft") == 0 || strcmp(setting.key, "spectralSideRight") == 0) &&
+        !spectralTheme) {
+      continue;
+    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
@@ -100,11 +109,12 @@ void SettingsActivity::rebuildSettingsLists() {
   }
 
   // Controls order: … → Remap Front Buttons → Orient Front Buttons → Tilt → …
-  // Insert Remap immediately before Orient Front Buttons.
+  // Insert Remap immediately before Orient Front Buttons; nest Orient under Remap.
   if (!BoardConfig::hasTouch()) {
     auto insertAt = controlsSettings.end();
     for (auto it = controlsSettings.begin(); it != controlsSettings.end(); ++it) {
       if (it->nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION) {
+        it->nestedUnderParent = true;
         insertAt = it;
         break;
       }
@@ -186,9 +196,18 @@ void SettingsActivity::onEnter() {
   requestUpdate();
 }
 
+void SettingsActivity::flushSettingsIfDirty() {
+  if (!settingsDirty) {
+    return;
+  }
+  SETTINGS.saveToFile();
+  settingsDirty = false;
+}
+
 void SettingsActivity::onExit() {
   Activity::onExit();
 
+  flushSettingsIfDirty();
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
@@ -231,8 +250,12 @@ void SettingsActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     // One Back always leaves Settings (option popups consume Back first).
     // Previously, focus on a row required a second press to actually exit.
-    SETTINGS.saveToFile();
-    onGoHome();
+    // Prefer finish()/pop so stacked Home resumes (goToSettings pushes Home).
+    // onGoHome() still works via empty-stack goHome, but would also force
+    // initialMenuItem=SETTINGS_MENU when Home was replaced — landing classic
+    // themes on the Settings row and confusing residual-Back handling.
+    // onExit() flushes dirty settings; save once, not on every toggle.
+    finish();
     return;
   }
 
@@ -422,7 +445,7 @@ void SettingsActivity::toggleCurrentSetting() {
                        currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
                          SETTINGS.*valuePtr = idx;
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         SETTINGS.saveToFile();
+                         markSettingsDirty();
                          rebuildSettingsLists();
                        });
       requestUpdate();
@@ -443,7 +466,7 @@ void SettingsActivity::toggleCurrentSetting() {
           UITheme::getInstance().reload();
         }
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
+        markSettingsDirty();
         rebuildSettingsLists();
       };
       if (!setting.enumStringValues.empty()) {
@@ -467,7 +490,14 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    // Persist parent toggles before pushing a child (power-loss safety); children
+    // that mutate SETTINGS should also mark dirty or save themselves.
+    flushSettingsIfDirty();
+    auto resultHandler = [this](const ActivityResult&) {
+      // One SD write when returning from a child (children often mutate SETTINGS).
+      SETTINGS.saveToFile();
+      settingsDirty = false;
+    };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -512,6 +542,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
+                                 settingsDirty = false;
                                  rebuildSettingsLists();
                                });
         break;
@@ -520,6 +551,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                                                       TextSettingsActivity::Tab::Family),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
+                                 settingsDirty = false;
                                  rebuildSettingsLists();
                                });
         break;
@@ -539,7 +571,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  markSettingsDirty();
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
 }
@@ -576,7 +608,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          markSettingsDirty();
         }
         requestUpdate();
       });
@@ -595,7 +627,7 @@ void SettingsActivity::openSessionTimePicker() {
         if (!result.isCancelled) {
           SETTINGS.readingSessionIdleMinutes =
               static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          markSettingsDirty();
         }
         requestUpdate();
       });
@@ -632,7 +664,10 @@ void SettingsActivity::render(RenderLock&&) {
   GUI.drawList(
       renderer, Rect{0, listTop, pageWidth, listHeight},
       settingsCount, selectedSettingIndex - 1,
-      [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
+      [&settings](int index) {
+        return NestedMenuLabel::format(I18N.get(settings[index].nameId), settings[index].nestedUnderParent);
+      },
+      nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
         std::string valueText = "";

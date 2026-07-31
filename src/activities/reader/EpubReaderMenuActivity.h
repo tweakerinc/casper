@@ -20,6 +20,7 @@ class EpubReaderMenuActivity final : public Activity {
     SELECT_CHAPTER,
     FOOTNOTES,
     GO_TO_PERCENT,
+    MANAGE_FONTS,  // Text settings (family/size/layout/style); stays in reader stack
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     READING_STATS,

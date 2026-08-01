@@ -440,9 +440,10 @@ void drawTitleAuthorInZone(const GfxRenderer& renderer, const ContentBand& band,
   }
 }
 
-// Reserved strip for page dots when multi-page under-panel is active (tracking on).
-// Content must stay above this band so list/stats never collide with the menu.
+// Reserved strip for page dots when multi-page under-panel is active (X3 + tracking).
+// X4 never draws page dots — do not reserve this band or the 4th recent is clipped.
 int penumbraPageDotsStripH() {
+  if (!gpio.deviceIsX3()) return 0;
   return SETTINGS.readingStatsTrackingEnabled() ? kPageDotsStripH : 0;
 }
 
@@ -591,17 +592,29 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
+  // Same floor as drawRecentsListPanel (no dots strip on X4).
+  const int floorY = band.contentBottom - penumbraPageDotsStripH();
+
   // Pin the upper "Now Reading" block — do not shift it when the list height changes.
   band.upperTop = band.contentTop + kX4UpperTopPadFixed;
-  const int Uh = measureNowReadingBlockH(renderer, band, books);
   // Always reserve full 4-row + View All height so the list never drops a book for air.
   const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
+  int Uh = measureNowReadingBlockH(renderer, band, books);
 
-  const int afterAuthor = band.upperTop + Uh;
+  int afterAuthor = band.upperTop + Uh;
   // Prefer even air; if the 4-row block is tall, pack gaps to 0 rather than
   // inventing space (which would push View All under the menu chrome).
-  int free = band.contentBottom - afterAuthor - kRuleThickness - Lh;
-  if (free < 0) free = 0;
+  int free = floorY - afterAuthor - kRuleThickness - Lh;
+  if (free < 0) {
+    // Still too tall (long Now Reading title): nudge upper pad up so 4 rows keep
+    // their reserved height above the menu instead of clipping the last book.
+    const int need = -free;
+    band.upperTop = std::max(band.contentTop + 4, band.upperTop - need);
+    Uh = measureNowReadingBlockH(renderer, band, books);
+    afterAuthor = band.upperTop + Uh;
+    free = floorY - afterAuthor - kRuleThickness - Lh;
+    if (free < 0) free = 0;
+  }
   // Three equal gaps below the author: author→line, line→RECENTS, list→menu.
   const int G = free / 3;
 
@@ -763,11 +776,13 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   const int topInset = x4 ? kRecentsTopInsetX4 : kRecentsTopInset;
   const int viewAllH = (showViewAll) ? (viewAllGap + titleLineH) : 0;
 
-  // Always prefer the theme cap (4). Only shrink when not pin-layout and space is truly short.
+  // Always show up to theme cap (4 on Penumbra). Never shrink on X4 pin layout —
+  // clipping the 4th row was the "only 3 recents" bug when a phantom dots strip
+  // or maxFit reduced n.
   const int capped =
       std::min(static_cast<int>(books.size()), static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount));
   int n = capped;
-  if (!band.pinBlocks) {
+  if (!band.pinBlocks && !x4) {
     const int spaceForRows =
         std::max(0, zoneH - topInset - captionH - capToList - viewAllH - 2);
     int maxFit = 0;

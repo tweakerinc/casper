@@ -5,13 +5,14 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
 // Quick Resume sleep/wake markers on the reader page.
-// Ink-only (no white plate). Between middle and right status anchors.
-// Vertically matched to the *reader* top status-bar row (clock / battery / %),
-// then dropped a bit into the chrome air above the book text.
+// Ink-only (no white plate). Prefer under the power button (top-right chrome),
+// then any free top status slot; only if L/M/R are all occupied, sit between
+// middle and right (legacy placement).
 
 namespace SleepChromeIcon {
 
@@ -40,7 +41,27 @@ inline int topY(const GfxRenderer& renderer) {
   return rowY + std::max(0, (rowH - size) / 2);
 }
 
-// Midway between middle and right status anchors (avoids centered clock).
+// Xteink power sits on the top bezel toward the right of the panel in the
+// usual reading hold — treat top-right status chrome as "under power".
+enum class ChromeSlot : uint8_t { Right, Left, Middle, BetweenMidRight };
+
+inline bool upperSlotEmpty(const uint8_t content) {
+  return content == CrossPointSettings::CORNER_HIDE;
+}
+
+// Prefer: under power (right) if free → left → middle → mid/right gap (current).
+inline ChromeSlot pickSlot() {
+  using S = CrossPointSettings;
+  const bool rightFree = upperSlotEmpty(SETTINGS.statusBarUpperRight);
+  const bool leftFree = upperSlotEmpty(SETTINGS.statusBarUpperLeft);
+  const bool midFree = upperSlotEmpty(SETTINGS.statusBarUpperMiddle);
+  // Under power first.
+  if (rightFree) return ChromeSlot::Right;
+  if (leftFree) return ChromeSlot::Left;
+  if (midFree) return ChromeSlot::Middle;
+  return ChromeSlot::BetweenMidRight;
+}
+
 inline int leftX(const GfxRenderer& renderer) {
   int orientedMarginTop = 0, orientedMarginRight = 0, orientedMarginBottom = 0, orientedMarginLeft = 0;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -49,10 +70,25 @@ inline int leftX(const GfxRenderer& renderer) {
   (void)orientedMarginBottom;
   const int screenW = renderer.getScreenWidth();
   const int centerX = screenW / 2;
-  const int rightX = screenW - orientedMarginRight - BaseTheme::kTopChromeInsetX;
+  const int leftEdge = orientedMarginLeft + BaseTheme::kTopChromeInsetX;
+  const int rightEdge = screenW - orientedMarginRight - BaseTheme::kTopChromeInsetX;
   const int size = iconSize(renderer);
-  const int iconCenter = (centerX + rightX) / 2;
-  return iconCenter - size / 2;
+  const ChromeSlot slot = pickSlot();
+  switch (slot) {
+    case ChromeSlot::Right:
+      // Align with right status group (under power).
+      return rightEdge - size;
+    case ChromeSlot::Left:
+      return leftEdge;
+    case ChromeSlot::Middle:
+      return centerX - size / 2;
+    case ChromeSlot::BetweenMidRight:
+    default: {
+      // Legacy: midway between middle and right anchors.
+      const int iconCenter = (centerX + rightEdge) / 2;
+      return iconCenter - size / 2;
+    }
+  }
 }
 
 // Scale a crop of a 1bpp MSB image into dstW×dstH, ink-only (white = transparent).

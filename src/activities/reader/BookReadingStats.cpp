@@ -233,9 +233,18 @@ bool parseKnownStatsBlob(const uint8_t* data, const int n, BookReadingStats& out
 }
 
 // Load a specific versioned filename only (no fallback chain).
+// Quiet: missing files are normal during version probes — never log them.
 bool loadStatsFileNamed(const std::string& cachePath, const std::string& fileName, BookReadingStats& out) {
-  HalFile f;
-  if (!Storage.openFileForRead("STATS", cachePath + "/" + fileName, f)) {
+  if (cachePath.empty() || fileName.empty()) {
+    return false;
+  }
+  const std::string full = cachePath + "/" + fileName;
+  // exists() is silent; openFileForRead("STATS", ...) spam-logs every missing v5..v1 probe.
+  if (!Storage.exists(full.c_str())) {
+    return false;
+  }
+  HalFile f = Storage.open(full.c_str(), O_RDONLY);
+  if (!f) {
     return false;
   }
   uint8_t data[STATS_FILE_SIZE] = {};
@@ -335,10 +344,16 @@ void considerDirectoryStatsFiles(const std::string& cachePath, BookReadingStats&
 
 // Load the richest parsable stats blob under one cache directory.
 // Cheap path: if current versioned file is already "rich", skip older names + dir walk.
+// Do NOT probe stats_v5..v1 individually — each miss used to log "File does not exist"
+// and hammer the SD on every Home/recents paint. One dir walk covers legacy names.
 BookReadingStats loadBestInCacheDir(const std::string& cachePath) {
   BookReadingStats best;
   bool have = false;
   if (cachePath.empty()) {
+    return best;
+  }
+  // No cache folder → no stats (single silent exists; no version spam).
+  if (!Storage.exists(cachePath.c_str())) {
     return best;
   }
 
@@ -349,12 +364,12 @@ BookReadingStats loadBestInCacheDir(const std::string& cachePath) {
     return best;
   }
 
-  // Fallbacks: older versioned names + legacy stats.bin + any stats*.bin in the folder.
-  for (int v = static_cast<int>(STATS_FILE_VERSION) - 1; v >= 1; --v) {
-    considerNamedStatsFile(cachePath, statsFileNameForVersion(static_cast<uint8_t>(v)), best, have);
-  }
-  considerNamedStatsFile(cachePath, LEGACY_STATS_FILE_NAME, best, have);
+  // One directory listing for any stats*.bin (legacy / CrossInk / odd forks).
   considerDirectoryStatsFiles(cachePath, best, have);
+  // Last resort: legacy unversioned name if the dir walk missed it (empty dir edge).
+  if (!have) {
+    considerNamedStatsFile(cachePath, LEGACY_STATS_FILE_NAME, best, have);
+  }
   return best;
 }
 
@@ -405,9 +420,62 @@ std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
   return {};
 }
 
+// Session memo for loadForBook — Home/recents used to re-scan the same 4–5 books
+// several times per paint (each scan was multi-version SD probes).
+struct LoadForBookMemo {
+  static constexpr size_t kCap = 8;
+  std::string path[kCap];
+  BookReadingStats stats[kCap];
+  bool valid[kCap] = {};
+  size_t next = 0;
+};
+LoadForBookMemo g_loadForBookMemo;
+
+void memoStore(const std::string& bookPath, const BookReadingStats& stats) {
+  if (bookPath.empty()) return;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
+      g_loadForBookMemo.stats[i] = stats;
+      return;
+    }
+  }
+  const size_t i = g_loadForBookMemo.next % LoadForBookMemo::kCap;
+  g_loadForBookMemo.path[i] = bookPath;
+  g_loadForBookMemo.stats[i] = stats;
+  g_loadForBookMemo.valid[i] = true;
+  ++g_loadForBookMemo.next;
+}
+
+bool memoLookup(const std::string& bookPath, BookReadingStats& out) {
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
+      out = g_loadForBookMemo.stats[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+void memoInvalidate(const std::string& bookPath) {
+  if (bookPath.empty()) {
+    for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) g_loadForBookMemo.valid[i] = false;
+    return;
+  }
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
+      g_loadForBookMemo.valid[i] = false;
+    }
+  }
+}
+
 BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   if (bookPath.empty()) {
     return {};
+  }
+
+  BookReadingStats memoed;
+  if (memoLookup(bookPath, memoed)) {
+    return memoed;
   }
 
   constexpr size_t kMaxPaths = 4;
@@ -415,6 +483,7 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   size_t pathCount = 0;
   collectBookCacheCandidates(bookPath, paths, pathCount, kMaxPaths);
   if (pathCount == 0) {
+    memoStore(bookPath, {});
     return {};
   }
 
@@ -427,8 +496,23 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
     const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
     if (loadStatsFileNamed(primaryPath, currentName, primaryFast) && hasAnyStatsPayload(primaryFast) &&
         !looksLikeEmptyShell(primaryFast)) {
+      memoStore(bookPath, primaryFast);
       return primaryFast;
     }
+  }
+
+  // If the primary cache dir is missing, still try alternate (CrossInk) paths once,
+  // but skip when *no* candidate folder exists — common for never-opened recents.
+  bool anyDir = false;
+  for (size_t i = 0; i < pathCount; ++i) {
+    if (!paths[i].empty() && Storage.exists(paths[i].c_str())) {
+      anyDir = true;
+      break;
+    }
+  }
+  if (!anyDir) {
+    memoStore(bookPath, {});
+    return {};
   }
 
   BookReadingStats best;
@@ -455,14 +539,16 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   }
 
   if (!have) {
+    memoStore(bookPath, {});
     return {};
   }
 
   // Land the winner under Casper's cache path so later opens hit the cheap path.
+  // Only rewrite when we actually have lifetime data worth keeping.
   const BookReadingStats primaryNow = loadBestInCacheDir(primaryPath);
   const bool primaryMissingOrThin =
       !hasAnyStatsPayload(primaryNow) || looksLikeEmptyShell(primaryNow) || isRicherStats(best, primaryNow);
-  if (primaryMissingOrThin) {
+  if (primaryMissingOrThin && hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
     ensureCacheDir(primaryPath);
     best.save(primaryPath);
     if (bestPathIndex != 0) {
@@ -473,6 +559,7 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
     }
   }
 
+  memoStore(bookPath, best);
   return best;
 }
 
@@ -580,6 +667,9 @@ void BookReadingStats::formatDuration(uint32_t seconds, char* buf, size_t len) {
 }
 
 void BookReadingStats::save(const std::string& cachePath) const {
+  // Drop memo entries so the next loadForBook sees the write (memo is by book path;
+  // wipe all when we only know the cache folder).
+  memoInvalidate({});
   const std::string statsFileName = statsFileNameForVersion(STATS_FILE_VERSION);
   HalFile f;
   if (!Storage.openFileForWrite("STATS", cachePath + "/" + statsFileName, f)) {

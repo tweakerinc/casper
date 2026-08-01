@@ -1,7 +1,7 @@
 # Casper
 
 Personal firmware for **Xteink X3/X4**, based on
-**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & **[CrossInk](https://github.com/uxjulia/CrossInk)**. Huge thanks to everyone for all their hard working!
+**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & **[CrossInk](https://github.com/uxjulia/CrossInk)**. Huge thanks to everyone for all their hard work!
 
 Casper keeps CrossPoint's stable reader core, and CrossInk's AMAZING Stat Tracking, and adds a redesign to the UI — thoughtful long-press menus, fully customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary** with multi-word selection and bilingual packs. Home themes: **Penumbra** (X3 clock / X4 title) and **Bare**.
 

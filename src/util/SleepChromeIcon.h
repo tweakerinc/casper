@@ -1,22 +1,24 @@
 #pragma once
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
 // Quick Resume sleep/wake markers on the reader page.
-// Ink-only (no white plate). Prefer under the power button (top-right chrome),
-// then any free top status slot; only if L/M/R are all occupied, sit between
-// middle and right (legacy placement).
+// Ink-only (no white plate). Prefer under the power button (top-right),
+// even when the right status slot has content (sit just inward of it).
+// Only if the right side is unusable do we use empty left/middle; last resort
+// mid/right gap.
 
 namespace SleepChromeIcon {
 
-// MoonIcon 48×48 has large empty margins; crop to ink so it fills the chrome box.
 constexpr int kMoonSrcW = 48;
 constexpr int kMoonSrcH = 48;
 constexpr int kMoonCropX = 7;
@@ -24,16 +26,12 @@ constexpr int kMoonCropY = 3;
 constexpr int kMoonCropW = 35;
 constexpr int kMoonCropH = 41;
 
-// Match clock/battery text height (SMALL_FONT line height vs battery icon).
 inline int iconSize(const GfxRenderer& renderer) {
   const int clockH = renderer.getLineHeight(SMALL_FONT_ID);
   const int battH = BaseMetrics::values.batteryHeight;
   return std::max({clockH, battH, 14});
 }
 
-// Same top row as BaseTheme::drawStatusBar reader chrome:
-//   topTextY = topPadding + kTopChromeBatteryY
-// Center the icon on that row so it lines up with clock / battery / %.
 inline int topY(const GfxRenderer& renderer) {
   const int size = iconSize(renderer);
   const int rowY = BaseMetrics::values.topPadding + BaseTheme::kTopChromeBatteryY;
@@ -41,57 +39,88 @@ inline int topY(const GfxRenderer& renderer) {
   return rowY + std::max(0, (rowH - size) / 2);
 }
 
-// Xteink power sits on the top bezel toward the right of the panel in the
-// usual reading hold — treat top-right status chrome as "under power".
-enum class ChromeSlot : uint8_t { Right, Left, Middle, BetweenMidRight };
-
 inline bool upperSlotEmpty(const uint8_t content) {
   return content == CrossPointSettings::CORNER_HIDE;
 }
 
-// Prefer: under power (right) if free → left → middle → mid/right gap (current).
-inline ChromeSlot pickSlot() {
-  using S = CrossPointSettings;
-  const bool rightFree = upperSlotEmpty(SETTINGS.statusBarUpperRight);
-  const bool leftFree = upperSlotEmpty(SETTINGS.statusBarUpperLeft);
-  const bool midFree = upperSlotEmpty(SETTINGS.statusBarUpperMiddle);
-  // Under power first.
-  if (rightFree) return ChromeSlot::Right;
-  if (leftFree) return ChromeSlot::Left;
-  if (midFree) return ChromeSlot::Middle;
-  return ChromeSlot::BetweenMidRight;
+// Approximate width of the upper-right status item so the moon can sit just
+// left of it (still under power) when the slot is occupied.
+inline int estimateUpperRightWidth(const GfxRenderer& renderer) {
+  using C = CrossPointSettings::STATUS_BAR_CORNER_CONTENT;
+  const uint8_t content = SETTINGS.statusBarUpperRight;
+  if (content == C::CORNER_HIDE) return 0;
+
+  const auto& metrics = BaseMetrics::values;
+  if (content == C::CORNER_BATTERY) {
+    const uint8_t mode = SETTINGS.readerBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                             ? SETTINGS.readerBatteryDisplay
+                             : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+    const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
+    const bool showPct = mode != CrossPointSettings::BATTERY_DISPLAY_ICON;
+    const int iconW = metrics.batteryWidth;
+    const int pctW = showPct ? renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
+    if (showIcon && showPct) return iconW + 4 + pctW;
+    if (showIcon) return iconW;
+    return pctW;
+  }
+  if (content == C::CORNER_PROGRESS_PERCENT) {
+    // "100% complete" worst case.
+    return renderer.getTextWidth(SMALL_FONT_ID, "100% complete");
+  }
+  if (content == C::CORNER_CLOCK) {
+    char buf[16];
+    if (halClock.isAvailable() &&
+        halClock.formatTime(buf, sizeof(buf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) {
+      return renderer.getTextWidth(SMALL_FONT_ID, buf);
+    }
+    return renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
+  }
+  // Page counters / other short chrome.
+  return renderer.getTextWidth(SMALL_FONT_ID, "999/999");
 }
 
+// Under power = top-right of the oriented panel.
+// free right  → flush to right edge
+// occupied   → just left of that right chrome (still top-right / under power)
+// squeezed   → empty left, then empty middle, then mid/right gap
 inline int leftX(const GfxRenderer& renderer) {
   int orientedMarginTop = 0, orientedMarginRight = 0, orientedMarginBottom = 0, orientedMarginLeft = 0;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
   (void)orientedMarginTop;
   (void)orientedMarginBottom;
+
   const int screenW = renderer.getScreenWidth();
   const int centerX = screenW / 2;
   const int leftEdge = orientedMarginLeft + BaseTheme::kTopChromeInsetX;
   const int rightEdge = screenW - orientedMarginRight - BaseTheme::kTopChromeInsetX;
   const int size = iconSize(renderer);
-  const ChromeSlot slot = pickSlot();
-  switch (slot) {
-    case ChromeSlot::Right:
-      // Align with right status group (under power).
-      return rightEdge - size;
-    case ChromeSlot::Left:
-      return leftEdge;
-    case ChromeSlot::Middle:
-      return centerX - size / 2;
-    case ChromeSlot::BetweenMidRight:
-    default: {
-      // Legacy: midway between middle and right anchors.
-      const int iconCenter = (centerX + rightEdge) / 2;
-      return iconCenter - size / 2;
-    }
+  constexpr int kGap = 6;
+
+  const bool rightFree = upperSlotEmpty(SETTINGS.statusBarUpperRight);
+  const bool leftFree = upperSlotEmpty(SETTINGS.statusBarUpperLeft);
+  const bool midFree = upperSlotEmpty(SETTINGS.statusBarUpperMiddle);
+
+  // 1) Under power — top-right (flush or inset past right status content).
+  if (rightFree) {
+    return rightEdge - size;
   }
+  const int rightW = estimateUpperRightWidth(renderer);
+  const int underPowerX = rightEdge - rightW - kGap - size;
+  // Keep it on the right half so it still reads as "under power".
+  if (underPowerX >= centerX) {
+    return underPowerX;
+  }
+
+  // 2) Empty left / middle.
+  if (leftFree) return leftEdge;
+  if (midFree) return centerX - size / 2;
+
+  // 3) Last resort: between middle and right (legacy).
+  const int iconCenter = (centerX + rightEdge) / 2;
+  return iconCenter - size / 2;
 }
 
-// Scale a crop of a 1bpp MSB image into dstW×dstH, ink-only (white = transparent).
 inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t* src, const int srcW,
                                       const int cropX, const int cropY, const int cropW, const int cropH,
                                       const int dstX, const int dstY, const int dstW, const int dstH) {
@@ -111,7 +140,6 @@ inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t
   }
 }
 
-// Fit moon crop into the square chrome box (fill height; center horizontally).
 inline void drawMoonFitted(const GfxRenderer& renderer, const uint8_t* src, const int boxX, const int boxY,
                            const int boxSize) {
   const int dh = boxSize;
@@ -132,11 +160,8 @@ inline void fillDot(const GfxRenderer& renderer, const int cx, const int cy, con
   }
 }
 
-// Three horizontal loading dots. Bottom of the dots lines up with the bottom
-// of the moon box (not vertically centered — that read as "too high").
 inline void drawLoadingDots(const GfxRenderer& renderer, const int x, const int y, const int size) {
   const int r = std::max(2, size / 7);
-  // Rest on the same baseline as the moon's bottom edge.
   const int cy = y + size - 1 - r;
   const int gap = std::max(r * 2 + 2, size / 3);
   const int midX = x + size / 2;
@@ -150,7 +175,6 @@ inline void drawAtTopChrome(const GfxRenderer& renderer, const uint8_t* src, con
   drawMoonFitted(renderer, src, leftX(renderer), topY(renderer), size);
 }
 
-// Clear chrome box then draw horizontal loading dots (same size/position as moon).
 inline void replaceAtTopChrome(const GfxRenderer& renderer, const uint8_t* /*src*/, const int /*srcW*/,
                                const int /*srcH*/) {
   const int x = leftX(renderer);

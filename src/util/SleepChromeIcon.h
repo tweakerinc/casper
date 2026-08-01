@@ -28,6 +28,8 @@ constexpr int kMoonCropW = 35;
 constexpr int kMoonCropH = 41;
 // Air between moon and right-side status content when the right slot is filled.
 constexpr int kRightChromeGap = 8;
+// When the right slot is empty, hug the physical corner (tighter than status chrome inset).
+constexpr int kCornerInsetX = 2;
 
 enum class ChromeContext : uint8_t { Home, Reader };
 
@@ -49,8 +51,18 @@ inline int topY(const GfxRenderer& renderer) {
   return rowY + std::max(0, (rowH - size) / 2);
 }
 
-// Right edge of the top status row — match BaseTheme anchors for each chrome type.
-inline int rightEdgeX(const GfxRenderer& renderer, const ChromeContext ctx) {
+// Right edge for flush corner placement (tighter than full status chrome margin).
+inline int cornerRightEdgeX(const GfxRenderer& renderer) {
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oTop;
+  (void)oBottom;
+  (void)oLeft;
+  return renderer.getScreenWidth() - oRight - kCornerInsetX;
+}
+
+// Right edge of drawn status chrome (for sitting just left of progress/battery).
+inline int statusRightEdgeX(const GfxRenderer& renderer, const ChromeContext ctx) {
   int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
   renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
   (void)oTop;
@@ -61,7 +73,6 @@ inline int rightEdgeX(const GfxRenderer& renderer, const ChromeContext ctx) {
     const auto& m = UITheme::getInstance().getMetrics();
     return screenW - m.statusBarHorizontalMargin - oRight;
   }
-  // System bar (home) uses kTopChromeInsetX on both sides.
   return screenW - oRight - BaseTheme::kTopChromeInsetX;
 }
 
@@ -166,27 +177,28 @@ inline bool midSlotEmpty(const ChromeContext ctx) {
 inline int leftX(const GfxRenderer& renderer) {
   const ChromeContext ctx = currentContext();
   const int size = iconSize(renderer);
-  const int rightEdge = rightEdgeX(renderer, ctx);
+  const int cornerRight = cornerRightEdgeX(renderer);
+  const int statusRight = statusRightEdgeX(renderer, ctx);
   const int leftEdge = leftEdgeX(renderer, ctx);
   const int centerX = renderer.getScreenWidth() / 2;
   const int rightW = rightSlotWidth(renderer, ctx);
 
-  // 1) Under power / top-right
+  // 1) Empty right slot → perfect corner (tight inset only).
   if (rightW <= 0) {
-    return rightEdge - size;  // empty right slot → true corner
+    return cornerRight - size;
   }
-  // Sit just left of right chrome (small fixed gap).
-  const int underPowerX = rightEdge - rightW - kRightChromeGap - size;
+  // 2) Occupied: sit just left of the right chrome (8px gap), still under power.
+  const int underPowerX = statusRight - rightW - kRightChromeGap - size;
   if (underPowerX >= centerX) {
     return underPowerX;
   }
 
-  // 2) Empty left / middle
+  // 3) Empty left / middle
   if (leftSlotEmpty(ctx)) return leftEdge;
   if (midSlotEmpty(ctx)) return centerX - size / 2;
 
-  // 3) Last resort mid/right gap
-  return (centerX + rightEdge) / 2 - size / 2;
+  // 4) Last resort mid/right gap
+  return (centerX + statusRight) / 2 - size / 2;
 }
 
 inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t* src, const int srcW,
@@ -208,11 +220,13 @@ inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t
   }
 }
 
+// Right-align the moon ink in the box so empty glyph margins don't leave it
+// looking inset from the corner.
 inline void drawMoonFitted(const GfxRenderer& renderer, const uint8_t* src, const int boxX, const int boxY,
                            const int boxSize) {
   const int dh = boxSize;
   const int dw = std::max(1, (kMoonCropW * boxSize) / kMoonCropH);
-  const int ox = boxX + (boxSize - dw) / 2;
+  const int ox = boxX + (boxSize - dw);  // flush right of the placement box
   drawTransparentScaledCrop(renderer, src, kMoonSrcW, kMoonCropX, kMoonCropY, kMoonCropW, kMoonCropH, ox, boxY, dw,
                             dh);
 }

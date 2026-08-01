@@ -17,6 +17,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/HtmlToPlainText.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 
@@ -388,10 +389,11 @@ int BookDescriptionActivity::rowHeight(const Line& line) const {
 
 void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Prefer a large serif so the title reads at least as boldly as body text.
-  titleFontId = BITTER_18_FONT_ID;
+  // Compact serif title: prefer a single line; wrap to two only when needed.
+  // (18pt was oversized for long titles and ate synopsis space.)
+  titleFontId = BITTER_14_FONT_ID;
   if (renderer.getLineHeight(titleFontId) <= 0) {
-    titleFontId = BITTER_16_FONT_ID;
+    titleFontId = BITTER_12_FONT_ID;
   }
   if (renderer.getLineHeight(titleFontId) <= 0) {
     titleFontId = UI_12_FONT_ID;
@@ -399,7 +401,7 @@ void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
 
   const char* headerText = title.empty() ? tr(STR_SYNOPSIS) : title.c_str();
   const int sidePad = metrics.contentSidePadding;
-  // Full content width so long titles wrap cleanly (up to two lines).
+  // Full content width; max two lines, second truncates with ellipsis if still long.
   const int titleMaxW = std::max(40, pageWidth - sidePad * 2);
   constexpr int kTitleMaxLines = 2;
   titleLines = renderer.wrappedText(titleFontId, headerText, titleMaxW, kTitleMaxLines, EpdFontFamily::BOLD);
@@ -414,7 +416,9 @@ void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
   const int titleY = std::max(metrics.topPadding + 4, chromeBottom);
   const int titleBlockH = static_cast<int>(titleLines.size()) * titleLineH +
                           std::max(0, static_cast<int>(titleLines.size()) - 1) * 1;
-  titleBlockBottom = titleY + titleBlockH + metrics.verticalSpacing;
+  // Extra gap so synopsis body is not jammed against the title.
+  constexpr int kTitleBodyGap = 14;
+  titleBlockBottom = titleY + titleBlockH + std::max(metrics.verticalSpacing, 6) + kTitleBodyGap;
 }
 
 void BookDescriptionActivity::drawTitleBlock(const int pageWidth) const {
@@ -576,7 +580,7 @@ void BookDescriptionActivity::render(RenderLock&&) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     const uint32_t tDisp = millis();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    UiGhostPolicy::displayMenuFrame(renderer);
     loadingFramePainted = true;
     LOG_DBG("DESC", "Loading shell draw=%lums display=%lums", static_cast<unsigned long>(tDisp - tRender),
             static_cast<unsigned long>(millis() - tDisp));
@@ -633,7 +637,7 @@ void BookDescriptionActivity::render(RenderLock&&) {
       mappedInput.mapLabels(tr(STR_BACK), "", canUp ? tr(STR_DIR_UP) : "", canDown ? tr(STR_DIR_DOWN) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   const uint32_t tDisp = millis();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  UiGhostPolicy::displayMenuFrame(renderer);
   LOG_DBG("DESC", "content paint draw=%lums display=%lums total=%lums", static_cast<unsigned long>(tDisp - tRender),
           static_cast<unsigned long>(millis() - tDisp), static_cast<unsigned long>(millis() - tRender));
   (void)pageHeight;

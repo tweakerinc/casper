@@ -27,9 +27,12 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
-  // Raw RTC date/time before user timezone offset. Used by reading-stats day buckets.
+  // Raw RTC date/time before user timezone offset. Used by reading-stats day buckets
+  // and Penumbra weekday. Optional weekday is 0=Sunday .. 6=Saturday.
   // Returns false if RTC is not available.
-  bool getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute) const;
+  // Years 1900–1999 are normalized to 2000+yy (PCF8563 century-bit glitch).
+  bool getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
+                   uint8_t* weekday = nullptr) const;
 
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).

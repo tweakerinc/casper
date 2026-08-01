@@ -13,6 +13,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Function options shown in the picker (order = display order).
@@ -314,7 +315,7 @@ void ButtonRemapActivity::render(RenderLock&&) {
     drawSlotArrows();
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 const char* ButtonRemapActivity::slotName(const uint8_t hwIndex) const {

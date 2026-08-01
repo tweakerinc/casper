@@ -19,9 +19,11 @@ void HalDisplay::begin(bool seamless) {
   einkDisplay.begin();
 
   if (seamless) {
-    // Defuse the SDK's X3 _x3InitialFullSyncsRemaining counter (no-op on X4)
-    // so the first paint isn't promoted to FULL (~770ms). Skips the wakeup-
-    // gated requestResync() below for the same reason.
+    // Defuse forced first-clean so Quick Resume / silent reboot can FAST-diff:
+    //   X3: _x3InitialFullSyncsRemaining
+    //   X4: SSD1677 _needsInitialFull (otherwise first FAST → HALF ~1.8s)
+    // Skips the wakeup-gated requestResync() below for the same reason.
+    // Caller must re-seed the differential baseline before the first FAST.
     einkDisplay.skipInitialResync();
     return;
   }

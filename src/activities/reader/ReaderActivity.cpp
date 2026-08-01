@@ -18,6 +18,8 @@
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
+#include "util/QrTimingLog.h"
+#include "util/SystemLog.h"
 
 bool ReaderActivity::s_preferFastFirstRefresh = false;
 bool ReaderActivity::s_deferFirstPageTextAa = false;
@@ -79,6 +81,11 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
     LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(),
             static_cast<unsigned long>(millis() - t0), uncached ? "miss" : "hit");
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("epub->load %lums book.bin=%s", static_cast<unsigned long>(millis() - t0),
+                        uncached ? "MISS" : "HIT");
+    }
+    SystemLog::logTimed("EPUB", millis() - t0, "load book.bin=%s", uncached ? "MISS" : "HIT");
   }
   if (loaded) {
     return epub;
@@ -164,8 +171,15 @@ void ReaderActivity::onEnter() {
   }
 
   const uint32_t tEnter = millis();
+  if (QrTimingLog::active()) QrTimingLog::line("ReaderActivity::onEnter start");
+  SystemLog::logTiming("READER", "open start");
   sdFontSystem.ensureLoaded(renderer);
   LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));
+  if (QrTimingLog::active()) {
+    QrTimingLog::line("after ensureLoaded fonts (+%lums step)",
+                      static_cast<unsigned long>(millis() - tEnter));
+  }
+  SystemLog::logTimed("READER", millis() - tEnter, "ensureLoaded fonts");
 
   currentBookPath = initialBookPath;
   if (isBmpFile(initialBookPath)) {
@@ -185,13 +199,21 @@ void ReaderActivity::onEnter() {
     }
     onGoToTxtReader(std::move(txt));
   } else {
+    const uint32_t tLoad = millis();
     auto epub = loadEpub(initialBookPath);
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("after loadEpub (+%lums step)", static_cast<unsigned long>(millis() - tLoad));
+    }
     if (!epub) {
       onGoBack();
       return;
     }
     LOG_DBG("READER", "ReaderActivity open total %lums before EpubReader",
             static_cast<unsigned long>(millis() - tEnter));
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("before EpubReaderActivity (ReaderActivity total +%lums)",
+                        static_cast<unsigned long>(millis() - tEnter));
+    }
     onGoToEpubReader(std::move(epub));
   }
 }

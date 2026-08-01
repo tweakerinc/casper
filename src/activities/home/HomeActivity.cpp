@@ -35,8 +35,10 @@
 #include "components/themes/HomeCoverMetrics.h"
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/dashboard/DashboardTheme.h"
-#include "components/themes/clockface/ClockfaceTheme.h"
-#include "components/themes/focus/FocusTheme.h"
+#include "components/themes/penumbra/PenumbraTheme.h"
+#include "util/SystemLog.h"
+#include "util/UiGhostPolicy.h"
+
 #include "fontIds.h"
 
 namespace {
@@ -59,35 +61,25 @@ bool isBareTheme() {
   return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::BARE;
 }
 
-bool isSpectralTheme() {
-  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::SPECTRAL;
+bool isPenumbraTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::PENUMBRA;
 }
 
-// Stats home (cover + book stats; side L/R toggles title ↔ lifetime under-box).
-// Legacy STATS_LIFE / parked ids still match until load remaps them to STATS.
-bool isStatsTheme() {
-  using T = CrossPointSettings::UI_THEME;
-  const auto theme = static_cast<T>(SETTINGS.uiTheme);
-  return theme == T::STATS || theme == T::STATS_LIFE || theme == T::DASHBOARD_RECENTS ||
-         theme == T::DASHBOARD_SCROLL || theme == T::DASHBOARD_MAGAZINE || theme == T::DASHBOARD_CARD ||
-         theme == T::MINIMAL || theme == T::LYRA_CAROUSEL;
-}
+// Stats (FocusTheme) is not in this firmware build.
+bool isStatsTheme() { return false; }
 
 // Front-button home chrome (no classic bottom list).
-bool usesMinimalHomeInteraction() {
-  return isBareTheme() || isSpectralTheme() || isStatsTheme();
-}
+bool usesMinimalHomeInteraction() { return isBareTheme() || isPenumbraTheme(); }
 
-// All minimal homes: Menu · Library · Recents · Read (Settings under Menu /
-// long-press Menu). Unified Bare / Spectral / Stats.
+// Menu · Library · Recents · Read (Settings under Menu / long-press Menu).
 bool usesBareStyleHomeNav() { return usesMinimalHomeInteraction(); }
 
-// Stats family: FocusTheme layout + shared cover gen size.
-bool usesStatsFamilyCover() { return isStatsTheme(); }
+// Stats family cover gen — disabled with Stats theme.
+bool usesStatsFamilyCover() { return false; }
 
-// Themes that paint a cover and need multipass greys. SPECTRAL is text-only.
+// Themes that paint a cover and need multipass greys. Penumbra is text-only.
 bool usesHomeCoverMultipass() {
-  return usesMinimalHomeInteraction() && !isSpectralTheme();
+  return usesMinimalHomeInteraction() && !isPenumbraTheme();
 }
 
 // Hero thumb height for the *current* theme so gen size matches on-screen blit
@@ -470,6 +462,7 @@ void HomeActivity::onEnter() {
   homeMenuShellOnPanel = false;
   menuLongPressFired = false;
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
+  suppressMenuBackUntilMs = 0;
   readLongPressFired = false;
   backPressSeen = false;
   backResumeArmed = false;
@@ -494,10 +487,21 @@ void HomeActivity::onEnter() {
 
   currentBookStats = BookReadingStats{};
   currentBookProgressPercent = -1.0f;
-  globalStats = GlobalReadingStats::load();
+  if (SETTINGS.readingStatsTrackingEnabled()) {
+    globalStats = GlobalReadingStats::load();
+  } else {
+    globalStats = GlobalReadingStats{};
+  }
   // Stats Recents (and other dashboard homes): selectorIndex is the focused recent.
   // Classic list themes still use it for the bottom menu row.
   selectorIndex = 0;
+  penumbraRecentsFocus = 0;
+  // Penumbra: land on the device default under-page (X4 = Recents leftmost).
+  // Always reset so a stale session mode cannot leave Recents on the far-right dot.
+  if (isPenumbraTheme()) {
+    PenumbraThemeUi::resetUnderModeToDefault();
+    PenumbraThemeUi::clampUnderModeToTracking();
+  }
   if (!recentBooks.empty()) {
     loadFocusedRecentStats();
   }
@@ -531,6 +535,29 @@ void HomeActivity::onExit() {
   coverGrayOnPanel = false;
 }
 
+void HomeActivity::markSnappyResumeReady() {
+  // Used when Home is seeded under the reader without a first paint (QR/cold open).
+  paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
+  homeUiReady = true;
+  recentsLoaded = true;
+  if (isPenumbraTheme()) {
+    // Text-only: FAST resume is correct (no cover greys to restore).
+    penumbraHalfBaselineDone = true;
+    leaveForUiChildSnappy = true;
+    coverGrayOnPanel = true;
+  } else if (usesHomeCoverMultipass()) {
+    // Bare / Dashboard / Focus: first PopToHome must run perfect multipass greys.
+    // Forcing snappy here left solid-BW jackets + menu ghosting on X4.
+    leaveForUiChildSnappy = false;
+    coverGrayOnPanel = false;
+    coverRendered = false;
+    penumbraHalfBaselineDone = false;
+  } else {
+    leaveForUiChildSnappy = true;
+    coverGrayOnPanel = false;
+  }
+}
+
 void HomeActivity::onResume() {
   // Phase 2: Home stayed alive under the reader / Settings. The panel was painted
   // by the child, so we must redraw — but NOT always multipass. Multipass greys
@@ -540,7 +567,12 @@ void HomeActivity::onResume() {
 
   const int themeNow = static_cast<int>(SETTINGS.uiTheme);
   const bool themeUnchanged = (paintedUiTheme == themeNow && themeNow >= 0);
-  const bool snappy = leaveForUiChildSnappy && themeUnchanged && usesHomeCoverMultipass();
+  // Penumbra: always snappy after a prior HALF baseline this session (FAST ~0.45s).
+  // Multipass themes: snappy only when we left with greys settled (Settings/Library).
+  const bool snappy =
+      themeUnchanged &&
+      (isPenumbraTheme() ? (leaveForUiChildSnappy || penumbraHalfBaselineDone)
+                         : (leaveForUiChildSnappy && usesHomeCoverMultipass()));
   leaveForUiChildSnappy = false;
 
   freeCoverBufferRamOnly();
@@ -561,10 +593,15 @@ void HomeActivity::onResume() {
   backPressSeen = false;
   backResumeArmed = false;
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
+  // ~450ms covers a FAST home paint; longer covers HALF if baseline not done.
+  suppressMenuBackUntilMs = millis() + (isPenumbraTheme() && penumbraHalfBaselineDone ? 500UL : 900UL);
   snappyResumeNoGreys = snappy;
   if (!snappy) {
     // Full quality path: force multipass (reader return, theme change, first land).
-    paintedUiTheme = -1;
+    // Penumbra keeps paintedUiTheme when half baseline is done so FAST path runs.
+    if (!(isPenumbraTheme() && penumbraHalfBaselineDone)) {
+      paintedUiTheme = -1;
+    }
   }
 
   // Portrait: reader may have left landscape.
@@ -585,16 +622,26 @@ void HomeActivity::onResume() {
     currentBookStats = BookReadingStats{};
     currentBookProgressPercent = -1.0f;
   }
-  globalStats = GlobalReadingStats::load();
+  // X4: tracking hard-off — skip global stats load (no under-panel / menu use).
+  if (SETTINGS.readingStatsTrackingEnabled()) {
+    globalStats = GlobalReadingStats::load();
+  } else {
+    globalStats = GlobalReadingStats{};
+  }
 
   const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
   if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
                                     DashboardMetrics::homeShelfThumbHeight)) {
     recentsLoaded = true;
     LOG_DBG("HOME", snappy ? "onResume: snappy UI return (no multipass)" : "onResume: thumbs ready — multipass");
+  } else if (isPenumbraTheme() || !usesHomeCoverMultipass()) {
+    // Penumbra / text-only homes never need hero thumbs. Clearing snappy here
+    // forced "gen after shell" and extra full paints after every Back from book.
+    recentsLoaded = true;
+    LOG_DBG("HOME", snappy ? "onResume: snappy (no cover thumbs)" : "onResume: text home full paint");
   } else {
     recentsLoaded = false;
-    snappyResumeNoGreys = false;  // need gen path, not snappy
+    snappyResumeNoGreys = false;  // cover themes need gen path, not snappy
     LOG_DBG("HOME", "onResume: thumbs missing — gen after shell");
   }
 }
@@ -637,6 +684,13 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   // painting). Holding RenderLock across multipass used to freeze the main loop
   // for the full 5–15s e-ink sequence; caller unlocks before we run, and we
   // bail between stages so the pending activity can take over immediately.
+  const uint32_t tMultipass = millis();
+  const uint8_t themeId = SETTINGS.uiTheme;
+  auto logMultipassDone = [tMultipass, themeId](const char* outcome) {
+    SystemLog::logTimed("HOME", millis() - tMultipass, "multipass theme=%u outcome=%s fre=%u",
+                        static_cast<unsigned>(themeId), outcome ? outcome : "?",
+                        static_cast<unsigned>(ESP.getFreeHeap()));
+  };
   auto leavingHome = [this]() -> bool {
     return cancelBackgroundPaint || !activityManager.isCurrentActivity(this) ||
            activityManager.hasPendingActivityChange();
@@ -644,7 +698,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
 
   // Fallback: plain BW half-refresh (1-bit thumbs, missing art, classic empty state).
   // settle=true claims the panel so we do not thrash multipass retries on heap OOM.
-  auto displayBw = [this, &leavingHome](bool settle) {
+  auto displayBw = [this, &leavingHome, &logMultipassDone](bool settle, const char* outcome) {
     if (settle) {
       coverGrayOnPanel = true;
       coverGrayNeedsRetry = false;
@@ -653,18 +707,21 @@ void HomeActivity::multipassHomeCoverGrayscale() {
       coverGrayOnPanel = false;
     }
     if (leavingHome()) {
+      logMultipassDone("leave_bw");
       return;
     }
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    logMultipassDone(outcome);
   };
 
   if (leavingHome()) {
     coverGrayOnPanel = false;
+    logMultipassDone("leave_early");
     return;
   }
 
   if (coverRectW <= 0 || coverRectH <= 0 || recentBooks.empty()) {
-    displayBw(true);
+    displayBw(true, "bw_no_cover");
     return;
   }
 
@@ -704,13 +761,13 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     });
   }
   if (coverPath.empty()) {
-    displayBw(true);
+    displayBw(true, "bw_no_path");
     return;
   }
 
   HalFile file;
   if (!Storage.openFileForRead("HOME", coverPath, file)) {
-    displayBw(true);
+    displayBw(true, "bw_open_fail");
     return;
   }
 
@@ -719,7 +776,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
       !bitmap.hasGreyscale()) {
     file.close();
     // 1-bit or corrupt: single-pass is correct (dither already baked in).
-    displayBw(true);
+    displayBw(true, "bw_1bit");
     return;
   }
 
@@ -762,6 +819,27 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   if (leavingHome()) {
     file.close();
     coverGrayOnPanel = false;
+    logMultipassDone("leave_pre_store");
+    return;
+  }
+
+  // Skip greys when heap is too tight for a full BW store + gray planes.
+  // Logs showed repeated bw_oom_store at ~65KB free after reading — wastes ~3s.
+  // Thresholds are conservative; settle on BW half instead of thrashing OOM.
+  constexpr uint32_t kMinFreeForCoverMultipass = 90 * 1024;
+  constexpr uint32_t kMinMaxAllocForCoverMultipass = 48 * 1024;
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  if (freeHeap < kMinFreeForCoverMultipass || maxAlloc < kMinMaxAllocForCoverMultipass) {
+    LOG_DBG("HOME", "Skip cover multipass (heap free=%u maxAlloc=%u)", static_cast<unsigned>(freeHeap),
+            static_cast<unsigned>(maxAlloc));
+    file.close();
+    renderer.setRenderMode(GfxRenderer::BW);
+    if (!leavingHome()) {
+      displayBw(true, "bw_skip_low_heap");
+    } else {
+      logMultipassDone("leave_low_heap");
+    }
     return;
   }
 
@@ -782,7 +860,9 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     file.close();
     renderer.setRenderMode(GfxRenderer::BW);
     if (!leavingHome()) {
-      displayBw(true);
+      displayBw(true, "bw_oom_store");
+    } else {
+      logMultipassDone("leave_oom");
     }
     return;
   }
@@ -796,6 +876,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     coverGrayOnPanel = false;
     coverGrayNeedsRetry = false;
     file.close();
+    logMultipassDone("abort_leave");
   };
 
   if (leavingHome()) {
@@ -803,13 +884,10 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
-  // v0.1.3 multipass order — stop here. No post-pass paper windows.
-  // Soft base: panel already shows a matching BW shell (snappy resume / deferred
-  // greys). FAST avoids a multi-second HALF that pins waitForRenderIdle when the
-  // user opens Synopsis/Library mid-pass. Leave-reader / hard base still HALF.
-  const bool useSoftBase = softGrayscaleBase;
+  // v0.1.3 perfect multipass: HALF base always (true greys). Soft/FAST base was
+  // for snappy UI but left muddy midtones on Bare covers vs the locked recipe.
   softGrayscaleBase = false;
-  renderer.displayGrayscaleBase(useSoftBase ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
 
   if (leavingHome()) {
     abortMultipass();
@@ -846,6 +924,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
   coverGrayNeedsRetry = false;
   file.close();
+  logMultipassDone("ok_half");
 }
 
 void HomeActivity::freeCoverBufferRamOnly() {
@@ -867,8 +946,10 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::markLeavingForUiChild() {
-  // Only snappy if greys were settled under this theme (panel still looked good).
-  leaveForUiChildSnappy = coverGrayOnPanel && paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
+  // Penumbra is text-only (no cover greys). Other themes need settled multipass greys.
+  const bool themeOk = paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
+  leaveForUiChildSnappy =
+      themeOk && (isPenumbraTheme() ? penumbraHalfBaselineDone : coverGrayOnPanel);
   cancelHomeBackgroundPaint();
 }
 
@@ -882,24 +963,37 @@ void HomeActivity::cancelHomeBackgroundPaint() {
 }
 
 bool HomeActivity::handleForcedRefresh() {
-  // v0.1.3: invalidate settle and repaint (multipass restores cover greys).
+  // Long-press power → Force Refresh. Must actually scrub the panel — not FAST.
+  // Penumbra does many FAST clock/under updates; after the first HALF baseline,
+  // a "force refresh" that only re-FAST'd left grey mud/splotches on glass.
+  // Reset baseline so this paint uses HALF (X3 also requestResync).
+  // Wait for the paint so the scrub starts immediately after the hold threshold
+  // (user can release; they should not need to hold through the whole HALF).
   coverGrayOnPanel = false;
   coverRendered = false;
   forceHomeShellRepaint = true;
-  requestUpdate();
+  penumbraHalfBaselineDone = false;
+  paintedUiTheme = -1;
+  snappyResumeNoGreys = false;
+  deferredGreysOnly = false;
+  softGrayscaleBase = false;
+  cancelBackgroundPaint = false;
+  coverGrayNeedsRetry = false;
+  SystemLog::logTiming("HOME", "force_refresh (HALF scrub)");
+  requestUpdateAndWait();
   return true;
 }
 
 void HomeActivity::loop() {
-  // SPECTRAL: when the minute rolls, window-refresh only the time digits (no
+  // Penumbra: when the minute rolls, window-refresh only the time digits (no
   // full-frame flash). Settled home otherwise skips paint forever.
-  if (isSpectralTheme() && homeUiReady && coverRendered && !minimalMenuOpen &&
-      paintedUiTheme == static_cast<int>(CrossPointSettings::UI_THEME::SPECTRAL) &&
-      !forceSPECTRALClockRepaint && !forceStatsUnderBoxRepaint) {
+  if (isPenumbraTheme() && homeUiReady && coverRendered && !minimalMenuOpen &&
+      paintedUiTheme == static_cast<int>(CrossPointSettings::UI_THEME::PENUMBRA) &&
+      !forcePenumbraClockRepaint && !forceStatsUnderBoxRepaint) {
     char now[8];
-    if (ClockfaceThemeUi::formatHeroTimeNow(now, sizeof(now)) &&
-        (SPECTRALLastDrawnTime[0] == '\0' || strcmp(now, SPECTRALLastDrawnTime) != 0)) {
-      forceSPECTRALClockRepaint = true;
+    if (PenumbraThemeUi::formatHeroTimeNow(now, sizeof(now)) &&
+        (penumbraLastDrawnTime[0] == '\0' || strcmp(now, penumbraLastDrawnTime) != 0)) {
+      forcePenumbraClockRepaint = true;
       requestUpdate();
       return;
     }
@@ -933,8 +1027,8 @@ void HomeActivity::loop() {
       return;
     }
     if (!recentsLoaded) {
-      // SPECTRAL has no cover art — skip gen / multipass wait entirely.
-      if (isSpectralTheme()) {
+      // Penumbra has no cover art — skip gen / multipass wait entirely.
+      if (isPenumbraTheme()) {
         recentsLoaded = true;
         coverGrayOnPanel = true;
       } else {
@@ -1007,12 +1101,22 @@ void HomeActivity::loop() {
       if (mappedInput.wasReleased(MappedInputManager::Button::Back) || releasedFrontButton == HalGPIO::BTN_BACK) {
         minimalMenuOpen = false;
         homeMenuShellOnPanel = false;
-        // Snappy FAST BW shell if we still know the settled theme (menu open no
-        // longer clears paintedUiTheme). Full multipass only if theme unknown.
-        snappyResumeNoGreys =
-            usesHomeCoverMultipass() && paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
+        // Opening the menu aborts in-flight greys (cancelBackgroundPaint). That flag
+        // must be cleared on dismiss — otherwise multipassHomeCoverGrayscale() bails
+        // at leave_early without pushing the home FB and the menu stays on glass.
+        cancelBackgroundPaint = false;
+        // Cover multipass themes: always re-run perfect greys after the BW menu
+        // (FAST shell left menu ghosting on X4). Penumbra/text: snappy FAST OK.
+        if (usesHomeCoverMultipass()) {
+          snappyResumeNoGreys = false;
+          softGrayscaleBase = false;
+          paintedUiTheme = -1;  // force full multipass path
+        } else {
+          snappyResumeNoGreys = paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
+        }
         coverGrayOnPanel = false;
         coverRendered = false;
+        forceHomeShellRepaint = true;
         requestUpdate();
         return;
       }
@@ -1070,74 +1174,59 @@ void HomeActivity::loop() {
       buttonNavigator.onPress(ButtonNavigator::getSideNextButtons(), [stepRecent] { stepRecent(1); });
     }
 
-    // Stats: side Left/Right toggles under-box title/author ↔ lifetime stats.
-    // Front L/R: Recents / Read (all themes).
-    if (isStatsTheme() && !usesRecentBookSideNav()) {
-      auto flipUnderBox = [this]() {
-        FocusThemeUi::showLifeUnderBox() = !FocusThemeUi::showLifeUnderBox();
-        forceStatsUnderBoxRepaint = true;
-        requestUpdate();
-      };
-      buttonNavigator.onPress(ButtonNavigator::getSidePreviousButtons(), [flipUnderBox] { flipUnderBox(); });
-      buttonNavigator.onPress(ButtonNavigator::getSideNextButtons(), [flipUnderBox] { flipUnderBox(); });
-    }
-    // Spectral: side buttons remappable (defaults both Panel Scroll).
-    // X3 Left/Right · X4 Up/Down via getSidePrevious/Next.
-    // Same action on both sides → bidirectional (Left −1 / Right +1).
-    // Only one side has the action → one-way cycle (+1): Title→Stats→Lifetime,
-    // or recents most-recent→least-recent.
-    if (isSpectralTheme()) {
-      auto runSpectralSide = [this](const bool isLeft) {
-        using A = CrossPointSettings::SPECTRAL_SIDE_ACTION;
-        auto clampAct = [](const uint8_t v) -> uint8_t {
-          return v < A::SPECTRAL_SIDE_ACTION_COUNT ? v : static_cast<uint8_t>(A::SPECTRAL_SIDE_RECENTS);
-        };
-        const uint8_t leftA = clampAct(SETTINGS.spectralSideLeft);
-        const uint8_t rightA = clampAct(SETTINGS.spectralSideRight);
-        const uint8_t action = isLeft ? leftA : rightA;
-        const bool bothPanel = leftA == A::SPECTRAL_SIDE_PANEL && rightA == A::SPECTRAL_SIDE_PANEL;
-        const bool bothRecents = leftA == A::SPECTRAL_SIDE_RECENTS && rightA == A::SPECTRAL_SIDE_RECENTS;
-        // Dual same-action: Left scrolls “back”, Right scrolls “forward”.
-        // Solo: always forward (+1).
-        int delta = 1;
-        if ((action == A::SPECTRAL_SIDE_PANEL && bothPanel) ||
-            (action == A::SPECTRAL_SIDE_RECENTS && bothRecents)) {
-          delta = isLeft ? -1 : 1;
-        }
-        if (action == A::SPECTRAL_SIDE_PANEL) {
-          if (SETTINGS.readingStatsTrackingEnabled() && ClockfaceThemeUi::cycleUnderMode(delta)) {
+    // Penumbra side buttons (not remappable):
+    //   X3 Left/Right → cycle under-panels (Title · Recents · Stats · Lifetime)
+    //   X4 Up/Down    → scroll on-screen Recents list
+    if (isPenumbraTheme()) {
+      auto runPenumbraSide = [this](const bool isLeft) {
+        const int delta = isLeft ? -1 : 1;
+        if (!gpio.deviceIsX3()) {
+          if (penumbraRecentsListCount() > 0) {
+            stepPenumbraRecentsFocus(delta);
             forceStatsUnderBoxRepaint = true;
+            forcePenumbraClockRepaint = false;
           }
-        } else if (recentBooks.size() > 1) {
-          // Recents: +1 older (toward least recent), −1 newer (toward most recent).
-          shiftRecentFocus(delta);
+        } else if (PenumbraThemeUi::cycleUnderMode(delta)) {
           forceStatsUnderBoxRepaint = true;
+          forcePenumbraClockRepaint = false;
         }
-        forceSPECTRALClockRepaint = true;
         requestUpdate();
       };
       buttonNavigator.onPress(ButtonNavigator::getSidePreviousButtons(),
-                              [runSpectralSide] { runSpectralSide(true); });
+                              [runPenumbraSide] { runPenumbraSide(true); });
       buttonNavigator.onPress(ButtonNavigator::getSideNextButtons(),
-                              [runSpectralSide] { runSpectralSide(false); });
+                              [runPenumbraSide] { runPenumbraSide(false); });
     }
 
     // All themes: Menu · Library · Recents · Read
-    // (Settings: Menu list / long-press Menu)
+    // X3 Penumbra on Recents under-panel: mid button = Down (scroll list).
+    // X4: mid button always opens full Recents (side Up/Down scroll the list).
     auto activateMinimalHomeNav = [this](int index) {
       switch (index) {
         case 0:  // Menu
+          // Stop cover multipass under the popup (same as long-press pre-cancel).
+          cancelBackgroundPaint = true;
           minimalMenuOpen = true;
           minimalMenuIndex = 0;
+          homeMenuShellOnPanel = false;
           requestUpdate();
           break;
         case 1:  // Library
           onFileBrowserOpen();
           break;
-        case 2:  // Recents
-          onRecentsOpen();
+        case 2:  // Recents — or Down on X3 when under-panel is the recents list
+          if (isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel() && gpio.deviceIsX3()) {
+            if (penumbraRecentsListCount() > 0) {
+              stepPenumbraRecentsFocus(1);
+              forceStatsUnderBoxRepaint = true;
+              forcePenumbraClockRepaint = false;
+              requestUpdate();
+            }
+          } else {
+            onRecentsOpen();
+          }
           break;
-        case 3:  // Read
+        case 3:  // Read / Open
           onContinueReading();
           break;
       }
@@ -1165,6 +1254,11 @@ void HomeActivity::loop() {
     }
 
     if (releasedFrontButton == HalGPIO::BTN_BACK) {
+      // After Back-from-reader, ignore short Menu for a short window so a double
+      // mash does not open the in-home menu (user already asked to go Home).
+      if (suppressMenuBackUntilMs != 0 && static_cast<long>(millis() - suppressMenuBackUntilMs) < 0) {
+        return;
+      }
       activateMinimalHomeNav(0);
       return;
     }
@@ -1201,10 +1295,10 @@ void HomeActivity::loop() {
       return;
     }
 
-    // Touch: tap cover (or SPECTRAL book block) to continue.
+    // Touch: tap cover (or Penumbra book block) to continue.
     const auto& metrics = UITheme::getInstance().getMetrics();
     if (!recentBooks.empty()) {
-      if (isSpectralTheme()) {
+      if (isPenumbraTheme()) {
         const int pageH = renderer.getScreenHeight();
         const int contentTop = metrics.homeTopPadding;
         const int contentBottom = pageH - metrics.buttonHintsHeight;
@@ -1366,15 +1460,16 @@ void HomeActivity::render(RenderLock&& lock) {
   const auto pageHeight = renderer.getScreenHeight();
 
   // ---------------------------------------------------------------------------
-  // SPECTRAL: fully isolated text-only path. No cover multipass, no settle-skip
+  // Penumbra: fully isolated text-only path. No cover multipass, no settle-skip
   // over a dirty panel, no shared Stats/Bare paint tail. Boot is clean; this must
   // match — black ink on native white only.
   // ---------------------------------------------------------------------------
-  if (isSpectralTheme()) {
+  if (isPenumbraTheme()) {
     if (paintedUiTheme >= 0 && paintedUiTheme != static_cast<int>(SETTINGS.uiTheme)) {
       freeCoverBufferRamOnly();
-      FocusThemeUi::showLifeUnderBox() = false;
-      ClockfaceThemeUi::underMode() = ClockfaceThemeUi::UnderMode::TitleAuthor;
+      // X4 lands on Recents (#1); X3 lands on Title/Author under the clock.
+      PenumbraThemeUi::resetUnderModeToDefault();
+      penumbraHalfBaselineDone = false;  // new theme: re-HALF once
     }
     // Kill any deferred cover greys from a previous theme.
     deferredGreysOnly = false;
@@ -1384,17 +1479,60 @@ void HomeActivity::render(RenderLock&& lock) {
     coverRectX = coverRectY = coverRectW = coverRectH = 0;
     freeCoverBufferRamOnly();
 
-    const int clockTheme = static_cast<int>(CrossPointSettings::UI_THEME::SPECTRAL);
+    const int clockTheme = static_cast<int>(CrossPointSettings::UI_THEME::PENUMBRA);
+    PenumbraThemeUi::clampUnderModeToTracking();
 
-    // Partial updates (minute tick / side L/R): rebuild full BW frame and
-    // displayWindow the whole panel. A tight clock-only window drives pure white
-    // only in the digit rect and leaves a visible "white box" vs greyer residual
-    // paper elsewhere; full-frame PTL matches that clean white everywhere.
-    const bool clockDirty = forceSPECTRALClockRepaint;
+    // Partial updates (minute tick / side L/R / Recents Down):
+    // - under-only: NEVER touch the upper half (Now Reading stays on books[0]).
+    // - clock dirty: full-frame rebuild so paper white stays even.
+    const bool clockDirty = forcePenumbraClockRepaint;
     const bool underDirty = forceStatsUnderBoxRepaint;
-    forceSPECTRALClockRepaint = false;
+    forcePenumbraClockRepaint = false;
     forceStatsUnderBoxRepaint = false;
     if ((clockDirty || underDirty) && !minimalMenuOpen && paintedUiTheme == clockTheme && coverRendered) {
+      // List focus is under-panel only. Upper Now Reading is always last-read (0).
+      clampPenumbraRecentsFocus();
+      const int listFocus = penumbraRecentsFocus;
+
+      // Prefer under-only whenever the under-panel changed — even if the minute
+      // clock also flipped — so scrolling Recents never rebinds the top title.
+      if (underDirty) {
+        const uint32_t t0 = millis();
+        const Rect dirty =
+            PenumbraThemeUi::redrawUnderPanel(renderer, recentBooks, listFocus, &currentBookStats,
+                                               currentBookProgressPercent, &globalStats);
+        {
+          const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
+          // X3 Recents page: Down. X4: Recents (side buttons scroll the list).
+          const char* mid =
+              (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+          const char* action =
+              recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
+          GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
+        }
+        const uint32_t tDraw = millis() - t0;
+        // Soft anti-ghost every under-panel scroll (X3 AA-pre-BW mid via
+        // UiGhostPolicy::displayHomeUnderUpdate) — pulls residual black from
+        // white without a HALF black flash. Menus stay on plain FAST.
+        const uint32_t t1 = millis();
+        const int winTop = dirty.y;
+        const int winH = std::max(1, pageHeight - winTop);
+        UiGhostPolicy::displayHomeUnderUpdate(renderer, 0, winTop, pageWidth, winH);
+        // Timing only — no SD flush on every Down (was adding lag on X3).
+        SystemLog::logTimed("HOME", millis() - t0, "penumbra_under focus=%d draw=%lums disp=%lums x3=%d",
+                            listFocus, static_cast<unsigned long>(tDraw),
+                            static_cast<unsigned long>(millis() - t1), gpio.deviceIsX3() ? 1 : 0);
+        // If only the clock digits also need a refresh, do a full frame next loop.
+        if (clockDirty) {
+          forcePenumbraClockRepaint = true;
+          requestUpdate();
+        }
+        homeUiReady = true;
+        recentsLoaded = true;
+        return;
+      }
+
+      // Clock-only (minute tick): full frame — upper still books[0].
       renderer.clearScreen(0xFF);
       const bool chromeOnly =
           SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
@@ -1409,16 +1547,26 @@ void HomeActivity::render(RenderLock&& lock) {
         bool cbs = false;
         bool br = false;
         auto noStore = [](int, int, int, int) -> bool { return false; };
-        GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, selectorIndex, cr, cbs, br,
+        GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, listFocus, cr, cbs, br,
                                 noStore, &currentBookStats, currentBookProgressPercent, &globalStats, nullptr);
       }
-      GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), tr(STR_RECENTS),
-                          recentBooks.empty() ? "" : tr(STR_READ));
-      char drawn[8];
-      if (ClockfaceThemeUi::formatHeroTimeNow(drawn, sizeof(drawn)) && drawn[0] != '\0') {
-        snprintf(SPECTRALLastDrawnTime, sizeof(SPECTRALLastDrawnTime), "%s", drawn);
+      {
+        const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
+        const char* mid =
+            (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+        const char* action =
+            recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
+        GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
       }
-      renderer.displayWindow(0, 0, pageWidth, pageHeight);
+      char drawn[8];
+      if (PenumbraThemeUi::formatHeroTimeNow(drawn, sizeof(drawn)) && drawn[0] != '\0') {
+        snprintf(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime), "%s", drawn);
+      }
+      const uint32_t tClock = millis();
+      // Full-frame clock: FAST (no greyscale-base).
+      UiGhostPolicy::displaySoftFull(renderer);
+      SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock fre=%u",
+                          static_cast<unsigned>(ESP.getFreeHeap()));
       homeUiReady = true;
       recentsLoaded = true;
       return;
@@ -1426,7 +1574,7 @@ void HomeActivity::render(RenderLock&& lock) {
 
     // First land / leave another theme / menu dismiss: always repaint.
     // Same-theme idle: still allow settle skip only if we already painted clean
-    // SPECTRAL (not a multipass theme's panel).
+    // Penumbra (not a multipass theme's panel).
     const bool needPaint =
         forceHomeShellRepaint || minimalMenuOpen || paintedUiTheme != clockTheme || !coverRendered;
     forceHomeShellRepaint = false;
@@ -1453,7 +1601,8 @@ void HomeActivity::render(RenderLock&& lock) {
         GUI.drawButtonMenu(renderer, Rect{0, menuTop, pageWidth, std::max(menuH, 1)}, menuCount, minimalMenuIndex,
                            [&menuItems](int index) { return std::string(menuItems[index].label); },
                            [&menuItems](int index) { return menuItems[index].icon; });
-        renderer.displayWindow(0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
+        UiGhostPolicy::displayMenuBand(renderer, 0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
+        cancelBackgroundPaint = false;
         homeUiReady = true;
         recentsLoaded = true;
         return;
@@ -1469,7 +1618,8 @@ void HomeActivity::render(RenderLock&& lock) {
       coverRendered = false;
       homeMenuShellOnPanel = true;
       paintedUiTheme = clockTheme;
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      UiGhostPolicy::displayMenuFrame(renderer);
+      cancelBackgroundPaint = false;
       homeUiReady = true;
       recentsLoaded = true;
       return;
@@ -1491,24 +1641,51 @@ void HomeActivity::render(RenderLock&& lock) {
       bool br = false;
       auto noStore = [](int, int, int, int) -> bool { return false; };
       // Pass book + lifetime stats so under-panel modes can paint without SD I/O.
-      GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, selectorIndex, cr, cbs, br,
+      // Penumbra: listFocus is under-panel only; stats/upper use last-read (index 0).
+      if (isPenumbraTheme()) clampPenumbraRecentsFocus();
+      const int listFocus = isPenumbraTheme() ? penumbraRecentsFocus : selectorIndex;
+      GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, listFocus, cr, cbs, br,
                               noStore, &currentBookStats, currentBookProgressPercent, &globalStats, nullptr);
       coverRendered = true;
       coverBufferStored = false;
     }
-    GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), tr(STR_RECENTS),
-                        recentBooks.empty() ? "" : tr(STR_READ));
+    {
+      const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
+      const char* mid =
+          (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+      const char* action =
+          recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
+      GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
+    }
 
-    // X3 HALF requestResync → absolute white-baseline full + settle (stronger than
-    // plain FULL). One shot — no double white flash.
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    // Prefetch Recents % so first under-panel swap does not SD-load every row.
+    PenumbraThemeUi::warmRecentsProgressCache(recentBooks);
+
+    // First full paint this theme session: HALF white baseline (~1.8s X4 / ~3s X3).
+    // Later full paints: FAST (periodic HALF from UiGhostPolicy on under-scroll).
+    // Home must stay stacked under Reader/Library/Recents so the baseline flag
+    // survives; replace→new Home re-HALF's.
+    const uint32_t tPenumbra = millis();
+    const bool useHalf = !penumbraHalfBaselineDone;
+    SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=%s theme=%u fre=%u",
+                         useHalf ? "HALF" : "FAST", static_cast<unsigned>(SETTINGS.uiTheme),
+                         static_cast<unsigned>(ESP.getFreeHeap()));
+    if (useHalf) {
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    } else {
+      UiGhostPolicy::displaySoftFull(renderer);
+    }
+    penumbraHalfBaselineDone = true;
+    SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=%s theme=%u fre=%u",
+                        useHalf ? "HALF" : "FAST", static_cast<unsigned>(SETTINGS.uiTheme),
+                        static_cast<unsigned>(ESP.getFreeHeap()));
     coverGrayOnPanel = true;
     paintedUiTheme = clockTheme;
     recentsLoaded = true;
     homeUiReady = true;
     // Seed minute-change detector so the next loop does not immediately re-window.
-    ClockfaceThemeUi::formatHeroTimeNow(SPECTRALLastDrawnTime, sizeof(SPECTRALLastDrawnTime));
-    forceSPECTRALClockRepaint = false;
+    PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
+    forcePenumbraClockRepaint = false;
     return;
   }
 
@@ -1521,40 +1698,9 @@ void HomeActivity::render(RenderLock&& lock) {
       coverGrayOnPanel = false;
       coverRendered = false;
       paintedUiTheme = -1;
-      FocusThemeUi::showLifeUnderBox() = false;
-      ClockfaceThemeUi::underMode() = ClockfaceThemeUi::UnderMode::TitleAuthor;
+      PenumbraThemeUi::resetUnderModeToDefault();
     }
 
-    // Stats under-box title ↔ lifetime (side Up/Down on X4, Left/Right on X3).
-    // X3: windowed FAST keeps multipass greys on the jacket (PTL).
-    // X4 (SSD1677): displayWindow after greys can promote to a full HALF clean and
-    // invert/stick the panel. Push a full FAST BW frame (under-box already in FB),
-    // then remultipass greys so the jacket recovers — same end state as X3.
-    if (forceStatsUnderBoxRepaint && isStatsTheme() && !minimalMenuOpen && recentsLoaded && coverRendered &&
-        paintedUiTheme == static_cast<int>(SETTINGS.uiTheme)) {
-      forceStatsUnderBoxRepaint = false;
-      const Rect dirty = FocusThemeUi::redrawUnderBox(renderer, recentBooks, &globalStats);
-      homeUiReady = true;
-      if (gpio.deviceIsX4()) {
-        freeCoverBufferRamOnly();
-        coverGrayOnPanel = false;
-        lock.unlock();
-        if (activityManager.hasPendingActivityChange() || !activityManager.isCurrentActivity(this)) {
-          return;
-        }
-        // Full BW shell with the new under-box text (not inverted partial).
-        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-        if (coverRectW > 0 && coverRectH > 0 && usesHomeCoverMultipass() &&
-            !activityManager.hasPendingActivityChange() && activityManager.isCurrentActivity(this)) {
-          multipassHomeCoverGrayscale();
-        }
-        return;
-      }
-      if (dirty.height > 0 && dirty.width > 0) {
-        renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
-      }
-      return;
-    }
     forceStatsUnderBoxRepaint = false;
 
     // Settled gray cover on panel: ignore spurious requestUpdate (USB detect bounce,
@@ -1609,7 +1755,7 @@ void HomeActivity::render(RenderLock&& lock) {
         GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex,
                            [&menuItems](int index) { return std::string(menuItems[index].label); },
                            [&menuItems](int index) { return menuItems[index].icon; });
-        renderer.displayWindow(0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
+        UiGhostPolicy::displayMenuBand(renderer, 0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
         homeUiReady = true;
         return;
       }
@@ -1621,11 +1767,17 @@ void HomeActivity::render(RenderLock&& lock) {
                          [&menuItems](int index) { return menuItems[index].icon; });
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      // BW menu overwrites greys on glass. Keep paintedUiTheme so Back can snappy-
-      // return with FAST shell + deferred greys (not a full multipass).
+      // BW menu over greyscale cover: FAST leaves midtone mud (especially X4).
+      // HALF scrub clears greys under the white plate; cursor moves stay windowed FAST.
       coverGrayOnPanel = false;
       homeMenuShellOnPanel = true;
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      if (usesHomeCoverMultipass()) {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      } else {
+        UiGhostPolicy::displayMenuFrame(renderer);
+      }
+      // Greys are already aborted for the popup; clear so Back→home can multipass.
+      cancelBackgroundPaint = false;
       homeUiReady = true;
       return;
     }
@@ -1633,20 +1785,20 @@ void HomeActivity::render(RenderLock&& lock) {
     // Clear first: cover snapshot is cover-art only, not the full tile, so we
     // cannot rely on a large restore to erase the previous frame (e.g. Menu).
     renderer.clearScreen();
-    // SPECTRAL never restores a cover snapshot (text-only home).
+    // Penumbra never restores a cover snapshot (text-only home).
     bool bufferRestored = false;
-    if (!isSpectralTheme() && coverBufferStored) {
+    if (!isPenumbraTheme() && coverBufferStored) {
       bufferRestored = restoreCoverBuffer();
     }
 
-    // Top chrome (battery icon+% / clock). Bare / SPECTRAL default chrome off;
+    // Top chrome (battery icon+% / clock). Bare / Penumbra default chrome off;
     // Stats always draws the status-bar band (same plate packing on X3 + X4).
-    const bool textOnlyHome = isBareTheme() || isSpectralTheme();
+    const bool textOnlyHome = isBareTheme() || isPenumbraTheme();
     const bool chromeOnlyMinimal =
         textOnlyHome &&
         (SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
          SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK));
-    // Bare / SPECTRAL: header only when the user has enabled battery/clock.
+    // Bare / Penumbra: header only when the user has enabled battery/clock.
     if (!textOnlyHome || chromeOnlyMinimal) {
       const int headerTop = textOnlyHome ? 0 : metrics.topPadding;
       const int headerH =
@@ -1656,11 +1808,11 @@ void HomeActivity::render(RenderLock&& lock) {
 
     // When greys will run next, only record the art box — do not malloc a cover
     // snapshot. X3 leave-reader multipass OOMs if ~15–30KB is still held for storeBw.
-    // SPECTRAL has no cover multipass.
+    // Penumbra has no cover multipass.
     const bool willMultipass = usesHomeCoverMultipass() && recentsLoaded && !coverGrayOnPanel &&
                                !minimalMenuOpen && !snappyResumeNoGreys;
     auto storeCover = [this, willMultipass](int x, int y, int w, int h) -> bool {
-      if (isSpectralTheme()) {
+      if (isPenumbraTheme()) {
         return false;
       }
       coverRectX = x;
@@ -1679,14 +1831,24 @@ void HomeActivity::render(RenderLock&& lock) {
       return storeCoverBuffer();
     };
 
-    // Rect is a full-screen hint; themes pack cover/title (or SPECTRAL) in that band.
-    GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, selectorIndex, coverRendered,
-                            coverBufferStored, bufferRestored, storeCover, &currentBookStats,
-                            currentBookProgressPercent, &globalStats, nullptr);
+    // Rect is a full-screen hint; themes pack cover/title (or Penumbra) in that band.
+    {
+      if (isPenumbraTheme()) clampPenumbraRecentsFocus();
+      const int listFocus = isPenumbraTheme() ? penumbraRecentsFocus : selectorIndex;
+      GUI.drawRecentBookCover(renderer, Rect{0, 0, pageWidth, pageHeight}, recentBooks, listFocus, coverRendered,
+                              coverBufferStored, bufferRestored, storeCover, &currentBookStats,
+                              currentBookProgressPercent, &globalStats, nullptr);
+    }
 
-    // Consistent on Bare / Spectral / Stats (and both X3 + X4).
-    GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), tr(STR_RECENTS),
-                        recentBooks.empty() ? "" : tr(STR_READ));
+    // Bare / Penumbra / Stats. Penumbra Recents under-panel: Recents → Down.
+    {
+      const bool recentsPanel = isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel();
+      const char* midHint =
+          (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+      const char* action =
+          recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
+      GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), midHint, action);
+    }
 
     // Release the render mutex before long e-ink ops so the main loop can push
     // Synopsis/Library/Read without blocking for the full multipass (10–15s freeze).
@@ -1699,11 +1861,11 @@ void HomeActivity::render(RenderLock&& lock) {
       coverGrayOnPanel = false;
       paintedUiTheme = -1;
       homeMenuShellOnPanel = false;
-      // FAST: X3 HALF would requestResync (full black GC) and feel sluggish.
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      // FAST only: X3 HALF would requestResync (black GC) and feel sluggish.
+      UiGhostPolicy::displaySoftFull(renderer);
       return;
     }
-    // Snappy return from Settings/Library/in-home Menu: one FAST BW shell now
+    // Snappy return from Settings/Library/in-home Menu: FAST BW shell now
     // (no multipass, no X3 HALF resync), then deferred greys after idle.
     if (snappyResumeNoGreys && recentsLoaded) {
       snappyResumeNoGreys = false;
@@ -1719,7 +1881,7 @@ void HomeActivity::render(RenderLock&& lock) {
       coverGrayNeedsRetry = true;
       // Long enough that Back→home feels done before the grey multipass starts.
       coverGrayRetryAtMs = millis() + (gpio.deviceIsX3() ? 1600UL : 900UL);
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      UiGhostPolicy::displaySoftFull(renderer);
       LOG_DBG("HOME", "Snappy home refresh (FAST); greys deferred");
       return;
     }
@@ -1818,27 +1980,34 @@ void HomeActivity::render(RenderLock&& lock) {
 }
 
 void HomeActivity::onSelectBook(const std::string& path) {
-  // Returning from reader should multipass greys again (full quality), not snappy BW.
-  leaveForUiChildSnappy = false;
-  snappyResumeNoGreys = false;
   // Abort home multipass so waitForRenderIdle is not a full grey pass.
   // Loading popup: only spend an e-ink cycle when greys were still running (user
   // would otherwise stare at a frozen multipass). When greys already settled, skip
   // the Loading refresh — it adds ~0.5–1s and makes "Loading" feel like most of
   // the open; first page paint is the next panel update.
   const bool greysSettled = coverGrayOnPanel;
-  markLeavingForUiChild();
+  // cancelBackgroundPaint only — do NOT use markLeavingForUiChild() here.
+  // Multipass cover themes: force hard multipass on return (FAST after dense page
+  // text ghosts on Bare covers). Penumbra is pure BW home chrome — keep snappy so
+  // resume can FAST-redraw (~0.45s) instead of HALF (~3.2s on X3 every Back).
+  cancelHomeBackgroundPaint();
+  leaveForUiChildSnappy = isPenumbraTheme();
+  snappyResumeNoGreys = false;
   if (!greysSettled) {
     GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/true);
   }
   const uint32_t t0 = millis();
   activityManager.waitForRenderIdle();
-  LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d", static_cast<unsigned long>(millis() - t0),
-          greysSettled ? 1 : 0);
+  LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d penumbra=%d",
+          static_cast<unsigned long>(millis() - t0), greysSettled ? 1 : 0, isPenumbraTheme() ? 1 : 0);
   cancelBackgroundPaint = false;
-  // Snappy open: FAST first page when greys already clean; always BW-first then AA.
-  // (Consumed by EpubReaderActivity via ReaderActivity open hints.)
-  ReaderActivity::setOpenHints(/*preferFastFirstRefresh=*/greysSettled, /*deferFirstPageTextAa=*/true);
+  // Always FAST first ink from Home. Logs showed abort_leave → HALF first page
+  // (display ~3s) even though abortMultipass restores BW. Penumbra is BW-only;
+  // Bare after settle or abort is also BW-safe. (Hints consumed by EpubReader.)
+  const bool preferFast = true;
+  ReaderActivity::setOpenHints(/*preferFastFirstRefresh=*/preferFast, /*deferFirstPageTextAa=*/true);
+  SystemLog::logTiming("HOME", "read_open preferFast=%d greysSettled=%d penumbra=%d", preferFast ? 1 : 0,
+                       greysSettled ? 1 : 0, isPenumbraTheme() ? 1 : 0);
   activityManager.goToReader(path);
 }
 
@@ -1849,7 +2018,11 @@ void HomeActivity::reloadHomeAfterBookAction() {
     selectorIndex = std::max(0, static_cast<int>(recentBooks.size()) - 1);
   }
   loadFocusedRecentStats();
-  globalStats = GlobalReadingStats::load();
+  if (SETTINGS.readingStatsTrackingEnabled()) {
+    globalStats = GlobalReadingStats::load();
+  } else {
+    globalStats = GlobalReadingStats{};
+  }
   freeCoverBuffer();
   coverRendered = false;
   coverBufferStored = false;
@@ -1869,22 +2042,77 @@ int HomeActivity::focusedRecentIndex() const {
   return std::clamp(selectorIndex, 0, static_cast<int>(recentBooks.size()) - 1);
 }
 
+int HomeActivity::penumbraRecentsListCount() const {
+  if (recentBooks.empty()) return 0;
+  const int maxN = UITheme::getInstance().getMetrics().homeRecentBooksCount;
+  return std::min(static_cast<int>(recentBooks.size()), std::max(1, maxN));
+}
+
+// Focus slots: books, plus View All on X3 Recents under-panel.
+int HomeActivity::penumbraRecentsFocusCount() const {
+  const int books = penumbraRecentsListCount();
+  if (books <= 0) return 0;
+  if (gpio.deviceIsX3() && isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel()) {
+    return books + 1;  // last slot = View All
+  }
+  return books;
+}
+
+bool HomeActivity::penumbraViewAllFocused() const {
+  if (!gpio.deviceIsX3() || !isPenumbraTheme() || !PenumbraThemeUi::isRecentsUnderPanel()) {
+    return false;
+  }
+  const int books = penumbraRecentsListCount();
+  return books > 0 && penumbraRecentsFocus == books;
+}
+
+void HomeActivity::clampPenumbraRecentsFocus() {
+  const int n = penumbraRecentsFocusCount();
+  if (n <= 0) {
+    penumbraRecentsFocus = 0;
+    return;
+  }
+  if (penumbraRecentsFocus < 0 || penumbraRecentsFocus >= n) {
+    penumbraRecentsFocus = 0;
+  }
+}
+
+void HomeActivity::stepPenumbraRecentsFocus(const int delta) {
+  const int n = penumbraRecentsFocusCount();
+  if (n <= 0) {
+    penumbraRecentsFocus = 0;
+    return;
+  }
+  int next = penumbraRecentsFocus + delta;
+  next %= n;
+  if (next < 0) next += n;
+  penumbraRecentsFocus = next;
+}
+
 void HomeActivity::loadFocusedRecentStats() {
   if (recentBooks.empty()) {
     currentBookStats = BookReadingStats{};
     currentBookProgressPercent = -1.0f;
+    penumbraRecentsFocus = 0;
     return;
   }
-  const auto& book = recentBooks[static_cast<size_t>(focusedRecentIndex())];
+  // Penumbra: upper Now Reading + Stats always describe the last-read book (0).
+  // List scrolling uses penumbraRecentsFocus and does not change these stats.
+  const int idx = isPenumbraTheme() ? 0 : focusedRecentIndex();
+  const auto& book = recentBooks[static_cast<size_t>(idx)];
   currentBookStats = loadRecentBookStats(book);
   currentBookProgressPercent = currentBookStats.getProgressPercent();
+  clampPenumbraRecentsFocus();
 }
 
 void HomeActivity::shiftRecentFocus(const int delta) {
   if (recentBooks.empty()) return;
   const int n = static_cast<int>(recentBooks.size());
-  // Wrap within the loaded recents window (SPECTRAL: at most 4).
-  selectorIndex = (focusedRecentIndex() + delta % n + n) % n;
+  // Wrap within the loaded recents window.
+  int next = focusedRecentIndex() + delta;
+  next %= n;
+  if (next < 0) next += n;
+  selectorIndex = next;
   loadFocusedRecentStats();
 }
 
@@ -1899,7 +2127,19 @@ void HomeActivity::showCurrentBookActionMenu(const bool ignoreInitialConfirmRele
   activityManager.waitForRenderIdle();
   LOG_DBG("HOME", "long-press menu after waitIdle %lums greysSettled=%d",
           static_cast<unsigned long>(millis() - tMenu), coverGrayOnPanel ? 1 : 0);
-  const RecentBook book = recentBooks[static_cast<size_t>(focusedRecentIndex())];
+  // Penumbra list focus when on Recents under-panel; else last-read / bare focus.
+  // View All is not a book — open the full Recents list instead.
+  if (isPenumbraTheme() && penumbraViewAllFocused()) {
+    onRecentsOpen();
+    return;
+  }
+  int menuIdx = focusedRecentIndex();
+  if (isPenumbraTheme()) {
+    clampPenumbraRecentsFocus();
+    menuIdx = PenumbraThemeUi::isRecentsUnderPanel() ? penumbraRecentsFocus : 0;
+    menuIdx = std::clamp(menuIdx, 0, penumbraRecentsListCount() - 1);
+  }
+  const RecentBook book = recentBooks[static_cast<size_t>(menuIdx)];
   // Menu handles side-effect actions itself and stays open. Parent only sees
   // Open / Delete / RemoveFromRecents / cancel — so Back returns to dashboard.
   startActivityForResult(
@@ -1961,9 +2201,24 @@ void HomeActivity::showCurrentBookActionMenu(const bool ignoreInitialConfirmRele
 }
 
 void HomeActivity::onContinueReading() {
-  if (!recentBooks.empty()) {
-    onSelectBook(recentBooks[static_cast<size_t>(focusedRecentIndex())].path);
+  if (recentBooks.empty()) return;
+  // X3 View All: open the full Recent Books activity.
+  if (isPenumbraTheme() && penumbraViewAllFocused()) {
+    onRecentsOpen();
+    return;
   }
+  // Penumbra Recents under-panel: open the list focus. Otherwise last-read (index 0)
+  // so scrolling the list never changes which book "Read" opens from other pages.
+  int idx = 0;
+  if (isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel()) {
+    clampPenumbraRecentsFocus();
+    idx = penumbraRecentsFocus;
+  } else if (!isPenumbraTheme()) {
+    idx = focusedRecentIndex();
+  }
+  idx = std::clamp(idx, 0, penumbraRecentsListCount() - 1);
+  idx = std::clamp(idx, 0, static_cast<int>(recentBooks.size()) - 1);
+  onSelectBook(recentBooks[static_cast<size_t>(idx)].path);
 }
 
 void HomeActivity::onFileBrowserOpen() {

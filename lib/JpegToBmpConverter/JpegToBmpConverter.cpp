@@ -656,6 +656,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const bool progressiveDecode = (jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE);
   // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG,
   // so callback coordinates and MCU buffering must use the reduced decode grid.
+  // c30 / v0.1.3: smooth bilinear upscale of that grid (not blocky full-size DC).
   const int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
   const int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
 

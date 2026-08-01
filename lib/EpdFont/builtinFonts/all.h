@@ -18,6 +18,10 @@
 #include <builtinFonts/bitter_18_bolditalic.h>
 #include <builtinFonts/bitter_18_italic.h>
 #include <builtinFonts/bitter_18_regular.h>
+// Penumbra home Recents: 8 pt author, 10 pt title (Source Serif 4).
+#include <builtinFonts/sourceserif4_8_regular.h>
+#include <builtinFonts/sourceserif4_10_bold.h>
+#include <builtinFonts/sourceserif4_10_regular.h>
 #include <builtinFonts/sourceserif4_12_bold.h>
 #include <builtinFonts/sourceserif4_12_bolditalic.h>
 #include <builtinFonts/sourceserif4_12_italic.h>
@@ -34,7 +38,6 @@
 #include <builtinFonts/sourceserif4_18_bolditalic.h>
 #include <builtinFonts/sourceserif4_18_italic.h>
 #include <builtinFonts/sourceserif4_18_regular.h>
-// Clockface hero digits (X3): Source Serif Bold 72 pt, 0-9 + colon only.
+// Penumbra hero digits (X3): Source Serif Bold 72 pt, 0-9 + colon only.
 #include <builtinFonts/sourceserif4_72_clock.h>
-// Small UI chrome (battery %)
-#include <builtinFonts/notosans_8_regular.h>
+// (Noto Sans 8 removed — SMALL_FONT / chrome uses sourceserif4_8_regular.)

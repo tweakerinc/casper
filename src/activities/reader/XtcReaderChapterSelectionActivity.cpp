@@ -1,4 +1,5 @@
 #include "XtcReaderChapterSelectionActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -163,7 +164,7 @@ void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
     // Center the empty state within the gutter-safe content region.
     const int emptyX = contentX + (contentWidth - renderer.getTextWidth(UI_10_FONT_ID, tr(STR_NO_CHAPTERS))) / 2;
     renderer.drawText(UI_10_FONT_ID, emptyX, 120 + contentY, tr(STR_NO_CHAPTERS));
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -182,5 +183,5 @@ void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

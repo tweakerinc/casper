@@ -16,6 +16,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Dynamic rows: Enable, [Auto Backup if tracking on + X3], [Backup Now if tracking on].
@@ -190,5 +191,5 @@ void StatsSettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

@@ -1,12 +1,9 @@
 # Casper
 
 Personal firmware for **Xteink X3/X4**, based on
-**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)**.
+**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & **[CrossInk](https://github.com/uxjulia/CrossInk)**. Huge thanks to everyone for all their hard work!
 
-Casper keeps CrossPoint’s stable reader core and adds branding plus a
-reading-first UI: **Penumbra** (X3 clock home / X4 title home) and **Bare**,
-redesigned **reader chrome**, **reading stats**, and a **StarDict dictionary**
-with multi-word selection and bilingual packs.
+Casper keeps CrossPoint's stable reader core, and CrossInk's AMAZING Stat Tracking, and adds a redesign to the UI — thoughtful long-press menus, fully customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary** with multi-word selection and bilingual packs. Home themes: **Penumbra** (X3 clock / X4 title) and **Bare**.
 
 <h2 align="center">Themes</h2>
 
@@ -19,6 +16,11 @@ with multi-word selection and bilingual packs.
 | <img src="./docs/images/casper/x3-penumbra-home.jpg" alt="Penumbra home on X3" width="260" /> | <img src="./docs/images/casper/x4-penumbra-home.jpg" alt="Penumbra home on X4" width="260" /> | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> |
 
 > **Note:** Clock, weekday, and certain date/time features on Penumbra need the **X3** RTC (the X4 has no real-time clock). Bare looks the same on both devices.
+
+<p align="center">
+  <strong>Penumbra Demo</strong><br />
+  <img src="./docs/images/casper/penumbra-demo.webp" alt="Penumbra theme demo" width="340" />
+</p>
 
 <h2 align="center">Gallery</h2>
 
@@ -44,19 +46,23 @@ with multi-word selection and bilingual packs.
 
 ## Features
 
-Feature overview from **[Casper v0.1.3](https://github.com/tweakerinc/casper/releases/tag/v0.1.3)** (New Themes and UI Overhaul). Full release notes and firmware assets are on the [Releases](https://github.com/tweakerinc/casper/releases) page.
+Feature overview from **[Casper v0.1.4](https://github.com/tweakerinc/casper/releases/tag/v0.1.4)** (themes, status bars, snappier home, and UI polish). Full release notes and firmware assets are on the [Releases](https://github.com/tweakerinc/casper/releases) page.
 
 ### Themes
 
 #### Penumbra
 
-Text-first home with under-panels you cycle on the side buttons.
+Text-first home with under-panels on the side buttons.
 
-- **X3:** large clock + weekday, then **Title · Recents · Book Stats · Lifetime** under the hairline (side Left/Right).  
-- **X4:** last-read title/author on top, **Recents** list below (side Up/Down scrolls the list).  
+| | |
+|---|---|
+| **X3** | Large clock + weekday, then cycle **Title · Recents · Book Stats · Lifetime** (side Left / Right). |
+| **X4** | Last-read title/author on top, **Recents** list below (side Up / Down scrolls the list). |
 
-`Menu` · `Library` · `Recents` · `Read`  
-(+ long-press **Menu** → Settings · long-press **Read** → book quick menu)
+`Menu` · `Library` · `Recents` · `Read`
+
+- Long-press **Menu** → Settings  
+- Long-press **Read** → book quick menu (mark finished, remove from recents, clear cache, synopsis, etc.)
 
 #### Bare
 
@@ -67,7 +73,7 @@ Designed for readers who simply want to feel as if it is them and their book —
 - Long-press **Menu** → Settings  
 - Long-press **Read** → book quick menu  
 
-> **Note:** Clock and weekday on Penumbra need the **X3** RTC (the X4 has no real-time clock).
+> **Note:** Clock, weekday, and other date/time home features need the **X3** RTC. The X4 has no real-time clock. Bare looks the same on both devices.
 
 ### System + Reader Status Bars
 
@@ -95,6 +101,8 @@ Fully customizable button remapping.
 Front buttons act as a list; side buttons can be set as tabs (or whatever you prefer).  
 A popular setup is using the side buttons as left/right controls to scroll through horizontal tabs.
 
+Keyboard / Wi‑Fi password footer labels follow your remap (Left stays Left, Up stays Up).
+
 ### System → Stats Folder
 
 New options under **Settings → System → Stats**:
@@ -103,11 +111,11 @@ New options under **Settings → System → Stats**:
 - Auto Backup  
 - Backup Now  
 
-You can turn stats off completely if you prefer a distraction-free reading experience.
+You can turn stats off completely if you prefer a distraction-free reading experience. When tracking is on, Penumbra’s Book Stats and Lifetime panels use that data.
 
 ### Cover Thumbnail Pipeline
 
-Improved cover generation for clearer, higher-quality thumbnails.
+Improved cover generation for clearer, higher-quality thumbnails (home multipass greys on Bare).
 
 ### UI Polish
 
@@ -117,10 +125,14 @@ Unified design language across the interface:
 - Better title centering  
 - Cleaner version string  
 - Fixed long-press behavior in the Library  
+- Sleep screen options: **Casper Dark** / **Casper Light** (alphabetized)  
+- After flash / cold boot lands on **Home** (not auto-open last book)
 
 ### Book Synopsis
 
-Open a short description of the current book from the **book quick menu** (long-press **Read** on home, or long-press a book in the library). Requires synopsis metadata (easy to add with Calibre).
+Open a short description of the current book from the **book quick menu** (long-press **Read** on home, or long-press a book in the library). Requires synopsis metadata — easy to add with Calibre.
+
+Useful for refreshing your memory or choosing your next book without leaving the device.
 
 ### Reader Shortcuts
 
@@ -133,6 +145,38 @@ Open a short description of the current book from the **book quick menu** (long-
 Offline StarDict packs on the SD card, with multi-pack cascade and multi-word selection.
 
 To install dictionaries, extract the `.dictionaries` folder to the **root of your SD card**.
+
+### Snappier Home Screen
+
+Returning to the home cover after reading should feel faster and less “busy.”
+
+#### Faster return from reading
+
+- When you open a book from Home, Home stays in the background instead of being torn down and rebuilt.
+- Pressing **Back** restores that Home instance: progress/stats refresh and the cover greys redraw once, without redoing the full home setup path.
+- If cover thumbnails are already on disk (the usual case after you’ve opened a book before), Home skips the intermediate black-and-white shell refresh and goes straight to the grayscale cover pass.
+
+#### Fewer wasted full redraws
+
+- Cancelling the book action menu (long-press Read → Back/cancel) repaints Home once and no longer forces a full cover re-scan/generation.
+- Once the home cover greys have settled, stray repaint requests no longer re-flash the full multipass (Bare, Penumbra, and classic list themes).
+- **Back** from the in-home Menu returns to the cover (no longer stuck until Settings).
+
+#### Faster cover multipass (panel-aware)
+
+- On X4 and similar panels, the grayscale base step uses a faster refresh mode where appropriate.
+- X3 still uses the cleaner half refresh so the previous reader page is less likely to ghost through the cover.
+
+### Also in v0.1.4
+
+| Area | Change |
+|------|--------|
+| Power button | Long-press **Force Refresh** no longer also sleeps on release (short = Sleep, long = Refresh). |
+| Boot | After flash / cold boot → **Home**, not last book. Quick Resume still works on sleep wake (including X4 on battery). |
+| Bare menu | **Back** closes the menu and restores the cover. |
+| Wi‑Fi keyboard | Footer labels match button remapping (front + side). |
+| Penumbra | Weekday more reliable after clock sync. |
+| Notes | One bin for X3 and X4. Wi‑Fi passwords live on SD (`/.crosspoint/wifi.json`, device-tied). Sync clock on X3 if weekday/time look wrong after install. |
 
 ---
 
@@ -152,7 +196,7 @@ pio run -e default
 ```
 
 Flash with the CrossPoint web installer (**Custom .bin**) or `esptool` (app at
-`0x10000`). Version label: **v0.1.4** (latest tag: **v0.1.3**).
+`0x10000`). Version label: **v0.1.4**.
 
 ## Credits
 

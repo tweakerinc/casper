@@ -1,10 +1,12 @@
 #include "EpubReaderPercentSelectionActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -14,6 +16,20 @@ namespace {
 // Fine/coarse slider step sizes for percent adjustments.
 constexpr int kSmallStep = 1;
 constexpr int kLargeStep = 10;
+// Gap between the bold percent label and the slider track.
+constexpr int kPctToBarGap = 28;
+
+// Shared layout so touch targets match the painted slider.
+void percentSliderLayout(const GfxRenderer& renderer, const ThemeMetrics& metrics, const Rect& screen, int& contentTop,
+                         int& barX, int& barY, int& barWidth, int& barHeight) {
+  contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing * 4;
+  barWidth = 360;
+  barHeight = 16;
+  barX = screen.x + (screen.width - barWidth) / 2;
+  // Keep % label clear of the track (was only ~2× verticalSpacing under the digits).
+  const int pctLineH = std::max(18, renderer.getLineHeight(UI_12_FONT_ID));
+  barY = contentTop + pctLineH + kPctToBarGap;
+}
 }  // namespace
 
 void EpubReaderPercentSelectionActivity::onEnter() {
@@ -40,11 +56,13 @@ void EpubReaderPercentSelectionActivity::loop() {
   auto& theme = UITheme::getInstance();
   auto metrics = theme.getMetrics();
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing * 4;
-  constexpr int barWidth = 360;
-  constexpr int barHeight = 16;
-  const int barX = screen.x + (screen.width - barWidth) / 2;
-  const int barY = contentTop + metrics.verticalSpacing * 2;
+  int contentTop = 0;
+  int barX = 0;
+  int barY = 0;
+  int barWidth = 0;
+  int barHeight = 0;
+  percentSliderLayout(renderer, metrics, screen, contentTop, barX, barY, barWidth, barHeight);
+  (void)contentTop;
   int tx = 0;
   int ty = 0;
 
@@ -119,18 +137,18 @@ void EpubReaderPercentSelectionActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_GO_TO_PERCENT));
 
-  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing * 4;
+  int contentTop = 0;
+  int barX = 0;
+  int barY = 0;
+  int barWidth = 0;
+  int barHeight = 0;
+  percentSliderLayout(renderer, metrics, screen, contentTop, barX, barY, barWidth, barHeight);
 
   const std::string percentText = std::to_string(percent) + "%";
   UITheme::drawCenteredText(renderer, screen, UI_12_FONT_ID, contentTop, percentText.c_str(), true,
                             EpdFontFamily::BOLD);
 
   // Draw slider track.
-  constexpr int barWidth = 360;
-  constexpr int barHeight = 16;
-  const int barX = screen.x + (screen.width - barWidth) / 2;
-  const int barY = contentTop + metrics.verticalSpacing * 2;
-
   renderer.drawRect(barX, barY, barWidth, barHeight);
 
   // Fill slider based on percent.
@@ -154,5 +172,5 @@ void EpubReaderPercentSelectionActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

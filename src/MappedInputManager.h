@@ -52,6 +52,13 @@ class MappedInputManager {
   unsigned long getHeldTime() const;
   const GfxRenderer& getRenderer() const { return renderer; }
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
+  // Footer labels for screens that use all four directions (keyboard, etc.):
+  // each physical front slot (L→R) shows the name of its remapped function
+  // (Left/Right/Up/Down), not list-style previous/next aliases.
+  // backAction / confirmAction override the Back/Confirm captions (e.g. "Select").
+  Labels mapDirectionLabels(const char* backAction, const char* confirmAction) const;
+  // Side keys: hw[4] = X3 left / X4 upper, hw[5] = X3 right / X4 lower.
+  void mapSideDirectionLabels(const char*& sideA, const char*& sideB) const;
   // Returns the raw front button index that was pressed this frame (or -1 if none).
   int getPressedFrontButton() const;
   // Returns the raw front button index that was released this frame (or -1 if none).

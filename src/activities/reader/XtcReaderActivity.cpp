@@ -23,6 +23,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SystemLog.h"
 
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
@@ -251,6 +252,7 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
 }
 
 void XtcReaderActivity::renderPage() {
+  const uint32_t t0 = millis();
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
   const uint8_t bitDepth = xtc->getBitDepth();
@@ -340,18 +342,22 @@ void XtcReaderActivity::renderPage() {
       }
     }
 
-    if (pagesUntilFullRefresh <= 1) {
-      // Periodic ghost cleanup: scrub via the normal path, then run the
-      // settle flavor of the grayscale base pass (DTM planes are equal after
-      // the display sync, so only the gentle reinforcement cells fire).
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-      renderer.preconditionGrayscale();
+    // XTC grayscale path: same device split as EPUB (YACP-compatible).
+    // X3: soft reinforce; X4: stock HALF scrub (SSD1677 clean primitive).
+    if (pagesUntilFullRefresh <= 1 &&
+        SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
+      if (gpio.deviceIsX3() && pagesUntilFullRefresh != CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
+        renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+      } else {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        renderer.preconditionGrayscale();
+      }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
-      // OEM grayscale pipeline base: differential "AA-pre-BW(mid)" update as
-      // the page turn on X3; plain FAST refresh on X4 (previous behavior).
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-      pagesUntilFullRefresh--;
+      if (SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
+        pagesUntilFullRefresh--;
+      }
     }
 
     // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
@@ -398,6 +404,9 @@ void XtcReaderActivity::renderPage() {
     free(pageBuffer);
 
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
+    SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=2",
+                        static_cast<unsigned long>(currentPage + 1),
+                        static_cast<unsigned long>(xtc->getPageCount()));
     return;
   } else {
     // 1-bit mode: 8 pixels per byte, MSB first
@@ -431,6 +440,9 @@ void XtcReaderActivity::renderPage() {
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
+  SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=%u",
+                      static_cast<unsigned long>(currentPage + 1),
+                      static_cast<unsigned long>(xtc->getPageCount()), static_cast<unsigned>(bitDepth));
 }
 
 void XtcReaderActivity::saveProgress() const {

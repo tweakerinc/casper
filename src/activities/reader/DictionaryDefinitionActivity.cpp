@@ -15,6 +15,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/HtmlToPlainText.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 
@@ -919,5 +920,5 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
                                             (scrollLine > 0 ? tr(STR_DIR_UP) : ""),
                                             (scrollLine + visibleLines < totalLines ? tr(STR_DIR_DOWN) : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

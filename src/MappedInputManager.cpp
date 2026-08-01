@@ -334,6 +334,45 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
           labelForHardware(HalGPIO::BTN_LEFT), labelForHardware(HalGPIO::BTN_RIGHT)};
 }
 
+namespace {
+const char* directionFuncCaption(const uint8_t func, const char* backAction, const char* confirmAction) {
+  using F = CrossPointSettings::BUTTON_FUNCTION;
+  switch (func) {
+    case F::BTN_FUNC_BACK:
+      return backAction ? backAction : tr(STR_BACK);
+    case F::BTN_FUNC_CONFIRM:
+      return confirmAction ? confirmAction : tr(STR_SELECT);
+    case F::BTN_FUNC_LEFT:
+      return tr(STR_DIR_LEFT);
+    case F::BTN_FUNC_RIGHT:
+      return tr(STR_DIR_RIGHT);
+    case F::BTN_FUNC_UP:
+      return tr(STR_DIR_UP);
+    case F::BTN_FUNC_DOWN:
+      return tr(STR_DIR_DOWN);
+    default:
+      return "";
+  }
+}
+}  // namespace
+
+MappedInputManager::Labels MappedInputManager::mapDirectionLabels(const char* backAction,
+                                                                  const char* confirmAction) const {
+  // Physical front L→R (hw 0–3): caption matches remapped function exactly.
+  const auto& map = SETTINGS.hwButtonFunction;
+  return {directionFuncCaption(map[CrossPointSettings::FRONT_HW_BACK], backAction, confirmAction),
+          directionFuncCaption(map[CrossPointSettings::FRONT_HW_CONFIRM], backAction, confirmAction),
+          directionFuncCaption(map[CrossPointSettings::FRONT_HW_LEFT], backAction, confirmAction),
+          directionFuncCaption(map[CrossPointSettings::FRONT_HW_RIGHT], backAction, confirmAction)};
+}
+
+void MappedInputManager::mapSideDirectionLabels(const char*& sideA, const char*& sideB) const {
+  // hw 4 = X3 left / X4 upper; hw 5 = X3 right / X4 lower.
+  const auto& map = SETTINGS.hwButtonFunction;
+  sideA = directionFuncCaption(map[4], tr(STR_BACK), tr(STR_SELECT));
+  sideB = directionFuncCaption(map[5], tr(STR_BACK), tr(STR_SELECT));
+}
+
 int MappedInputManager::getPressedFrontButton() const {
   // Scan the raw front buttons in hardware order.
   // This bypasses remapping so the remap activity can capture physical presses.

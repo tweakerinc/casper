@@ -16,6 +16,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Logical menu rows (visible set is rebuilt dynamically).
@@ -473,5 +474,5 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
     }
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

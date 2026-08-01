@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <esp_sleep.h>
+#include <esp_system.h>
 #include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
@@ -28,14 +30,18 @@
 #include "SdCardFontSystem.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/reader/ReaderActivity.h"
+#include "activities/reader/ReadingStatsUtils.h"
+#include "activities/reader/StatsBackup.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
-#include "activities/reader/ReadingStatsUtils.h"
-#include "activities/reader/StatsBackup.h"
+#include "util/SleepChromeIcon.h"
 #include "util/ButtonNavigator.h"
+#include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SystemLog.h"
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -56,27 +62,42 @@ static bool isGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN act
 
 static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
   const unsigned long held = gpio.getPowerButtonHeldTime();
+  const auto shortAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn);
+  const auto longAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+  const unsigned long longMs = SETTINGS.getPowerButtonLongPressDuration();
+
   if (mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     if (longPowerButtonHandled) {
+      // Wake latch or long-hold action already ran while pressed (e.g. Force Refresh).
       longPowerButtonHandled = false;
       return CrossPointSettings::SHORT_PWRBTN::IGNORE;
     }
-    return held < SETTINGS.getPowerButtonLongPressDuration()
-               ? static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
-               : static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+    // Long hold past threshold with a while-held global action (Force Refresh /
+    // Sleep): that action should have fired on the hold. Never also run short
+    // SLEEP on release — Force Refresh's blocking HALF used to clear the latch
+    // before this edge, then short=SLEEP put the device to sleep after the scrub.
+    if (held >= longMs && isGlobalPowerButtonAction(longAction)) {
+      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+    }
+    // shortPwrBtn=SLEEP: sleep on release for true short taps (held < longMs).
+    // Long holds that are not global long-actions still map to longAction below.
+    if (shortAction == CrossPointSettings::SHORT_PWRBTN::SLEEP) {
+      return CrossPointSettings::SHORT_PWRBTN::SLEEP;
+    }
+    return held < longMs ? shortAction : longAction;
   }
 
-  if (longPowerButtonHandled || !gpio.isPressed(HalGPIO::BTN_POWER) ||
-      held < SETTINGS.getPowerButtonLongPressDuration()) {
+  if (longPowerButtonHandled || !gpio.isPressed(HalGPIO::BTN_POWER) || held < longMs) {
     return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
 
-  const auto action = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
-  if (!isGlobalPowerButtonAction(action)) {
+  // While held past threshold: only fire long if it is a global sleep/refresh.
+  // (Force Refresh still works on long-hold; Sleep short-press is release-edge above.)
+  if (!isGlobalPowerButtonAction(longAction)) {
     return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
   longPowerButtonHandled = true;
-  return action;
+  return longAction;
 }
 
 static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
@@ -86,11 +107,14 @@ static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN
       return true;
     case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
+      SystemLog::logTiming("MAIN", "force_refresh long-power held=%lums",
+                           static_cast<unsigned long>(gpio.getPowerButtonHeldTime()));
       if (!activityManager.handleForcedRefresh()) {
-        // Match v0.1.3: HALF scrub of current FB (activities may override).
+        // No activity override: scrub current framebuffer (HALF + X3 resync).
         RenderLock lock;
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       }
+      // Action is latched; release power anytime — do not require holding through scrub.
       return true;
     }
     default:
@@ -125,6 +149,12 @@ EpdFont bitter18BoldItalicFont(&bitter_18_bolditalic);
 EpdFontFamily bitter18FontFamily(&bitter18RegularFont, &bitter18BoldFont, &bitter18ItalicFont,
                                  &bitter18BoldItalicFont);
 
+// Penumbra Recents: 8 pt author (regular only), 10 pt title (regular + bold focus).
+EpdFont sourceserif8RegularFont(&sourceserif4_8_regular);
+EpdFontFamily sourceserif8FontFamily(&sourceserif8RegularFont);
+EpdFont sourceserif10RegularFont(&sourceserif4_10_regular);
+EpdFont sourceserif10BoldFont(&sourceserif4_10_bold);
+EpdFontFamily sourceserif10FontFamily(&sourceserif10RegularFont, &sourceserif10BoldFont);
 EpdFont sourceserif12RegularFont(&sourceserif4_12_regular);
 EpdFont sourceserif12BoldFont(&sourceserif4_12_bold);
 EpdFont sourceserif12ItalicFont(&sourceserif4_12_italic);
@@ -149,13 +179,10 @@ EpdFont sourceserif18ItalicFont(&sourceserif4_18_italic);
 EpdFont sourceserif18BoldItalicFont(&sourceserif4_18_bolditalic);
 EpdFontFamily sourceserif18FontFamily(&sourceserif18RegularFont, &sourceserif18BoldFont, &sourceserif18ItalicFont,
                                       &sourceserif18BoldItalicFont);
-// Clockface hero: digits-only 72 pt (Bold face used as REGULAR style slot).
+// Penumbra hero: digits-only 72 pt (Bold face used as REGULAR style slot).
 EpdFont sourceserif72ClockFont(&sourceserif4_72_clock);
 EpdFontFamily sourceserif72ClockFontFamily(&sourceserif72ClockFont);
 #endif  // OMIT_FONTS
-
-EpdFont smallFont(&notosans_8_regular);
-EpdFontFamily smallFontFamily(&smallFont);
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
@@ -243,7 +270,14 @@ static bool loadSleepFrameBuffer() {
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+  // Resume target for Quick Resume: reader only if we actually slept in a book.
+  // Home / Settings / Library / etc. all wake to Home (Settings must never auto-resume).
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  // Successful sleep from reader: clear crash-loop counter so the next QR can
+  // open the book (loadCount>=2 forces Home as a boot-loop guard).
+  if (APP_STATE.lastSleepFromReader) {
+    APP_STATE.readerActivityLoadCount = 0;
+  }
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -256,11 +290,17 @@ void enterDeepSleep(bool fromTimeout) {
   // are not lost if a prior save failed or never ran.
   SETTINGS.saveToFile();
 
+  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d lastSleepFromReader=%d", fromTimeout ? 1 : 0,
+                       APP_STATE.lastSleepFromReader ? 1 : 0);
+  SystemLog::flush();
+
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
 
+  // Snapshot after the moon is on the FB so X3 wake re-seed matches the glass
+  // (needed for no-flash differential). Moon is ink-only in the top chrome band.
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
   }
@@ -310,13 +350,15 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(BITTER_16_FONT_ID, bitter16FontFamily);
   renderer.insertFont(BITTER_18_FONT_ID, bitter18FontFamily);
   // UI_10/UI_12 alias Source Serif 12/14 — insert full families once.
+  renderer.insertFont(SOURCESERIF4_8_FONT_ID, sourceserif8FontFamily);
+  renderer.insertFont(SOURCESERIF4_10_FONT_ID, sourceserif10FontFamily);
   renderer.insertFont(SOURCESERIF4_12_FONT_ID, sourceserif12FontFamily);
   renderer.insertFont(SOURCESERIF4_14_FONT_ID, sourceserif14FontFamily);
   renderer.insertFont(SOURCESERIF4_16_FONT_ID, sourceserif16FontFamily);
   renderer.insertFont(SOURCESERIF4_18_FONT_ID, sourceserif18FontFamily);
   renderer.insertFont(SOURCESERIF4_72_CLOCK_FONT_ID, sourceserif72ClockFontFamily);
 #endif  // OMIT_FONTS
-  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  // SMALL_FONT_ID aliases SOURCESERIF4_8_FONT_ID (inserted above).
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
@@ -376,31 +418,66 @@ void setup() {
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
   HalSystem::checkPanic();
   APP_STATE.loadFromFile();
-  RECENT_BOOKS.loadFromFile();
+
+  // Wake cause before QR planning — flash/USB must not look like sleep-from-reader.
+  const auto wakeupReason = gpio.getWakeupReason();
+
+  // Detect Quick Resume → book early so we can skip non-critical boot work.
+  // PowerButton covers: deep-sleep GPIO wake (X3 / X4+USB) and X4 battery latch
+  // POWERON (MCU fully powered off in sleep). Flash/USB are never PowerButton.
+  const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton &&
+                        !APP_STATE.showBootScreen && APP_STATE.lastSleepFromReader &&
+                        !APP_STATE.openEpubPath.empty() && APP_STATE.readerActivityLoadCount < 2;
+
+  // Defer recents/KOReader/OPDS SD reads until after first ink on QR→book
+  // (saves ~50–150ms and SD contention before the page is readable).
+  if (!qrToBook) {
+    RECENT_BOOKS.loadFromFile();
+    KOREADER_STORE.loadFromFile();
+    OPDS_STORE.loadFromFile();
+  }
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
-  KOREADER_STORE.loadFromFile();
-  OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
+  // Buffered rotating SD log for field performance captures (/.casper-logs/).
+  SystemLog::begin();
+  SystemLog::logTiming("BOOT", "settings_loaded millis=%lu qrBook=%d wake=%d",
+                       static_cast<unsigned long>(millis()), qrToBook ? 1 : 0,
+                       static_cast<int>(wakeupReason));
 
-  const auto wakeupReason = gpio.getWakeupReason();
+  // Flash / USB / unknown cold boots: drop sticky reader-wake flags so a later
+  // power press cannot reopen the last book (flash → USB sleep → power loop).
+  // Do NOT clear on PowerButton — that is a real sleep wake (incl. X4 battery).
+  auto clearStickyReaderWake = []() {
+    if (!APP_STATE.lastSleepFromReader && APP_STATE.showBootScreen) return;
+    APP_STATE.lastSleepFromReader = false;
+    APP_STATE.showBootScreen = true;
+    APP_STATE.saveToFile();
+    LOG_DBG("MAIN", "Cleared sticky lastSleepFromReader (non power-button boot)");
+  };
+
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
-      LOG_DBG("MAIN", "Verifying power button press duration");
+      LOG_DBG("MAIN", "Verifying power button press duration (sleep wake)");
       if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
         powerManager.startDeepSleep(gpio);
       }
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
-      // If USB power caused a cold boot, go back to sleep
+      // USB VBUS glitch while off — do not treat as reader QR. Clear sticky wake
+      // so the next intentional power press lands on Home, then sleep again.
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
+      clearStickyReaderWake();
       powerManager.startDeepSleep(gpio);
       break;
     case HalGPIO::WakeupReason::AfterFlash:
-      // After flashing, just proceed to boot
+      LOG_DBG("MAIN", "Wakeup reason: After flash — cold boot to Home");
+      clearStickyReaderWake();
+      break;
     case HalGPIO::WakeupReason::Other:
     default:
+      clearStickyReaderWake();
       break;
   }
 
@@ -409,11 +486,11 @@ void setup() {
   // flashing has been locked down (e.g. recent X3 firmware).
   bool recoveryFirmwareMode = false;
   if (wakeupReason == HalGPIO::WakeupReason::PowerButton) {
-    // Refresh the cached button state a few times — isPressed() needs ~half a second to settle
-    // after boot per the HalGPIO contract. Use a millis-based deadline so we always wait the full
-    // settle window even if the loop body takes longer than expected on slow boots.
+    // QR→book: quick sample only (~60ms). Full 500ms settle delayed first ink by half a second
+    // on every power wake and was a large chunk of the ~5s QR total vs YACP.
+    const unsigned long settleMs = qrToBook ? 60UL : 500UL;
     const unsigned long settleStart = millis();
-    while (millis() - settleStart < 500) {
+    while (millis() - settleStart < settleMs) {
       gpio.update();
       delay(10);
     }
@@ -430,32 +507,73 @@ void setup() {
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
   // HalDisplay::begin), so the first paint is FAST_REFRESH (~500ms) over the
   // retained frame and input dispatches against a visible UI.
+  //
+  // QuickResume for PowerButton wakes (deep sleep OR X4 battery POWERON latch).
+  // Flash / unknown cold boot → Splash. (Do not require ESP_RST_DEEPSLEEP only —
+  // that forced a full reboot-feel on X4 unplugged wake.)
+  const bool forceColdHome = wakeupReason != HalGPIO::WakeupReason::PowerButton;
   const BootResume resume = isSilentReboot              ? BootResume::Silent
+                            : forceColdHome             ? BootResume::Splash
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
 
+  if (resume == BootResume::QuickResume) {
+    // SD: /.casper-logs/qr_timing.log — pull after a QR wake and paste the latest block.
+    QrTimingLog::begin("QuickResume");
+    QrTimingLog::line("after SETTINGS/APP_STATE load (pre display)");
+    SystemLog::logTiming("QR", "wake start");
+  } else if (resume == BootResume::Splash) {
+    SystemLog::logTiming("BOOT", "cold/splash path");
+  } else {
+    SystemLog::logTiming("BOOT", "silent reboot path");
+  }
+
   setupDisplayAndFonts(resume != BootResume::Splash);
+  if (QrTimingLog::active()) QrTimingLog::line("after setupDisplayAndFonts");
+  SystemLog::logTiming("BOOT", "after setupDisplayAndFonts millis=%lu", static_cast<unsigned long>(millis()));
 
   switch (resume) {
     case BootResume::Silent:
       // Splash skipped: the routing block below picks the target activity; the
       // panel keeps showing the pre-reboot popup until that first paint lands.
       break;
-    case BootResume::QuickResume:
-      // One-shot flag: re-arm the splash for the next non-quick-resume boot. Save
-      // before any painting so a hang in the blocking paint path can't strand
-      // us in a quick-resume-with-no-frame loop on the next boot.
+    case BootResume::QuickResume: {
+      // One-shot flag: re-arm splash for next non-QR boot (saved after first ink on QR→book).
       APP_STATE.showBootScreen = true;
-      APP_STATE.saveToFile();
+      // Resume the screen we slept from: reader only if last sleep was in a book.
+      const bool qrOpenBook = qrToBook && !mappedInputManager.isPressed(MappedInputManager::Button::Back);
+      if (QrTimingLog::active()) {
+        QrTimingLog::line("qr_plan openBook=%d pathEmpty=%d lastReader=%d loadCount=%u", qrOpenBook ? 1 : 0,
+                          APP_STATE.openEpubPath.empty() ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0,
+                          static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+      }
       if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
-        const auto pageHeight = renderer.getScreenHeight();
-        renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (QrTimingLog::active()) QrTimingLog::line("after loadSleepFrameBuffer");
+        // Re-seed controller "previous" plane from the restored FB (X3 DTM1 / X4 RED).
+        renderer.cleanupGrayscaleWithFrameBuffer();
+        if (qrOpenBook) {
+          // Leave sleep image on glass; first page FAST replaces it (no spinner flash).
+          if (QrTimingLog::active()) QrTimingLog::line("sleep frame kept (no spinner; open book next)");
+        } else {
+          // Landing on Home: moon → loading icon.
+          SleepChromeIcon::replaceAtTopChrome(renderer, LoadingIcon, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
+          // Plain FAST only — do not use displayGrayscaleBase here (AA-pre-BW mid
+          // is grayscale preconditioning and leaves white muddy if no greys follow).
+          renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+          if (QrTimingLog::active()) QrTimingLog::line("after sleep-frame loading-icon panel update");
+        }
       } else {
-        activityManager.goToBoot();  // frame file missing, fall back to the splash
+        if (QrTimingLog::active()) QrTimingLog::line("sleep_frame MISSING — fall back to splash");
+        activityManager.goToBoot();
+      }
+      // QR→book: defer APP_STATE.save (showBootScreen) until after first ink — SD write
+      // was ~200ms on the critical path. Non-book QR still saves now (home is less latency-critical).
+      if (!qrOpenBook) {
+        APP_STATE.saveToFile();
+        if (QrTimingLog::active()) QrTimingLog::line("after showBootScreen saveToFile");
       }
       break;
+    }
     case BootResume::Splash:
       activityManager.goToBoot();
       break;
@@ -476,18 +594,55 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
-  } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
-             mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
-    // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
-    // crashed (indicated by readerActivityLoadCount > 0)
+  } else if (resume != BootResume::QuickResume || !qrToBook ||
+             mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Home for splash / after flash / non-reader sleep / Back held.
+    // Only genuine QuickResume sleep-from-reader (qrToBook) auto-opens a book.
+    if (qrToBook) {
+      // Planned book open aborted (Back held) — load stores deferred for QR.
+      RECENT_BOOKS.loadFromFile();
+      KOREADER_STORE.loadFromFile();
+      OPDS_STORE.loadFromFile();
+    }
     activityManager.goHome();
   } else {
-    // Clear app state to avoid getting into a boot loop if the epub doesn't load
+    // Sleep-from-reader QuickResume: open book. On QR, push first ink in setup
+    // before waiting for power release — waitForPowerRelease used to block the
+    // entire open until the user let go of the wake press.
     const auto path = APP_STATE.openEpubPath;
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
-    APP_STATE.saveToFile();
+    // Defer APP_STATE SD write on QR (showBootScreen + loadCount) until after first ink.
+    if (resume != BootResume::QuickResume) {
+      APP_STATE.saveToFile();
+    }
+    if (resume == BootResume::QuickResume) {
+      ReaderActivity::setOpenHints(/*preferFastFirstRefresh=*/true,
+                                   /*deferFirstPageTextAa=*/SETTINGS.textAntiAliasing != 0);
+    }
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("before goToReader path=%s lastReader=1 loadCount=%u", path.c_str(),
+                        static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+    }
     activityManager.goToReader(path);
+    if (QrTimingLog::active()) QrTimingLog::line("after goToReader returns (open may still paint)");
+
+    if (resume == BootResume::QuickResume) {
+      // Drain Reader→EpubReader swap (pending from onEnter) and paint first page now.
+      activityManager.loop();
+      if (QrTimingLog::active()) QrTimingLog::line("after activityManager.loop drain");
+      activityManager.requestUpdateAndWait();
+      if (QrTimingLog::active()) QrTimingLog::line("after first_ink wait");
+      // Now safe to touch SD for deferred boot work.
+      APP_STATE.saveToFile();
+      RECENT_BOOKS.loadFromFile();
+      KOREADER_STORE.loadFromFile();
+      OPDS_STORE.loadFromFile();
+      if (QrTimingLog::active()) {
+        QrTimingLog::line("after deferred stores+save");
+        QrTimingLog::end("first_ink_setup");
+      }
+    }
   }
 
   if (resume == BootResume::Silent) {
@@ -507,9 +662,21 @@ void setup() {
     gpio.update();
   }
 
-  // Ensure we're not still holding the power button before leaving setup
-  waitForPowerRelease();
-  allowSleepAt = millis() + 2000;
+  // QR→book already showed first ink above; don't stall on power-release before loop.
+  // (Holding power through boot used to block here and add seconds to perceived wake.)
+  if (resume != BootResume::QuickResume || !APP_STATE.lastSleepFromReader) {
+    waitForPowerRelease();
+    longPowerButtonHandled = false;
+  } else {
+    // Only ignore the *wake* gesture if power is still held when setup ends.
+    // Always latching true meant: if the user already released the wake press,
+    // the next shortPwrBtn=SLEEP release was eaten (clear latch + IGNORE) and
+    // sleep needed a second press — matches "few presses to sleep" on X3.
+    longPowerButtonHandled = gpio.isPressed(HalGPIO::BTN_POWER);
+  }
+  // Grace so a still-held wake press cannot re-sleep the instant allowSleepAt
+  // elapses; that release is swallowed via longPowerButtonHandled above.
+  allowSleepAt = millis() + (resume == BootResume::QuickResume ? 800UL : 2000UL);
 }
 
 void loop() {
@@ -588,6 +755,16 @@ void loop() {
 
   // Short vs long power: long held triggers global sleep/refresh immediately;
   // release dispatches the short or long action (CrossInk-style).
+  //
+  // Do NOT clear longPowerButtonHandled merely because power is up. Force Refresh
+  // blocks for ~1–3s (HALF scrub); the user usually releases during that scrub.
+  // Clearing the latch here before wasReleased is handled made shortPwrBtn=SLEEP
+  // fire on the release edge → refresh then sleep. Latch is cleared only when
+  // getPowerButtonAction sees the release (IGNORE) or on a fresh power press.
+  if (millis() >= allowSleepAt && longPowerButtonHandled && gpio.wasPressed(HalGPIO::BTN_POWER)) {
+    // New press after a completed long action / wake latch — arm for this hold.
+    longPowerButtonHandled = false;
+  }
   if (millis() >= allowSleepAt) {
     // Screenshot combo still takes priority over power sleep.
     if (!(gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN))) {
@@ -602,11 +779,22 @@ void loop() {
   // A background requestUpdate here used to black-flash home multipass themes.
   (void)gpio.wasUsbStateChanged();  // consume edge so it does not stick
 
+  SystemLog::maybeSampleHeap();
+
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
 
   const unsigned long loopDuration = millis() - loopStartTime;
+  // Surface long main-loop stalls to SD (hang hunting). 2s covers EPD FAST; HALF is longer.
+  if (activityDuration >= 2000) {
+    SystemLog::logCritical("LOOP", "activity_slow %lums fre=%u", static_cast<unsigned long>(activityDuration),
+                           static_cast<unsigned>(ESP.getFreeHeap()));
+  } else if (loopDuration >= 5000) {
+    SystemLog::logCritical("LOOP", "loop_slow %lums act=%lums fre=%u", static_cast<unsigned long>(loopDuration),
+                           static_cast<unsigned long>(activityDuration),
+                           static_cast<unsigned>(ESP.getFreeHeap()));
+  }
   if (loopDuration > maxLoopDuration) {
     maxLoopDuration = loopDuration;
     if (maxLoopDuration > 50) {
@@ -624,7 +812,10 @@ void loop() {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
+      // shortPwrBtn=SLEEP is release-edge. A 50ms sample while power is held
+      // makes short taps flaky (press+release between updates). Stay snappy
+      // while power is down so one short press reliably sleeps.
+      delay(gpio.isPressed(HalGPIO::BTN_POWER) ? 10 : 50);
     } else {
       // Short delay to prevent tight loop while still being responsive
       delay(10);

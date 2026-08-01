@@ -15,6 +15,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/OpdsFilename.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Normalizes a user-typed folder: trims spaces, "" => SD root, otherwise a
@@ -231,5 +232,5 @@ void OpdsServerListActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

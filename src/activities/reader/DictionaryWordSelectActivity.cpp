@@ -20,6 +20,7 @@
 #include "fontIds.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
+#include "util/UiGhostPolicy.h"
 
 // Tiny pad so a highlight box (+2) clears the hint strip without making the
 // reserved chrome taller than dashboard / settings buttons (buttonHintsHeight).
@@ -597,7 +598,7 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     if (drawHighlightWithSnapshot()) {
       drawModeTitle();
       drawHints();
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      UiGhostPolicy::displayMenuFrame(renderer);
       return;
     }
     // Snapshot failed (oversize box) — fall through to a full repaint.
@@ -629,5 +630,5 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     GUI.drawPopup(renderer, I18N.get(popupMsg));
     return;
   }
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

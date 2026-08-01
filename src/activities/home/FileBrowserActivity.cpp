@@ -16,6 +16,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Long-press threshold for book menu / folder delete / hidden-files toggle.
@@ -554,7 +555,7 @@ void FileBrowserActivity::render(RenderLock&&) {
     }
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

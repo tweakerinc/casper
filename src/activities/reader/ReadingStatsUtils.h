@@ -79,9 +79,15 @@ float estimateRemainingBookPages(int chapterPages, int currentPage1Based, float 
 // remainingPages × secondsPerPage. Returns false if inputs are unusable.
 bool estimateTimeLeftFromPages(float remainingPages, uint32_t secondsPerPage, uint32_t& outSeconds);
 
-// Weak last resort when page data is unavailable (dashboard with empty cache only).
-// Prefer estimatedTimeLeftSeconds from the reader over this.
+// Progress-ratio ETA: totalReading × (1−p)/p. Solid once you've read a while with
+// a trustworthy progress % — matches "I'm halfway with 12h spent → ~12h left".
 bool estimateTimeLeftFromProgress(uint32_t totalReadingSeconds, float progressPercent, uint32_t& outSeconds);
+
+// Book-level ETA for home / status bar / session save.
+// Page×pace undercounts badly when chapter page density ≠ book progress (partial
+// sections, uneven spine). Progress-ratio is preferred when both disagree.
+bool estimateBookTimeLeftSeconds(float remainingPages, uint32_t secondsPerPage, uint32_t totalReadingSeconds,
+                                 float progressPercent, uint32_t& outSeconds);
 
 // Dampen page-to-page ETA jumps. prevSeconds=0 means "no history" (return raw).
 // Caps relative step then applies a light EMA so 13h does not leap to 16h on one turn.

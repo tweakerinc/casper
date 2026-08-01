@@ -1,4 +1,5 @@
 #include "BackupStatsActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -41,7 +42,7 @@ void BackupStatsActivity::render(RenderLock&&) {
 
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CONFIRM), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -56,7 +57,7 @@ void BackupStatsActivity::render(RenderLock&&) {
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -68,7 +69,7 @@ void BackupStatsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void BackupStatsActivity::runBackup() {

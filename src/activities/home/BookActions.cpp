@@ -15,6 +15,7 @@
 #include "activities/reader/GlobalReadingStats.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/UiGhostPolicy.h"
 
 namespace BookActions {
 namespace {
@@ -29,27 +30,15 @@ std::string bookStatsCachePath(const std::string& path) { return BookReadingStat
 
 std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std::string& fullPath,
                                                                       const bool includeRemoveFromRecents) {
-  // Shared order for Stats / Recents / File Browser long-press:
-  // Read, Synopsis (EPUB), Reading Stats (Stats theme only), Reset Reading Pace, …
+  // Long-press: Read, Synopsis (EPUB), Reset Pace, …
+  // (Per-book Reading Stats entry was Stats-theme only; use Menu → Reading Stats.)
   std::vector<FileBrowserActionActivity::MenuItem> items;
   items.reserve(9);
   items.push_back({FileBrowserAction::Open, StrId::STR_READ});
   if (FsHelpers::hasEpubExtension(fullPath)) {
     items.push_back({FileBrowserAction::Description, StrId::STR_SYNOPSIS});
   }
-  // Stats home: offer per-book Reading Stats under Synopsis.
-  // Hidden entirely when the user has disabled stat tracking.
-  const auto theme = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
-  const bool statsTheme = theme == CrossPointSettings::UI_THEME::STATS ||
-                          theme == CrossPointSettings::UI_THEME::STATS_LIFE ||
-                          theme == CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE ||
-                          theme == CrossPointSettings::UI_THEME::DASHBOARD_CARD ||
-                          theme == CrossPointSettings::UI_THEME::MINIMAL ||
-                          theme == CrossPointSettings::UI_THEME::LYRA_CAROUSEL;
   const bool statsOk = SETTINGS.readingStatsTrackingEnabled();
-  if (statsOk && statsTheme && hasReadingStats(fullPath)) {
-    items.push_back({FileBrowserAction::ReadingStats, StrId::STR_READING_STATS});
-  }
   if (statsOk && hasReadingStats(fullPath)) {
     items.push_back({FileBrowserAction::ResetPace, StrId::STR_RESET_READING_PACE});
   }
@@ -78,10 +67,8 @@ bool hasClearableBookCache(const std::string& path) {
 void clearFileMetadata(const std::string& fullPath) {
   // Drop reading cache + stats when deleting a book from SD.
   ::clearBookCache(fullPath);
-  const std::string statsPath = bookStatsCachePath(fullPath);
-  if (!statsPath.empty()) {
-    BookReadingStats::remove(statsPath);
-  }
+  // Wipe stats under Casper and CrossInk cache hashes (if both exist).
+  BookReadingStats::removeForBook(fullPath);
   if (FsHelpers::hasEpubExtension(fullPath)) {
     ClippingStore::deleteForFilePath(fullPath, "epub");
   }
@@ -101,7 +88,7 @@ bool deleteBookStats(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  return BookReadingStats::remove(cachePath);
+  return BookReadingStats::removeForBook(fullPath);
 }
 
 bool resetReadingPace(const std::string& fullPath) {
@@ -109,7 +96,8 @@ bool resetReadingPace(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  BookReadingStats stats = BookReadingStats::load(cachePath);
+  // loadForBook picks up CrossInk FNV stats if present, then we rewrite Casper path.
+  BookReadingStats stats = BookReadingStats::loadForBook(fullPath);
   stats.avgSecondsPerForwardPage = 0;
   stats.paceSampleCount = 0;
   stats.estimatedTimeLeftSeconds = 0;
@@ -199,7 +187,7 @@ void drawToast(const GfxRenderer& renderer, const char* msg) {
   const auto pageHeight = renderer.getScreenHeight();
   renderer.clearScreen();
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 10, msg, true);
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 std::string loadBookDescription(const std::string& fullPath) {

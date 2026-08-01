@@ -72,8 +72,10 @@ static constexpr int STATS_FILE_SIZE = 75;
 static constexpr uint16_t MAX_PACE_SAMPLE_COUNT = 1000;
 static constexpr uint8_t FLAG_START_DATE_MANUAL = 1u << 0;
 static constexpr uint8_t FLAG_FINISHED_DATE_MANUAL = 1u << 1;
-static constexpr uint8_t PREVIOUS_VERSIONED_STATS_FILE_VERSION = STATS_FILE_VERSION - 1;
 static constexpr const char* LEGACY_STATS_FILE_NAME = "stats.bin";
+static constexpr const char* CROSSPOINT_CACHE_ROOT = "/.crosspoint";
+// Cap directory scan so a corrupted cache folder cannot stall book open.
+static constexpr size_t MAX_STATS_DIR_SCAN = 16;
 
 std::string statsFileNameForVersion(const uint8_t version) {
   char buf[16];
@@ -81,27 +83,34 @@ std::string statsFileNameForVersion(const uint8_t version) {
   return std::string(buf);
 }
 
-bool openStatsFileForRead(const std::string& cachePath, HalFile& f) {
-  const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
-  if (Storage.openFileForRead("STATS", cachePath + "/" + currentName, f)) {
-    return true;
+// CrossInk EPUB cache dirs use FNV-1a 64-bit of the full book path (ZipFile::fnvHash64).
+// Casper / CrossPoint 1.5 use std::hash → different epub_<n> folder names on the same SD.
+uint64_t fnv1a64Path(const std::string& path) {
+  uint64_t hash = 14695981039346656037ull;
+  for (size_t i = 0; i < path.size(); ++i) {
+    hash ^= static_cast<uint8_t>(path[i]);
+    hash *= 1099511628211ull;
   }
+  return hash;
+}
 
-  // When bumping STATS_FILE_VERSION, this automatically tries the previous
-  // versioned filename (e.g. v6 falls back to stats_v5.bin) before the original
-  // unversioned stats.bin migration source.
-  const std::string previousName = statsFileNameForVersion(PREVIOUS_VERSIONED_STATS_FILE_VERSION);
-  if (Storage.openFileForRead("STATS", cachePath + "/" + previousName, f)) {
-    LOG_DBG("STATS", "Migrating %s to %s", previousName.c_str(), currentName.c_str());
-    return true;
-  }
+std::string stdHashEpubCachePath(const std::string& bookPath) {
+  return std::string(CROSSPOINT_CACHE_ROOT) + "/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
+}
 
-  if (Storage.openFileForRead("STATS", cachePath + "/" + LEGACY_STATS_FILE_NAME, f)) {
-    LOG_DBG("STATS", "Migrating legacy %s to %s", LEGACY_STATS_FILE_NAME, currentName.c_str());
-    return true;
-  }
+std::string crossInkFnvEpubCachePath(const std::string& bookPath) {
+  return std::string(CROSSPOINT_CACHE_ROOT) + "/epub_" + std::to_string(fnv1a64Path(bookPath));
+}
 
-  return false;
+bool isStatsFileName(const char* name) {
+  if (!name) return false;
+  static constexpr char kPrefix[] = "stats";
+  static constexpr char kSuffix[] = ".bin";
+  const size_t nameLen = strlen(name);
+  constexpr size_t prefixLen = sizeof(kPrefix) - 1;
+  constexpr size_t suffixLen = sizeof(kSuffix) - 1;
+  return nameLen >= prefixLen + suffixLen && strncmp(name, kPrefix, prefixLen) == 0 &&
+         strcmp(name + nameLen - suffixLen, kSuffix) == 0;
 }
 
 uint16_t readLe16(const uint8_t* data, const int offset) {
@@ -140,32 +149,6 @@ ReadingStatsDate readDate(const uint8_t* data, const int offset) {
     date.clear();
   }
   return date;
-}
-
-}  // namespace
-
-std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
-  if (bookPath.empty()) {
-    return {};
-  }
-  if (FsHelpers::hasEpubExtension(bookPath)) {
-    return Epub(bookPath, "/.crosspoint").getCachePath();
-  }
-  if (FsHelpers::hasXtcExtension(bookPath)) {
-    return std::string("/.crosspoint/xtc_") + std::to_string(std::hash<std::string>{}(bookPath));
-  }
-  if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
-    return std::string("/.crosspoint/txt_") + std::to_string(std::hash<std::string>{}(bookPath));
-  }
-  return {};
-}
-
-BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
-  const std::string path = cachePathForBook(bookPath);
-  if (path.empty()) {
-    return {};
-  }
-  return load(path);
 }
 
 // Parse one stats blob already read into `data` (n bytes). Returns empty on mismatch.
@@ -220,6 +203,35 @@ BookReadingStats parseStatsBlob(const uint8_t* data, const int n) {
   return stats;
 }
 
+bool parseKnownStatsBlob(const uint8_t* data, const int n, BookReadingStats& out) {
+  if (n <= 0) return false;
+  if (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  if (n == STATS_FILE_SIZE_V2 && data[0] == STATS_FILE_VERSION_V2) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  if (n == STATS_FILE_SIZE_V3 && data[0] == STATS_FILE_VERSION_V3) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  if (n == STATS_FILE_SIZE_V4 && data[0] == STATS_FILE_VERSION_V4) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  if (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  if (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION) {
+    out = parseStatsBlob(data, n);
+    return true;
+  }
+  return false;
+}
+
 // Load a specific versioned filename only (no fallback chain).
 bool loadStatsFileNamed(const std::string& cachePath, const std::string& fileName, BookReadingStats& out) {
   HalFile f;
@@ -229,72 +241,263 @@ bool loadStatsFileNamed(const std::string& cachePath, const std::string& fileNam
   uint8_t data[STATS_FILE_SIZE] = {};
   const int n = f.read(data, STATS_FILE_SIZE);
   f.close();
-  out = parseStatsBlob(data, n);
-  // parseStatsBlob returns default on mismatch — treat as failure if still empty version path.
-  // A real empty book can have 0 sessions; success is "file parsed as a known version".
-  if (n <= 0) {
-    return false;
+  return parseKnownStatsBlob(data, n, out);
+}
+
+// Prefer the file with more lifetime data (seconds, then sessions, then pages).
+bool isRicherStats(const BookReadingStats& a, const BookReadingStats& b) {
+  if (a.totalReadingSeconds != b.totalReadingSeconds) {
+    return a.totalReadingSeconds > b.totalReadingSeconds;
   }
-  if (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) return true;
-  if (n == STATS_FILE_SIZE_V2 && data[0] == STATS_FILE_VERSION_V2) return true;
-  if (n == STATS_FILE_SIZE_V3 && data[0] == STATS_FILE_VERSION_V3) return true;
-  if (n == STATS_FILE_SIZE_V4 && data[0] == STATS_FILE_VERSION_V4) return true;
-  if (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5) return true;
-  if (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION) return true;
+  if (a.sessionCount != b.sessionCount) {
+    return a.sessionCount > b.sessionCount;
+  }
+  if (a.totalPagesTurned != b.totalPagesTurned) {
+    return a.totalPagesTurned > b.totalPagesTurned;
+  }
+  if (a.isCompleted != b.isCompleted) {
+    return a.isCompleted;
+  }
+  // Prefer known progress over unknown when lifetime totals match.
+  if (a.progressPercentMilli != b.progressPercentMilli) {
+    if (a.progressPercentMilli == 0xFFFF) return false;
+    if (b.progressPercentMilli == 0xFFFF) return true;
+  }
   return false;
 }
 
+bool hasAnyStatsPayload(const BookReadingStats& s) {
+  return s.sessionCount > 0 || s.totalReadingSeconds > 0 || s.totalPagesTurned > 0 || s.isCompleted ||
+         s.progressPercentMilli != 0xFFFF || s.startDate.isValid() || s.finishedDate.isValid();
+}
+
+bool looksLikeEmptyShell(const BookReadingStats& s) {
+  return s.sessionCount == 0 && s.totalReadingSeconds < 60 && s.totalPagesTurned <= 1 && !s.isCompleted;
+}
+
+// Merge progress/ETA from a thin newer file into richer lifetime totals.
+void preferRicherKeepProgress(BookReadingStats& best, const BookReadingStats& candidate) {
+  if (!isRicherStats(candidate, best)) {
+    // Candidate is thinner: still take progress/ETA if best lacks them.
+    if (best.progressPercentMilli == 0xFFFF && candidate.progressPercentMilli != 0xFFFF) {
+      best.progressPercentMilli = candidate.progressPercentMilli;
+    }
+    if (best.estimatedTimeLeftSeconds == 0 && candidate.estimatedTimeLeftSeconds != 0) {
+      best.estimatedTimeLeftSeconds = candidate.estimatedTimeLeftSeconds;
+    }
+    return;
+  }
+  const uint16_t progressMilli = best.progressPercentMilli;
+  const uint32_t eta = best.estimatedTimeLeftSeconds;
+  best = candidate;
+  if (progressMilli != 0xFFFF && best.progressPercentMilli == 0xFFFF) {
+    best.progressPercentMilli = progressMilli;
+  }
+  if (eta != 0 && best.estimatedTimeLeftSeconds == 0) {
+    best.estimatedTimeLeftSeconds = eta;
+  }
+}
+
+void considerNamedStatsFile(const std::string& cachePath, const std::string& fileName, BookReadingStats& best,
+                            bool& have) {
+  BookReadingStats candidate;
+  if (!loadStatsFileNamed(cachePath, fileName, candidate)) {
+    return;
+  }
+  if (!have) {
+    best = candidate;
+    have = true;
+    return;
+  }
+  preferRicherKeepProgress(best, candidate);
+}
+
+// Walk the cache folder for any stats*.bin (covers odd CrossInk / fork names).
+void considerDirectoryStatsFiles(const std::string& cachePath, BookReadingStats& best, bool& have) {
+  auto dir = Storage.open(cachePath.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return;
+  }
+
+  size_t scanned = 0;
+  char name[96];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (++scanned > MAX_STATS_DIR_SCAN) break;
+    considerNamedStatsFile(cachePath, name, best, have);
+  }
+  dir.close();
+}
+
+// Load the richest parsable stats blob under one cache directory.
+// Cheap path: if current versioned file is already "rich", skip older names + dir walk.
+BookReadingStats loadBestInCacheDir(const std::string& cachePath) {
+  BookReadingStats best;
+  bool have = false;
+  if (cachePath.empty()) {
+    return best;
+  }
+
+  // Prefer current filename first (Casper writes stats_vN.bin on every save/migrate).
+  const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
+  considerNamedStatsFile(cachePath, currentName, best, have);
+  if (have && hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
+    return best;
+  }
+
+  // Fallbacks: older versioned names + legacy stats.bin + any stats*.bin in the folder.
+  for (int v = static_cast<int>(STATS_FILE_VERSION) - 1; v >= 1; --v) {
+    considerNamedStatsFile(cachePath, statsFileNameForVersion(static_cast<uint8_t>(v)), best, have);
+  }
+  considerNamedStatsFile(cachePath, LEGACY_STATS_FILE_NAME, best, have);
+  considerDirectoryStatsFiles(cachePath, best, have);
+  return best;
+}
+
+void ensureCacheDir(const std::string& cachePath) {
+  if (cachePath.empty() || Storage.exists(cachePath.c_str())) {
+    return;
+  }
+  Storage.mkdir(cachePath.c_str());
+}
+
+// Candidate cache dirs for one book: Casper/1.5 path first, then CrossInk FNV EPUB.
+void collectBookCacheCandidates(const std::string& bookPath, std::string* paths, size_t& count, const size_t max) {
+  count = 0;
+  auto pushUnique = [&](const std::string& p) {
+    if (p.empty() || count >= max) return;
+    for (size_t i = 0; i < count; ++i) {
+      if (paths[i] == p) return;
+    }
+    paths[count++] = p;
+  };
+
+  pushUnique(BookReadingStats::cachePathForBook(bookPath));
+
+  // CrossInk stores EPUBs under epub_<fnv64>; Casper uses epub_<std::hash>.
+  if (FsHelpers::hasEpubExtension(bookPath)) {
+    pushUnique(crossInkFnvEpubCachePath(bookPath));
+    // Also try std::hash explicitly (same as cachePathForBook for EPUB, but
+    // cheap insurance if Epub constructor ever diverges).
+    pushUnique(stdHashEpubCachePath(bookPath));
+  }
+}
+
+}  // namespace
+
+std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
+  if (bookPath.empty()) {
+    return {};
+  }
+  if (FsHelpers::hasEpubExtension(bookPath)) {
+    return Epub(bookPath, CROSSPOINT_CACHE_ROOT).getCachePath();
+  }
+  if (FsHelpers::hasXtcExtension(bookPath)) {
+    return std::string(CROSSPOINT_CACHE_ROOT) + "/xtc_" + std::to_string(std::hash<std::string>{}(bookPath));
+  }
+  if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
+    return std::string(CROSSPOINT_CACHE_ROOT) + "/txt_" + std::to_string(std::hash<std::string>{}(bookPath));
+  }
+  return {};
+}
+
+BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
+  if (bookPath.empty()) {
+    return {};
+  }
+
+  constexpr size_t kMaxPaths = 4;
+  std::string paths[kMaxPaths];
+  size_t pathCount = 0;
+  collectBookCacheCandidates(bookPath, paths, pathCount, kMaxPaths);
+  if (pathCount == 0) {
+    return {};
+  }
+
+  const std::string& primaryPath = paths[0];
+
+  // Cheap stats win: once Casper has a rich stats_vN under the primary path,
+  // skip CrossInk FNV folders and multi-file scans (~80–100ms on X3 SD).
+  {
+    BookReadingStats primaryFast;
+    const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
+    if (loadStatsFileNamed(primaryPath, currentName, primaryFast) && hasAnyStatsPayload(primaryFast) &&
+        !looksLikeEmptyShell(primaryFast)) {
+      return primaryFast;
+    }
+  }
+
+  BookReadingStats best;
+  bool have = false;
+  size_t bestPathIndex = 0;
+
+  for (size_t i = 0; i < pathCount; ++i) {
+    const BookReadingStats candidate = loadBestInCacheDir(paths[i]);
+    if (!hasAnyStatsPayload(candidate)) {
+      continue;
+    }
+    if (!have) {
+      best = candidate;
+      have = true;
+      bestPathIndex = i;
+      continue;
+    }
+    if (isRicherStats(candidate, best)) {
+      preferRicherKeepProgress(best, candidate);
+      bestPathIndex = i;
+    } else {
+      preferRicherKeepProgress(best, candidate);
+    }
+  }
+
+  if (!have) {
+    return {};
+  }
+
+  // Land the winner under Casper's cache path so later opens hit the cheap path.
+  const BookReadingStats primaryNow = loadBestInCacheDir(primaryPath);
+  const bool primaryMissingOrThin =
+      !hasAnyStatsPayload(primaryNow) || looksLikeEmptyShell(primaryNow) || isRicherStats(best, primaryNow);
+  if (primaryMissingOrThin) {
+    ensureCacheDir(primaryPath);
+    best.save(primaryPath);
+    if (bestPathIndex != 0) {
+      LOG_DBG("STATS", "Migrated book stats from CrossInk/legacy cache %s -> %s", paths[bestPathIndex].c_str(),
+              primaryPath.c_str());
+    } else {
+      LOG_DBG("STATS", "Normalized book stats into %s", primaryPath.c_str());
+    }
+  }
+
+  return best;
+}
+
 BookReadingStats BookReadingStats::load(const std::string& cachePath) {
-  BookReadingStats stats;
-  HalFile f;
-  if (!openStatsFileForRead(cachePath, f)) {
-    return stats;
-  }
-  uint8_t data[STATS_FILE_SIZE] = {};
-  const int n = f.read(data, STATS_FILE_SIZE);
-  f.close();
-
-  const bool knownVersion =
-      (n == STATS_FILE_SIZE_V1 && data[0] == STATS_FILE_VERSION_V1) ||
-      (n == STATS_FILE_SIZE_V2 && data[0] == STATS_FILE_VERSION_V2) ||
-      (n == STATS_FILE_SIZE_V3 && data[0] == STATS_FILE_VERSION_V3) ||
-      (n == STATS_FILE_SIZE_V4 && data[0] == STATS_FILE_VERSION_V4) ||
-      (n == STATS_FILE_SIZE_V5 && data[0] == STATS_FILE_VERSION_V5) ||
-      (n == STATS_FILE_SIZE && data[0] == STATS_FILE_VERSION);
-  if (!knownVersion) {
-    LOG_DBG("STATS", "Stats missing or version mismatch, starting fresh");
+  BookReadingStats stats = loadBestInCacheDir(cachePath);
+  if (!hasAnyStatsPayload(stats)) {
     return stats;
   }
 
-  stats = parseStatsBlob(data, n);
-
-  // Re-open migration trap: a fresh stats_v6.bin from a short reopen (0 sessions /
-  // ~0 reading time) would hide a rich stats_v5.bin after path/cache migration.
-  // Prefer the older file's lifetime totals when the current file looks empty.
-  const bool primaryLooksEmpty =
-      stats.sessionCount == 0 && stats.totalReadingSeconds < 60 && stats.totalPagesTurned <= 1;
-  if (primaryLooksEmpty && data[0] == STATS_FILE_VERSION) {
-    BookReadingStats older;
-    const std::string prevName = statsFileNameForVersion(PREVIOUS_VERSIONED_STATS_FILE_VERSION);
-    if (loadStatsFileNamed(cachePath, prevName, older)) {
-      const bool olderRicher =
-          older.totalReadingSeconds > stats.totalReadingSeconds || older.sessionCount > stats.sessionCount ||
-          older.totalPagesTurned > stats.totalPagesTurned;
-      if (olderRicher) {
-        LOG_DBG("STATS", "Recovering lifetime stats from %s (v6 was empty shell)", prevName.c_str());
-        const uint16_t progressMilli = stats.progressPercentMilli;
-        const uint32_t eta = stats.estimatedTimeLeftSeconds;
-        stats = older;
-        // Keep any progress/ETA captured by the brief v6 reopen.
-        if (progressMilli != 0xFFFF) {
-          stats.progressPercentMilli = progressMilli;
-        }
-        if (eta != 0 && stats.estimatedTimeLeftSeconds == 0) {
-          stats.estimatedTimeLeftSeconds = eta;
-        }
-        // Rewrite v6 so the next open does not re-hit this path.
-        stats.save(cachePath);
-      }
+  // Promote the richest found blob to the current versioned filename when the
+  // primary file is missing or a thin reopen shell (CrossInk v5 <-> Casper v6).
+  const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
+  BookReadingStats currentOnly;
+  const bool haveCurrent = loadStatsFileNamed(cachePath, currentName, currentOnly);
+  if (!haveCurrent || looksLikeEmptyShell(currentOnly) || isRicherStats(stats, currentOnly)) {
+    const bool sameTotals =
+        haveCurrent && currentOnly.totalReadingSeconds == stats.totalReadingSeconds &&
+        currentOnly.sessionCount == stats.sessionCount && currentOnly.totalPagesTurned == stats.totalPagesTurned &&
+        currentOnly.isCompleted == stats.isCompleted &&
+        currentOnly.progressPercentMilli == stats.progressPercentMilli &&
+        currentOnly.estimatedTimeLeftSeconds == stats.estimatedTimeLeftSeconds;
+    if (!sameTotals) {
+      ensureCacheDir(cachePath);
+      stats.save(cachePath);
+      LOG_DBG("STATS", "Wrote normalized %s under %s", currentName.c_str(), cachePath.c_str());
     }
   }
 
@@ -412,25 +615,54 @@ void BookReadingStats::save(const std::string& cachePath) const {
 }
 
 bool BookReadingStats::remove(const std::string& cachePath) {
-  const std::string statsFileName = statsFileNameForVersion(STATS_FILE_VERSION);
-  const std::string statsPath = cachePath + "/" + statsFileName;
+  if (cachePath.empty()) {
+    return true;
+  }
   bool ok = true;
-  if (Storage.exists(statsPath.c_str()) && !Storage.remove(statsPath.c_str())) {
-    LOG_ERR("STATS", "Could not delete %s", statsFileName.c_str());
-    ok = false;
-  }
 
-  const std::string previousStatsFileName = statsFileNameForVersion(PREVIOUS_VERSIONED_STATS_FILE_VERSION);
-  const std::string previousStatsPath = cachePath + "/" + previousStatsFileName;
-  if (Storage.exists(previousStatsPath.c_str()) && !Storage.remove(previousStatsPath.c_str())) {
-    LOG_ERR("STATS", "Could not delete %s", previousStatsFileName.c_str());
-    ok = false;
-  }
+  auto removeOne = [&](const std::string& fileName) {
+    const std::string path = cachePath + "/" + fileName;
+    if (!Storage.exists(path.c_str())) {
+      return;
+    }
+    if (!Storage.remove(path.c_str())) {
+      LOG_ERR("STATS", "Could not delete %s", fileName.c_str());
+      ok = false;
+    }
+  };
 
-  const std::string legacyStatsPath = cachePath + "/" + LEGACY_STATS_FILE_NAME;
-  if (Storage.exists(legacyStatsPath.c_str()) && !Storage.remove(legacyStatsPath.c_str())) {
-    LOG_ERR("STATS", "Could not delete %s", LEGACY_STATS_FILE_NAME);
-    ok = false;
+  for (int v = static_cast<int>(STATS_FILE_VERSION); v >= 1; --v) {
+    removeOne(statsFileNameForVersion(static_cast<uint8_t>(v)));
+  }
+  removeOne(LEGACY_STATS_FILE_NAME);
+
+  // Catch any other stats*.bin left by forks / renames.
+  auto dir = Storage.open(cachePath.c_str());
+  if (dir && dir.isDirectory()) {
+    char name[96];
+    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+      const bool isDir = file.isDirectory();
+      file.getName(name, sizeof(name));
+      file.close();
+      if (isDir || !isStatsFileName(name)) continue;
+      removeOne(name);
+    }
+  }
+  if (dir) dir.close();
+
+  return ok;
+}
+
+bool BookReadingStats::removeForBook(const std::string& bookPath) {
+  constexpr size_t kMaxPaths = 4;
+  std::string paths[kMaxPaths];
+  size_t pathCount = 0;
+  collectBookCacheCandidates(bookPath, paths, pathCount, kMaxPaths);
+  bool ok = true;
+  for (size_t i = 0; i < pathCount; ++i) {
+    if (!remove(paths[i])) {
+      ok = false;
+    }
   }
   return ok;
 }

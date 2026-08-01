@@ -100,14 +100,16 @@ void checkPanic() {
     auto panicInfo = getPanicInfo(true);
     // Remove first so create always goes through FsDateTime callback (some hosts
     // keep a stale 12/31/2025 create time across O_TRUNC rewrites).
-    Storage.remove("/crash_report.txt");
-    auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
+    // Hidden diagnostics folder (same home as system/QR logs).
+    Storage.ensureDirectoryExists("/.casper-logs");  // CasperLogPaths::kDir — keep literal for lib isolation
+    Storage.remove("/.casper-logs/crash_report.txt");
+    auto file = Storage.open("/.casper-logs/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
       file.write(panicInfo.c_str(), panicInfo.size());
       file.close();
-      LOG_INF("SYS", "Dumped panic info to SD card");
+      LOG_INF("SYS", "Dumped panic info to /.casper-logs/crash_report.txt");
     } else {
-      LOG_ERR("SYS", "Failed to open crash_report.txt for writing");
+      LOG_ERR("SYS", "Failed to open /.casper-logs/crash_report.txt for writing");
     }
   }
 }

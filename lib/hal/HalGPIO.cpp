@@ -90,12 +90,59 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
     return nvsToDeviceType(cachedValue);
   }
 
-  // v0.1.3 freeink (566fce3): detectXteinkIsX3() only — no UltraChip promotion.
-  // True = X3 (UC8253); false = X4 (SSD1677). Persist so we do not re-probe every boot.
+  // X3 vs X4 I2C fingerprint only. Display-controller sibling (UC8253 vs UC8279
+  // / SSD1677 vs UC8179) is resolved in begin() via the live bus probe.
   const bool isX3 = freeink::detectXteinkIsX3();
-  LOG_INF("HW", "Xteink probe (0.1.3 path): isX3=%d", isX3 ? 1 : 0);
+  LOG_INF("HW", "Xteink I2C probe: isX3=%d", isX3 ? 1 : 0);
   writeNvsDeviceValue(NVS_KEY_DEV_CACHED, isX3 ? NvsDeviceValue::X3 : NvsDeviceValue::X4);
   return isX3 ? HalGPIO::DeviceType::X3 : HalGPIO::DeviceType::X4;
+}
+
+const char* displayControllerName(BoardConfig::DisplayController c) {
+  switch (c) {
+    case BoardConfig::DisplayController::SSD1677:
+      return "SSD1677";
+    case BoardConfig::DisplayController::UC8253:
+      return "UC8253";
+    case BoardConfig::DisplayController::UC8279:
+      return "UC8279";
+    case BoardConfig::DisplayController::UC8179:
+      return "UC8179";
+    case BoardConfig::DisplayController::ED2208:
+      return "ED2208";
+    case BoardConfig::DisplayController::LgfxEpd:
+      return "LgfxEpd";
+    case BoardConfig::DisplayController::IT8951:
+      return "IT8951";
+    default:
+      return "unknown";
+  }
+}
+
+// Pick board profile + UltraChip sibling when the bus probe confirms it.
+// Logs VER/FLG so serial boot can tell old UC8253 glass from new UC8279 glass.
+void selectBoardAndPanelController(bool isX3) {
+  if (isX3) {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3);  // default UC8253
+    uint8_t ver[5] = {};
+    uint8_t flg = 0;
+    const freeink::X3DisplayVerdict v = freeink::detectX3DisplayController(ver, &flg);
+    LOG_INF("HW", "X3 panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", ver[0], ver[1], ver[2],
+            ver[3], ver[4], flg, static_cast<unsigned>(v));
+    if (v == freeink::X3DisplayVerdict::Uc8279Confirmed) {
+      BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+      LOG_INF("HW", "promoted UC8253 -> UC8279 (new-batch panel)");
+    } else {
+      LOG_INF("HW", "panel controller UC8253 (classic / probe not UC8279)");
+    }
+  } else {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX4);  // default SSD1677
+    if (freeink::applyXteinkDisplayController()) {
+      LOG_INF("HW", "promoted SSD1677 -> UC8179 (new-batch panel)");
+    } else {
+      LOG_INF("HW", "panel controller SSD1677 (classic / probe not UC8179)");
+    }
+  }
 }
 
 }  // namespace
@@ -108,10 +155,10 @@ void HalGPIO::begin() {
 #else
   _deviceType = detectDeviceTypeWithFingerprint();
 #endif
-  // Match Casper v0.1.3: classic X3=UC8253 / X4=SSD1677 only (freeink @ 566fce3).
-  BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
-  LOG_INF("HW", "Board=%s displayController=%u (v0.1.3 freeink pin)", BoardConfig::ACTIVE.name,
-          static_cast<unsigned>(BoardConfig::ACTIVE.displayController));
+  selectBoardAndPanelController(deviceIsX3());
+  LOG_INF("HW", "Board=%s displayController=%u (%s)", BoardConfig::ACTIVE.name,
+          static_cast<unsigned>(BoardConfig::ACTIVE.displayController),
+          displayControllerName(BoardConfig::ACTIVE.displayController));
 
   SPI.begin(EPD_SCLK, SPI_MISO, EPD_MOSI, EPD_CS);
 
@@ -174,6 +221,7 @@ void HalGPIO::setSharedConfirmPowerShortPressEmitsPower(const bool enabled) {
 
 bool HalGPIO::isXteinkDevice() const {
   return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3 ||
+         BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3Uc8279 ||
          BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4;
 }
 
@@ -243,18 +291,31 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
 
   const bool usbConnected = isUsbConnected();
 
+  // Real deep-sleep exit (X3, and X4 while on USB — latch stays powered).
   if (resetReason == ESP_RST_DEEPSLEEP &&
       (wakeupCause == ESP_SLEEP_WAKEUP_GPIO || wakeupCause == ESP_SLEEP_WAKEUP_EXT1)) {
     return WakeupReason::PowerButton;
   }
+  // X4 on battery: GPIO13 power latch cuts MCU power in sleep, so wake is a
+  // cold ESP_RST_POWERON (not DEEPSLEEP). Without USB that is still a power-
+  // button wake and must QuickResume like v0.1.3 — not Splash/"reboot".
+  // Flash/USB paths below keep sticky lastSleepFromReader from auto-opening a book.
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) {
     return WakeupReason::PowerButton;
   }
-  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_UNKNOWN && usbConnected) {
+#ifdef ESP_RST_USB
+  // USB-Serial/JTAG download reset (common after esptool on ESP32-C3).
+  if (resetReason == ESP_RST_USB) {
+    return WakeupReason::AfterFlash;
+  }
+#endif
+  if (usbConnected && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED &&
+      (resetReason == ESP_RST_UNKNOWN || resetReason == ESP_RST_SW)) {
     return WakeupReason::AfterFlash;
   }
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
     return WakeupReason::AfterUSBPower;
   }
+  // Brownout recovery, unknown, etc. → cold boot (not sleep wake).
   return WakeupReason::Other;
 }

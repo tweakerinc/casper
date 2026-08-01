@@ -1169,7 +1169,8 @@ int BaseTheme::systemStatusSideReserve(const GfxRenderer& renderer) const {
   return reserve;
 }
 
-void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const char* previewTime) const {
+void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const char* previewTime,
+                                    const bool forceBatteryWarningPreview) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -1199,6 +1200,15 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
       }
     }
   }
+
+  // Battery Warning text when SoC ≤ threshold (or forced in Status Bar preview).
+  // Drawn in the slot that holds SYS_SLOT_BATTERY_WARNING (default Middle).
+  const int warnThr = SETTINGS.batteryWarningThresholdPercent();
+  const uint16_t battPctLive = powerManager.getBatteryPercentage();
+  const bool showBatteryWarning =
+      forceBatteryWarningPreview || (warnThr > 0 && static_cast<int>(battPctLive) <= warnThr);
+  const int warnPctShow =
+      forceBatteryWarningPreview ? (warnThr > 0 ? warnThr : 15) : static_cast<int>(battPctLive);
 
   auto drawClockAt = [&](int align) {
     if (timeText == nullptr || timeText[0] == '\0') return;
@@ -1231,16 +1241,31 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
       groupW = pctW;
     }
     if (align == 2) {
-      // Right: group flush right.
       const int iconX = showIcon ? (rightX - battW) : (rightX - battW);
       drawBatteryRight(renderer, Rect{iconX, batteryY, battW, battH}, mode);
     } else if (align == 1) {
-      // Middle: center the group.
       const int iconX = centerX - groupW / 2;
       drawBatteryLeft(renderer, Rect{iconX, batteryY, battW, battH}, mode);
     } else {
       drawBatteryLeft(renderer, Rect{leftX, batteryY, battW, battH}, mode);
     }
+  };
+
+  auto drawBatteryWarningAt = [&](int align) {
+    if (!showBatteryWarning || warnPctShow < 0) return;
+    char warnBuf[48];
+    // "Battery 15% · Charge Soon"
+    snprintf(warnBuf, sizeof(warnBuf), "Battery %d%% · %s", warnPctShow, tr(STR_CHARGE_SOON));
+    constexpr int kFont = SMALL_FONT_ID;
+    const int lineH = renderer.getLineHeight(kFont);
+    const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineH) / 2);
+    const int maxW = std::max(40, (screenW / 2) - 16);
+    const std::string vis = renderer.truncatedText(kFont, warnBuf, maxW);
+    const int tw = renderer.getTextWidth(kFont, vis.c_str());
+    int textX = centerX - tw / 2;
+    if (align == 0) textX = leftX;
+    else if (align == 2) textX = rightX - tw;
+    renderer.drawText(kFont, textX, textY, vis.c_str());
   };
 
   auto drawSlot = [&](uint8_t content, int align) {
@@ -1249,12 +1274,25 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
       drawBatteryAt(align);
     } else if (content == S::SYS_SLOT_CLOCK) {
       drawClockAt(align);
+    } else if (content == S::SYS_SLOT_BATTERY_WARNING) {
+      // In Status Bar settings preview always paint the sample; live only when low.
+      // When force preview and this slot is empty of warning placement, still
+      // paint so user sees layout (handled by slot assignment + force flag).
+      if (forceBatteryWarningPreview || showBatteryWarning) {
+        drawBatteryWarningAt(align);
+      }
     }
   };
 
   drawSlot(SETTINGS.systemStatusBarLeft, 0);
   drawSlot(SETTINGS.systemStatusBarMiddle, 1);
   drawSlot(SETTINGS.systemStatusBarRight, 2);
+
+  // Settings preview: if no slot has Battery Warning yet, sample it in Middle
+  // so the user still sees the message while configuring.
+  if (forceBatteryWarningPreview && !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY_WARNING)) {
+    drawBatteryWarningAt(/*align=*/1);
+  }
 }
 
 void BaseTheme::drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const {

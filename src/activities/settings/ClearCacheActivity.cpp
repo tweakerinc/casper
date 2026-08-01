@@ -9,6 +9,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/UiGhostPolicy.h"
 
 void ClearCacheActivity::onEnter() {
   Activity::onEnter();
@@ -47,13 +48,13 @@ void ClearCacheActivity::render(RenderLock&&) {
 
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
   if (state == CLEARING) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_CLEARING_CACHE));
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -67,7 +68,7 @@ void ClearCacheActivity::render(RenderLock&&) {
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -78,7 +79,7 @@ void ClearCacheActivity::render(RenderLock&&) {
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 }

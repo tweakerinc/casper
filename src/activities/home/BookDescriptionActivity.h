@@ -45,7 +45,7 @@ class BookDescriptionActivity final : public Activity {
   void drawScrollBar(int totalLines) const;
   int pageStep() const;
   int rowHeight(const Line& line) const;
-  // Large multi-line book title under top chrome (fills most of the width).
+  // Compact book title under top chrome (1–2 lines, body starts below with gap).
   void layoutTitleBlock(int pageWidth);
   void drawTitleBlock(int pageWidth) const;
 

@@ -3,6 +3,7 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Txt.h>
@@ -15,6 +16,7 @@
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#include "util/SleepChromeIcon.h"
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
@@ -332,9 +334,14 @@ void SleepActivity::renderCoverSleepScreen() const {
 }
 
 void SleepActivity::renderLastScreenSleepScreen() const {
-  const auto pageHeight = renderer.getScreenHeight();
-  renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  // Keep the current page on-panel and only add a small ink-only moon in the
+  // top status-bar row (centered between the left/right chrome slots — usually
+  // battery and clock). No white plate, so it does not cover page glyphs.
+  // Both devices: differential FAST only (moon ink delta) — no HALF scrub flash.
+  // Do not use displayGrayscaleBase here: AA-pre-BW mid is greyscale preconditioning
+  // and leaves white muddy when no grey planes follow (v0.1.3 used plain FAST).
+  SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 void SleepActivity::renderBlankSleepScreen() const {

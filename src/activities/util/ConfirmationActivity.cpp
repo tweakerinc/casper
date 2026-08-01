@@ -1,4 +1,5 @@
 #include "ConfirmationActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <I18n.h>
 
@@ -55,7 +56,7 @@ void ConfirmationActivity::render(RenderLock&& lock) {
 
   if (confirmPopup.processRender(renderer, mappedInput)) return;
 
-  renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void ConfirmationActivity::loop() {

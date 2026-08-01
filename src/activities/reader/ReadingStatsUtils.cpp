@@ -542,12 +542,54 @@ bool estimateTimeLeftFromProgress(const uint32_t totalReadingSeconds, const floa
   return outSeconds > 0;
 }
 
+bool estimateBookTimeLeftSeconds(const float remainingPages, const uint32_t secondsPerPage,
+                                 const uint32_t totalReadingSeconds, const float progressPercent,
+                                 uint32_t& outSeconds) {
+  outSeconds = 0;
+  uint32_t fromPages = 0;
+  uint32_t fromProgress = 0;
+  const bool hasPages = estimateTimeLeftFromPages(remainingPages, secondsPerPage, fromPages);
+  const bool hasProgress = estimateTimeLeftFromProgress(totalReadingSeconds, progressPercent, fromProgress);
+
+  if (!hasPages && !hasProgress) {
+    return false;
+  }
+  if (!hasProgress) {
+    outSeconds = fromPages;
+    return true;
+  }
+  if (!hasPages) {
+    outSeconds = fromProgress;
+    return true;
+  }
+
+  // Both available. Page density often undercounts remaining work (e.g. halfway
+  // through a long book with 12h spent but only ~1h page×pace left because the
+  // current chapter's page/progress ratio is sparse). When the two disagree by
+  // more than ~40%, trust progress-ratio (elapsed × remaining fraction).
+  const uint32_t hi = std::max(fromPages, fromProgress);
+  const uint32_t lo = std::min(fromPages, fromProgress);
+  if (lo * 5u < hi * 3u) {
+    // Strong disagreement — progress tracks multi-hour reality better.
+    outSeconds = fromProgress;
+  } else {
+    // Close enough: light blend, lean progress (2:1).
+    outSeconds = (fromPages + fromProgress * 2u) / 3u;
+  }
+  return outSeconds > 0;
+}
+
 uint32_t smoothTimeLeftSeconds(const uint32_t prevSeconds, const uint32_t rawSeconds) {
   if (rawSeconds == 0) {
     return prevSeconds;
   }
   if (prevSeconds == 0) {
     return rawSeconds;
+  }
+  // Large model correction (e.g. page×pace said 51m, progress-ratio says 6h):
+  // do not crawl at 3 min/step for hours — move most of the way to raw.
+  if (rawSeconds > prevSeconds * 2u + 600u || prevSeconds > rawSeconds * 2u + 600u) {
+    return (prevSeconds + rawSeconds * 3u) / 4u;
   }
   // Cap one-step move: max(3 minutes, ~6% of previous). Stops 13h ↔ 16h thrash
   // when chapter density or a single dwell sample jumps.

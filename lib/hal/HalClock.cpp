@@ -39,7 +39,8 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   return true;
 }
 
-bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute) const {
+bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
+                           uint8_t* weekday) const {
   if (!_available) return false;
 
   Rtc::DateTime dt;
@@ -48,10 +49,20 @@ bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t
   }
 
   year = dt.year;
+  // PCF8563 century bit can leave year in 19xx while the clock is still correct
+  // for the 2000s (hour/min still good). Normalize so weekday math and stats
+  // day-buckets do not bail on year < 2000.
+  if (year >= 1900 && year < 2000) {
+    year = static_cast<uint16_t>(2000 + (year % 100));
+  }
   month = dt.month;
   day = dt.day;
   hour = dt.hour;
   minute = dt.minute;
+  if (weekday) {
+    // Hardware weekday is 0=Sunday .. 6=Saturday (Rtc.h). Clamp bad BCD.
+    *weekday = static_cast<uint8_t>(dt.weekday % 7U);
+  }
 
   // Keep the time cache coherent with the full date-time poll.
   _cachedHour = dt.hour;

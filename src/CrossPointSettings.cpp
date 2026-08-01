@@ -292,12 +292,17 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperBuiltinFontsSlimMigrated"] = casperBuiltinFontsSlimMigrated;
   doc["casperButtonAxisMigrated"] = casperButtonAxisMigrated;
   doc["casperSpeedDefaultsMigrated"] = casperSpeedDefaultsMigrated;
+  doc["casperAntiGhost15Migrated"] = casperAntiGhost15Migrated;
+  doc["casperStatsThemeDisabledMigrated"] = casperStatsThemeDisabledMigrated;
+  doc["casperX4SpectralDefaultMigrated"] = casperX4SpectralDefaultMigrated;
   // System top chrome slots (also in SettingsList when present).
   doc["systemStatusBarLeft"] = systemStatusBarLeft;
   doc["systemStatusBarMiddle"] = systemStatusBarMiddle;
   doc["systemStatusBarRight"] = systemStatusBarRight;
   doc["systemBatteryDisplay"] = systemBatteryDisplay;
   doc["readerBatteryDisplay"] = readerBatteryDisplay;
+  doc["batteryWarning"] = batteryWarning;
+  doc["systemLogLevel"] = systemLogLevel;
   // XTC overlay placement — on-device Customize Reader UI only (not SettingsList).
   doc["xtcStatusBarMode"] = xtcStatusBarMode;
   // Long power button (also in SettingsList when present).
@@ -544,11 +549,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       clamp(doc["statusBarTimeLeft"] | (uint8_t)TIME_LEFT_BOOK, STATUS_BAR_TIME_LEFT_COUNT, TIME_LEFT_BOOK);
 
   // One-time Casper home migration: old SD settings often still have uiTheme=Lyra (1).
-  // X4 → Bare (clean cover home); X3 → Stats (stats chrome fits the taller panel).
+  // Default Penumbra on both (X3 clock face / X4 title+progress). Bare remains selectable.
   // After this runs once, the user can change theme freely in Settings.
   const uint8_t migrated = doc["casperHomeMigrated"] | (uint8_t)0;
   if (migrated == 0) {
-    uiTheme = gpio.deviceIsX4() ? static_cast<uint8_t>(BARE) : static_cast<uint8_t>(STATS);
+    uiTheme = static_cast<uint8_t>(PENUMBRA);
     statusBarProgressBar = BOOK_PROGRESS;
     statusBarProgressBarThickness = PROGRESS_BAR_THIN;
     statusBarBattery = 1;
@@ -558,21 +563,54 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     screenMargin = 10;
     casperHomeMigrated = 1;
     casperProgressBarOrderMigrated = 1;  // BOOK_PROGRESS already uses new enum values
+    casperStatsThemeDisabledMigrated = 1;
+    casperX4SpectralDefaultMigrated = 1;
     needsResave = true;
-    LOG_DBG("CPS", "casperHomeMigrated: defaulted uiTheme=%s, screenMargin=10",
-            gpio.deviceIsX4() ? "Bare" : "Stats");
+    LOG_DBG("CPS", "casperHomeMigrated: defaulted uiTheme=Penumbra, screenMargin=10");
   } else {
     casperHomeMigrated = 1;
   }
 
-  // Removed skins + Stats-Life merge into Stats (Bare / SPECTRAL stay).
-  // Enum values remain stable in JSON. Shelf + Stats Scroll parked.
+  // Removed skins → Bare. Stats / Stats-Life → Penumbra (replacement home face).
   if (uiTheme == MINIMAL || uiTheme == LYRA_CAROUSEL || uiTheme == LYRA || uiTheme == LYRA_3_COVERS ||
       uiTheme == ROUNDEDRAFF || uiTheme == CLASSIC || uiTheme == DASHBOARD_MAGAZINE || uiTheme == DASHBOARD_CARD ||
-      uiTheme == DASHBOARD_RECENTS || uiTheme == DASHBOARD_SCROLL || uiTheme == STATS_LIFE) {
-    uiTheme = STATS;
+      uiTheme == DASHBOARD_RECENTS || uiTheme == DASHBOARD_SCROLL) {
+    uiTheme = BARE;
     needsResave = true;
-    LOG_DBG("CPS", "Remapped removed/legacy/Stats-Life theme → Stats");
+    LOG_DBG("CPS", "Remapped removed/legacy theme → Bare");
+  }
+  if (uiTheme == STATS || uiTheme == STATS_LIFE) {
+    uiTheme = PENUMBRA;
+    needsResave = true;
+    LOG_DBG("CPS", "Remapped Stats theme → Penumbra");
+  }
+
+  // One-time: users already on Stats when we dropped FocusTheme from the binary.
+  const uint8_t statsDisabledMigrated = doc["casperStatsThemeDisabledMigrated"] | (uint8_t)0;
+  if (statsDisabledMigrated == 0) {
+    if (uiTheme == STATS || uiTheme == STATS_LIFE) {
+      uiTheme = PENUMBRA;
+      needsResave = true;
+      LOG_DBG("CPS", "casperStatsThemeDisabledMigrated: Stats → Penumbra");
+    }
+    casperStatsThemeDisabledMigrated = 1;
+    needsResave = true;
+  } else {
+    casperStatsThemeDisabledMigrated = 1;
+  }
+
+  // One-time X4: previous build remapped Stats→Bare; prefer Penumbra (progress face).
+  const uint8_t x4SpectralMigrated = doc["casperX4SpectralDefaultMigrated"] | (uint8_t)0;
+  if (x4SpectralMigrated == 0) {
+    if (gpio.deviceIsX4() && uiTheme == BARE) {
+      uiTheme = PENUMBRA;
+      needsResave = true;
+      LOG_DBG("CPS", "casperX4SpectralDefaultMigrated: X4 Bare → Penumbra");
+    }
+    casperX4SpectralDefaultMigrated = 1;
+    needsResave = true;
+  } else {
+    casperX4SpectralDefaultMigrated = 1;
   }
 
   // Ghost parked — fall back to Bare until the theme returns.
@@ -582,15 +620,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     LOG_DBG("CPS", "Remapped Ghost → Bare (theme parked)");
   }
 
-  // SPECTRAL is X3-only. X4 (or missing RTC path) falls back to Bare.
-  if (uiTheme == SPECTRAL && !gpio.deviceIsX3()) {
-    uiTheme = BARE;
-    needsResave = true;
-    LOG_DBG("CPS", "Remapped SPECTRAL → Bare (X3-only theme)");
-  }
-
-  // SPECTRAL: never keep a system-bar clock (home owns the clock).
-  if (uiTheme == SPECTRAL && systemStatusBarHas(SYS_SLOT_CLOCK)) {
+  // Penumbra: never keep a system-bar clock (X3 home clock / X4 home progress).
+  if (uiTheme == PENUMBRA && systemStatusBarHas(SYS_SLOT_CLOCK)) {
     stripSystemStatusBarClock();
     needsResave = true;
   }
@@ -657,6 +688,21 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperSpeedDefaultsMigrated = 1;
   }
 
+  // One-time: Anti-Ghosting default 10 → 15 (fewer HALF scrubs on X4; still cleans).
+  // Only rewrite installs still on the old default of 10 — leave 5/30/60/Never alone.
+  const uint8_t ag15Migrated = doc["casperAntiGhost15Migrated"] | (uint8_t)0;
+  if (ag15Migrated == 0) {
+    if (refreshFrequency == REFRESH_10) {
+      refreshFrequency = REFRESH_15;
+      needsResave = true;
+      LOG_DBG("CPS", "casperAntiGhost15Migrated: refreshFrequency 10 -> 15");
+    }
+    casperAntiGhost15Migrated = 1;
+    needsResave = true;
+  } else {
+    casperAntiGhost15Migrated = 1;
+  }
+
   // Clock is always top-center when shown. Collapse legacy Left (2) / invalid into Show.
   if (statusBarClock != STATUS_BAR_CLOCK_HIDE && statusBarClock != STATUS_BAR_CLOCK_SHOW) {
     statusBarClock = STATUS_BAR_CLOCK_SHOW;
@@ -695,6 +741,14 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
   if (!doc["readerBatteryDisplay"].isNull()) {
     readerBatteryDisplay = clampBattDisplay(doc["readerBatteryDisplay"] | (uint8_t)BATTERY_DISPLAY_ICON_PERCENT);
+  }
+  {
+    const uint8_t bw = doc["batteryWarning"] | batteryWarning;
+    batteryWarning = (bw < BATTERY_WARNING_COUNT) ? bw : static_cast<uint8_t>(BATTERY_WARNING_15);
+  }
+  {
+    const uint8_t sl = doc["systemLogLevel"] | systemLogLevel;
+    systemLogLevel = (sl < SYSTEM_LOG_LEVEL_COUNT) ? sl : static_cast<uint8_t>(SYSTEM_LOG_OFF);
   }
   if (hasSysSlots) {
     systemStatusBarLeft = clampSysSlot(doc["systemStatusBarLeft"] | systemStatusBarLeft);
@@ -826,22 +880,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     statusBarLowerMiddle = clampCorner(doc["statusBarLowerMiddle"] | statusBarLowerMiddle);
   }
 
-  // One-time: generic title slot (value 7) → Book Title or Chapter Title from legacy statusBarTitle.
+  // One-time: mark title-split migration done. Do not remap CORNER_BOOK_TITLE every
+  // boot (that rewrote modern slots whenever statusBarTitle was Chapter and the
+  // flag had not yet been flushed — "Resaving settings to update format" every wake).
   const uint8_t titleSplitMigrated = doc["casperStatusBarTitleSplitMigrated"] | (uint8_t)0;
   if (titleSplitMigrated == 0) {
-    const uint8_t mappedTitle =
-        (statusBarTitle == BOOK_TITLE) ? static_cast<uint8_t>(CORNER_BOOK_TITLE)
-                                       : static_cast<uint8_t>(CORNER_CHAPTER_TITLE);
-    uint8_t* slots[] = {&statusBarUpperLeft,   &statusBarUpperMiddle, &statusBarUpperRight,
-                        &statusBarLowerLeft,   &statusBarLowerMiddle, &statusBarLowerRight};
-    for (uint8_t* s : slots) {
-      // 7 was the only "Title" content before the split.
-      if (*s == CORNER_BOOK_TITLE) {
-        *s = mappedTitle;
-      }
-    }
     casperStatusBarTitleSplitMigrated = 1;
-    needsResave = true;
+    needsResave = true;  // persist flag once
   } else {
     casperStatusBarTitleSplitMigrated = 1;
   }
@@ -888,6 +933,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   return true;
 }
 
+bool CrossPointSettings::readingStatsTrackingEnabled() const {
+  // X4 has no RTC — session/pace/time-left stats are not meaningful. Never track.
+  if (!gpio.deviceIsX3()) return false;
+  return readingStatsEnabled != 0;
+}
+
 bool CrossPointSettings::statusBarCornerHas(const uint8_t content) const {
   if (content == CORNER_HIDE) return false;
   return statusBarUpperLeft == content || statusBarUpperMiddle == content || statusBarUpperRight == content ||
@@ -909,7 +960,7 @@ void CrossPointSettings::syncSystemStatusLegacyFromSlots() {
 
 void CrossPointSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content) {
   if (content >= SYSTEM_STATUS_SLOT_COUNT) content = SYS_SLOT_HIDE;
-  // SPECTRAL owns the clock on the home screen — never place it on the system bar.
+  // Penumbra owns the clock/progress on the home screen — never place clock on the system bar.
   if (content == SYS_SLOT_CLOCK && !systemStatusBarAllowsClock()) {
     content = SYS_SLOT_HIDE;
   }
@@ -924,7 +975,7 @@ void CrossPointSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t c
 }
 
 bool CrossPointSettings::systemStatusBarAllowsClock() const {
-  return static_cast<UI_THEME>(uiTheme) != UI_THEME::SPECTRAL;
+  return static_cast<UI_THEME>(uiTheme) != UI_THEME::PENUMBRA;
 }
 
 void CrossPointSettings::stripSystemStatusBarClock() {
@@ -932,6 +983,24 @@ void CrossPointSettings::stripSystemStatusBarClock() {
   if (systemStatusBarMiddle == SYS_SLOT_CLOCK) systemStatusBarMiddle = SYS_SLOT_HIDE;
   if (systemStatusBarRight == SYS_SLOT_CLOCK) systemStatusBarRight = SYS_SLOT_HIDE;
   syncSystemStatusLegacyFromSlots();
+}
+
+int CrossPointSettings::batteryWarningThresholdPercent() const {
+  switch (batteryWarning) {
+    case BATTERY_WARNING_5:
+      return 5;
+    case BATTERY_WARNING_10:
+      return 10;
+    case BATTERY_WARNING_15:
+      return 15;
+    case BATTERY_WARNING_20:
+      return 20;
+    case BATTERY_WARNING_25:
+      return 25;
+    case BATTERY_WARNING_OFF:
+    default:
+      return 0;
+  }
 }
 
 void CrossPointSettings::syncXtcStatusBarModeFromSlots() {
@@ -1061,6 +1130,7 @@ unsigned long CrossPointSettings::getSleepTimeoutMs() const {
 }
 
 int CrossPointSettings::getRefreshFrequency() const {
+  // Returns pages between maintenance turns, or REFRESH_COUNTDOWN_DISABLED (-1).
   switch (refreshFrequency) {
     case REFRESH_1:
       return 1;
@@ -1073,6 +1143,10 @@ int CrossPointSettings::getRefreshFrequency() const {
       return 15;
     case REFRESH_30:
       return 30;
+    case REFRESH_60:
+      return 60;
+    case REFRESH_NEVER:
+      return REFRESH_COUNTDOWN_DISABLED;
   }
 }
 

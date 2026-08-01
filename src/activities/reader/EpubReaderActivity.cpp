@@ -49,7 +49,9 @@
 #include "SdCardFontSystem.h"
 #include "util/BookmarkUtil.h"
 #include "util/DictionaryRegistry.h"
+#include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SystemLog.h"
 
 #include <cctype>
 #include <cstring>
@@ -684,6 +686,8 @@ void EpubReaderActivity::onEnter() {
     return;
   }
 
+  if (QrTimingLog::active()) QrTimingLog::line("EpubReaderActivity::onEnter start");
+
   ImageBlock::clearSessionRenderFailures();
   // Lazy image extraction: section builds only header-probe images, so the first
   // render of an image page pulls the file out of the EPUB through this hook.
@@ -696,6 +700,7 @@ void EpubReaderActivity::onEnter() {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   epub->setupCacheDir();
+  if (QrTimingLog::active()) QrTimingLog::line("after setupCacheDir");
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -718,6 +723,9 @@ void EpubReaderActivity::onEnter() {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
     }
   }
+  if (QrTimingLog::active()) {
+    QrTimingLog::line("after progress.bin spine=%d page=%d", currentSpineIndex, nextPageNumber);
+  }
   // We may want a better condition to detect if we are opening for the first time.
   // This will trigger if the book is re-opened at Chapter 0.
   if (currentSpineIndex == 0) {
@@ -728,14 +736,15 @@ void EpubReaderActivity::onEnter() {
     }
   }
 
-  // Per-book stats needed early for session/pace; keep on open path.
-  // Global stats, recents, bookmarks, clippings: after first page (see loop).
-  const uint32_t tStats = millis();
-  readingStats = BookReadingStats::loadForBook(epub->getPath());
-  LOG_DBG("ERS", "loadForBook stats %lums", static_cast<unsigned long>(millis() - tStats));
+  // Per-book stats deferred until after first ink (with recents/bookmarks).
+  // QR logs showed ~105ms on the open critical path; first page does not need
+  // lifetime totals. Session clock still starts now for accurate dwell.
   readingSessionStartMs = millis();
   lastPageTurnTime = readingSessionStartMs;  // dwell baseline for first forward page
   pendingOpenSideWork = true;
+  if (QrTimingLog::active()) {
+    QrTimingLog::line("stats deferred until after first ink");
+  }
 
   // Home Read sets open hints: FAST when greys settled, defer text AA for first ink.
   // Other entry paths (file browser, sleep resume) leave defaults → HALF + full AA.
@@ -750,14 +759,22 @@ void EpubReaderActivity::onEnter() {
   pendingDeferredOpenAa = false;
 
   if (openPreferFastFirstRefresh) {
-    // pagesUntilFullRefresh > 1 → FAST in displayWithRefreshCycle (not HALF clean).
+    // pagesUntilFullRefresh > 1 → FAST; Never (-1) stays disabled.
     const int freq = SETTINGS.getRefreshFrequency();
-    pagesUntilFullRefresh = freq > 1 ? freq : 2;
+    if (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
+      pagesUntilFullRefresh = CrossPointSettings::REFRESH_COUNTDOWN_DISABLED;
+    } else {
+      pagesUntilFullRefresh = freq > 1 ? freq : 2;
+    }
     LOG_DBG("ERS", "Open: FAST first page (greys settled) deferAa=%d", openDeferTextAa ? 1 : 0);
   } else {
-    // After multipass home / settings: force HALF so BW text does not differential-ghost.
-    pagesUntilFullRefresh = 1;
-    LOG_DBG("ERS", "Open: HALF first page deferAa=%d", openDeferTextAa ? 1 : 0);
+    // After multipass home / settings: force scrub (HALF) so BW text does not ghost.
+    pagesUntilFullRefresh = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+    LOG_DBG("ERS", "Open: scrub first page deferAa=%d", openDeferTextAa ? 1 : 0);
+  }
+  if (QrTimingLog::active()) {
+    QrTimingLog::line("EpubReader ready requestUpdate fast=%d defer_aa=%d", openPreferFastFirstRefresh ? 1 : 0,
+                      openDeferTextAa ? 1 : 0);
   }
 
   // Trigger first update
@@ -767,6 +784,17 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::runDeferredOpenSideWork() {
   if (!pendingOpenSideWork || !epub) return;
   pendingOpenSideWork = false;
+
+  // Per-book stats (was on open path; ~100ms SD). Safe after first ink.
+  {
+    const uint32_t tStats = millis();
+    readingStats = BookReadingStats::loadForBook(epub->getPath());
+    LOG_DBG("ERS", "loadForBook stats (deferred) %lums", static_cast<unsigned long>(millis() - tStats));
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("deferred loadForBook stats (+%lums)",
+                        static_cast<unsigned long>(millis() - tStats));
+    }
+  }
 
   // Last-opened + recents (SD writes) after first ink — not needed for page 1.
   APP_STATE.openEpubPath = epub->getPath();
@@ -783,6 +811,7 @@ void EpubReaderActivity::runDeferredOpenSideWork() {
 
 void EpubReaderActivity::onExit() {
   // Ensure recents/app-state still update if user leaves before first paint finished.
+  // (No-op when open path already ran this after first ink.)
   runDeferredOpenSideWork();
 
   Activity::onExit();
@@ -794,6 +823,9 @@ void EpubReaderActivity::onExit() {
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
+  // App-state first (small SPIFFS write). Book progress % save below is what Home
+  // needs for the ring; avoid a second APP_STATE write if deferred open already
+  // wrote openEpubPath this session.
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
 
@@ -802,9 +834,25 @@ void EpubReaderActivity::onExit() {
   // Apply any outstanding menu/dict pause so it never counts as reading time.
   // Cap the final page dwell by Session Time so leaving the book open idle
   // does not inflate totals (CrossInk-style idle threshold).
-  // Skip entirely when the user has disabled stat tracking.
+  // Session/lifetime analytics skip when tracking is off; progress % always updates
+  // so home (Penumbra ring) can show book position without analytics.
   if (statsPauseStartMs != 0UL) {
     resumeReadingStatsClock();
+  }
+  // Always persist progress % for home / status UI (independent of tracking toggle).
+  if (epub && !SETTINGS.readingStatsTrackingEnabled()) {
+    if (epub->getSpineItemsCount() > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
+      readingStats.setProgressPercent(100.0f);
+    } else {
+      const float newPct = getCurrentBookProgressPercent();
+      if (newPct >= 0.0f) {
+        readingStats.setProgressPercent(newPct);
+      }
+    }
+    if (readingStats.isCompleted) {
+      readingStats.setProgressPercent(100.0f);
+    }
+    readingStats.save(epub->getCachePath());
   }
   if (SETTINGS.readingStatsTrackingEnabled() && epub && readingSessionStartMs != 0) {
     const unsigned long nowMs = millis();
@@ -873,8 +921,11 @@ void EpubReaderActivity::onExit() {
       const uint32_t secPerPage =
           estimateSecondsPerPage(readingStats.avgSecondsPerForwardPage, readingStats.paceSampleCount,
                                  readingStats.totalReadingSeconds, readingStats.totalPagesTurned);
+      // Prefer progress-ratio when page×pace undercounts (common mid-book).
+      const float progPct = (bookProg >= 0.0f && bookProg <= 1.0f) ? (bookProg * 100.0f) : -1.0f;
       uint32_t est = 0;
-      if (estimateTimeLeftFromPages(remainingPages, secPerPage, est)) {
+      if (estimateBookTimeLeftSeconds(remainingPages, secPerPage, readingStats.totalReadingSeconds, progPct,
+                                      est)) {
         readingStats.estimatedTimeLeftSeconds =
             smoothTimeLeftSeconds(readingStats.estimatedTimeLeftSeconds, est);
       } else {
@@ -1202,7 +1253,7 @@ void EpubReaderActivity::openBookStats() {
     const uint32_t secPerPage = estimateSecondsPerPage(readingStats.avgSecondsPerForwardPage,
                                                        readingStats.paceSampleCount, liveTotal,
                                                        readingStats.totalPagesTurned);
-    hasEst = estimateTimeLeftFromPages(remainingPages, secPerPage, estLeft);
+    hasEst = estimateBookTimeLeftSeconds(remainingPages, secPerPage, liveTotal, bookProgress, estLeft);
   }
   const GlobalReadingStats aggregated = GlobalReadingStats::loadAggregated(globalReadingStats);
   pauseReadingStatsClock();
@@ -2148,6 +2199,10 @@ void EpubReaderActivity::leaveReaderToHome() {
   if (tryStartAutoKoUpload()) {
     return;
   }
+  // Prefer PopToHome over a fresh HomeActivity. Drain residual Back edges so
+  // Home does not immediately open Menu on the same physical release.
+  (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
+  (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
   onGoHome();
 }
 
@@ -2906,6 +2961,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
   const int fontId = SETTINGS.getReaderFontId();
+  // One SD-friendly line per page (buffered; no open per turn unless flush due).
+  const auto logPageTiming = [this, t0](const char* pathTag) {
+    SystemLog::logTimed(
+        "PAGE", millis() - t0, "%s spine=%d page=%d aa=%u fre=%u", pathTag, currentSpineIndex,
+        section ? section->currentPage : -1, static_cast<unsigned>(SETTINGS.textAntiAliasing),
+        static_cast<unsigned>(ESP.getFreeHeap()));
+  };
 
   // The image pixel-cache RAM slot lives for exactly one page render (it feeds
   // the BW double-refresh and every grayscale band pass); release it on every
@@ -3005,6 +3067,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             static_cast<unsigned long>(wall), static_cast<unsigned long>(tBwRender - tPrewarm),
             static_cast<unsigned long>(tDisplay - tBwRender), openPreferFastFirstRefresh ? 1 : 0,
             openDeferTextAa ? 1 : 0, skipTextAaThisFrame ? 1 : 0);
+    if (QrTimingLog::active()) {
+      QrTimingLog::line(
+          "FIRST_INK readable (bw_render=%lums display=%lums) fast=%d defer_aa=%d aa_skipped=%d",
+          static_cast<unsigned long>(tBwRender - tPrewarm), static_cast<unsigned long>(tDisplay - tBwRender),
+          openPreferFastFirstRefresh ? 1 : 0, openDeferTextAa ? 1 : 0, skipTextAaThisFrame ? 1 : 0);
+      QrTimingLog::end("first_ink");
+    }
+    SystemLog::logTiming(
+        "ERS", "FIRST_INK wall=%lums bw_render=%lums display=%lums fast=%d defer_aa=%d aa_skip=%d",
+        static_cast<unsigned long>(wall), static_cast<unsigned long>(tBwRender - tPrewarm),
+        static_cast<unsigned long>(tDisplay - tBwRender), openPreferFastFirstRefresh ? 1 : 0,
+        openDeferTextAa ? 1 : 0, skipTextAaThisFrame ? 1 : 0);
   }
   if (skipTextAaThisFrame) {
     openDeferTextAa = false;
@@ -3095,6 +3169,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               "wait=%lums gray_write=%lums gray_display=%lums cleanup=%lums total=%lums (planes buffered: %d)",
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayRender - tDisplay, tWait - tGrayRender,
               tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
+      logPageTiming(msbPlaneBuf ? "tiled_async2" : "tiled_async1");
     } else {
       // Per-strip scratch tier: blocking panels (X3) and the OOM fallback.
       // The strip writes below need the panel idle, so wait out any pending
@@ -3110,6 +3185,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           // update diffs against stale contents.
           renderer.cleanupGrayscaleWithFrameBuffer();
         }
+        logPageTiming("tiled_oom");
       } else {
         // Bands may be streamed in any order: X4 windows each via setRamArea,
         // X3 via PTL.
@@ -3151,6 +3227,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                 "gray_msb=%lums gray_display=%lums cleanup=%lums total=%lums",
                 tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayLsb - tDisplay, tGrayMsb - tGrayLsb,
                 tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay, tEnd - t0);
+        logPageTiming("tiled");
       }
     }
   } else {
@@ -3164,6 +3241,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         const auto tEnd = millis();
         LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
                 tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
+        logPageTiming("bw_store_fail");
         return;
       }
       const auto tBwStore = millis();
@@ -3198,12 +3276,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               "gray_lsb=%lums gray_msb=%lums gray_display=%lums bw_restore=%lums total=%lums",
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tBwStore - tDisplay, tGrayLsb - tBwStore,
               tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tBwRestore - tGrayDisplay, tEnd - t0);
+      logPageTiming("fallback_gray");
     } else {
       // No text AA and no images: BW frame already displayed above, no grayscale
       // to render, so no save/restore.
       const auto tEnd = millis();
       LOG_DBG("ERS", "Page render: prewarm=%lums bw_render=%lums display=%lums total=%lums", tPrewarm - t0,
               tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
+      logPageTiming("bw_only");
     }
   }
 }
@@ -3259,7 +3339,15 @@ bool EpubReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, const 
   }
 
   uint32_t seconds = 0;
-  if (!estimateTimeLeftFromPages(remainingPages, secPerPage, seconds)) {
+  if (bookEstimate) {
+    // Book ETA: blend page×pace with progress-ratio so mid-book doesn't show
+    // "51m left" after 12h of reading at ~50% (page density undercounts).
+    if (!estimateBookTimeLeftSeconds(remainingPages, secPerPage, liveTotalSeconds, bookProg * 100.0f,
+                                     seconds)) {
+      snprintf(buf, len, "%s", tr(STR_TIME_LEFT_CALCULATING));
+      return true;
+    }
+  } else if (!estimateTimeLeftFromPages(remainingPages, secPerPage, seconds)) {
     snprintf(buf, len, "%s", tr(STR_TIME_LEFT_CALCULATING));
     return true;
   }

@@ -1,4 +1,5 @@
 #include "BookStatsActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <I18n.h>
 
@@ -318,7 +319,7 @@ void BookStatsActivity::render(RenderLock&&) {
     renderNoRtcCombinedStatsPage(renderer, &mappedInput, bookTitle, stats, progressPercent, hasEstimatedTimeLeft,
                                  estimatedTimeLeftSeconds, globalStats,
                                  showAllDevicesStats ? &allDevicesStats : nullptr, true);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -338,5 +339,5 @@ void BookStatsActivity::render(RenderLock&&) {
       renderEditBookDatesPage(renderer, &mappedInput, bookTitle, stats, selectedEditField, true);
       break;
   }
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

@@ -1,4 +1,5 @@
 #include "OtaUpdateActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -177,7 +178,7 @@ void OtaUpdateActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, top + height + metrics.verticalSpacing, tr(STR_RESTARTING_HINT));
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void OtaUpdateActivity::runUpdateInstall() {

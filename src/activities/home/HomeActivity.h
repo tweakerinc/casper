@@ -32,7 +32,7 @@ class HomeActivity final : public Activity {
   // Used to avoid stacking multipass flashes from cover-gen retries / path-only updates.
   bool coverGrayOnPanel = false;
   // uiTheme value that last completed a successful cover multipass. Theme switch
-  // (Stats ↔ Bare / SPECTRAL) must not settled-skip with the old greys/layout.
+  // (Stats ↔ Bare / Penumbra) must not settled-skip with the old greys/layout.
   int paintedUiTheme = -1;
   // storeBwBuffer OOM / aborted multipass: retry greys without thrashing every frame.
   bool coverGrayNeedsRetry = false;
@@ -63,16 +63,33 @@ class HomeActivity final : public Activity {
   // Minimal/Dashboard: direct front-button actions + optional popup menu.
   bool minimalMenuOpen = false;
   bool minimalSuppressInitialFrontRelease = false;
+  // After return from reader/Settings: ignore short Back→Menu for a short window so
+  // a second mash of Back does not open the in-home menu (feels like "need 2 Backs").
+  unsigned long suppressMenuBackUntilMs = 0;
   // Long-press Read (BTN_RIGHT) opens the same book-action menu as Recent Books.
   bool readLongPressFired = false;
   // Long-press Menu (BTN_BACK) opens Settings.
   bool menuLongPressFired = false;
   // Stats: side Left/Right toggled under-box title ↔ lifetime.
   bool forceStatsUnderBoxRepaint = false;
-  // SPECTRAL: windowed digit-only (or clock-block) refresh — no full-frame flash.
-  bool forceSPECTRALClockRepaint = false;
+  // Penumbra (X3): windowed digit-only (or clock-block) refresh — no full-frame flash.
+  bool forcePenumbraClockRepaint = false;
   // Last hero time string drawn on panel ("H:MM"); used for minute-change detect.
-  char SPECTRALLastDrawnTime[8] = "";
+  char penumbraLastDrawnTime[8] = "";
+  // Penumbra Recents under-panel list focus (independent of upper "last read" book).
+  int penumbraRecentsFocus = 0;
+  // After one HALF (white baseline) this session, further full-frame Penumbra
+  // paints use FAST (~0.45s on X3) instead of HALF (~3.2s). Reader return used
+  // to always HALF and felt frozen / multi-pressy.
+  bool penumbraHalfBaselineDone = false;
+
+ public:
+  // After onEnter when seeding Home under the reader (QR/cold open): mark state
+  // so PopToHome onResume takes the snappy FAST path instead of a new-Home HALF
+  // multipass (~5s on X3). Does not paint.
+  void markSnappyResumeReady();
+
+ private:
   // Book-action menu (etc.) dismissed: must paint home over the child FB once.
   bool forceHomeShellRepaint = false;
   int minimalMenuIndex = 0;
@@ -128,6 +145,16 @@ class HomeActivity final : public Activity {
   int focusedRecentIndex() const;
   void loadFocusedRecentStats();
   void shiftRecentFocus(int delta);
+  // Penumbra Recents under-panel: book rows drawn (capped by theme, max 3).
+  int penumbraRecentsListCount() const;
+  // Focus slots: books (+ View All on X3 Recents under-panel).
+  int penumbraRecentsFocusCount() const;
+  // True when focus is on X3 "View All" (not a book).
+  bool penumbraViewAllFocused() const;
+  // Step list focus within the focus window (wraps).
+  void stepPenumbraRecentsFocus(int delta);
+  // Keep penumbraRecentsFocus in range after reloads / theme changes.
+  void clampPenumbraRecentsFocus();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
@@ -159,7 +186,7 @@ class HomeActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool isHomeActivity() const override { return true; }
-  // Power long-press FORCE_REFRESH: re-run cover grayscale multipass (plain HALF
-  // leaves 2-bit midtones black and the settled-skip would never repaint greys).
+  // Power long-press FORCE_REFRESH: full redraw with HALF scrub (Penumbra) or
+  // cover multipass (Bare). Must not FAST-only — that leaves grey mud on glass.
   bool handleForcedRefresh() override;
 };

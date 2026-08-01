@@ -64,11 +64,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // System top chrome (home/settings headers): Left / Middle / Right slots.
-  // Battery and Clock may each appear in at most one slot.
+  // Battery, Clock, and Battery Warning may each appear in at most one slot.
   enum SYSTEM_STATUS_SLOT {
     SYS_SLOT_HIDE = 0,
     SYS_SLOT_BATTERY = 1,
     SYS_SLOT_CLOCK = 2,
+    SYS_SLOT_BATTERY_WARNING = 3,  // "Battery N% · Charge Soon" when SoC ≤ threshold
     SYSTEM_STATUS_SLOT_COUNT
   };
 
@@ -79,6 +80,27 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     BATTERY_DISPLAY_PERCENT = 1,       // "NN%" text only
     BATTERY_DISPLAY_ICON_PERCENT = 2,  // icon + percent (default when battery is enabled)
     BATTERY_DISPLAY_MODE_COUNT
+  };
+
+  // Low-battery message threshold (Display → Status Bar → nest under Battery Warning slot).
+  // When SoC ≤ threshold, shows "Battery N% · Charge Soon" in the slot that holds
+  // SYS_SLOT_BATTERY_WARNING (default Middle on Bare/Penumbra).
+  enum BATTERY_WARNING {
+    BATTERY_WARNING_OFF = 0,
+    BATTERY_WARNING_5 = 1,
+    BATTERY_WARNING_10 = 2,
+    BATTERY_WARNING_15 = 3,
+    BATTERY_WARNING_20 = 4,
+    BATTERY_WARNING_25 = 5,
+    BATTERY_WARNING_COUNT
+  };
+
+  // SD system performance log (System → System Log). See util/SystemLog.
+  enum SYSTEM_LOG_LEVEL {
+    SYSTEM_LOG_OFF = 0,
+    SYSTEM_LOG_TIMING = 1,   // boot, sleep/wake, open, page turn, network, heap
+    SYSTEM_LOG_VERBOSE = 2,  // + activity enter/exit and extra detail
+    SYSTEM_LOG_LEVEL_COUNT
   };
 
   // Reader time-left estimate (legacy single setting; also derived from corner slots).
@@ -197,15 +219,21 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SLEEP_TIMEOUT_COUNT
   };
 
-  // E-ink refresh frequency (pages between full refreshes)
+  // E-ink page maintenance interval (pages between soft reinforce / scrub).
+  // Append-only — saved JSON indices must stay stable.
   enum REFRESH_FREQUENCY {
     REFRESH_1 = 0,
     REFRESH_5 = 1,
     REFRESH_10 = 2,
     REFRESH_15 = 3,
     REFRESH_30 = 4,
+    REFRESH_60 = 5,     // YACP-style extended interval
+    REFRESH_NEVER = 6,  // FAST only; required cleanups still scrub
     REFRESH_FREQUENCY_COUNT
   };
+  // Countdown sentinels used by ReaderUtils::displayWithRefreshCycle.
+  static constexpr int REFRESH_COUNTDOWN_DISABLED = -1;
+  static constexpr int REFRESH_COUNTDOWN_FORCE_SCRUB = 0;
 
   // Short power button press actions
   enum SHORT_PWRBTN { IGNORE = 0, SLEEP = 1, PAGE_TURN = 2, FORCE_REFRESH = 3, FOOTNOTES = 4, SHORT_PWRBTN_COUNT };
@@ -243,7 +271,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // UI Theme (append-only — existing saved values must keep their numbers).
-  // Display names (english.yaml): Bare · Stats · Spectral (X3).
+  // Display names (english.yaml): Bare · Penumbra (X3 clock / X4 progress).
   enum UI_THEME {
     CLASSIC = 0,
     LYRA = 1,
@@ -263,22 +291,28 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     DASHBOARD_SCROLL = 11,   // was "Stats Scroll"
     // Stats: cover + book stats; side L/R toggles title ↔ lifetime (was FOCUS / Stats-Life).
     STATS = 12,
-    // Spectral (was Clockface): X3-only large home clock + under-panel.
-    // JSON value 13 stable. Hidden on X4 picker; remapped to BARE on non-X3.
-    SPECTRAL = 13,
-    CLOCKFACE = SPECTRAL,  // legacy name
+    // Penumbra (was Spectral / Clockface): X3 clock + under-panel; X4 title + progress ring.
+    // JSON value 13 stable.
+    PENUMBRA = 13,
+    SPECTRAL = PENUMBRA,   // legacy name
+    CLOCKFACE = PENUMBRA,  // legacy name
     // Ghost: parked (enum kept for JSON stability; remapped to BARE on load).
     GHOST = 14,
   };
 
-  // Spectral home side-button actions (X3 Left/Right, X4 Up/Down via side map).
+  // Penumbra home side-button actions (X3 Left/Right, X4 Up/Down via side map).
   // Both sides same action → bidirectional (Left back / Right forward).
   // Only one side set → one-way cycle (Title→Stats→Lifetime, or newest→oldest).
-  enum SPECTRAL_SIDE_ACTION : uint8_t {
-    SPECTRAL_SIDE_RECENTS = 0,       // recent books (up to 4)
-    SPECTRAL_SIDE_PANEL = 1,         // Title / Stats / Lifetime under-panel
-    SPECTRAL_SIDE_ACTION_COUNT = 2
+  enum PENUMBRA_SIDE_ACTION : uint8_t {
+    PENUMBRA_SIDE_RECENTS = 0,       // recent books (up to 4)
+    PENUMBRA_SIDE_PANEL = 1,         // Title / Stats / Lifetime under-panel
+    PENUMBRA_SIDE_ACTION_COUNT = 2,
+    // Legacy aliases
+    SPECTRAL_SIDE_RECENTS = PENUMBRA_SIDE_RECENTS,
+    SPECTRAL_SIDE_PANEL = PENUMBRA_SIDE_PANEL,
+    SPECTRAL_SIDE_ACTION_COUNT = PENUMBRA_SIDE_ACTION_COUNT
   };
+  using SPECTRAL_SIDE_ACTION = PENUMBRA_SIDE_ACTION;
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
@@ -294,7 +328,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // Sleep screen settings (Casper default: light logo wallpaper)
-  uint8_t sleepScreen = LIGHT;
+  // Factory default: Quick Resume (short power → sleep with QR wake screen).
+  uint8_t sleepScreen = QUICK_RESUME;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
@@ -318,14 +353,20 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBarLowerRight = CORNER_CHAPTER_PAGE_COUNTER;
   // Legacy reader clock show/hide (migrated into CORNER_CLOCK slot; kept for JSON/web).
   uint8_t statusBarClock = STATUS_BAR_CLOCK_SHOW;
-  // System top chrome slots (Display → Status Bar). Stats default: battery left, clock right.
-  uint8_t systemStatusBarLeft = SYS_SLOT_BATTERY;
-  uint8_t systemStatusBarMiddle = SYS_SLOT_HIDE;
-  uint8_t systemStatusBarRight = SYS_SLOT_CLOCK;
+  // System top chrome slots (Display → Status Bar). Bare/Penumbra: warning middle.
+  // Legacy factory (pre-Bare): battery left, clock right — migration may overwrite.
+  uint8_t systemStatusBarLeft = SYS_SLOT_HIDE;
+  uint8_t systemStatusBarMiddle = SYS_SLOT_BATTERY_WARNING;
+  uint8_t systemStatusBarRight = SYS_SLOT_HIDE;
   // When Battery is placed on the system bar: Icon / Percent / Icon + Percent.
   uint8_t systemBatteryDisplay = BATTERY_DISPLAY_ICON_PERCENT;
   // When Battery is placed in reader chrome (Customize Reader UI): same modes, independent.
   uint8_t readerBatteryDisplay = BATTERY_DISPLAY_ICON_PERCENT;
+  // Low-battery center message threshold (Bare/Penumbra default 15%).
+  uint8_t batteryWarning = BATTERY_WARNING_15;
+  // Field performance log on SD (/.casper-logs/). Off by default; Settings → Enable Logging
+  // turns on Timing capture (SystemLog + QR timing). Crash reports always write regardless.
+  uint8_t systemLogLevel = SYSTEM_LOG_OFF;
   // Derived from system status slots (synced on assign); kept for JSON/web + older readers.
   uint8_t systemClock = STATUS_BAR_CLOCK_SHOW;
   // Legacy single time-left mode (synced from corners when possible).
@@ -344,7 +385,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t extraParagraphSpacing = 1;
   // Off by default: AA greys are the main open/page-turn cost on e-ink.
   uint8_t textAntiAliasing = 0;
-  // Short power button click behaviour (Casper: sleep)
+  // Short power button click behaviour (Casper: enter sleep; screen mode defaults to Quick Resume)
   uint8_t shortPwrBtn = SLEEP;
   // Long power button press (held past getPowerButtonLongPressDuration); same SHORT_PWRBTN values.
   // Casper default: force full refresh (short remains sleep).
@@ -370,13 +411,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
       BTN_FUNC_BACK, BTN_FUNC_CONFIRM, BTN_FUNC_UP, BTN_FUNC_DOWN, BTN_FUNC_LEFT, BTN_FUNC_RIGHT};
   // Reader font settings
   uint8_t fontFamily = SOURCESERIF4;
-  uint8_t fontSize = SMALL;  // 12 pt Lexend Deca (Casper default)
+  uint8_t fontSize = MEDIUM;  // 14 pt Source Serif 4 (Casper default)
   uint8_t lineSpacing = NORMAL;
   uint8_t paragraphAlignment = LEFT_ALIGN;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
   // E-ink refresh frequency (default 15 pages)
-  uint8_t refreshFrequency = REFRESH_15;
+  uint8_t refreshFrequency = REFRESH_15;  // default Anti-Ghosting every 15 pages
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
@@ -400,16 +441,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Casper: open stock CrossPoint dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;
-  // UI Theme. Compile-time default Bare (typical X4). loadFromFile() sets
-  // first-boot defaults: X4 → Bare, X3 → Stats (see casperHomeMigrated).
-  uint8_t uiTheme = BARE;
-  // Spectral theme side buttons (X3 Left/Right; labels say Up/Down on X4 if offered).
+  // UI Theme. Factory default Penumbra on both X3 and X4 (fresh SD / no settings file).
+  // casperHomeMigrated still upgrades older saved themes once on load.
+  uint8_t uiTheme = PENUMBRA;
+  // Penumbra theme side buttons (X3 Left/Right; labels say Up/Down on X4).
   // Defaults: both Panel Scroll (Left = back, Right = forward through Title/Stats/Lifetime).
-  uint8_t spectralSideLeft = SPECTRAL_SIDE_PANEL;
-  uint8_t spectralSideRight = SPECTRAL_SIDE_PANEL;
-  // One-time migration: force Casper home chrome defaults once.
-  // Users can still change theme in Settings afterwards.
-  uint8_t casperHomeMigrated = 0;
+  // JSON keys remain spectralSideLeft/Right for saved-settings compatibility.
+  uint8_t spectralSideLeft = PENUMBRA_SIDE_PANEL;
+  uint8_t spectralSideRight = PENUMBRA_SIDE_PANEL;
+  // One-time migration: force Casper home chrome defaults once on old SD cards.
+  // Default 1 so a first save after factory defaults does not re-force Penumbra
+  // if the user already switched theme before reboot.
+  uint8_t casperHomeMigrated = 1;
   // One-time migration: force short=Sleep / long=ForceRefresh / long-press menu=Dictionary.
   uint8_t casperControlsMigrated = 0;
   // One-time migration: factory clock defaults (12h, UTC-7) + keep status-bar clock shown.
@@ -432,6 +475,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t casperButtonAxisMigrated = 0;
   // One-time: text AA + embedded style off (faster open / page turn defaults).
   uint8_t casperSpeedDefaultsMigrated = 0;
+  // One-time: bump Anti-Ghosting default 10 → 15 for existing installs still on 10.
+  uint8_t casperAntiGhost15Migrated = 0;
+  // One-time: Stats (FocusTheme) removed from firmware → Penumbra (legacy flag).
+  // Default 1: factory install is already post-migration.
+  uint8_t casperStatsThemeDisabledMigrated = 1;
+  // One-time: X4 Bare (after Stats drop) → Penumbra (title + progress face).
+  // Default 1 so first-boot users who choose Bare are not remapped on next load.
+  uint8_t casperX4SpectralDefaultMigrated = 1;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
@@ -474,8 +525,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t readingSessionIdleMinutes = 5;
   // When 1: record reading stats (default). When 0: no tracking; hide Reading Stats UI.
   // Existing on-disk stats are left alone (not deleted).
+  // X4 has no RTC — pace/session stats are unreliable; tracking is hard-disabled
+  // there (see readingStatsTrackingEnabled). Setting still persists for X3 / web.
   uint8_t readingStatsEnabled = 1;
-  bool readingStatsTrackingEnabled() const { return readingStatsEnabled != 0; }
+  // True only when tracking is enabled *and* the device can support it (X3).
+  bool readingStatsTrackingEnabled() const;
   static constexpr uint8_t MIN_SESSION_IDLE_MINUTES = 1;
   static constexpr uint8_t MAX_SESSION_IDLE_MINUTES = 30;
   // Short press Back goes to file browser instead of home (0 = disabled, 1 = enabled)
@@ -503,7 +557,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   static constexpr uint16_t POWER_BUTTON_WAKE_SHORT_MS = 10;
   static constexpr uint16_t POWER_BUTTON_WAKE_LONG_MS = 200;
-  static constexpr uint16_t POWER_BUTTON_LONG_PRESS_MS = 500;
+  // Long-press power (sleep / force refresh) — snappy threshold; scrub itself still
+  // takes ~1.5–3s on e-ink. Was 500ms and felt like multi-second holds with HALF lag.
+  static constexpr uint16_t POWER_BUTTON_LONG_PRESS_MS = 350;
 
   // Short-press / wake verification duration. Stays short when short action is SLEEP
   // so a quick tap wakes and re-sleeps correctly; longer otherwise.
@@ -512,7 +568,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
                                                                    : POWER_BUTTON_WAKE_LONG_MS;
   }
   uint16_t getPowerButtonWakeDuration() const { return getPowerButtonDuration(); }
-  // Hold threshold that distinguishes short vs long power press (~400-600 ms).
+  // Hold threshold that distinguishes short vs long power press.
   uint16_t getPowerButtonLongPressDuration() const { return POWER_BUTTON_LONG_PRESS_MS; }
   int getReaderFontId() const;
 
@@ -591,10 +647,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   void assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content);
   // Keep hideBatteryPercentage + systemClock in sync with the three slots.
   void syncSystemStatusLegacyFromSlots();
-  // Spectral draws a large home clock — system status bar clock placement is disabled.
+  // Penumbra draws a large home clock (X3) / progress face (X4) — system status bar clock disabled.
   bool systemStatusBarAllowsClock() const;
-  // Clear any SYS_SLOT_CLOCK placement (used when switching to Clockface).
+  // Clear any SYS_SLOT_CLOCK placement (used when switching to Penumbra).
   void stripSystemStatusBarClock();
+  // Battery Warning threshold percent (0 = Off).
+  int batteryWarningThresholdPercent() const;
 
   // Resolved text-rendering configuration for the Epub layout engine. The
   // viewport is renderer/orientation-derived, so the caller supplies it —

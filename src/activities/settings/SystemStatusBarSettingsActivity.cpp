@@ -18,6 +18,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Logical menu rows (visible set is rebuilt dynamically).
@@ -26,17 +27,19 @@ enum MenuItem {
   ITEM_MIDDLE,
   ITEM_RIGHT,
   ITEM_BATTERY_DISPLAY,  // nested under the slot that has Battery
+  ITEM_BATTERY_WARNING,  // threshold nested under the slot that has Battery Warning
   ITEM_CLOCK_FORMAT,
   ITEM_CLOCK_UTC_OFFSET,
   ITEM_CLOCK_SYNC,
   ITEM_ID_COUNT
 };
 
-// Slot content order for popup: Hide, Battery, Clock.
+// Slot content order for popup: Hide, Battery, Clock, Battery Warning.
 constexpr uint8_t kSlotContentOrder[] = {
     CrossPointSettings::SYS_SLOT_HIDE,
     CrossPointSettings::SYS_SLOT_BATTERY,
     CrossPointSettings::SYS_SLOT_CLOCK,
+    CrossPointSettings::SYS_SLOT_BATTERY_WARNING,
 };
 constexpr int kSlotContentOrderCount = static_cast<int>(sizeof(kSlotContentOrder) / sizeof(kSlotContentOrder[0]));
 
@@ -44,6 +47,7 @@ const StrId kSlotLabelByEnum[CrossPointSettings::SYSTEM_STATUS_SLOT_COUNT] = {
     StrId::STR_HIDE,
     StrId::STR_BATTERY,
     StrId::STR_CLOCK,
+    StrId::STR_BATTERY_WARNING,
 };
 
 constexpr int CLOCK_FORMAT_ITEMS = 2;
@@ -53,6 +57,26 @@ const StrId clockFormatNames[CLOCK_FORMAT_ITEMS] = {StrId::STR_CLOCK_FORMAT_24H,
 constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
 const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
     StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT};
+
+// Battery Warning thresholds (matches BATTERY_WARNING enum).
+constexpr int BATTERY_WARNING_ITEMS = CrossPointSettings::BATTERY_WARNING_COUNT;
+const char* batteryWarningValueLabel(uint8_t mode) {
+  switch (mode) {
+    case CrossPointSettings::BATTERY_WARNING_5:
+      return "5%";
+    case CrossPointSettings::BATTERY_WARNING_10:
+      return "10%";
+    case CrossPointSettings::BATTERY_WARNING_15:
+      return "15%";
+    case CrossPointSettings::BATTERY_WARNING_20:
+      return "20%";
+    case CrossPointSettings::BATTERY_WARNING_25:
+      return "25%";
+    case CrossPointSettings::BATTERY_WARNING_OFF:
+    default:
+      return I18N.get(StrId::STR_STATE_OFF);
+  }
+}
 
 // Dynamic visible menu: map list index → MenuItem.
 // Order: Left, [battery % / clock under Left], Middle, …, Right, …
@@ -134,6 +158,10 @@ void pushNestedForSlot(uint8_t slotContent) {
   if (slotContent == CrossPointSettings::SYS_SLOT_BATTERY) {
     pushVisible(ITEM_BATTERY_DISPLAY, true);
   }
+  if (slotContent == CrossPointSettings::SYS_SLOT_BATTERY_WARNING) {
+    // Threshold nests under whichever slot holds Battery Warning (L / M / R).
+    pushVisible(ITEM_BATTERY_WARNING, true);
+  }
   if (slotContent == CrossPointSettings::SYS_SLOT_CLOCK && halClock.isAvailable()) {
     pushClockItems(/*nested=*/true);
   }
@@ -149,7 +177,7 @@ void rebuildVisibleMenu() {
   pushVisible(ITEM_RIGHT);
   pushNestedForSlot(SETTINGS.systemStatusBarRight);
 
-  // SPECTRAL has no status-bar clock slot, but still needs format / offset / sync
+  // Penumbra has no status-bar clock slot, but still needs format / offset / sync
   // for the large home clock. Top-level when clock is not on the bar.
   if (halClock.isAvailable() && !SETTINGS.systemStatusBarAllowsClock() &&
       !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
@@ -203,6 +231,8 @@ StrId menuNameForItem(int item) {
       return StrId::STR_RIGHT;
     case ITEM_BATTERY_DISPLAY:
       return StrId::STR_BATTERY_DISPLAY;
+    case ITEM_BATTERY_WARNING:
+      return StrId::STR_BATTERY_WARNING;
     case ITEM_CLOCK_FORMAT:
       return StrId::STR_CLOCK_FORMAT;
     case ITEM_CLOCK_UTC_OFFSET:
@@ -298,7 +328,7 @@ void SystemStatusBarSettingsActivity::handleSelection() {
   if (isSlotItem(item)) {
     const int slotItem = item;
     uint8_t& field = slotFieldForItem(slotItem);
-    // SPECTRAL theme: large home clock owns the time — Clock is not a slot option.
+    // Penumbra theme: large home clock owns the time — Clock is not a slot option.
     const bool includeClock = halClock.isAvailable() && SETTINGS.systemStatusBarAllowsClock();
     const int currentDisplay = filteredDisplayIndex(field, includeClock);
     optionPopup.show(slotNameForItem(slotItem), slotOptionLabels(includeClock), currentDisplay,
@@ -323,6 +353,21 @@ void SystemStatusBarSettingsActivity::handleSelection() {
                          SETTINGS.systemBatteryDisplay = static_cast<uint8_t>(idx);
                          SETTINGS.saveToFile();
                        });
+      return;
+    }
+    case ITEM_BATTERY_WARNING: {
+      std::vector<std::string> labels;
+      labels.reserve(BATTERY_WARNING_ITEMS);
+      for (int i = 0; i < BATTERY_WARNING_ITEMS; i++) {
+        labels.emplace_back(batteryWarningValueLabel(static_cast<uint8_t>(i)));
+      }
+      const uint8_t cur =
+          SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
+      optionPopup.show(StrId::STR_BATTERY_WARNING, labels, cur, [this](int idx) {
+        if (idx < 0 || idx >= BATTERY_WARNING_ITEMS) return;
+        SETTINGS.batteryWarning = static_cast<uint8_t>(idx);
+        SETTINGS.saveToFile();
+      });
       return;
     }
     case ITEM_CLOCK_FORMAT:
@@ -363,7 +408,8 @@ void SystemStatusBarSettingsActivity::render(RenderLock&&) {
   } else {
     snprintf(previewTime, sizeof(previewTime), SETTINGS.clockFormat == 1 ? "12:34 PM" : "12:34");
   }
-  GUI.drawSystemStatusBar(renderer, metrics.topPadding, previewTime);
+  // Force Battery Warning sample in the preview so the user can see the center message.
+  GUI.drawSystemStatusBar(renderer, metrics.topPadding, previewTime, /*forceBatteryWarningPreview=*/true);
 
   // Title centered in the band between top chrome and the list (like Customize Reader UI).
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
@@ -400,6 +446,11 @@ void SystemStatusBarSettingsActivity::render(RenderLock&&) {
             const uint8_t mode =
                 SETTINGS.systemBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.systemBatteryDisplay : 0;
             return std::string(I18N.get(batteryDisplayNames[mode]));
+          }
+          case ITEM_BATTERY_WARNING: {
+            const uint8_t mode =
+                SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
+            return std::string(batteryWarningValueLabel(mode));
           }
           case ITEM_CLOCK_FORMAT: {
             const uint8_t fmt = SETTINGS.clockFormat < CLOCK_FORMAT_ITEMS ? SETTINGS.clockFormat : 0;
@@ -439,5 +490,5 @@ void SystemStatusBarSettingsActivity::render(RenderLock&&) {
     }
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

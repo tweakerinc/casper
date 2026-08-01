@@ -1,4 +1,5 @@
 #include "RecentBooksActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -231,5 +232,5 @@ void RecentBooksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

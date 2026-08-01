@@ -5,6 +5,7 @@
 
 #include <algorithm>
 
+#include "util/SystemLog.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -66,7 +67,14 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      const uint32_t tRender = millis();
       currentActivity->render(std::move(lock));
+      const uint32_t renderMs = millis() - tRender;
+      // HALF/full home paints are multi-second; flag only pathological hangs.
+      if (renderMs >= 8000) {
+        SystemLog::logCritical("RENDER", "slow %lums fre=%u", static_cast<unsigned long>(renderMs),
+                               static_cast<unsigned>(ESP.getFreeHeap()));
+      }
     }
 
     renderInProgress.store(false, std::memory_order_release);
@@ -280,11 +288,30 @@ void ActivityManager::goToSettings() {
 }
 
 void ActivityManager::goToFileBrowser(std::string path) {
-  replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
+  // Keep Home stacked (like Settings / Reader) so Back can FAST-resume Penumbra
+  // instead of allocating a new Home and paying HALF baseline (~1.8s on X4).
+  // Also push when Home is already under a parent (e.g. re-open Library).
+  const bool homeOnStack =
+      (currentActivity && currentActivity->isHomeActivity()) ||
+      std::any_of(stackActivities.begin(), stackActivities.end(),
+                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  if (homeOnStack) {
+    pushActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
+  } else {
+    replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
+  }
 }
 
 void ActivityManager::goToRecentBooks() {
-  replaceActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
+  const bool homeOnStack =
+      (currentActivity && currentActivity->isHomeActivity()) ||
+      std::any_of(stackActivities.begin(), stackActivities.end(),
+                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  if (homeOnStack) {
+    pushActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
+  } else {
+    replaceActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
+  }
 }
 
 void ActivityManager::goToBrowser() {
@@ -298,12 +325,40 @@ void ActivityManager::goToBrowser() {
 }
 
 void ActivityManager::goToReader(std::string path) {
-  // Phase 2: keep Home alive under the reader so Back can resume it (no full rebuild).
-  if (currentActivity && currentActivity->isHomeActivity()) {
+  // Keep Home (and Library/Recents above it) on the stack so Back → goHome can
+  // PopToHome with a snappy FAST resume. Replacing from FileBrowser used to clear
+  // the stack, force a brand-new HomeActivity on Back, and cost ~3s HALF on X3
+  // (felt like multi-press / frozen return from the book).
+  //
+  // QR / cold open: stack was empty (log: "Swapped activity, stack size = 0"), so
+  // leaveReaderToHome built a *new* Home (~5s multipass / HALF on X3). Seed Home
+  // under the reader without painting it first.
+  const bool homeOnStack =
+      (currentActivity && currentActivity->isHomeActivity()) ||
+      std::any_of(stackActivities.begin(), stackActivities.end(),
+                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  if (homeOnStack) {
     pushActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
-  } else {
-    replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+    return;
   }
+
+  // No Home yet: exit whatever is current (Boot, etc.), seed Home on the stack
+  // (onEnter for stats/recents, no paint), then enter the reader.
+  if (currentActivity) {
+    RenderLock lock;
+    exitActivity(lock);
+    while (!stackActivities.empty()) {
+      stackActivities.back()->onExit();
+      stackActivities.pop_back();
+    }
+  }
+  auto home = std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE);
+  home->onEnter();  // load recents/stats (requestUpdate is harmless — Reader is current next)
+  home->markSnappyResumeReady();  // PopToHome → FAST, not new-Home HALF/multipass
+  stackActivities.push_back(std::move(home));
+  LOG_DBG("ACT", "Seeded Home under reader (QR/cold open snappy Back path)");
+  currentActivity = std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path));
+  currentActivity->onEnter();
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {

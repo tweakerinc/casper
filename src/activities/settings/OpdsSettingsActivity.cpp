@@ -1,4 +1,5 @@
 #include "OpdsSettingsActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -231,5 +232,5 @@ void OpdsSettingsActivity::render(RenderLock&&) {
     GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

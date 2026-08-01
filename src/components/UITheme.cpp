@@ -11,13 +11,9 @@
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
-#include "components/themes/dashboard/DashboardTheme.h"
-#include "components/themes/lyra/Lyra3CoversTheme.h"
-#include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/bare/BareTheme.h"
-#include "components/themes/clockface/ClockfaceTheme.h"
-#include "components/themes/focus/FocusTheme.h"
-#include "components/themes/roundedraff/RoundedRaffTheme.h"
+#include "components/themes/penumbra/PenumbraTheme.h"
+// Stats (FocusTheme) excluded from firmware — see SettingsList / CrossPointSettings.
 
 UITheme UITheme::instance;
 
@@ -38,25 +34,14 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<BareTheme>();
       currentMetrics = &BareMetrics::values;
       break;
-    case CrossPointSettings::UI_THEME::SPECTRAL:
-      // X3-only home face. X4 (or bad settings) falls through to Bare.
-      if (gpio.deviceIsX3()) {
-        LOG_DBG("UI", "Using Spectral theme");
-        currentTheme = std::make_unique<ClockfaceTheme>();
-        currentMetrics = &ClockfaceMetrics::values;
-        break;
-      }
-      LOG_DBG("UI", "Spectral not available on X4 — using Bare");
-      currentTheme = std::make_unique<BareTheme>();
-      currentMetrics = &BareMetrics::values;
+    case CrossPointSettings::UI_THEME::PENUMBRA:
+      // X3: large clock + under-panel. X4: title/author top + progress ring bottom.
+      LOG_DBG("UI", "Using Penumbra theme (%s)", gpio.deviceIsX3() ? "X3 clock" : "X4 progress");
+      currentTheme = std::make_unique<PenumbraTheme>();
+      currentMetrics = &PenumbraMetrics::values;
       break;
     case CrossPointSettings::UI_THEME::GHOST:  // parked — fall through to Bare
-      LOG_DBG("UI", "Ghost theme parked — using Bare");
-      currentTheme = std::make_unique<BareTheme>();
-      currentMetrics = &BareMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::STATS:
-    // Stats-Life + parked/legacy skins all share FocusTheme (title ↔ lifetime toggle).
+    case CrossPointSettings::UI_THEME::STATS:  // disabled (not in binary)
     case CrossPointSettings::UI_THEME::STATS_LIFE:
     case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
     case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
@@ -69,9 +54,9 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
     case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
     case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     default:
-      LOG_DBG("UI", "Using Stats theme");
-      currentTheme = std::make_unique<FocusTheme>();
-      currentMetrics = &FocusMetrics::values;
+      LOG_DBG("UI", "Using Bare theme (Stats/legacy remapped or default)");
+      currentTheme = std::make_unique<BareTheme>();
+      currentMetrics = &BareMetrics::values;
       break;
   }
   metricsValid = false;

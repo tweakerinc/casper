@@ -34,6 +34,8 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
+#include "util/SystemLog.h"
+#include "util/UiGhostPolicy.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
@@ -58,20 +60,24 @@ void SettingsActivity::rebuildSettingsLists() {
   SettingInfo showHidden{};
   SettingInfo removeRecents{};
   SettingInfo moveFinished{};
+  SettingInfo enableLogging{};
   bool haveTimeToSleep = false;
   bool haveSessionTime = false;
   bool haveShowHidden = false;
   bool haveRemoveRecents = false;
   bool haveMoveFinished = false;
-
-  const bool spectralTheme =
-      static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::SPECTRAL;
+  bool haveEnableLogging = false;
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
-    // Spectral side-button map only when Spectral is the active home theme.
-    if (setting.key && (strcmp(setting.key, "spectralSideLeft") == 0 || strcmp(setting.key, "spectralSideRight") == 0) &&
-        !spectralTheme) {
+    // Never show legacy Penumbra/Spectral side remap (removed; behavior is fixed per device).
+    if (setting.key &&
+        (strcmp(setting.key, "spectralSideLeft") == 0 || strcmp(setting.key, "spectralSideRight") == 0)) {
+      continue;
+    }
+    // Also hide by name in case a stale list entry lacks the key.
+    if (setting.nameId == StrId::STR_PENUMBRA_LEFT_BUTTON || setting.nameId == StrId::STR_PENUMBRA_RIGHT_BUTTON ||
+        setting.nameId == StrId::STR_PENUMBRA_UP_BUTTON || setting.nameId == StrId::STR_PENUMBRA_DOWN_BUTTON) {
       continue;
     }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
@@ -104,6 +110,10 @@ void SettingsActivity::rebuildSettingsLists() {
       } else if (setting.nameId == StrId::STR_MOVE_FINISHED_TO_READ) {
         moveFinished = setting;
         haveMoveFinished = true;
+      } else if (setting.nameId == StrId::STR_ENABLE_LOGGING ||
+                 (setting.key && strcmp(setting.key, "systemLogLevel") == 0)) {
+        enableLogging = setting;
+        haveEnableLogging = true;
       }
     }
   }
@@ -127,18 +137,21 @@ void SettingsActivity::rebuildSettingsLists() {
   displaySettings.insert(displaySettings.begin(),
                          SettingInfo::Action(StrId::STR_STATUS_BAR, SettingAction::SystemStatusBar));
 
-  // System order: Wi‑Fi → Stats (folder) → Session Time → …
-  // … → Language → KOReader Sync → OPDS → SD firmware → Check for Updates (last).
+  // System order: Wi‑Fi → Stats (folder, X3 only) → Session Time (X3 only) → …
+  // … → Language → KOReader Sync → OPDS → Enable Logging → SD firmware → Check for Updates.
   // Backup / Auto Backup / Enable Tracking live inside Stats — not duplicated here.
+  // X4: no RTC → no reading-stat tracking or settings surface.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_STATS, SettingAction::Stats));
-  if (haveSessionTime) {
-    systemSettings.push_back(sessionTime);
-  } else {
-    systemSettings.push_back(SettingInfo::Value(
-        StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
-        {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES, 1},
-        "readingSessionIdleMinutes"));
+  if (gpio.deviceIsX3()) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_STATS, SettingAction::Stats));
+    if (haveSessionTime) {
+      systemSettings.push_back(sessionTime);
+    } else {
+      systemSettings.push_back(SettingInfo::Value(
+          StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
+          {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES, 1},
+          "readingSessionIdleMinutes"));
+    }
   }
   if (haveTimeToSleep) systemSettings.push_back(timeToSleep);
   if (haveShowHidden) systemSettings.push_back(showHidden);
@@ -147,6 +160,21 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
+  if (haveEnableLogging) {
+    systemSettings.push_back(enableLogging);
+  } else {
+    // Fallback if the shared list entry is missing (should not happen).
+    systemSettings.push_back(SettingInfo::DynamicEnum(
+        StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
+        [] {
+          return static_cast<uint8_t>(SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF ? 1 : 0);
+        },
+        [](uint8_t on) {
+          SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_TIMING)
+                                       : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
+        },
+        "systemLogLevel"));
+  }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
 
@@ -418,7 +446,10 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
-  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
+  // DynamicEnum sleep picker has no valuePtr — match by name/key as well.
+  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen ||
+                                  setting.nameId == StrId::STR_SLEEP_SCREEN ||
+                                  (setting.key && strcmp(setting.key, "sleepScreen") == 0);
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
@@ -441,9 +472,16 @@ void SettingsActivity::toggleCurrentSetting() {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     if (setting.enumValues.size() >= 2) {
       const auto valuePtr = setting.valuePtr;
+      const bool isEnableLogging = setting.nameId == StrId::STR_ENABLE_LOGGING ||
+                                   setting.nameId == StrId::STR_SYSTEM_LOG ||
+                                   (setting.key && strcmp(setting.key, "systemLogLevel") == 0);
       optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()),
-                       currentValue, [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
+                       currentValue,
+                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
                          SETTINGS.*valuePtr = idx;
+                         if (isEnableLogging) {
+                           SystemLog::reloadLevel();
+                         }
                          syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
                          markSettingsDirty();
                          rebuildSettingsLists();
@@ -452,6 +490,10 @@ void SettingsActivity::toggleCurrentSetting() {
       return;
     }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
+    if (setting.nameId == StrId::STR_ENABLE_LOGGING || setting.nameId == StrId::STR_SYSTEM_LOG ||
+        (setting.key && strcmp(setting.key, "systemLogLevel") == 0)) {
+      SystemLog::reloadLevel();
+    }
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumValues.size())
@@ -460,10 +502,20 @@ void SettingsActivity::toggleCurrentSetting() {
     if (totalValues >= 2) {
       const auto valueSetter = setting.valueSetter;
       const bool isUiTheme = setting.nameId == StrId::STR_UI_THEME;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, isUiTheme](int idx) {
+      const bool isEnableLogging = setting.nameId == StrId::STR_ENABLE_LOGGING ||
+                                   setting.nameId == StrId::STR_SYSTEM_LOG ||
+                                   (setting.key && strcmp(setting.key, "systemLogLevel") == 0);
+      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, isUiTheme,
+                       isEnableLogging](int idx) {
+        const uint8_t prevTheme = isUiTheme ? SETTINGS.uiTheme : 0;
         valueSetter(idx);
         if (isUiTheme) {
+          const uint32_t tReload = millis();
           UITheme::getInstance().reload();
+          SystemLog::logThemeChange(prevTheme, SETTINGS.uiTheme, millis() - tReload);
+        }
+        if (isEnableLogging) {
+          SystemLog::reloadLevel();
         }
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         markSettingsDirty();
@@ -478,9 +530,15 @@ void SettingsActivity::toggleCurrentSetting() {
       requestUpdate();
       return;
     }
-    setting.valueSetter((cur + 1) % totalValues);
-    if (setting.nameId == StrId::STR_UI_THEME) {
-      UITheme::getInstance().reload();
+    {
+      const bool isUiTheme = setting.nameId == StrId::STR_UI_THEME;
+      const uint8_t prevTheme = isUiTheme ? SETTINGS.uiTheme : 0;
+      setting.valueSetter((cur + 1) % totalValues);
+      if (isUiTheme) {
+        const uint32_t tReload = millis();
+        UITheme::getInstance().reload();
+        SystemLog::logThemeChange(prevTheme, SETTINGS.uiTheme, millis() - tReload);
+      }
     }
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t currentValue = SETTINGS.*(setting.valuePtr);
@@ -738,6 +796,6 @@ void SettingsActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, textY, CROSSPOINT_VERSION, true);
   }
 
-  // Always use standard refresh for settings screen
-  renderer.displayBuffer();
+  // UI anti-ghost: FAST + periodic HALF (not greyscale-base). Reader 15 does not apply.
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

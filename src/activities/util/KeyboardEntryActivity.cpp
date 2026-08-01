@@ -1,4 +1,5 @@
 #include "KeyboardEntryActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <HalGPIO.h>
 #include <I18n.h>
@@ -941,12 +942,19 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   fui::keyboard(frame, kbRect, props);
   interactionsReady = true;
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // Label every physical key by its remapped function (Left stays Left, Up stays Up).
+  // mapLabels(list previous/next) is wrong here — it aliases directions for menus.
+  const auto labels = mappedInput.mapDirectionLabels(tr(STR_BACK), tr(STR_SELECT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  GUI.drawSideButtonHints(renderer, ">", "<");
+  // Side keys (X3 L/R or X4 upper/lower): same function-name rule — never hardcode
+  // ">"/"<" (rotated 90° those look like up/down arrows).
+  const char* sideA = "";
+  const char* sideB = "";
+  mappedInput.mapSideDirectionLabels(sideA, sideB);
+  GUI.drawSideButtonHints(renderer, sideA, sideB);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void KeyboardEntryActivity::onComplete(std::string text) {

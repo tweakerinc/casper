@@ -1,4 +1,5 @@
 #include "EpubReaderClippingListActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -462,13 +463,13 @@ void EpubReaderClippingListActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, LIST_START_Y + contentY + 20, tr(STR_NO_CLIPPINGS));
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
   if (detailMode) {
     renderDetail();
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -513,5 +514,5 @@ void EpubReaderClippingListActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

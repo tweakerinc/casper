@@ -636,7 +636,7 @@ Rect FocusThemeUi::redrawUnderBox(GfxRenderer& renderer, const std::vector<Recen
   const int clearH = std::max(0, bandBottom - clearTop);
   const Rect dirty{0, clearTop, pageW, clearH};
   if (clearH > 0) {
-    // Explicit pure white (false = white ink off) so windowed FAST matches Spectral paper.
+    // Explicit pure white (false = white ink off) so windowed FAST matches Penumbra paper.
     renderer.fillRect(0, clearTop, pageW, clearH, false);
   }
 

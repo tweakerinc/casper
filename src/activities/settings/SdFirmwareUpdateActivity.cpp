@@ -1,4 +1,5 @@
 #include "SdFirmwareUpdateActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -257,5 +258,5 @@ void SdFirmwareUpdateActivity::render(RenderLock&&) {
     }
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

@@ -14,6 +14,8 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SystemLog.h"
+#include "util/UiGhostPolicy.h"
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -386,6 +388,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     connectedIP = ipStr;
     autoConnecting = false;
+    SystemLog::logTiming("WIFI", "connected ssid=%s ip=%s rssi=%d took=%lums", selectedSSID.c_str(), ipStr,
+                         WiFi.RSSI(), static_cast<unsigned long>(millis() - connectionStartTime));
 
 #if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
     uint8_t connectedBssid[6] = {};
@@ -811,7 +815,7 @@ void WifiSelectionActivity::render(RenderLock&&) {
       break;
   }
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void WifiSelectionActivity::renderNetworkList(const Rect* screen, const ThemeMetrics* metrics) const {
@@ -945,7 +949,8 @@ void WifiSelectionActivity::renderSavePrompt(const Rect* screen, const ThemeMetr
   }
 
   // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // List uses Up/Down (and Left/Right as aliases). previous/next label UP/DOWN slots.
+  const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1001,7 +1006,8 @@ void WifiSelectionActivity::renderForgetPrompt(const Rect* screen, const ThemeMe
   }
 
   // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  // List uses Up/Down (and Left/Right as aliases). previous/next label UP/DOWN slots.
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

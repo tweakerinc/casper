@@ -197,22 +197,49 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
   return SETTINGS.touchReaderControls && input.hasTouch() && input.wasMenuGesture();
 }
 
-// One helper, blocking or deferred: the async form starts the refresh and
-// returns so the caller can overlap CPU work with the panel's refresh time.
-// Async callers must not touch the framebuffer until
-// renderer.waitRefreshComplete() and must rebuild the differential baseline
-// before the next page turn (the tiled grayscale cleanup does).
+// Page-turn refresh with YACP-style periodic maintenance (device-correct waveform):
+//   - Ordinary turns: FAST
+//   - Every N pages (Anti-Ghosting setting):
+//       X3: soft B/W reinforce (OEM AA-pre-BW mid via displayGrayscaleBase(FAST))
+//           — no black flash; gently pulls residual black out of white
+//       X4: HALF scrub (SSD1677 0xD7 single-pass clean) — no soft bank exists
+//   - FORCE_SCRUB (0) / popups / images / manual: always HALF (hard clean)
+//   - Interval "Never": FAST only (required cleanups still scrub)
+//
+// Note: greyscale-base is intentional *only* for this X3 reader maintenance path
+// (and Penumbra under-panel soft scrolls). Do not spam it on every menu FAST —
+// that was the UI white-mud regression. Reader interval hits have a correct DTM1
+// baseline from continuous paging, matching YACP's soft reinforce.
+//
+// Async: starts FAST/HALF non-blocking when possible; X3 soft reinforce is blocking.
+// Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
-  if (async) {
-    renderer.displayBufferAsync(mode);
+  const int freq = SETTINGS.getRefreshFrequency();  // -1 = Never
+  const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
+  const bool forceScrub = (pagesUntilFullRefresh == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1;
+
+  if (maintenanceDue || forceScrub) {
+    // X3 ordinary interval: soft reinforce (no black flash). Forced scrub and
+    // all X4 maintenance use HALF (stock hard clean).
+    const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub;
+    if (useX3SoftReinforce) {
+      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+    } else if (async) {
+      renderer.displayBufferAsync(HalDisplay::HALF_REFRESH);
+    } else {
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
+    pagesUntilFullRefresh = disabled ? CrossPointSettings::REFRESH_COUNTDOWN_DISABLED : freq;
   } else {
-    renderer.displayBuffer(mode);
-  }
-  if (pagesUntilFullRefresh <= 1) {
-    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
-  } else {
-    pagesUntilFullRefresh--;
+    if (async) {
+      renderer.displayBufferAsync(HalDisplay::FAST_REFRESH);
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+    if (!disabled) {
+      pagesUntilFullRefresh--;
+    }
   }
 }
 
@@ -266,11 +293,18 @@ struct BackNavCallback {
 // missed long sample still leaves via short (home), which matches intent.
 inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
                                  const char* filePath, BackNavCallback goHome) {
+  auto leaveHome = [&]() {
+    // Drain residual Back edges so the resumed Home does not treat this release
+    // as Menu (minimal front-button map: short Back = Menu).
+    (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
+    (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+    goHome.fn(goHome.ctx);
+  };
   // Long-press only while held — must be observed across the threshold in-loop.
   if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS) {
     if (SETTINGS.backShortToFileBrowser) {
-      goHome.fn(goHome.ctx);
+      leaveHome();
     } else {
       activityManager.goToFileBrowser(filePath);
     }
@@ -281,7 +315,7 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
     if (SETTINGS.backShortToFileBrowser) {
       activityManager.goToFileBrowser(filePath);
     } else {
-      goHome.fn(goHome.ctx);
+      leaveHome();
     }
     return true;
   }

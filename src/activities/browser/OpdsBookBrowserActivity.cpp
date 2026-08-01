@@ -21,6 +21,7 @@
 #include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 constexpr int PAGE_ITEMS = 23;
@@ -207,7 +208,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, statusMessage.c_str());
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -219,7 +220,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -231,7 +232,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       GUI.drawProgressBar(renderer, Rect{50, pageHeight / 2 + 20, pageWidth - 100, 20}, downloadProgress,
                           downloadTotal);
     }
-    renderer.displayBuffer();
+    UiGhostPolicy::displayMenuFrame(renderer);
     return;
   }
 
@@ -256,7 +257,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
                         i != static_cast<size_t>(selectorIndex));
     }
   }
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {

@@ -1,4 +1,5 @@
 #include "ClipSelectionActivity.h"
+#include "util/UiGhostPolicy.h"
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -264,7 +265,7 @@ void ClipSelectionActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  UiGhostPolicy::displayMenuFrame(renderer);
 }
 
 bool ClipSelectionActivity::switchToPage(const int pageIdx) {

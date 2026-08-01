@@ -5,7 +5,7 @@
 
 #include "ReadingStatsUtils.h"
 
-// Per-book reading statistics, persisted to cachePath/stats_v5.bin.
+// Per-book reading statistics, persisted to cachePath/stats_vN.bin.
 struct BookReadingStats {
   uint16_t sessionCount = 0;              // Total times this book was opened
   uint32_t totalReadingSeconds = 0;       // Accumulated reading time in seconds
@@ -30,24 +30,28 @@ struct BookReadingStats {
   float getProgressPercent() const;
   void setProgressPercent(float percent);
 
-  // Loads stats from cachePath/stats_v5.bin, with fallback reads from the
-  // previous versioned filename and legacy cachePath/stats.bin. Returns
-  // default-constructed stats if no compatible file exists.
+  // Loads the richest parsable stats*.bin under cachePath (stats_v6…v1, stats.bin,
+  // plus any other stats*.bin). Promotes to the current versioned filename when needed.
   static BookReadingStats load(const std::string& cachePath);
 
-  // Cache path for this book under /.crosspoint (1.5 path hash only).
+  // Cache path for this book under /.crosspoint (Casper / CrossPoint 1.5 std::hash).
   // Empty when bookPath is not a known book type.
   static std::string cachePathForBook(const std::string& bookPath);
 
-  // Load from cachePathForBook(bookPath). No cross-firmware path migration.
+  // Load stats for a book. Also reads CrossInk EPUB cache dirs (FNV-1a 64-bit hash)
+  // and any alternate stats*.bin names, then copies the richest result into
+  // cachePathForBook so no manual SD transfer is required after flashing Casper.
   static BookReadingStats loadForBook(const std::string& bookPath);
 
-  // Saves stats to cachePath/stats_v5.bin.
+  // Saves stats to cachePath/stats_vN.bin (current format).
   void save(const std::string& cachePath) const;
 
-  // Deletes cachePath/stats_v5.bin, the previous versioned filename, and legacy
-  // cachePath/stats.bin. Missing files are treated as success.
+  // Deletes all stats*.bin under cachePath (all known versions + directory scan).
+  // Missing files are treated as success.
   static bool remove(const std::string& cachePath);
+
+  // Deletes stats under every known cache path for this book (Casper + CrossInk).
+  static bool removeForBook(const std::string& bookPath);
 
   // Updates the running reading pace with one forward page dwell sample.
   void recordForwardPageRead(uint32_t seconds);

@@ -80,7 +80,7 @@ constexpr int kRecentsTopInset = 28;
 constexpr int kRecentsTopInsetX4 = 16;
 // Air between "RECENTS" caption and the first book row.
 constexpr int kRecentsCaptionToListGap = 22;
-// Gap between last book row and centered "View All" (X3 Recents page).
+// Gap between last book row and centered "View All" (X3 + X4 Recents list).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
 // Under-panel page dots (both devices). Fixed strip above menu.
@@ -577,7 +577,8 @@ void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
+  // Reserve View All under the list (same as X3) so 4 books + footer fit the equal-gap rhythm.
+  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
   const int contentH = std::max(1, band.contentBottom - band.contentTop);
   // free space for 4 equal gaps around the two content blocks + hairline thickness.
   int free = contentH - Uh - Lh - kRuleThickness;
@@ -712,14 +713,14 @@ float recentsCachedProgress(const int i) {
 // - Title full width (no % column on the title line).
 // - Author line: name left, % right (same baseline). Title is full width.
 // - Micro bar sits just under the author line.
-// - Focus = BOLD title (books) or BOLD "View All" (X3 Recents page).
-// - X3: View All under the list; listFocusIndex == n means View All focused.
+// - Focus = BOLD title (books) or BOLD "View All".
+// - View All under the list (X3 + X4); listFocusIndex == n means View All focused.
 // - listFocusIndex is list-only; upper "Now Reading"/clock is always books[0].
 void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
                           const std::vector<RecentBook>& books, const int listFocusIndex) {
   const bool x4 = isX4Penumbra();
-  // View All only on X3 (X4 uses front Recents for the full list; sides scroll).
-  const bool showViewAll = !x4;
+  // Full Recent Books list is one tap past View All (mid button = Down to scroll).
+  const bool showViewAll = true;
   const int zoneTop = band.midY + kRuleThickness;
   const int zoneBottom = band.contentBottom - penumbraPageDotsStripH();
   const int zoneH = std::max(1, zoneBottom - zoneTop);
@@ -828,7 +829,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
     y = barTop + kMicroBarH + kRowGap;
   }
 
-  // X3: View All under the list — opens full Recent Books (focus index n).
+  // View All under the list — opens full Recent Books (focus index n).
   if (showViewAll && n > 0) {
     y += kRecentsViewAllGap - kRowGap;  // last row already added kRowGap
     if (y + titleLineH <= zoneBottom) {

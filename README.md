@@ -1,10 +1,12 @@
 # Casper
 
 Personal firmware for **Xteink X3/X4**, based on
-**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & **[CrossInk](https://github.com/uxjulia/CrossInk)**. Huge thanks to everyone for all their hard working!
+**[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)**.
 
-Casper keeps CrossPoint’s stable reader core, and CrossInks AMAZING Stat Tracking, and adds a redesign to the UI, from thoughtful long-press menus that bring your settings where they need to be, to completely customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary**
-with multi-word selection and bilingual packs. **Bare**, **Stats**, and **Stats-Life** themes.
+Casper keeps CrossPoint’s stable reader core and adds branding plus a
+reading-first UI: **Penumbra** (X3 clock home / X4 title home) and **Bare**,
+redesigned **reader chrome**, **reading stats**, and a **StarDict dictionary**
+with multi-word selection and bilingual packs.
 
 <h2 align="center">Themes</h2>
 
@@ -12,25 +14,29 @@ with multi-word selection and bilingual packs. **Bare**, **Stats**, and **Stats-
   Home skins for different reading styles. Pick one under <strong>Settings → Display → Theme</strong>.
 </p>
 
-| Bare | Stats | Stats-Life |
-|:----:|:-----:|:----------:|
-| <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> | <img src="./docs/images/casper/stats-theme.jpg" alt="Stats Theme" width="260" /> | <img src="./docs/images/casper/stats-life-theme.jpg" alt="Stats-Life Theme" width="260" /> |
+| Penumbra (X3) | Penumbra (X4) | Bare |
+|:-------------:|:-------------:|:----:|
+| <img src="./docs/images/casper/x3-penumbra-home.jpg" alt="Penumbra home on X3" width="260" /> | <img src="./docs/images/casper/x4-penumbra-home.jpg" alt="Penumbra home on X4" width="260" /> | <img src="./docs/images/casper/bare-home.jpg" alt="Bare Theme" width="260" /> |
 
-> **Note:** Certain date/time features only work on the **X3** (the X4 has no real-time clock).
+> **Note:** Clock, weekday, and certain date/time features on Penumbra need the **X3** RTC (the X4 has no real-time clock). Bare looks the same on both devices.
 
 <h2 align="center">Gallery</h2>
 
-| Synopsis | Reading UI | Multi-Word Lookup | Dictionary Lookup |
-|:--------:|:----------:|:-----------------:|:-----------------:|
-| <img src="./docs/images/casper/synopsis-view.jpg" alt="Synopsis" width="200" /> | <img src="./docs/images/casper/reader-ui.jpg" alt="Reading UI" width="200" /> | <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-Word Lookup" width="200" /> | <img src="./docs/images/casper/dictionary-lookup.jpg" alt="Dictionary Lookup" width="200" /> |
+| Penumbra Recents | Penumbra Book Stats | Penumbra Lifetime | Synopsis |
+|:----------------:|:-------------------:|:-----------------:|:--------:|
+| <img src="./docs/images/casper/x3-penumbra-recents.jpg" alt="Penumbra Recents" width="200" /> | <img src="./docs/images/casper/x3-penumbra-book-stats.jpg" alt="Penumbra Book Stats" width="200" /> | <img src="./docs/images/casper/x3-penumbra-life-stats.jpg" alt="Penumbra Lifetime Stats" width="200" /> | <img src="./docs/images/casper/synopsis-view.jpg" alt="Synopsis" width="200" /> |
 
-| Reading Stats | Lifetime Stats | Controls | Dictionary Settings |
-|:-------------:|:--------------:|:--------:|:-------------------:|
-| <img src="./docs/images/casper/reading-stats.jpg" alt="Reading Stats" width="200" /> | <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime Reading Stats" width="200" /> | <img src="./docs/images/casper/controls.jpg" alt="Controls" width="200" /> | <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary Settings" width="200" /> |
+| Reading UI | Multi-Word Lookup | Dictionary Lookup | Reading Stats |
+|:----------:|:-----------------:|:-----------------:|:-------------:|
+| <img src="./docs/images/casper/reader-ui.jpg" alt="Reading UI" width="200" /> | <img src="./docs/images/casper/multi-word-selection.jpg" alt="Multi-Word Lookup" width="200" /> | <img src="./docs/images/casper/dictionary-lookup.jpg" alt="Dictionary Lookup" width="200" /> | <img src="./docs/images/casper/reading-stats.jpg" alt="Reading Stats" width="200" /> |
 
-| Spanish Translation | Manage Fonts | Customize Reader UI | Settings |
-|:-------------------:|:------------:|:-------------------:|:--------:|
-| <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish Translation" width="200" /> | <img src="./docs/images/casper/manage-fonts.jpg" alt="Manage Fonts" width="200" /> | <img src="./docs/images/casper/customize-reader-ui.jpg" alt="Customize Reader UI" width="200" /> | <img src="./docs/images/casper/settings.jpg" alt="Settings" width="200" /> |
+| Lifetime Stats | Controls | Dictionary Settings | Spanish Translation |
+|:--------------:|:--------:|:-------------------:|:-------------------:|
+| <img src="./docs/images/casper/lifetime-stats.jpg" alt="Lifetime Reading Stats" width="200" /> | <img src="./docs/images/casper/controls.jpg" alt="Controls" width="200" /> | <img src="./docs/images/casper/dictionary-settings.jpg" alt="Dictionary Settings" width="200" /> | <img src="./docs/images/casper/spanish-english.jpg" alt="Spanish Translation" width="200" /> |
+
+| Manage Fonts | Customize Reader UI | Settings |
+|:------------:|:-------------------:|:--------:|
+| <img src="./docs/images/casper/manage-fonts.jpg" alt="Manage Fonts" width="200" /> | <img src="./docs/images/casper/customize-reader-ui.jpg" alt="Customize Reader UI" width="200" /> | <img src="./docs/images/casper/settings.jpg" alt="Settings" width="200" /> |
 
 **Full photo tour:** **[docs/casper.md](./docs/casper.md)**
 
@@ -42,24 +48,26 @@ Feature overview from **[Casper v0.1.3](https://github.com/tweakerinc/casper/rel
 
 ### Themes
 
-#### Stats & Stats-Life
+#### Penumbra
 
-Built for people who want detailed reading data. **Stats** tracks Reading Time, Time Left in Book/Chapter, Progress, Daily Average, Pages per Minute, book start date, and estimated finish date. **Stats-Life** includes everything and adds Lifetime Device Stats to your Home Screen.
+Text-first home with under-panels you cycle on the side buttons.
 
-`Menu` · `Library` · `Settings` · `Read`  
-(+ long-press **Read** → quick book menu: mark finished, remove from recents, delete stats/cache, view synopsis, etc.)
+- **X3:** large clock + weekday, then **Title · Recents · Book Stats · Lifetime** under the hairline (side Left/Right).  
+- **X4:** last-read title/author on top, **Recents** list below (side Up/Down scrolls the list).  
+
+`Menu` · `Library` · `Recents` · `Read`  
+(+ long-press **Menu** → Settings · long-press **Read** → book quick menu)
 
 #### Bare
 
-Designed for readers who simply want to feel as if it is them and their book — a minimal theme loaded with functionality.
+Designed for readers who simply want to feel as if it is them and their book — a minimal cover theme, same layout on X3 and X4.
 
-`Menu` · `Library` · `Synopsis` · `Read`
+`Menu` · `Library` · `Recents` · `Read`
 
 - Long-press **Menu** → Settings  
-- Long-press **Library** → Recents  
 - Long-press **Read** → book quick menu  
 
-> **Note:** Certain date/time features only work on the **X3** (the X4 does not have a real-time clock).
+> **Note:** Clock and weekday on Penumbra need the **X3** RTC (the X4 has no real-time clock).
 
 ### System + Reader Status Bars
 
@@ -112,9 +120,7 @@ Unified design language across the interface:
 
 ### Book Synopsis
 
-In the **Bare** theme, a **Synopsis** button is available on the home screen (requires synopsis metadata — easy to add with Calibre).
-
-You can also long-press **Select/Open** on any book in the library to open a quick menu that includes the synopsis. Useful for refreshing your memory or choosing your next book without leaving the device.
+Open a short description of the current book from the **book quick menu** (long-press **Read** on home, or long-press a book in the library). Requires synopsis metadata (easy to add with Calibre).
 
 ### Reader Shortcuts
 

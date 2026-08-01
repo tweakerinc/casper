@@ -42,8 +42,13 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
-  // Drop stale entries first so a new add can't evict a valid book in their stead.
-  pruneMissing();
+  // Soft-prune only: drop missing entries when we can keep at least one other book.
+  // Never call this in a way that can zero the list (see pruneMissing guard).
+  if (pruneMissing()) {
+    // Persist prune separately so a later add failure cannot leave stale missing paths
+    // without also risking an all-or-nothing wipe (already guarded).
+    saveToFile();
+  }
 
   // Remove existing entry if present
   auto it =
@@ -107,8 +112,38 @@ bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exist
 
 bool RecentBooksStore::pruneMissing() {
   const size_t before = recentBooks.size();
-  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(), &isMissing), recentBooks.end());
-  return recentBooks.size() != before;
+  if (before == 0) {
+    return false;
+  }
+
+  // Never wipe the whole list on a single exists() pass. After flash / SD settle
+  // glitches, Storage.exists can fail for every path and we used to save an empty
+  // recent.json — permanently erasing the user's library of recents.
+  std::vector<RecentBook> kept;
+  kept.reserve(before);
+  size_t missing = 0;
+  for (const auto& book : recentBooks) {
+    if (isMissing(book)) {
+      ++missing;
+    } else {
+      kept.push_back(book);
+    }
+  }
+  if (missing == 0) {
+    return false;
+  }
+  if (kept.empty()) {
+    LOG_ERR("RBS",
+            "Refusing to prune all %u recent books (exists failed for every path) — "
+            "keeping list; check SD / paths",
+            static_cast<unsigned>(before));
+    return false;
+  }
+
+  recentBooks.swap(kept);
+  LOG_DBG("RBS", "Pruned %u missing recent(s); %u remain", static_cast<unsigned>(missing),
+          static_cast<unsigned>(recentBooks.size()));
+  return true;
 }
 
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {

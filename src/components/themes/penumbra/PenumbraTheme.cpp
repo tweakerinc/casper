@@ -75,27 +75,19 @@ constexpr int kStatsStackGapX4Top = 8;
 constexpr int kStatsStackGapX4Footer = 22;
 // X4 upper half: modest pad under chrome; internal gaps fill the rest of the half.
 constexpr int kX4TitleTopPad = 12;
-// Extra air below mid-hairline before the RECENTS caption (X3 / non-pinned).
+// Extra air below mid-hairline before the RECENTS caption (non-pinned layouts).
 constexpr int kRecentsTopInset = 28;
-constexpr int kRecentsTopInsetX4 = 16;
+constexpr int kRecentsTopInsetX4 = 12;
 // Air between "RECENTS" caption and the first book row.
 constexpr int kRecentsCaptionToListGap = 22;
-// X4 list packing (top panel is independent — never use these to move Now Reading).
-constexpr int kRecentsCaptionToListGapX4 = 10;
-// Gap between last book row and centered "View All" (X3 list; X4 bottom-anchors View All).
+constexpr int kRecentsCaptionToListGapX4 = 12;
+// Gap between last book row and "View All" (sits under the 4th book — not menu-pinned).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
-constexpr int kRecentsViewAllGapX4 = 10;
-// X4 Now Reading top pad — FIXED. Never change this to make room for the list.
-constexpr int kX4UpperTopPadFixed = 14;
-// Small air author → hairline → RECENTS so the list sits higher (more room for 4 rows).
-constexpr int kX4AuthorToHairline = 10;
-constexpr int kX4HairlineToRecents = 8;
+constexpr int kRecentsViewAllGapX4 = 12;
 // Row gap inside the recents list (title/author/bar groups).
 constexpr int kRecentsRowGap = 8;
-constexpr int kRecentsRowGapX4 = 4;
-// Pad above menu chrome when bottom-pinning View All on X4.
-constexpr int kX4ViewAllBottomPad = 6;
+constexpr int kRecentsRowGapX4 = 6;
 // Under-panel page dots (both devices). Fixed strip above menu.
 // X3: 4 dots (Title · Recents · Stats · Lifetime) when tracking is on.
 // X4: no page dots (Recents only; tracking off).
@@ -588,23 +580,30 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
   band.pinBlocks = true;
 }
 
-// X4 layout — simple and stable:
-//   • Now Reading stays at a fixed top pad (never moved to "make room").
-//   • Short air under the author → hairline → RECENTS (list sits higher).
-//   • Draw always paints 4 book rows; View All is bottom-pinned above the menu.
+// X4 equal vertical rhythm (four matching air gaps G):
+//   status bar → NOW READING
+//   author     → hairline
+//   hairline   → RECENTS
+//   View All   → menu
+// Now Reading height is measured as-is (not stretched/nudged). The list measures
+// 4 books + View All so G shrinks slightly to free room for the 4th row — that is
+// the only "shift up" of hairline/Recents (even air, not a fixed-pad hack).
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
-  // FIXED top panel — do not recompute from free space or list height.
-  band.upperTop = band.contentTop + kX4UpperTopPadFixed;
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  const int afterAuthor = band.upperTop + Uh;
+  // Include View All in Lh so the bottom G is truly "View All → menu".
+  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
+  const int contentH = std::max(1, band.contentBottom - band.contentTop);
+  int free = contentH - Uh - Lh - kRuleThickness;
+  if (free < 0) free = 0;
+  const int G = free / 4;
 
-  band.midY = afterAuthor + kX4AuthorToHairline;
+  band.upperTop = band.contentTop + G;
+  band.midY = band.upperTop + Uh + G;
   band.halfH = std::max(1, band.midY - band.contentTop);
-  band.lowerTop = band.midY + kRuleThickness + kX4HairlineToRecents;
+  band.lowerTop = band.midY + kRuleThickness + G;
   band.pinBlocks = true;
-  (void)books;
 }
 
 // X3 under-panel: title/author for the last-read book (index 0).
@@ -725,12 +724,9 @@ float recentsCachedProgress(const int i) {
 }
 
 // Minimalist recents list:
-// - Title full width (no % column on the title line).
-// - Author line: name left, % right (same baseline). Title is full width.
-// - Micro bar sits just under the author line.
-// - Focus = BOLD title (books) or BOLD "View All".
-// - X4: always up to 4 books; View All pinned low above the menu.
-// - listFocusIndex is list-only; upper "Now Reading"/clock is always books[0].
+// - Title full width; author + % on one line; micro bar under author.
+// - Up to 4 books on Penumbra; View All sits just under the last book.
+// - listFocusIndex is list-only; upper "Now Reading" is always books[0].
 void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
                           const std::vector<RecentBook>& books, const int listFocusIndex) {
   const bool x4 = isX4Penumbra();
@@ -757,7 +753,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   const int topInset = x4 ? kRecentsTopInsetX4 : kRecentsTopInset;
   const int viewAllH = showViewAll ? (viewAllGap + titleLineH) : 0;
 
-  // Penumbra cap is 4. X4 never maxFit-shrinks — always draw every loaded row up to 4.
+  // Always up to 4 on Penumbra. Never shrink the X4 pin layout with maxFit.
   const int capped =
       std::min(static_cast<int>(books.size()), static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount));
   int n = capped;
@@ -778,7 +774,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   const int blockH = captionH + capToList + listH + (n > 0 ? viewAllH : 0);
   int y;
   if (band.pinBlocks) {
-    y = band.lowerTop;  // X4: just under hairline (Recents pulled up)
+    y = band.lowerTop;
   } else {
     y = zoneTop + std::max(topInset, (zoneH - blockH) / 2);
     if (y + blockH > zoneBottom - 2) {
@@ -797,7 +793,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   }
 
   for (int i = 0; i < n; ++i) {
-    // X4: always paint all n rows (up to 4). Plenty of vertical room under Now Reading.
+    // X4 pin layout: always paint all n rows (measured into equal-gap Lh).
     if (!x4 && !band.pinBlocks && y + rowH > zoneBottom) break;
     const RecentBook& book = books[static_cast<size_t>(i)];
     const bool focused = (i == focus);
@@ -841,25 +837,15 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
     y = barTop + kMicroBarH + kRowGap;
   }
 
-  // View All — X4: pin near the menu (low). X3: sit just under the list.
+  // View All sits under the last book (not menu-pinned).
   if (showViewAll && n > 0) {
-    int viewY;
-    if (x4) {
-      viewY = zoneBottom - titleLineH - kX4ViewAllBottomPad;
-      // If the list ran long, still keep View All below the last row.
-      viewY = std::max(viewY, y + 2);
-      if (viewY + titleLineH > zoneBottom) {
-        viewY = std::max(zoneTop, zoneBottom - titleLineH);
-      }
-    } else {
-      viewY = y + viewAllGap - kRowGap;
-    }
-    if (viewY + titleLineH <= zoneBottom + 2) {
+    y += viewAllGap - kRowGap;  // last row already added kRowGap
+    if (y + titleLineH <= zoneBottom + 2) {
       const bool viewAllFocused = (focus == n);
       const char* label = tr(STR_VIEW_ALL);
       const auto style = viewAllFocused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
       const int lw = renderer.getTextWidth(titleFont, label, style);
-      renderer.drawText(titleFont, centerX - lw / 2, viewY, label, true, style);
+      renderer.drawText(titleFont, centerX - lw / 2, y, label, true, style);
     }
   }
 }

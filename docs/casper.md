@@ -9,9 +9,9 @@ description: Visual tour of Casper themes, reader, stats, controls, and dictiona
 **Casper** is personal firmware for the **Xteink X3/X4**, built on
 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
 It keeps a solid EPUB/TXT reading core, then layers Casper branding and a
-reading-first UI: **Bare**, **Stats**, and **Stats-Life** home themes,
-redesigned reader chrome, reading stats, flexible controls, and offline
-dictionary lookup with multi-word selection.
+reading-first UI: **Penumbra** and **Bare** home themes, redesigned reader
+chrome, reading stats, flexible controls, and offline dictionary lookup with
+multi-word selection.
 
 [View on GitHub](https://github.com/tweakerinc/casper) ·
 [Releases](https://github.com/tweakerinc/casper/releases) ·
@@ -22,42 +22,39 @@ dictionary lookup with multi-word selection.
 <h2 align="center">Themes</h2>
 
 <p align="center">
-  Casper ships three home skins. Choose under <strong>Settings → Display → Theme</strong>.
+  Choose under <strong>Settings → Display → Theme</strong>.
 </p>
 
-| Bare | Stats | Stats-Life |
-|:----:|:-----:|:----------:|
-| <img src="./images/casper/bare-home.jpg" alt="Casper Bare theme home" width="240" /> | <img src="./images/casper/stats-theme.jpg" alt="Casper Stats theme home" width="240" /> | <img src="./images/casper/stats-life-theme.jpg" alt="Casper Stats-Life theme home" width="240" /> |
+| Penumbra (X3) | Penumbra (X4) | Bare |
+|:-------------:|:-------------:|:----:|
+| <img src="./images/casper/x3-penumbra-home.jpg" alt="Penumbra home on X3" width="240" /> | <img src="./images/casper/x4-penumbra-home.jpg" alt="Penumbra home on X4" width="240" /> | <img src="./images/casper/bare-home.jpg" alt="Casper Bare theme home" width="240" /> |
+
+### Penumbra
+
+Text-first home. **X3** shows a large clock and weekday with under-panels
+(**Title · Recents · Book Stats · Lifetime**). **X4** shows last-read title
+above a Recents list. Front actions: **Menu · Library · Recents · Read**.
+
+| Recents | Book Stats | Lifetime |
+|:-------:|:----------:|:--------:|
+| <img src="./images/casper/x3-penumbra-recents.jpg" alt="Penumbra Recents" width="220" /> | <img src="./images/casper/x3-penumbra-book-stats.jpg" alt="Penumbra Book Stats" width="220" /> | <img src="./images/casper/x3-penumbra-life-stats.jpg" alt="Penumbra Lifetime Stats" width="220" /> |
 
 ### Bare
 
 Designed for readers who simply want it to feel like **them and their book** —
-a large cover, title and author, minimal chrome, and front-button actions
-**Menu · Library · Synopsis · Read**.
+a large cover, title and author, minimal chrome (same on X3 and X4). Front
+actions: **Menu · Library · Recents · Read**.
 
 - Long-press **Menu** → Settings  
-- Long-press **Library** → Recents  
 - Long-press **Read** → book quick menu  
 
-### Stats
-
-Built for people who want **detailed reading data** on the home screen:
-reading time, time left, progress, daily average, pages per minute, book start
-date, and estimated finish date. Front actions:
-**Menu · Library · Settings · Read** (long-press **Read** → book menu).
-
-### Stats-Life
-
-Everything in **Stats**, plus **lifetime device stats** on the home screen under
-the cover and book metrics.
-
-> **Note:** Certain date/time features only work on the **X3** (the X4 has no RTC).
+> **Note:** Clock and weekday on Penumbra need the **X3** RTC (the X4 has no RTC).
 
 ### Synopsis view
 
-From Bare (or the book quick menu), open a short description of the current
-book without diving into the file browser. Needs synopsis metadata (easy to add
-in Calibre).
+From the book quick menu (or library long-press), open a short description of
+the current book without diving into the file browser. Needs synopsis metadata
+(easy to add in Calibre).
 
 <img src="./images/casper/synopsis-view.jpg" alt="Casper book synopsis view" width="360" />
 

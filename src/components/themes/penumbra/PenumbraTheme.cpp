@@ -80,9 +80,18 @@ constexpr int kRecentsTopInset = 28;
 constexpr int kRecentsTopInsetX4 = 16;
 // Air between "RECENTS" caption and the first book row.
 constexpr int kRecentsCaptionToListGap = 22;
+// X4: slightly tighter so 4 book rows + View All fit above the menu with even air.
+constexpr int kRecentsCaptionToListGapX4 = 14;
 // Gap between last book row and centered "View All" (X3 + X4 Recents list).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
+constexpr int kRecentsViewAllGapX4 = 8;
+// X4 Now Reading top pad (fixed — do not rebalance with the lower block).
+// Keeps the upper panel stable while hairline + Recents re-center below the author.
+constexpr int kX4UpperTopPadFixed = 14;
+// Row gap inside the recents list (title/author/bar groups).
+constexpr int kRecentsRowGap = 8;
+constexpr int kRecentsRowGapX4 = 6;
 // Under-panel page dots (both devices). Fixed strip above menu.
 // X3: 4 dots (Title · Recents · Stats · Lifetime) when tracking is on.
 // X4: no page dots (Recents only; tracking off).
@@ -478,19 +487,22 @@ int recentsRowHeight(const GfxRenderer& renderer) {
 int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band,
                          const std::vector<RecentBook>& books, const bool includeViewAll = false) {
   (void)band;
+  const bool x4 = isX4Penumbra();
   const int captionH = renderer.getLineHeight(kLabelFontId);
   const int titleLineH = renderer.getLineHeight(kRecentsTitleFontId);
   const int rowH = recentsRowHeight(renderer);
-  constexpr int kRowGap = 8;
+  const int rowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
+  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  const int viewAllGap = x4 ? kRecentsViewAllGapX4 : kRecentsViewAllGap;
   const int maxN = static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount);
   // Empty books: still reserve full list height so clock-minute re-layout does not jump midY.
   const int n =
       books.empty() ? maxN : std::min(static_cast<int>(books.size()), maxN);
-  if (n <= 0) return captionH + kRecentsCaptionToListGap + titleLineH;
-  const int listH = n * rowH + (n - 1) * kRowGap;
-  int h = captionH + kRecentsCaptionToListGap + listH;
+  if (n <= 0) return captionH + capToList + titleLineH;
+  const int listH = n * rowH + (n - 1) * rowGap;
+  int h = captionH + capToList + listH;
   if (includeViewAll && n > 0) {
-    h += kRecentsViewAllGap + titleLineH;
+    h += viewAllGap + titleLineH;
   }
   return h;
 }
@@ -571,24 +583,31 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
   band.pinBlocks = true;
 }
 
-// X4 equal vertical rhythm (four matching air gaps):
-//   contentTop → NOW READING  =  author → hairline  =  hairline → RECENTS  =  last bar → menu
+// X4 layout (top panel fixed; rebalance only below the author):
+//   contentTop + pad → NOW READING (unchanged vertical start)
+//   author → hairline → RECENTS → list end → menu: three equal air gaps
+//   so the hairline sits centered between author and the RECENTS headline,
+//   and the 4-book + View All block rides higher with even room above the menu.
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
+  // Pin the upper "Now Reading" block — do not shift it when the list height changes.
+  band.upperTop = band.contentTop + kX4UpperTopPadFixed;
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  // Reserve View All under the list (same as X3) so 4 books + footer fit the equal-gap rhythm.
+  // Always reserve full 4-row + View All height so the list never drops a book for air.
   const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
-  const int contentH = std::max(1, band.contentBottom - band.contentTop);
-  // free space for 4 equal gaps around the two content blocks + hairline thickness.
-  int free = contentH - Uh - Lh - kRuleThickness;
-  if (free < 4) free = 4;
-  const int G = free / 4;
 
-  band.upperTop = band.contentTop + G;
-  band.midY = band.upperTop + Uh + G;
+  const int afterAuthor = band.upperTop + Uh;
+  // Prefer even air; if the 4-row block is tall, pack gaps to 0 rather than
+  // inventing space (which would push View All under the menu chrome).
+  int free = band.contentBottom - afterAuthor - kRuleThickness - Lh;
+  if (free < 0) free = 0;
+  // Three equal gaps below the author: author→line, line→RECENTS, list→menu.
+  const int G = free / 3;
+
+  band.midY = afterAuthor + G;
   band.halfH = std::max(1, band.midY - band.contentTop);
-  band.lowerTop = band.midY + kRuleThickness + G;  // RECENTS caption starts here
+  band.lowerTop = band.midY + kRuleThickness + G;  // RECENTS caption
   band.pinBlocks = true;
 }
 
@@ -735,19 +754,22 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   const int authorInkH = renderer.getFontAscenderSize(authorFont);
   constexpr int kMicroBarH = 5;
   constexpr int kAuthorToBarGap = 4;  // original author→bar gap
-  constexpr int kRowGap = 8;
+  const int kRowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
+  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  const int viewAllGap = x4 ? kRecentsViewAllGapX4 : kRecentsViewAllGap;
   // title · author+% · gap · bar
   const int rowH = titleLineH + authorInkH + kAuthorToBarGap + kMicroBarH;
 
   const int topInset = x4 ? kRecentsTopInsetX4 : kRecentsTopInset;
-  const int viewAllH = (showViewAll) ? (kRecentsViewAllGap + titleLineH) : 0;
+  const int viewAllH = (showViewAll) ? (viewAllGap + titleLineH) : 0;
 
+  // Always prefer the theme cap (4). Only shrink when not pin-layout and space is truly short.
   const int capped =
       std::min(static_cast<int>(books.size()), static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount));
   int n = capped;
   if (!band.pinBlocks) {
     const int spaceForRows =
-        std::max(0, zoneH - topInset - captionH - kRecentsCaptionToListGap - viewAllH - 2);
+        std::max(0, zoneH - topInset - captionH - capToList - viewAllH - 2);
     int maxFit = 0;
     if (rowH > 0 && spaceForRows >= rowH) {
       maxFit = 1 + std::max(0, spaceForRows - rowH) / (rowH + kRowGap);
@@ -760,7 +782,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   ensureRecentsProgressCache(books, n);
 
   const int listH = n > 0 ? (n * rowH + (n - 1) * kRowGap) : titleLineH;
-  const int blockH = captionH + kRecentsCaptionToListGap + listH + (n > 0 ? viewAllH : 0);
+  const int blockH = captionH + capToList + listH + (n > 0 ? viewAllH : 0);
   int y;
   if (band.pinBlocks) {
     // Equal-gap layout: lowerTop already includes hairline→RECENTS air.
@@ -773,7 +795,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   }
 
   drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS));
-  y += captionH + kRecentsCaptionToListGap;
+  y += captionH + capToList;
 
   if (n == 0) {
     const char* empty = tr(STR_NO_OPEN_BOOK);
@@ -783,7 +805,8 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   }
 
   for (int i = 0; i < n; ++i) {
-    if (y + rowH > zoneBottom) break;
+    // Pin layout already reserved full Lh — still draw all rows even if 1–2px tight.
+    if (!band.pinBlocks && y + rowH > zoneBottom) break;
     const RecentBook& book = books[static_cast<size_t>(i)];
     const bool focused = (i == focus);
     const char* title = book.title.empty() ? book.path.c_str() : book.title.c_str();
@@ -831,8 +854,9 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
 
   // View All under the list — opens full Recent Books (focus index n).
   if (showViewAll && n > 0) {
-    y += kRecentsViewAllGap - kRowGap;  // last row already added kRowGap
-    if (y + titleLineH <= zoneBottom) {
+    y += viewAllGap - kRowGap;  // last row already added kRowGap
+    // Prefer drawing View All even if slightly tight (pin layout reserved its height).
+    if (y + titleLineH <= zoneBottom + (band.pinBlocks ? titleLineH : 0)) {
       const bool viewAllFocused = (focus == n);
       const char* label = tr(STR_VIEW_ALL);
       const auto style = viewAllFocused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;

@@ -1090,11 +1090,13 @@ void HomeActivity::loop() {
         minimalMenuIndex = menuCount - 1;
       }
 
-      buttonNavigator.onPrevious([this, menuCount] {
+      // Press only (no continuous): holding Menu / a nav key must not auto-scroll
+      // the home popup — that looked like a stuck scroll for some remaps/devices.
+      buttonNavigator.onPreviousPress([this, menuCount] {
         minimalMenuIndex = ButtonNavigator::previousIndex(minimalMenuIndex, menuCount);
         requestUpdate();
       });
-      buttonNavigator.onNext([this, menuCount] {
+      buttonNavigator.onNextPress([this, menuCount] {
         minimalMenuIndex = ButtonNavigator::nextIndex(minimalMenuIndex, menuCount);
         requestUpdate();
       });

@@ -81,10 +81,9 @@ constexpr int kRecentsTopInsetX4 = 12;
 // Air between "RECENTS" caption and the first book row.
 constexpr int kRecentsCaptionToListGap = 22;
 constexpr int kRecentsCaptionToListGapX4 = 12;
-// Gap between last book row and "View All" (sits under the 4th book — not menu-pinned).
+// Gap between last book row and "View All" (X3 only; X4 has no View All).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
-constexpr int kRecentsViewAllGapX4 = 12;
 // Row gap inside the recents list (title/author/bar groups).
 constexpr int kRecentsRowGap = 8;
 constexpr int kRecentsRowGapX4 = 6;
@@ -481,6 +480,11 @@ int recentsRowHeight(const GfxRenderer& renderer) {
   return titleLineH + authorInkH + kAuthorToBarGap + kMicroBarH;
 }
 
+// X3: up to 4 books + View All. X4: up to 5 books, no View All (mid = Recents, sides scroll).
+inline int penumbraRecentsListCap() {
+  return isX4Penumbra() ? 5 : 4;
+}
+
 int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band,
                          const std::vector<RecentBook>& books, const bool includeViewAll = false) {
   (void)band;
@@ -490,15 +494,16 @@ int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band,
   const int rowH = recentsRowHeight(renderer);
   const int rowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
   const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
-  const int viewAllGap = x4 ? kRecentsViewAllGapX4 : kRecentsViewAllGap;
-  const int maxN = static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount);
+  const int viewAllGap = kRecentsViewAllGap;
+  const int maxN = penumbraRecentsListCap();
   // Empty books: still reserve full list height so clock-minute re-layout does not jump midY.
   const int n =
       books.empty() ? maxN : std::min(static_cast<int>(books.size()), maxN);
   if (n <= 0) return captionH + capToList + titleLineH;
   const int listH = n * rowH + (n - 1) * rowGap;
   int h = captionH + capToList + listH;
-  if (includeViewAll && n > 0) {
+  // View All only on X3 (includeViewAll is ignored on X4).
+  if (includeViewAll && !x4 && n > 0) {
     h += viewAllGap + titleLineH;
   }
   return h;
@@ -584,16 +589,13 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
 //   status bar → NOW READING
 //   author     → hairline
 //   hairline   → RECENTS
-//   View All   → menu
-// Now Reading height is measured as-is (not stretched/nudged). The list measures
-// 4 books + View All so G shrinks slightly to free room for the 4th row — that is
-// the only "shift up" of hairline/Recents (even air, not a fixed-pad hack).
+//   last book  → menu
+// List is up to 5 books; no View All (sides scroll; mid button opens full Recents).
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  // Include View All in Lh so the bottom G is truly "View All → menu".
-  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
+  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
   const int contentH = std::max(1, band.contentBottom - band.contentTop);
   int free = contentH - Uh - Lh - kRuleThickness;
   if (free < 0) free = 0;
@@ -696,7 +698,8 @@ void drawMicroProgressBar(const GfxRenderer& renderer, const int x, const int y,
 }
 
 // Progress % cache — avoid loadForBook (SD) on every Down scroll (X3 SPI is slow).
-constexpr int kRecentsPctCacheMax = 4;
+// Sized for X4's 5-row list (X3 uses ≤4 + View All).
+constexpr int kRecentsPctCacheMax = 5;
 struct RecentsPctCache {
   std::string path[kRecentsPctCacheMax];
   float pct[kRecentsPctCacheMax];
@@ -725,12 +728,14 @@ float recentsCachedProgress(const int i) {
 
 // Minimalist recents list:
 // - Title full width; author + % on one line; micro bar under author.
-// - Up to 4 books on Penumbra; View All sits just under the last book.
+// - X3: up to 4 books + View All under the list.
+// - X4: up to 5 books, no View All (sides scroll; mid = Recents).
 // - listFocusIndex is list-only; upper "Now Reading" is always books[0].
 void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
                           const std::vector<RecentBook>& books, const int listFocusIndex) {
   const bool x4 = isX4Penumbra();
-  const bool showViewAll = true;
+  // View All only on X3 (full list is a front Recents button on X4).
+  const bool showViewAll = !x4;
   const int zoneTop = band.midY + kRuleThickness;
   const int zoneBottom = band.contentBottom - penumbraPageDotsStripH();
   const int zoneH = std::max(1, zoneBottom - zoneTop);
@@ -747,15 +752,13 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   constexpr int kAuthorToBarGap = 4;
   const int kRowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
   const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
-  const int viewAllGap = x4 ? kRecentsViewAllGapX4 : kRecentsViewAllGap;
+  const int viewAllGap = kRecentsViewAllGap;
   const int rowH = titleLineH + authorInkH + kAuthorToBarGap + kMicroBarH;
 
   const int topInset = x4 ? kRecentsTopInsetX4 : kRecentsTopInset;
   const int viewAllH = showViewAll ? (viewAllGap + titleLineH) : 0;
 
-  // Always up to 4 on Penumbra. Never shrink the X4 pin layout with maxFit.
-  const int capped =
-      std::min(static_cast<int>(books.size()), static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount));
+  const int capped = std::min(static_cast<int>(books.size()), penumbraRecentsListCap());
   int n = capped;
   if (!x4 && !band.pinBlocks) {
     const int spaceForRows =
@@ -837,7 +840,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
     y = barTop + kMicroBarH + kRowGap;
   }
 
-  // View All sits under the last book (not menu-pinned).
+  // X3 only: View All under the last book.
   if (showViewAll && n > 0) {
     y += viewAllGap - kRowGap;  // last row already added kRowGap
     if (y + titleLineH <= zoneBottom + 2) {
@@ -1177,7 +1180,7 @@ Rect PenumbraThemeUi::redrawUnderPanel(GfxRenderer& renderer, const std::vector<
 }
 
 void PenumbraThemeUi::warmRecentsProgressCache(const std::vector<RecentBook>& books) {
-  const int n = std::min(static_cast<int>(books.size()), static_cast<int>(PenumbraMetrics::values.homeRecentBooksCount));
+  const int n = std::min(static_cast<int>(books.size()), penumbraRecentsListCap());
   ensureRecentsProgressCache(books, n);
 }
 

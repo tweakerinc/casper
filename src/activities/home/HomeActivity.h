@@ -145,11 +145,11 @@ class HomeActivity final : public Activity {
   int focusedRecentIndex() const;
   void loadFocusedRecentStats();
   void shiftRecentFocus(int delta);
-  // Penumbra Recents under-panel: book rows drawn (capped by theme, max 4).
+  // Penumbra Recents under-panel: book rows drawn (X3 ≤4, X4 ≤5).
   int penumbraRecentsListCount() const;
-  // Focus slots: books (+ View All on Penumbra Recents under-panel, X3 + X4).
+  // Focus slots: books (+ View All on X3 Recents under-panel only).
   int penumbraRecentsFocusCount() const;
-  // True when focus is on "View All" (not a book).
+  // True when focus is on X3 "View All" (not a book).
   bool penumbraViewAllFocused() const;
   // Step list focus within the focus window (wraps).
   void stepPenumbraRecentsFocus(int delta);

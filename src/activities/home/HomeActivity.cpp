@@ -1201,8 +1201,8 @@ void HomeActivity::loop() {
     }
 
     // All themes: Menu · Library · Recents · Read
-    // Penumbra on Recents under-panel (X3 + X4): mid button = Down (scroll list /
-    // View All). Full Recents list opens from View All or when not on that panel.
+    // X3 Penumbra on Recents under-panel: mid = Down (scroll list / View All).
+    // X4: mid always opens full Recents; side Up/Down scroll the on-screen list.
     auto activateMinimalHomeNav = [this](int index) {
       switch (index) {
         case 0:  // Menu
@@ -1216,8 +1216,8 @@ void HomeActivity::loop() {
         case 1:  // Library
           onFileBrowserOpen();
           break;
-        case 2:  // Recents — or Down when Penumbra under-panel is the recents list
-          if (isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel()) {
+        case 2:  // Recents — or Down on X3 when under-panel is the recents list
+          if (isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel() && gpio.deviceIsX3()) {
             if (penumbraRecentsFocusCount() > 0) {
               stepPenumbraRecentsFocus(1);
               forceStatsUnderBoxRepaint = true;
@@ -1505,8 +1505,9 @@ void HomeActivity::render(RenderLock&& lock) {
                                                currentBookProgressPercent, &globalStats);
         {
           const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
-          // Recents under-panel (X3 + X4): mid = Down (scroll / View All).
-          const char* mid = recentsPanel ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+          // X3 Recents page: Down. X4: always Recents (sides scroll the list).
+          const char* mid =
+              (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
           const char* action =
               recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
           GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
@@ -1553,7 +1554,8 @@ void HomeActivity::render(RenderLock&& lock) {
       }
       {
         const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
-        const char* mid = recentsPanel ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+        const char* mid =
+            (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
         const char* action =
             recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
         GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
@@ -1651,7 +1653,8 @@ void HomeActivity::render(RenderLock&& lock) {
     }
     {
       const bool recentsPanel = PenumbraThemeUi::isRecentsUnderPanel();
-      const char* mid = recentsPanel ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+      const char* mid =
+          (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
       const char* action =
           recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
       GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), mid, action);
@@ -1839,10 +1842,11 @@ void HomeActivity::render(RenderLock&& lock) {
                               currentBookProgressPercent, &globalStats, nullptr);
     }
 
-    // Bare / Penumbra / Stats. Penumbra Recents under-panel: mid label = Down.
+    // Bare / Penumbra / Stats. X3 Recents under-panel: mid = Down; X4: Recents.
     {
       const bool recentsPanel = isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel();
-      const char* midHint = recentsPanel ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
+      const char* midHint =
+          (recentsPanel && gpio.deviceIsX3()) ? tr(STR_DIR_DOWN) : tr(STR_RECENTS);
       const char* action =
           recentBooks.empty() ? "" : (recentsPanel ? tr(STR_OPEN) : tr(STR_READ));
       GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_LIBRARY), midHint, action);
@@ -2046,18 +2050,18 @@ int HomeActivity::penumbraRecentsListCount() const {
   return std::min(static_cast<int>(recentBooks.size()), std::max(1, maxN));
 }
 
-// Focus slots: books, plus View All on Penumbra Recents under-panel (X3 + X4).
+// Focus slots: books, plus View All on X3 Penumbra Recents under-panel only.
 int HomeActivity::penumbraRecentsFocusCount() const {
   const int books = penumbraRecentsListCount();
   if (books <= 0) return 0;
-  if (isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel()) {
-    return books + 1;  // last slot = View All
+  if (gpio.deviceIsX3() && isPenumbraTheme() && PenumbraThemeUi::isRecentsUnderPanel()) {
+    return books + 1;  // last slot = View All (X3)
   }
   return books;
 }
 
 bool HomeActivity::penumbraViewAllFocused() const {
-  if (!isPenumbraTheme() || !PenumbraThemeUi::isRecentsUnderPanel()) {
+  if (!gpio.deviceIsX3() || !isPenumbraTheme() || !PenumbraThemeUi::isRecentsUnderPanel()) {
     return false;
   }
   const int books = penumbraRecentsListCount();

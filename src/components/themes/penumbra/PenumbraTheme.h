@@ -29,8 +29,8 @@ constexpr ThemeMetrics makeValues() {
   // touch-band math that uses homeCoverTileHeight in classic themes.
   v.homeCoverHeight = 1;
   v.homeCoverTileHeight = 1;
-  // Last-read + 3 more recents on the under-panel list (4 rows; X4 primary).
-  v.homeRecentBooksCount = 4;
+  // Cap for under-panel list (X4 uses 5 without View All; X3 uses ≤4 + View All).
+  v.homeRecentBooksCount = 5;
   v.homeContinueReadingInMenu = false;
   v.homeMenuTopOffset = 0;
   v.buttonHintsHeight = 48;

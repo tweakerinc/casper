@@ -2,20 +2,21 @@
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <I18n.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
+#include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
-// Quick Resume sleep/wake markers on the reader page.
-// Ink-only (no white plate). Prefer under the power button (top-right),
-// even when the right status slot has content (sit just inward of it).
-// Only if the right side is unusable do we use empty left/middle; last resort
-// mid/right gap.
+// Quick Resume sleep/wake markers on the retained page.
+// Home uses system status-bar slots; reader uses reader status-bar slots.
+// Prefer under power (top-right). If that corner has chrome, sit ~8px left of it.
 
 namespace SleepChromeIcon {
 
@@ -25,6 +26,15 @@ constexpr int kMoonCropX = 7;
 constexpr int kMoonCropY = 3;
 constexpr int kMoonCropW = 35;
 constexpr int kMoonCropH = 41;
+// Air between moon and right-side status content when the right slot is filled.
+constexpr int kRightChromeGap = 8;
+
+enum class ChromeContext : uint8_t { Home, Reader };
+
+// QR sleep/wake: use the chrome of the screen still on the panel.
+inline ChromeContext currentContext() {
+  return APP_STATE.lastSleepFromReader ? ChromeContext::Reader : ChromeContext::Home;
+}
 
 inline int iconSize(const GfxRenderer& renderer) {
   const int clockH = renderer.getLineHeight(SMALL_FONT_ID);
@@ -39,33 +49,86 @@ inline int topY(const GfxRenderer& renderer) {
   return rowY + std::max(0, (rowH - size) / 2);
 }
 
-inline bool upperSlotEmpty(const uint8_t content) {
-  return content == CrossPointSettings::CORNER_HIDE;
+// Right edge of the top status row — match BaseTheme anchors for each chrome type.
+inline int rightEdgeX(const GfxRenderer& renderer, const ChromeContext ctx) {
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oTop;
+  (void)oBottom;
+  (void)oLeft;
+  const int screenW = renderer.getScreenWidth();
+  if (ctx == ChromeContext::Reader) {
+    const auto& m = UITheme::getInstance().getMetrics();
+    return screenW - m.statusBarHorizontalMargin - oRight;
+  }
+  // System bar (home) uses kTopChromeInsetX on both sides.
+  return screenW - oRight - BaseTheme::kTopChromeInsetX;
 }
 
-// Approximate width of the upper-right status item so the moon can sit just
-// left of it (still under power) when the slot is occupied.
-inline int estimateUpperRightWidth(const GfxRenderer& renderer) {
-  using C = CrossPointSettings::STATUS_BAR_CORNER_CONTENT;
+inline int leftEdgeX(const GfxRenderer& renderer, const ChromeContext ctx) {
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oTop;
+  (void)oBottom;
+  (void)oRight;
+  if (ctx == ChromeContext::Reader) {
+    const auto& m = UITheme::getInstance().getMetrics();
+    return m.statusBarHorizontalMargin + oLeft;
+  }
+  return oLeft + BaseTheme::kTopChromeInsetX;
+}
+
+inline int batteryGroupWidth(const GfxRenderer& renderer, const uint8_t displayMode) {
+  const auto& metrics = BaseMetrics::values;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                           ? displayMode
+                           : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+  const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
+  const bool showPct = mode != CrossPointSettings::BATTERY_DISPLAY_ICON;
+  const int iconW = metrics.batteryWidth;
+  const int pctW = showPct ? renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
+  if (showIcon && showPct) return iconW + 4 + pctW;
+  if (showIcon) return iconW;
+  return pctW;
+}
+
+// Width of whatever is drawn in the top-right slot for this chrome context.
+// 0 ⇒ right corner is free → moon flush right.
+inline int rightSlotWidth(const GfxRenderer& renderer, const ChromeContext ctx) {
+  using S = CrossPointSettings;
+  if (ctx == ChromeContext::Home) {
+    const uint8_t slot = SETTINGS.systemStatusBarRight;
+    if (slot == S::SYS_SLOT_HIDE) return 0;
+    if (slot == S::SYS_SLOT_BATTERY) {
+      return batteryGroupWidth(renderer, SETTINGS.systemBatteryDisplay);
+    }
+    if (slot == S::SYS_SLOT_CLOCK) {
+      char buf[16];
+      if (halClock.isAvailable() &&
+          halClock.formatTime(buf, sizeof(buf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) {
+        return renderer.getTextWidth(SMALL_FONT_ID, buf);
+      }
+      return renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
+    }
+    if (slot == S::SYS_SLOT_BATTERY_WARNING) {
+      // Only drawn when low; on sleep we still reserve a modest width if assigned.
+      return renderer.getTextWidth(SMALL_FONT_ID, "Battery 15%");
+    }
+    return 0;
+  }
+
+  // Reader chrome
+  using C = S::STATUS_BAR_CORNER_CONTENT;
   const uint8_t content = SETTINGS.statusBarUpperRight;
   if (content == C::CORNER_HIDE) return 0;
-
-  const auto& metrics = BaseMetrics::values;
   if (content == C::CORNER_BATTERY) {
-    const uint8_t mode = SETTINGS.readerBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
-                             ? SETTINGS.readerBatteryDisplay
-                             : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
-    const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
-    const bool showPct = mode != CrossPointSettings::BATTERY_DISPLAY_ICON;
-    const int iconW = metrics.batteryWidth;
-    const int pctW = showPct ? renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
-    if (showIcon && showPct) return iconW + 4 + pctW;
-    if (showIcon) return iconW;
-    return pctW;
+    return batteryGroupWidth(renderer, SETTINGS.readerBatteryDisplay);
   }
   if (content == C::CORNER_PROGRESS_PERCENT) {
-    // "100% complete" worst case.
-    return renderer.getTextWidth(SMALL_FONT_ID, "100% complete");
+    // Typical drawn form: "42% complete" — use a mid-length sample, not padded max.
+    char buf[32];
+    snprintf(buf, sizeof(buf), "99%% %s", tr(STR_COMPLETE));
+    return renderer.getTextWidth(SMALL_FONT_ID, buf);
   }
   if (content == C::CORNER_CLOCK) {
     char buf[16];
@@ -75,50 +138,55 @@ inline int estimateUpperRightWidth(const GfxRenderer& renderer) {
     }
     return renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
   }
-  // Page counters / other short chrome.
+  if (content == C::CORNER_CHAPTER_PAGE_COUNTER || content == C::CORNER_BOOK_PAGE_COUNTER) {
+    return renderer.getTextWidth(SMALL_FONT_ID, "Pg. 999/999");
+  }
+  if (content == C::CORNER_CHAPTER_COUNTER) {
+    return renderer.getTextWidth(SMALL_FONT_ID, "Ch. 99/99");
+  }
+  // Titles are rare on upper-right; keep modest.
   return renderer.getTextWidth(SMALL_FONT_ID, "999/999");
 }
 
-// Under power = top-right of the oriented panel.
-// free right  → flush to right edge
-// occupied   → just left of that right chrome (still top-right / under power)
-// squeezed   → empty left, then empty middle, then mid/right gap
-inline int leftX(const GfxRenderer& renderer) {
-  int orientedMarginTop = 0, orientedMarginRight = 0, orientedMarginBottom = 0, orientedMarginLeft = 0;
-  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
-                                   &orientedMarginLeft);
-  (void)orientedMarginTop;
-  (void)orientedMarginBottom;
-
-  const int screenW = renderer.getScreenWidth();
-  const int centerX = screenW / 2;
-  const int leftEdge = orientedMarginLeft + BaseTheme::kTopChromeInsetX;
-  const int rightEdge = screenW - orientedMarginRight - BaseTheme::kTopChromeInsetX;
-  const int size = iconSize(renderer);
-  constexpr int kGap = 6;
-
-  const bool rightFree = upperSlotEmpty(SETTINGS.statusBarUpperRight);
-  const bool leftFree = upperSlotEmpty(SETTINGS.statusBarUpperLeft);
-  const bool midFree = upperSlotEmpty(SETTINGS.statusBarUpperMiddle);
-
-  // 1) Under power — top-right (flush or inset past right status content).
-  if (rightFree) {
-    return rightEdge - size;
+inline bool leftSlotEmpty(const ChromeContext ctx) {
+  if (ctx == ChromeContext::Home) {
+    return SETTINGS.systemStatusBarLeft == CrossPointSettings::SYS_SLOT_HIDE;
   }
-  const int rightW = estimateUpperRightWidth(renderer);
-  const int underPowerX = rightEdge - rightW - kGap - size;
-  // Keep it on the right half so it still reads as "under power".
+  return SETTINGS.statusBarUpperLeft == CrossPointSettings::CORNER_HIDE;
+}
+
+inline bool midSlotEmpty(const ChromeContext ctx) {
+  if (ctx == ChromeContext::Home) {
+    return SETTINGS.systemStatusBarMiddle == CrossPointSettings::SYS_SLOT_HIDE;
+  }
+  return SETTINGS.statusBarUpperMiddle == CrossPointSettings::CORNER_HIDE;
+}
+
+// Under power (top-right). Free right → flush corner. Occupied → 8px left of that chrome.
+inline int leftX(const GfxRenderer& renderer) {
+  const ChromeContext ctx = currentContext();
+  const int size = iconSize(renderer);
+  const int rightEdge = rightEdgeX(renderer, ctx);
+  const int leftEdge = leftEdgeX(renderer, ctx);
+  const int centerX = renderer.getScreenWidth() / 2;
+  const int rightW = rightSlotWidth(renderer, ctx);
+
+  // 1) Under power / top-right
+  if (rightW <= 0) {
+    return rightEdge - size;  // empty right slot → true corner
+  }
+  // Sit just left of right chrome (small fixed gap).
+  const int underPowerX = rightEdge - rightW - kRightChromeGap - size;
   if (underPowerX >= centerX) {
     return underPowerX;
   }
 
-  // 2) Empty left / middle.
-  if (leftFree) return leftEdge;
-  if (midFree) return centerX - size / 2;
+  // 2) Empty left / middle
+  if (leftSlotEmpty(ctx)) return leftEdge;
+  if (midSlotEmpty(ctx)) return centerX - size / 2;
 
-  // 3) Last resort: between middle and right (legacy).
-  const int iconCenter = (centerX + rightEdge) / 2;
-  return iconCenter - size / 2;
+  // 3) Last resort mid/right gap
+  return (centerX + rightEdge) / 2 - size / 2;
 }
 
 inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t* src, const int srcW,
@@ -145,8 +213,8 @@ inline void drawMoonFitted(const GfxRenderer& renderer, const uint8_t* src, cons
   const int dh = boxSize;
   const int dw = std::max(1, (kMoonCropW * boxSize) / kMoonCropH);
   const int ox = boxX + (boxSize - dw) / 2;
-  const int oy = boxY;
-  drawTransparentScaledCrop(renderer, src, kMoonSrcW, kMoonCropX, kMoonCropY, kMoonCropW, kMoonCropH, ox, oy, dw, dh);
+  drawTransparentScaledCrop(renderer, src, kMoonSrcW, kMoonCropX, kMoonCropY, kMoonCropW, kMoonCropH, ox, boxY, dw,
+                            dh);
 }
 
 inline void fillDot(const GfxRenderer& renderer, const int cx, const int cy, const int r) {

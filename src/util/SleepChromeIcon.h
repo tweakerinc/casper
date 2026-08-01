@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 
 #include <algorithm>
@@ -29,7 +30,9 @@ constexpr int kMoonCropH = 41;
 // Air between moon and right-side status content when the right slot is filled.
 constexpr int kRightChromeGap = 8;
 // When the right slot is empty, hug the physical corner (tighter than status chrome inset).
+// X4 looks balanced at 2px; X3 reads a hair too far right → extra inset on X3 only.
 constexpr int kCornerInsetX = 2;
+constexpr int kCornerInsetX3Extra = 3;  // pull moon left ~3px on X3
 
 enum class ChromeContext : uint8_t { Home, Reader };
 
@@ -58,7 +61,8 @@ inline int cornerRightEdgeX(const GfxRenderer& renderer) {
   (void)oTop;
   (void)oBottom;
   (void)oLeft;
-  return renderer.getScreenWidth() - oRight - kCornerInsetX;
+  const int inset = kCornerInsetX + (gpio.deviceIsX3() ? kCornerInsetX3Extra : 0);
+  return renderer.getScreenWidth() - oRight - inset;
 }
 
 // Right edge of drawn status chrome (for sitting just left of progress/battery).

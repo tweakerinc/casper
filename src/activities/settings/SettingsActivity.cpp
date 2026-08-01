@@ -138,7 +138,7 @@ void SettingsActivity::rebuildSettingsLists() {
                          SettingInfo::Action(StrId::STR_STATUS_BAR, SettingAction::SystemStatusBar));
 
   // System order: Wi‑Fi → Stats (folder, X3 only) → Session Time (X3 only) → …
-  // … → Language → KOReader Sync → OPDS → Enable Logging → SD firmware → Check for Updates.
+  // … → Enable Logging → Language → KOReader Sync → OPDS → SD firmware → Check for Updates.
   // Backup / Auto Backup / Enable Tracking live inside Stats — not duplicated here.
   // X4: no RTC → no reading-stat tracking or settings surface.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
@@ -157,9 +157,6 @@ void SettingsActivity::rebuildSettingsLists() {
   if (haveShowHidden) systemSettings.push_back(showHidden);
   if (haveRemoveRecents) systemSettings.push_back(removeRecents);
   if (haveMoveFinished) systemSettings.push_back(moveFinished);
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   if (haveEnableLogging) {
     systemSettings.push_back(enableLogging);
   } else {
@@ -175,6 +172,9 @@ void SettingsActivity::rebuildSettingsLists() {
         },
         "systemLogLevel"));
   }
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
 

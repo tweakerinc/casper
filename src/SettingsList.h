@@ -347,8 +347,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
             {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
             "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
-        // Enable Logging (Off / On). On = Timing field captures. Placed after OPDS in
-        // SettingsActivity's ordered System list; also exposed on web/JSON.
+        SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
+                            StrId::STR_CAT_SYSTEM),
+        SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
+                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
+        SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
+                            "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
+        // Enable Logging (Off / On). On = Timing. On-device order: above Language (see SettingsActivity).
         SettingInfo::DynamicEnum(
             StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
             [] {
@@ -360,12 +365,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                      : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
             },
             "systemLogLevel", StrId::STR_CAT_SYSTEM),
-        SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
-                            StrId::STR_CAT_SYSTEM),
-        SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
-                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
-        SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
-                            "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
         // Session idle gap for stats (device UI builds ordered System list separately).
         SettingInfo::Value(StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
                            {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES,

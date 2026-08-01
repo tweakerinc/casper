@@ -468,6 +468,28 @@ void memoInvalidate(const std::string& bookPath) {
   }
 }
 
+// One-time CrossInk / legacy scan marker under the Casper cache folder.
+// Present ⇒ we already looked for alternate cache dirs once; do not thrash SD
+// again until the user clears cache (which deletes this folder/marker).
+static constexpr const char* kLegacyScanMarker = "stats_legacy_scanned";
+
+bool legacyScanAlreadyDone(const std::string& primaryPath) {
+  if (primaryPath.empty()) return false;
+  return Storage.exists((primaryPath + "/" + kLegacyScanMarker).c_str());
+}
+
+void markLegacyScanDone(const std::string& primaryPath) {
+  if (primaryPath.empty()) return;
+  ensureCacheDir(primaryPath);
+  const std::string markPath = primaryPath + "/" + kLegacyScanMarker;
+  if (Storage.exists(markPath.c_str())) return;
+  HalFile f = Storage.open(markPath.c_str(), O_RDWR | O_CREAT | O_TRUNC);
+  if (!f) return;
+  const char one = '1';
+  f.write(reinterpret_cast<const uint8_t*>(&one), 1);
+  f.close();
+}
+
 BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   if (bookPath.empty()) {
     return {};
@@ -488,12 +510,11 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   }
 
   const std::string& primaryPath = paths[0];
+  const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
 
-  // Cheap stats win: once Casper has a rich stats_vN under the primary path,
-  // skip CrossInk FNV folders and multi-file scans (~80–100ms on X3 SD).
+  // 1) Fast path: Casper's current stats file under the primary cache.
   {
     BookReadingStats primaryFast;
-    const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
     if (loadStatsFileNamed(primaryPath, currentName, primaryFast) && hasAnyStatsPayload(primaryFast) &&
         !looksLikeEmptyShell(primaryFast)) {
       memoStore(bookPath, primaryFast);
@@ -501,20 +522,33 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
     }
   }
 
-  // If the primary cache dir is missing, still try alternate (CrossInk) paths once,
-  // but skip when *no* candidate folder exists — common for never-opened recents.
-  bool anyDir = false;
-  for (size_t i = 0; i < pathCount; ++i) {
-    if (!paths[i].empty() && Storage.exists(paths[i].c_str())) {
-      anyDir = true;
-      break;
+  // 2) Primary folder only (no CrossInk yet): any stats*.bin already migrated here.
+  {
+    const BookReadingStats primaryOnly = loadBestInCacheDir(primaryPath);
+    if (hasAnyStatsPayload(primaryOnly) && !looksLikeEmptyShell(primaryOnly)) {
+      // Promote to current filename if needed (single-dir, cheap).
+      BookReadingStats currentOnly;
+      if (!loadStatsFileNamed(primaryPath, currentName, currentOnly) || looksLikeEmptyShell(currentOnly) ||
+          isRicherStats(primaryOnly, currentOnly)) {
+        ensureCacheDir(primaryPath);
+        primaryOnly.save(primaryPath);
+      }
+      // We have real Casper stats — no need for future CrossInk hunts.
+      markLegacyScanDone(primaryPath);
+      memoStore(bookPath, primaryOnly);
+      return primaryOnly;
     }
   }
-  if (!anyDir) {
+
+  // 3) Already did the one-time CrossInk/legacy hunt for this book (or user never
+  // had stats). Deleting the cache folder removes the marker and allows a re-scan.
+  if (legacyScanAlreadyDone(primaryPath)) {
     memoStore(bookPath, {});
     return {};
   }
 
+  // 4) One-time CrossInk / alternate-path scan (first flash, first open, or after
+  // clear cache). Not repeated on every Home paint or reboot.
   BookReadingStats best;
   bool have = false;
   size_t bestPathIndex = 0;
@@ -538,17 +572,16 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
     }
   }
 
+  // Always mark so we never re-walk CrossInk folders for this book.
+  markLegacyScanDone(primaryPath);
+
   if (!have) {
     memoStore(bookPath, {});
     return {};
   }
 
-  // Land the winner under Casper's cache path so later opens hit the cheap path.
-  // Only rewrite when we actually have lifetime data worth keeping.
-  const BookReadingStats primaryNow = loadBestInCacheDir(primaryPath);
-  const bool primaryMissingOrThin =
-      !hasAnyStatsPayload(primaryNow) || looksLikeEmptyShell(primaryNow) || isRicherStats(best, primaryNow);
-  if (primaryMissingOrThin && hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
+  // Land the winner under Casper's primary cache path.
+  if (hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
     ensureCacheDir(primaryPath);
     best.save(primaryPath);
     if (bestPathIndex != 0) {

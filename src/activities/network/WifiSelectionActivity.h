@@ -89,9 +89,10 @@ class WifiSelectionActivity final : public Activity {
   int savePromptSelection = 0;
   int forgetPromptSelection = 0;
 
-  // Connection timeout
-  static constexpr unsigned long CONNECTION_TIMEOUT_MS = 15000;
-  static constexpr unsigned long AUTO_CONNECTION_TIMEOUT_MS = 7000;
+  // Connection timeout. Auto is slightly shorter so we can walk saved SSIDs,
+  // but too short (≤7s) false-fails on crowded 2.4 GHz / slow DHCP.
+  static constexpr unsigned long CONNECTION_TIMEOUT_MS = 20000;
+  static constexpr unsigned long AUTO_CONNECTION_TIMEOUT_MS = 12000;
   unsigned long connectionStartTime = 0;
 
   void renderNetworkList(const Rect* screen, const ThemeMetrics* metrics) const;

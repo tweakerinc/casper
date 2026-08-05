@@ -77,6 +77,8 @@ void TextSettingsActivity::onEnter() {
   // user can pick Font / Size / Layout / … before diving into a list item.
   std::fill(std::begin(selectedIndex_), std::end(selectedIndex_), 0);
 
+  // One scrub on open; scrolling/tabs stay FAST (no periodic HALF while navigating).
+  UiGhostPolicy::requestHardScrub();
   requestUpdate();
 }
 
@@ -176,12 +178,15 @@ bool TextSettingsActivity::handleTouch() {
 void TextSettingsActivity::loop() {
   if (optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) return;  // picker owns input while open
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  // Finish on release, not press. When this screen is opened from the reader
+  // menu, a press-to-finish leaves a Back release for the reader — and the
+  // reader treats any Back release as "go home" after reflow. Match CrossPoint.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (selectedIndex() == 0) {
       // Stay on the tab bar so Select can cycle Font / Size / Layout / Style
       // without dropping into the first list row each time.

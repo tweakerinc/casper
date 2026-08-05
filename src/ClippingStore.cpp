@@ -96,6 +96,8 @@ bool ClippingStore::loadForBook(const std::string& filePath, const std::string& 
   bookAuthor = author;
   dirty = false;
   clippings.clear();
+  textCache.clear();
+  textCacheWarmed = false;
   if (clippings.capacity() < INITIAL_CLIPPING_RESERVE) {
     clippings.reserve(INITIAL_CLIPPING_RESERVE);
   }
@@ -111,6 +113,8 @@ bool ClippingStore::loadForBook(const std::string& filePath, const std::string& 
 void ClippingStore::unload() {
   if (dirty) saveToFile();
   clippings.clear();
+  textCache.clear();
+  textCacheWarmed = false;
   bookFilePath.clear();
   bookTitle.clear();
   bookAuthor.clear();
@@ -142,9 +146,11 @@ ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, c
   clipping.textLength = static_cast<uint16_t>(std::min(text.size(), CLIPPING_TEXT_MAX));
 
   clippings.push_back(std::move(clipping));
+  textCache.push_back(text.substr(0, clipping.textLength));
   dirty = true;
   if (!writeToFile(&text, clippings.size() - 1)) {
     clippings.pop_back();
+    if (!textCache.empty()) textCache.pop_back();
     dirty = true;
     return AddResult::SaveFailed;
   }
@@ -179,10 +185,32 @@ const Clipping* ClippingStore::clippingAt(const size_t index) const {
 bool ClippingStore::readClippingText(const size_t index, std::string& out) const {
   const Clipping* clipping = clippingAt(index);
   if (!clipping) return false;
-  return readClippingText(*clipping, out);
+  if (index < textCache.size() && !textCache[index].empty()) {
+    out = textCache[index];
+    return true;
+  }
+  if (!readClippingTextFromDisk(*clipping, out)) {
+    return false;
+  }
+  if (index < textCache.size()) {
+    textCache[index] = out;
+  } else if (index == textCache.size()) {
+    textCache.push_back(out);
+  }
+  return true;
 }
 
 bool ClippingStore::readClippingText(const Clipping& clipping, std::string& out) const {
+  // Prefer cache when this is a live entry from clippings[].
+  for (size_t i = 0; i < clippings.size(); ++i) {
+    if (&clippings[i] == &clipping) {
+      return readClippingText(i, out);
+    }
+  }
+  return readClippingTextFromDisk(clipping, out);
+}
+
+bool ClippingStore::readClippingTextFromDisk(const Clipping& clipping, std::string& out) const {
   out.clear();
   if (clipping.textLength == 0) return true;
   if (storeFilePath.empty()) return false;
@@ -207,6 +235,30 @@ bool ClippingStore::readClippingText(const Clipping& clipping, std::string& out)
   return ok;
 }
 
+void ClippingStore::warmTextCache() const {
+  if (textCacheWarmed || clippings.empty()) {
+    textCacheWarmed = true;
+    return;
+  }
+  // Cap total cached bytes so a huge annotation set cannot exhaust heap.
+  constexpr size_t kMaxWarmBytes = 48 * 1024;
+  size_t used = 0;
+  textCache.assign(clippings.size(), {});
+  for (size_t i = 0; i < clippings.size(); ++i) {
+    if (used >= kMaxWarmBytes) break;
+    if (clippings[i].textLength == 0) continue;
+    if (used + clippings[i].textLength > kMaxWarmBytes) break;
+    std::string body;
+    if (readClippingTextFromDisk(clippings[i], body)) {
+      textCache[i] = std::move(body);
+      used += textCache[i].size();
+    }
+  }
+  textCacheWarmed = true;
+  LOG_DBG("CLIP", "Text cache warmed: %u clips, %u bytes", static_cast<unsigned>(clippings.size()),
+          static_cast<unsigned>(used));
+}
+
 bool ClippingStore::saveToFile() {
   if (!dirty) return true;
   if (writeToFile()) {
@@ -218,6 +270,8 @@ bool ClippingStore::saveToFile() {
 
 void ClippingStore::clearAll() {
   clippings.clear();
+  textCache.clear();
+  textCacheWarmed = false;
   dirty = false;
   if (!storeFilePath.empty() && Storage.exists(storeFilePath.c_str())) {
     Storage.remove(storeFilePath.c_str());

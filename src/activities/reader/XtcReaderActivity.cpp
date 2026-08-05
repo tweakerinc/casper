@@ -75,7 +75,7 @@ void XtcReaderActivity::loop() {
   const bool atEndOfBook = currentPage >= xtc->getPageCount();
 
   // While the end screen suggestion menu is showing it owns Confirm/Back/navigation
-  // input. Anything it doesn't handle (e.g. long-press Back to the file browser) falls
+  // input. Anything it doesn't handle falls
   // through to the regular handlers below; page turns are absorbed by the end-of-book
   // block.
   if (atEndOfBook && endOfBookOptions.menuActive()) {

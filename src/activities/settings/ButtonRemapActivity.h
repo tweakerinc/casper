@@ -24,15 +24,21 @@ class ButtonRemapActivity final : public Activity {
   uint8_t tempMap[CrossPointSettings::HW_REMAP_BUTTON_COUNT] = {};
   int selectedIndex = 0;
   unsigned long errorUntil = 0;
+  unsigned long lastContinuousNavTime = 0;
   std::string errorMessage;
   OptionPopup functionPopup;
   bool dirty = false;
+
+  // Locked editor chrome (matches footer): hw0 Back, hw1 Select, hw2 Up, hw3 Down.
+  static constexpr uint16_t kLockedNavStartMs = 500;
+  static constexpr uint16_t kLockedNavIntervalMs = 350;
 
   void openFunctionPicker();
   bool tryAssign(uint8_t hwIndex, uint8_t function);
   void resetDefaults();
   void commitAndExit();
   void showError(const char* msg);
+  bool lockedContinuousNav(uint8_t hwIndex);
 
   const char* slotName(uint8_t hwIndex) const;
   const char* functionName(uint8_t function) const;

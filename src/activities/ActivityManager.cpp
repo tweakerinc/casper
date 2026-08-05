@@ -333,6 +333,19 @@ void ActivityManager::goToReader(std::string path) {
   // QR / cold open: stack was empty (log: "Swapped activity, stack size = 0"), so
   // leaveReaderToHome built a *new* Home (~5s multipass / HALF on X3). Seed Home
   // under the reader without painting it first.
+  //
+  // Free Home cover snapshot RAM while reading — Home stays stacked for snappy
+  // Back, but a full cover buffer does not need to compete with section build.
+  auto releaseHomeCover = [](Activity* a) {
+    if (a && a->isHomeActivity()) {
+      static_cast<HomeActivity*>(a)->releaseHeavyResourcesForReader();
+    }
+  };
+  releaseHomeCover(currentActivity.get());
+  for (const auto& stacked : stackActivities) {
+    releaseHomeCover(stacked.get());
+  }
+
   const bool homeOnStack =
       (currentActivity && currentActivity->isHomeActivity()) ||
       std::any_of(stackActivities.begin(), stackActivities.end(),
@@ -361,8 +374,8 @@ void ActivityManager::goToReader(std::string path) {
   currentActivity->onEnter();
 }
 
-void ActivityManager::goToSleep(bool fromTimeout) {
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+void ActivityManager::goToSleep(bool fromTimeout, bool useQuickResume) {
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, useQuickResume));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
 

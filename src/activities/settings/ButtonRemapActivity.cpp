@@ -96,7 +96,33 @@ bool ButtonRemapActivity::tryAssign(const uint8_t hwIndex, const uint8_t functio
 
   uint8_t trial[CrossPointSettings::HW_REMAP_BUTTON_COUNT];
   std::memcpy(trial, tempMap, sizeof(trial));
-  trial[hwIndex] = function;
+
+  // Already this function on this slot — no-op.
+  if (trial[hwIndex] == function) {
+    return true;
+  }
+
+  if (function == CrossPointSettings::BTN_FUNC_NONE) {
+    // Disable this key only (NONE may appear on multiple slots).
+    trial[hwIndex] = CrossPointSettings::BTN_FUNC_NONE;
+  } else {
+    // Each real function exists at most once: assigning it here swaps with the
+    // slot that currently owns it (e.g. put Left on Bottom1 → Bottom1's old
+    // function moves to wherever Left was). No puzzle, no duplicate Backs.
+    int owner = -1;
+    for (uint8_t i = 0; i < CrossPointSettings::HW_REMAP_BUTTON_COUNT; i++) {
+      if (trial[i] == function) {
+        owner = static_cast<int>(i);
+        break;
+      }
+    }
+    const uint8_t displaced = trial[hwIndex];
+    trial[hwIndex] = function;
+    if (owner >= 0) {
+      trial[static_cast<uint8_t>(owner)] = displaced;
+    }
+  }
+
   if (!CrossPointSettings::isButtonFunctionMapValid(trial)) {
     showError(tr(STR_REMAP_NEED_CORE));
     return false;
@@ -146,6 +172,18 @@ void ButtonRemapActivity::commitAndExit() {
   finish();
 }
 
+bool ButtonRemapActivity::lockedContinuousNav(const uint8_t hwIndex) {
+  // Hold physical Up/Down slots to repeat list nav — independent of remap.
+  if (!gpio.isPressed(hwIndex)) return false;
+  const unsigned long held = mappedInput.getHeldTime();
+  if (held < kLockedNavStartMs) return false;
+  if (lastContinuousNavTime != 0 && (millis() - lastContinuousNavTime) < kLockedNavIntervalMs) {
+    return false;
+  }
+  lastContinuousNavTime = millis();
+  return true;
+}
+
 void ButtonRemapActivity::loop() {
   if (errorUntil > 0 && millis() > errorUntil) {
     errorMessage.clear();
@@ -153,20 +191,28 @@ void ButtonRemapActivity::loop() {
     requestUpdate();
   }
 
-  if (functionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  // Popup + list: locked physical chrome only. Labels draw Back · Select · Up · Down
+  // on front slots 0–3; input must match that layout so a remapped Back on Bottom 3
+  // cannot steal "Back" while the footer still points at Bottom 1.
+  if (functionPopup.handleInputLockedFront(mappedInput, [this] { requestUpdate(); })) {
+    return;
+  }
 
-  // List navigation uses the current (valid) map via NavPrev/NavNext.
-  ButtonNavigator nav;
-  nav.onPrevious([this] {
+  // hw2 labeled Up, hw3 labeled Down (hardware names are LEFT/RIGHT).
+  const bool prev = gpio.wasPressed(HalGPIO::BTN_LEFT) || lockedContinuousNav(HalGPIO::BTN_LEFT);
+  const bool next = gpio.wasPressed(HalGPIO::BTN_RIGHT) || lockedContinuousNav(HalGPIO::BTN_RIGHT);
+  if (gpio.wasReleased(HalGPIO::BTN_LEFT) || gpio.wasReleased(HalGPIO::BTN_RIGHT)) {
+    lastContinuousNavTime = 0;
+  }
+  if (prev) {
     selectedIndex = ButtonNavigator::previousIndex(selectedIndex, kListCount);
     requestUpdate();
-  });
-  nav.onNext([this] {
+  } else if (next) {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, kListCount);
     requestUpdate();
-  });
+  }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+  if (gpio.wasPressed(HalGPIO::BTN_CONFIRM)) {
     if (selectedIndex == kResetRow) {
       resetDefaults();
     } else {
@@ -175,7 +221,7 @@ void ButtonRemapActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
     commitAndExit();
     return;
   }
@@ -247,13 +293,13 @@ void ButtonRemapActivity::render(RenderLock&&) {
   // redraw mapLabels on top of function names without clearing).
   renderer.clearScreen();
 
-  // Title + thick bottom rule (same as Settings / Manage Fonts header).
+  // Title + bottom rule (same as Settings / Manage Fonts header).
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_REMAP_FRONT_BUTTONS));
 
   // Double-line hint band under the header — match Manage Fonts "Preview" chrome:
-  // header already drew the top 3px rule; label band; matching 3px bottom rule.
+  // header already drew the top rule; label band; matching thin bottom rule.
   // Use the largest font that fits the full sentence (no ellipsis when possible).
-  constexpr int kRuleThickness = 3;
+  constexpr int kRuleThickness = 1;
   constexpr int kBandExtraPad = 10;
   const char* hint = tr(STR_REMAP_SLOT_HINT);
   const int maxHintW = std::max(40, pageWidth - metrics.contentSidePadding * 2);
@@ -304,8 +350,9 @@ void ButtonRemapActivity::render(RenderLock&&) {
                      errorMessage.c_str());
   }
 
-  // Locked chrome for this editor: physical order Back · Select · Up · Down.
-  // Does not follow tempMap — inputs stay predictable while remapping.
+  // Locked chrome: physical Back · Select · Up · Down (hw 0–3). loop() reads the
+  // same raw keys — never MappedInputManager — so the user's remap cannot desync
+  // footer labels from what the buttons actually do on this screen.
   GUI.drawButtonHints(renderer, tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 
   // Popup draws only the dialog (no second footer pass). Full clear above prevents overdraw.
@@ -329,9 +376,10 @@ const char* ButtonRemapActivity::slotName(const uint8_t hwIndex) const {
     case 3:
       return tr(STR_REMAP_SLOT_FRONT_4);
     case 4:
-      return tr(STR_REMAP_SLOT_SIDE_LEFT);
+      // X3: side keys are left/right. X4: same hw slots are upper/lower (Up/Down feel).
+      return gpio.deviceIsX3() ? tr(STR_REMAP_SLOT_SIDE_LEFT) : tr(STR_REMAP_SLOT_SIDE_UPPER);
     case 5:
-      return tr(STR_REMAP_SLOT_SIDE_RIGHT);
+      return gpio.deviceIsX3() ? tr(STR_REMAP_SLOT_SIDE_RIGHT) : tr(STR_REMAP_SLOT_SIDE_LOWER);
     default:
       return "";
   }

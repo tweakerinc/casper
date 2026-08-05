@@ -22,7 +22,9 @@ class EpubReaderMenuActivity final : public Activity {
     GO_TO_PERCENT,
     MANAGE_FONTS,  // Text settings (family/size/layout/style); stays in reader stack
     AUTO_PAGE_TURN,
+    BLUETOOTH,  // BLE page-turner quick connect
     ROTATE_SCREEN,
+    ORIENT_FRONT_BUTTONS,  // Nested under Reading Orientation (same as Settings)
     READING_STATS,
     TOGGLE_COMPLETED,
     GO_HOME,
@@ -87,11 +89,15 @@ class EpubReaderMenuActivity final : public Activity {
   bool popupClosing = false;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
+  uint8_t pendingFrontButtonFollow = 0;
   uint8_t selectedPageTurnOption = 0;
-  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
-                                                StrId::STR_LANDSCAPE_CCW};
+  // Match Settings → Reading Orientation labels (STR_INVERTED is color invert, not screen rotate).
+  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
+                                                StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
   const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;
+
+  [[nodiscard]] ::MenuResult makeMenuResult(int action) const;
 };

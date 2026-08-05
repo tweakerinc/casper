@@ -683,6 +683,7 @@ void drawPenumbraPageDots(const GfxRenderer& renderer, const ContentBand& band, 
 
 // Solid micro progress bar — pure black outline + black fill (no dither).
 // Always drawn at a fixed row slot; never tied to list focus.
+// Independent of Manage Reader UI → Progress Bar (reader chrome only).
 void drawMicroProgressBar(const GfxRenderer& renderer, const int x, const int y, const int w, const int h,
                           const int pct /* -1 unknown, 0..100 */) {
   if (w < 4 || h < 2) return;
@@ -697,7 +698,9 @@ void drawMicroProgressBar(const GfxRenderer& renderer, const int x, const int y,
   }
 }
 
-// Progress % cache — avoid loadForBook (SD) on every Down scroll (X3 SPI is slow).
+// Progress % cache — SD load only when the recents *path list* changes (panel
+// load / new book opened). Never re-scan on Down scroll, minute tick, or when
+// the number of fitted rows changes (that used to thrash loadForBook on SPI).
 // Sized for X4's 5-row list (X3 uses ≤4 + View All).
 constexpr int kRecentsPctCacheMax = 5;
 struct RecentsPctCache {
@@ -707,17 +710,22 @@ struct RecentsPctCache {
 };
 RecentsPctCache g_recentsPctCache;
 
-void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int n) {
-  const int count = std::clamp(n, 0, kRecentsPctCacheMax);
-  bool hit = (g_recentsPctCache.n == count);
+void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int /*nDisplay*/,
+                                const bool forceReload = false) {
+  // Always cache the full on-panel list capacity (not the fit count for this paint).
+  const int count = std::min(static_cast<int>(books.size()), kRecentsPctCacheMax);
+  bool hit = !forceReload && (g_recentsPctCache.n == count);
   for (int i = 0; hit && i < count; ++i) {
     if (g_recentsPctCache.path[i] != books[static_cast<size_t>(i)].path) hit = false;
   }
   if (hit) return;
+  // Path set changed, first paint, or forced (home resume after reader) — SD pass for %.
   g_recentsPctCache.n = count;
   for (int i = 0; i < count; ++i) {
     g_recentsPctCache.path[i] = books[static_cast<size_t>(i)].path;
     g_recentsPctCache.pct[i] = BookReadingStats::loadForBook(g_recentsPctCache.path[i]).getProgressPercent();
+    LOG_DBG("HOME", "Recents progress cache[%d] %.1f%% %s", i,
+            static_cast<double>(g_recentsPctCache.pct[i]), g_recentsPctCache.path[i].c_str());
   }
 }
 
@@ -1181,12 +1189,16 @@ Rect PenumbraThemeUi::redrawUnderPanel(GfxRenderer& renderer, const std::vector<
 
 void PenumbraThemeUi::warmRecentsProgressCache(const std::vector<RecentBook>& books) {
   const int n = std::min(static_cast<int>(books.size()), penumbraRecentsListCap());
-  ensureRecentsProgressCache(books, n);
+  // Always re-read stats files here. Path-only hit left micro-bars stuck at an old
+  // % (often 0%) after Go to Percent / reading — X4 Recents under-panel is the main
+  // surface that shows those bars (X3 Stats under-panel uses live progressPercent).
+  ensureRecentsProgressCache(books, n, /*forceReload=*/true);
 }
 
 bool PenumbraThemeUi::formatHeroTimeNow(char* buf, size_t bufSize) { return formatHeroTime(buf, bufSize); }
 
-Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, char* outTime, size_t outTimeSize) {
+Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, const char* prevTime, char* outTime,
+                                       size_t outTimeSize) {
   ContentBand band = layoutContentBand(renderer);
   // X4 has no hero clock — upper half is title/author (redrawn with full paint).
   if (!gpio.deviceIsX3()) {
@@ -1202,12 +1214,62 @@ Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, char* outTime, siz
     snprintf(outTime, outTimeSize, "%s", timeBuf);
   }
 
-  // Full-width upper band through the hairline so windowed FAST white is even.
-  const int pageW = renderer.getScreenWidth();
-  const int clearTop = 0;
-  const int clearH = std::max(1, band.midY + kRuleThickness - clearTop);
-  renderer.fillRect(0, clearTop, pageW, clearH, false);
-  drawClockHalf(renderer, band);
+  const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
+  const int dayH = renderer.getLineHeight(kDayFontId);
+  const int clockBlockH = clockInkH + kClockToDayGap + dayH;
+  const int groupTop =
+      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
 
-  return Rect{0, clearTop, pageW, clearH};
+  // Measure old/new clock string bounds (centered). Prefer a tight suffix clear
+  // when only trailing digits change (e.g. 9:41 → 9:42) so most of the face stays put.
+  const int newW = renderer.getTextWidth(kClockFontId, timeBuf, EpdFontFamily::REGULAR);
+  const int newLeft = band.centerX - newW / 2;
+  int clearLeft = newLeft;
+  int clearRight = newLeft + newW;
+  bool suffixOnly = false;
+
+  if (prevTime && prevTime[0] != '\0') {
+    const int oldW = renderer.getTextWidth(kClockFontId, prevTime, EpdFontFamily::REGULAR);
+    const int oldLeft = band.centerX - oldW / 2;
+    clearLeft = std::min(clearLeft, oldLeft);
+    clearRight = std::max(clearRight, oldLeft + oldW);
+
+    // Common prefix length in characters.
+    size_t prefixChars = 0;
+    while (prevTime[prefixChars] != '\0' && timeBuf[prefixChars] != '\0' &&
+           prevTime[prefixChars] == timeBuf[prefixChars]) {
+      ++prefixChars;
+    }
+    // Same string length and non-empty prefix → clear only the changing tail.
+    // Hour width changes (9:59 → 10:00) fall through to the full union rect.
+    if (prefixChars > 0 && strlen(prevTime) == strlen(timeBuf) && oldW == newW && oldLeft == newLeft) {
+      char prefixBuf[16];
+      const size_t n = std::min(prefixChars, sizeof(prefixBuf) - 1);
+      memcpy(prefixBuf, timeBuf, n);
+      prefixBuf[n] = '\0';
+      const int prefixW = renderer.getTextWidth(kClockFontId, prefixBuf, EpdFontFamily::REGULAR);
+      clearLeft = newLeft + prefixW;
+      clearRight = newLeft + newW;
+      suffixOnly = true;
+    }
+  }
+
+  // Small pad so AA / glyph overhang does not leave speckles.
+  constexpr int kPadX = 4;
+  constexpr int kPadY = 2;
+  clearLeft = std::max(0, clearLeft - kPadX);
+  clearRight = std::min(renderer.getScreenWidth(), clearRight + kPadX);
+  const int clearTop = std::max(0, groupTop - kPadY);
+  const int clearH = clockInkH + kPadY * 2;
+  const int clearW = std::max(1, clearRight - clearLeft);
+
+  if (clearW > 0 && clearH > 0) {
+    renderer.fillRect(clearLeft, clearTop, clearW, clearH, false);
+  }
+  // Always redraw the full time string so prefix glyphs stay sharp after a
+  // suffix-only white fill (prefix is left intact; full draw is ink-on-ink there).
+  (void)suffixOnly;
+  drawHeroClockCentered(renderer, band.centerX, groupTop, timeBuf);
+
+  return Rect{clearLeft, clearTop, clearW, clearH};
 }

@@ -62,6 +62,10 @@ class ClippingStore {
   bool readClippingText(size_t index, std::string& out) const;
   bool readClippingText(const Clipping& clipping, std::string& out) const;
 
+  // Prefetch all clipping bodies into RAM (once per book). Speeds page highlight
+  // paint which otherwise re-opens the store file per unmatched clip.
+  void warmTextCache() const;
+
   static bool hasAnyClippings();
   static bool getAllClippedBooks(std::vector<ClippedBookEntry>& out);
   static void deleteForFilePath(const std::string& filePath, const std::string& bookType);
@@ -77,10 +81,14 @@ class ClippingStore {
   std::string bookAuthor;
   std::string storeFilePath;
   bool dirty = false;
+  // Parallel to clippings: empty = not loaded; filled by warmTextCache / first read.
+  mutable std::vector<std::string> textCache;
+  mutable bool textCacheWarmed = false;
 
   bool readFromFile();
   bool readFromFile(const std::string& path, std::vector<Clipping>& out) const;
   bool writeToFile(const std::string* replacementText = nullptr, size_t replacementIndex = SIZE_MAX);
+  bool readClippingTextFromDisk(const Clipping& clipping, std::string& out) const;
 };
 
 #define CLIPPINGS ClippingStore::getInstance()

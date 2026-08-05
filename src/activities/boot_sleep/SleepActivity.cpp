@@ -21,10 +21,10 @@
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
+  // useQuickResume is decided by enterDeepSleep (power QR action and/or timeout QR).
+  // Legacy: Sleep Screen == QUICK_RESUME still maps to last-frame until migrated.
   const bool renderQuickResume =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+      useQuickResume || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
 
   if (renderQuickResume) {
     return renderLastScreenSleepScreen();
@@ -159,7 +159,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // Casper: logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
+  // Casper: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
   // (1.5 has no drawImageInverted — invertScreen flips logo + name together).
   renderer.clearScreen();
   constexpr int kLogoSize = 120;

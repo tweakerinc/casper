@@ -280,7 +280,13 @@ bool hasAnyStatsPayload(const BookReadingStats& s) {
          s.progressPercentMilli != 0xFFFF || s.startDate.isValid() || s.finishedDate.isValid();
 }
 
+// "Empty shell" = reopen noise with no meaningful lifetime *or* progress.
+// X4 hard-disables session tracking, so stats files often only contain
+// progressPercentMilli — that must NOT be discarded or home bars stay at 0%.
 bool looksLikeEmptyShell(const BookReadingStats& s) {
+  if (s.progressPercentMilli != 0xFFFF) {
+    return false;  // known book position is real data (home Recents bars)
+  }
   return s.sessionCount == 0 && s.totalReadingSeconds < 60 && s.totalPagesTurned <= 1 && !s.isCompleted;
 }
 
@@ -513,12 +519,14 @@ BookReadingStats BookReadingStats::loadForBook(const std::string& bookPath) {
   const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
 
   // 1) Fast path: Casper's current stats file under the primary cache.
+  // Accept progress-only files (X4) even if lifetime totals are zero.
   {
     BookReadingStats primaryFast;
-    if (loadStatsFileNamed(primaryPath, currentName, primaryFast) && hasAnyStatsPayload(primaryFast) &&
-        !looksLikeEmptyShell(primaryFast)) {
-      memoStore(bookPath, primaryFast);
-      return primaryFast;
+    if (loadStatsFileNamed(primaryPath, currentName, primaryFast) && hasAnyStatsPayload(primaryFast)) {
+      if (!looksLikeEmptyShell(primaryFast) || primaryFast.progressPercentMilli != 0xFFFF) {
+        memoStore(bookPath, primaryFast);
+        return primaryFast;
+      }
     }
   }
 
@@ -703,10 +711,16 @@ void BookReadingStats::save(const std::string& cachePath) const {
   // Drop memo entries so the next loadForBook sees the write (memo is by book path;
   // wipe all when we only know the cache folder).
   memoInvalidate({});
+  if (cachePath.empty()) {
+    LOG_ERR("STATS", "save: empty cache path");
+    return;
+  }
+  ensureCacheDir(cachePath);
   const std::string statsFileName = statsFileNameForVersion(STATS_FILE_VERSION);
+  const std::string fullPath = cachePath + "/" + statsFileName;
   HalFile f;
-  if (!Storage.openFileForWrite("STATS", cachePath + "/" + statsFileName, f)) {
-    LOG_ERR("STATS", "Could not write %s", statsFileName.c_str());
+  if (!Storage.openFileForWrite("STATS", fullPath, f)) {
+    LOG_ERR("STATS", "Could not write %s", fullPath.c_str());
     return;
   }
   uint8_t data[STATS_FILE_SIZE];
@@ -733,8 +747,16 @@ void BookReadingStats::save(const std::string& cachePath) const {
   }
   writeLe32(data, 69, estimatedTimeLeftSeconds);
   writeLe16(data, 73, progressPercentMilli);
-  f.write(data, STATS_FILE_SIZE);
+  const size_t written = f.write(data, STATS_FILE_SIZE);
+  f.flush();
   f.close();
+  if (written != STATS_FILE_SIZE) {
+    LOG_ERR("STATS", "Short write %s (%u/%d)", fullPath.c_str(), static_cast<unsigned>(written), STATS_FILE_SIZE);
+    return;
+  }
+  LOG_INF("STATS", "Saved %s progressMilli=%u (%.1f%%)", fullPath.c_str(),
+          static_cast<unsigned>(progressPercentMilli),
+          progressPercentMilli == 0xFFFF ? -1.0 : static_cast<double>(progressPercentMilli) / 100.0);
 }
 
 bool BookReadingStats::remove(const std::string& cachePath) {

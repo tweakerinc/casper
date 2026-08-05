@@ -103,7 +103,22 @@ struct ThemeMetrics {
   int textFieldLineEndOffset;
 };
 
-enum UIIcon { None = 0, Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Bookmark };
+enum UIIcon {
+  None = 0,
+  Folder,
+  Text,
+  Image,
+  Book,
+  File,
+  Recent,
+  Settings,
+  Transfer,
+  Library,
+  Wifi,
+  Hotspot,
+  Bookmark,
+  Bluetooth
+};
 
 // Default theme implementation (Classic Theme)
 // Additional themes can inherit from this and override methods as needed
@@ -238,6 +253,8 @@ class BaseTheme {
   // = TOC position ("Ch. 5/40"; pass <=0 to hide). bookTitle / chapterTitle for title slots.
   // previewIgnoreBatteryMasterHide: Customize Reader UI preview still draws a
   // Battery slot when Display → Battery is Hide, so the layout can be configured.
+  // previewClockTime: when non-null, Clock slots use this sample string (settings
+  // preview on devices without RTC, e.g. X4).
   void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                      std::string bookTitle, const int paddingBottom = 0, const int textYOffset = 0,
                      const bool fillMargin = true, const bool isPageBookmarked = false,
@@ -246,7 +263,7 @@ class BaseTheme {
                      const int bookPage = 0, const int bookPageCount = 0,
                      const bool bookPageCountEstimated = false, const int chapterIndex = 0,
                      const int chapterTotal = 0, std::string chapterTitle = {},
-                     bool previewIgnoreBatteryMasterHide = false) const;
+                     bool previewIgnoreBatteryMasterHide = false, const char* previewClockTime = nullptr) const;
   // Top-center clock for reader chrome (X3 RTC). No-op when clock hidden/unavailable.
   void drawTopStatusBarClock(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr) const;
   // System top chrome (Display → Status Bar): Left / Middle / Right Battery|Clock|Hide.

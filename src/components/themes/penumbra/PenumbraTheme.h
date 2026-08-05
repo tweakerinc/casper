@@ -154,8 +154,12 @@ Rect redrawUnderPanel(GfxRenderer& renderer, const std::vector<RecentBook>& rece
 // swap does not pay loadForBook on every row.
 void warmRecentsProgressCache(const std::vector<RecentBook>& books);
 
-// White-fill full-width upper half + redraw clock/weekday/rule.
-Rect redrawClockBlock(GfxRenderer& renderer, char* outTime = nullptr, size_t outTimeSize = 0);
+// White-fill only the clock digit band (not weekday/hairline) and redraw time.
+// prevTime: last drawn string ("H:MM") so the dirty rect can be the union of old/new
+// and, when only the minutes change, only the changing suffix is cleared.
+// Returns the tight dirty rect for a windowed/soft panel update.
+Rect redrawClockBlock(GfxRenderer& renderer, const char* prevTime = nullptr, char* outTime = nullptr,
+                      size_t outTimeSize = 0);
 
 bool formatHeroTimeNow(char* buf, size_t bufSize);
 }  // namespace PenumbraThemeUi

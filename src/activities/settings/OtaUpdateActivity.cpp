@@ -37,12 +37,13 @@ bool contains(const Rect& rect, const int x, const int y) {
 
 void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
-    LOG_ERR("OTA", "WiFi connection failed, exiting");
+    LOG_ERR("OTA", "WiFi connection failed/cancelled, exiting heap=%u", ESP.getFreeHeap());
     finish();
     return;
   }
 
-  LOG_DBG("OTA", "WiFi connected, checking for update");
+  LOG_INF("OTA", "WiFi connected ip=%s rssi=%d heap=%u maxAlloc=%u", WiFi.localIP().toString().c_str(), WiFi.RSSI(),
+          ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   {
     RenderLock lock(*this);
@@ -50,9 +51,12 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdateAndWait();
 
+  // Drop scan result memory before TLS (scan APs can hold several KB).
+  WiFi.scanDelete();
+
   const auto res = updater.checkForUpdate();
   if (res != OtaUpdater::OK) {
-    LOG_DBG("OTA", "Update check failed: %d", res);
+    LOG_ERR("OTA", "Update check failed: %d heap=%u maxAlloc=%u", res, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     {
       RenderLock lock(*this);
       state = FAILED;
@@ -78,9 +82,17 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 void OtaUpdateActivity::onEnter() {
   Activity::onEnter();
 
+  // OTA needs a large contiguous internal-heap block for TLS + later flash.
+  // Log the floor so serial captures of buddy devices show OOM vs connect fails.
+  LOG_INF("OTA", "Enter heap=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
   // Turn on WiFi immediately
   LOG_DBG("OTA", "Turning on WiFi...");
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  // Clear any half-open STA state left by a previous aborted network activity.
+  WiFi.disconnect(false, false);
+  delay(50);
 
   // Launch WiFi selection subactivity
   LOG_DBG("OTA", "Launching WifiSelectionActivity...");

@@ -21,6 +21,8 @@ struct MenuResult {
   int action = -1;
   uint8_t orientation = 0;
   uint8_t pageTurnOption = 0;
+  // Orient Front Buttons from the reader menu (applied even if the menu is cancelled).
+  uint8_t frontButtonFollowOrientation = 0;
 };
 
 struct ChapterResult {

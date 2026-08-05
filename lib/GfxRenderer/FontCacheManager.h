@@ -27,12 +27,17 @@ class FontCacheManager {
   // The FontDecompressor pointer, needed by GfxRenderer::getGlyphBitmap()
   FontDecompressor* getDecompressor() const { return fontDecompressor_; }
 
-  // RAII scope for two-pass prewarm pattern
+  // RAII scope for two-pass prewarm pattern.
+  // clearOnEnter: free previous page glyphs before scanning (required when filling slots).
+  // clearOnExit: free after paint (old default). Set false to retain glyphs for next turn /
+  // idle prewarm so the next page can skip a cold decompress.
   class PrewarmScope {
    public:
-    explicit PrewarmScope(FontCacheManager& manager);
+    PrewarmScope(FontCacheManager& manager, bool clearOnEnter, bool clearOnExit);
     ~PrewarmScope();
     void endScanAndPrewarm();
+    // Keep page glyph buffers after destroy (idle prewarm / heap-ok page turns).
+    void keepCacheOnExit() { clearOnExit_ = false; }
     PrewarmScope(PrewarmScope&& other) noexcept;
     PrewarmScope& operator=(PrewarmScope&&) = delete;
     PrewarmScope(const PrewarmScope&) = delete;
@@ -41,8 +46,9 @@ class FontCacheManager {
    private:
     FontCacheManager* manager_;
     bool active_ = true;
+    bool clearOnExit_ = true;
   };
-  PrewarmScope createPrewarmScope();
+  PrewarmScope createPrewarmScope(bool clearOnEnter = true, bool clearOnExit = true);
 
  private:
   const std::map<int, EpdFontFamily>& fontMap_;

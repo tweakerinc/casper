@@ -36,6 +36,8 @@ class Epub {
   bool parseTocNavFile() const;
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
+  // True when spine href looks like cover/title-page and the section is small.
+  bool spineLooksCoverOnly(int spineIndex) const;
 
  public:
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
@@ -76,6 +78,10 @@ class Epub {
   int getTocIndexForSpineIndex(int spineIndex) const;
   size_t getCumulativeSpineItemSize(int spineIndex) const;
   int getSpineIndexForTextReference() const;
+  // First open (no resume / still at spine 0 page 0): OPF text/start if set,
+  // else first spine that does not look like a cover-only frontispiece (max 3 skips).
+  // Never jumps past real body text; resume progress is not handled here.
+  int getFirstOpenSpineIndex() const;
 
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;

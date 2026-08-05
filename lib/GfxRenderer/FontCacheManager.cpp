@@ -76,9 +76,13 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
 // --- PrewarmScope implementation ---
 
-FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manager_(&manager) {
+FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager, const bool clearOnEnter,
+                                             const bool clearOnExit)
+    : manager_(&manager), clearOnExit_(clearOnExit) {
   manager_->scanMode_ = ScanMode::Scanning;
-  manager_->clearCache();
+  if (clearOnEnter) {
+    manager_->clearCache();
+  }
   manager_->resetStats();
   manager_->scanText_.clear();
   manager_->scanText_.reserve(2048);  // Pre-allocate to avoid heap fragmentation from repeated concat
@@ -107,13 +111,18 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 FontCacheManager::PrewarmScope::~PrewarmScope() {
   if (active_) {
     endScanAndPrewarm();  // no-op if already called (scanText_ is empty)
-    manager_->clearCache();
+    if (clearOnExit_) {
+      manager_->clearCache();
+    }
   }
 }
 
 FontCacheManager::PrewarmScope::PrewarmScope(PrewarmScope&& other) noexcept
-    : manager_(other.manager_), active_(other.active_) {
+    : manager_(other.manager_), active_(other.active_), clearOnExit_(other.clearOnExit_) {
   other.active_ = false;
 }
 
-FontCacheManager::PrewarmScope FontCacheManager::createPrewarmScope() { return PrewarmScope(*this); }
+FontCacheManager::PrewarmScope FontCacheManager::createPrewarmScope(const bool clearOnEnter,
+                                                                   const bool clearOnExit) {
+  return PrewarmScope(*this, clearOnEnter, clearOnExit);
+}

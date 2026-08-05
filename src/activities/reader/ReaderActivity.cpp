@@ -18,6 +18,7 @@
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
+#include "components/themes/BaseTheme.h"
 #include "util/QrTimingLog.h"
 #include "util/SystemLog.h"
 
@@ -173,6 +174,9 @@ void ReaderActivity::onEnter() {
   const uint32_t tEnter = millis();
   if (QrTimingLog::active()) QrTimingLog::line("ReaderActivity::onEnter start");
   SystemLog::logTiming("READER", "open start");
+  // Feedback during font ensure + container load (Home Loading may already be on panel;
+  // re-paint if a prior frame cleared it, or if open skipped Home's popup).
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
   sdFontSystem.ensureLoaded(renderer);
   LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));
   if (QrTimingLog::active()) {

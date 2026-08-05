@@ -5,6 +5,7 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,20 +14,22 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
+#include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
-// Dynamic rows: Enable, [Auto Backup if tracking on + X3], [Backup Now if tracking on].
+// Dynamic rows: Enable, Session Time, [Auto Backup if tracking on + X3], [Backup Now if tracking on].
 enum MenuItem : uint8_t {
   ITEM_ENABLE = 0,
+  ITEM_SESSION_TIME,
   ITEM_AUTO_BACKUP,
   ITEM_BACKUP_NOW,
 };
 
-constexpr int kMaxVisible = 4;
+constexpr int kMaxVisible = 5;
 uint8_t gVisible[kMaxVisible];
 int gVisibleCount = 0;
 
@@ -36,6 +39,8 @@ void rebuildVisible() {
     if (gVisibleCount < kMaxVisible) gVisible[gVisibleCount++] = id;
   };
   push(ITEM_ENABLE);
+  // Idle gap for stats sessions — always listed (nested under tracking conceptually).
+  push(ITEM_SESSION_TIME);
   if (SETTINGS.readingStatsTrackingEnabled()) {
     // Auto backup needs RTC date (X3).
     if (gpio.deviceIsX3()) {
@@ -54,6 +59,8 @@ StrId nameForItem(int item) {
   switch (item) {
     case ITEM_ENABLE:
       return StrId::STR_ENABLE_STAT_TRACKING;
+    case ITEM_SESSION_TIME:
+      return StrId::STR_SESSION_TIME;
     case ITEM_AUTO_BACKUP:
       return StrId::STR_AUTO_BACKUP_STATS;
     case ITEM_BACKUP_NOW:
@@ -76,6 +83,7 @@ void StatsSettingsActivity::onEnter() {
   Activity::onEnter();
   selectedIndex = 0;
   rebuildMenu();
+  UiGhostPolicy::requestHardScrub();
   requestUpdate();
 }
 
@@ -134,6 +142,23 @@ void StatsSettingsActivity::handleSelection() {
       SETTINGS.saveToFile();
       rebuildMenu();
       return;
+    case ITEM_SESSION_TIME:
+      startActivityForResult(
+          std::make_unique<IntervalSelectionActivity>(
+              renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
+              static_cast<int>(SETTINGS.readingSessionIdleMinutes),
+              static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
+              static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
+              StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled) {
+              SETTINGS.readingSessionIdleMinutes =
+                  static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+              SETTINGS.saveToFile();
+            }
+            requestUpdate();
+          });
+      return;
     case ITEM_AUTO_BACKUP:
       SETTINGS.autoBackupStats = SETTINGS.autoBackupStats != 0 ? 0 : 1;
       SETTINGS.saveToFile();
@@ -166,8 +191,9 @@ void StatsSettingsActivity::render(RenderLock&&) {
       [](int index) {
         const int item = itemAt(index);
         if (item < 0) return std::string();
-        // Auto Backup / Backup Now nest under Enable Stat Tracking.
-        const bool nested = item == ITEM_AUTO_BACKUP || item == ITEM_BACKUP_NOW;
+        // Session Time / Auto Backup / Backup Now nest under Enable Stat Tracking.
+        const bool nested =
+            item == ITEM_SESSION_TIME || item == ITEM_AUTO_BACKUP || item == ITEM_BACKUP_NOW;
         return NestedMenuLabel::format(I18N.get(nameForItem(item)), nested);
       },
       nullptr, nullptr,
@@ -175,6 +201,12 @@ void StatsSettingsActivity::render(RenderLock&&) {
         switch (itemAt(index)) {
           case ITEM_ENABLE:
             return SETTINGS.readingStatsEnabled != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+          case ITEM_SESSION_TIME: {
+            char valueBuffer[32];
+            snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
+                     static_cast<unsigned int>(SETTINGS.readingSessionIdleMinutes));
+            return std::string(valueBuffer);
+          }
           case ITEM_AUTO_BACKUP:
             return SETTINGS.autoBackupStats != 0 ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
           case ITEM_BACKUP_NOW:

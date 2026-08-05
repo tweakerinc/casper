@@ -11,15 +11,22 @@
 
 bool MappedInputManager::isNavDirectionSwapped() const {
   // Key the swap on the orientation the screen is *actually* rendered at, not the persisted reader
-  // setting. The reader (and its modal menus) render rotated, so navigation/labels flip there; the
-  // home and settings UI render in portrait, so they never flip even when a rotated reader is configured.
-  const auto orientation = renderer.getOrientation();
-  return SETTINGS.frontButtonFollowOrientation &&
-         (orientation == GfxRenderer::PortraitInverted || orientation == GfxRenderer::LandscapeCounterClockwise);
+  // setting. Home/settings force Portrait, so they never swap.
+  // When Orient Front Buttons is On:
+  //   Portrait 180° — full axis follow (working as intended).
+  //   Landscape CCW — front slot 3 (Up func) acts/labels as Down; slot 4 as Up.
+  // Portrait and Landscape CW never swap here (Orient defaults Off for those layouts;
+  // CW+On would feel inverted for page turn, so leave mapping alone).
+  if (!SETTINGS.frontButtonFollowOrientation) {
+    return false;
+  }
+  const auto o = renderer.getOrientation();
+  return o == GfxRenderer::PortraitInverted || o == GfxRenderer::LandscapeCounterClockwise;
 }
 
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
   const auto sideLayout = SETTINGS.sideButtonLayout;
+  const bool orientSwap = isNavDirectionSwapped();
 
   // Any physical key (front or side) assigned this function.
   auto anyWithFunc = [&](const uint8_t func) -> bool {
@@ -45,34 +52,46 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
     case Button::Power:
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
-    case Button::PageBack:
-      // Page turn: Up/Down functions, plus Left/Right (default side mapping). Side layout swap.
+    case Button::PageBack: {
+      // Page turn uses Up/Down + Left/Right. Side layout swaps axes; orientSwap reverses
+      // both so Portrait 180 / landscape keep "forward" feeling correct. (Previously only
+      // Left/Right were flipped in detectPageTurn — Up/Down never followed orientation.)
+      const bool prevIsUpLeft = (sideLayout == CrossPointSettings::PREV_NEXT) != orientSwap;
       switch (sideLayout) {
         case CrossPointSettings::PREV_NEXT:
-          return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
         case CrossPointSettings::NEXT_PREV:
+          if (prevIsUpLeft) {
+            return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
+          }
           return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
+        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
+        default:
+          // Still allow remapped front Up/Down/Left/Right for page turn when "sides disabled"
+          // only meant the side-layout enum; keep prior behavior (no page from layout).
+          return false;
+      }
+    }
+    case Button::PageForward: {
+      const bool nextIsDownRight = (sideLayout == CrossPointSettings::PREV_NEXT) != orientSwap;
+      switch (sideLayout) {
+        case CrossPointSettings::PREV_NEXT:
+        case CrossPointSettings::NEXT_PREV:
+          if (nextIsDownRight) {
+            return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
+          }
+          return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
         case CrossPointSettings::SIDE_BUTTONS_DISABLED:
         default:
           return false;
       }
-    case Button::PageForward:
-      switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-          return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
-        case CrossPointSettings::NEXT_PREV:
-          return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
-      }
+    }
     case Button::NavNext:
-      // Logical "next item" navigation: Down + Right functions, axis-flipped when orientation-following.
-      return isNavDirectionSwapped() ? (mapButton(Button::Up, fn) || mapButton(Button::Left, fn))
-                                     : (mapButton(Button::Down, fn) || mapButton(Button::Right, fn));
+      // Logical "next item": Down+Right, flipped with orientation follow.
+      return orientSwap ? (mapButton(Button::Up, fn) || mapButton(Button::Left, fn))
+                        : (mapButton(Button::Down, fn) || mapButton(Button::Right, fn));
     case Button::NavPrevious:
-      return isNavDirectionSwapped() ? (mapButton(Button::Down, fn) || mapButton(Button::Right, fn))
-                                     : (mapButton(Button::Up, fn) || mapButton(Button::Left, fn));
+      return orientSwap ? (mapButton(Button::Down, fn) || mapButton(Button::Right, fn))
+                        : (mapButton(Button::Up, fn) || mapButton(Button::Left, fn));
   }
 
   return false;

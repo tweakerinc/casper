@@ -105,8 +105,9 @@ void rememberImageFailure(const std::string& path) {
 constexpr size_t PXC_CHUNK_SHIFT = 14;  // 16 KB chunks
 constexpr size_t PXC_CHUNK_SIZE = 1u << PXC_CHUNK_SHIFT;
 constexpr size_t PXC_MAX_CHUNKS = 6;  // 96 KB: a full-screen 2bpp image
-constexpr size_t PXC_HEAP_RESERVE = 24 * 1024;
-constexpr size_t PXC_MAX_ALLOC_RESERVE = 8 * 1024;
+// Slightly higher reserves so image decode does not starve concurrent UI/section work.
+constexpr size_t PXC_HEAP_RESERVE = 32 * 1024;
+constexpr size_t PXC_MAX_ALLOC_RESERVE = 12 * 1024;
 // Rows can straddle a chunk boundary; they are reassembled into a stack
 // buffer. (screenWidth + 3) / 4 caps at 200 B for an 800px panel.
 constexpr int PXC_MAX_BYTES_PER_ROW = 208;

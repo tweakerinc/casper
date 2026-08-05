@@ -39,7 +39,13 @@ std::string PersistableStoreBase::extractPassword(JsonVariantConst doc, bool& ne
     // Deobfuscation failed — fall back to legacy plaintext password.
     pass = doc["password"] | "";
     if (!pass.empty()) needsResave = true;
+  } else {
+    // WiFi (and any other store using this helper): accept CrossInk/Casper CPV1
+    // envelope or bare password. Do not force a resave — keep the SD file
+    // interchangeable with CrossInk.
+    pass = obfuscation::unwrapWifiPassword(std::move(pass));
   }
+
   // A successfully decoded empty string is a legitimate value; preserve as-is.
   return pass;
 }

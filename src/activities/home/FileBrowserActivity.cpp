@@ -11,6 +11,7 @@
 #include "CrossPointSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
+#include "util/FinishedBooks.h"
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
@@ -46,6 +47,8 @@ bool containsHiddenPathSegment(const std::string& path) {
 void FileBrowserActivity::loadFiles() {
   files.clear();
 
+  const bool atLibraryRoot = (basepath == "/" || basepath.empty());
+
   auto root = Storage.open(basepath.c_str());
   if (!root || !root.isDirectory()) {
     return;
@@ -67,6 +70,11 @@ void FileBrowserActivity::loadFiles() {
     }
 
     if (file.isDirectory()) {
+      // Always hide the finished-books folder from Library (/read, /Finished Books).
+      // Browse finished books via Recents → Show Read Books.
+      if (mode == Mode::Books && FinishedBooks::isFinishedDirName(fileNameBuffer.get())) {
+        continue;
+      }
       files.emplace_back(std::string(fileNameBuffer.get()) + "/");
     } else {
       std::string_view filename{fileNameBuffer.get()};
@@ -84,6 +92,7 @@ void FileBrowserActivity::loadFiles() {
   }
   root.close();
   FsHelpers::sortFileList(files);
+  (void)atLibraryRoot;
 }
 
 void FileBrowserActivity::onEnter() {
@@ -96,6 +105,8 @@ void FileBrowserActivity::onEnter() {
   }
 
   selectorIndex = 0;
+  // Clean plate on open; folder browsing stays FAST (no periodic HALF mid-scroll).
+  UiGhostPolicy::requestHardScrub();
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
@@ -469,15 +480,17 @@ std::string getFileName(std::string filename) {
     return filename;
   }
   const auto pos = filename.rfind('.');
+  // Title only; extension is shown on the right as "epub" (no leading ".").
+  if (pos == std::string::npos || pos == 0) return filename;
   return filename.substr(0, pos);
 }
 
-std::string getFileExtension(const std::string& filename) {
-  if (filename.back() == '/') {
-    return "";
-  }
+// Extension without the leading '.' so the value column is "epub", not ".epub".
+std::string getFileExtensionLabel(const std::string& filename) {
+  if (filename.empty() || filename.back() == '/') return "";
   const auto pos = filename.rfind('.');
-  return filename.substr(pos);
+  if (pos == std::string::npos || pos + 1 >= filename.size()) return "";
+  return filename.substr(pos + 1);
 }
 
 void FileBrowserActivity::render(RenderLock&&) {
@@ -490,7 +503,7 @@ void FileBrowserActivity::render(RenderLock&&) {
   std::string folderName =
       (mode == Mode::PickFirmware)
           ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+          : ((basepath == "/") ? std::string(tr(STR_LIBRARY)) : basepath.substr(basepath.rfind('/') + 1));
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
 
   const int pathLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
@@ -502,17 +515,16 @@ void FileBrowserActivity::render(RenderLock&&) {
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
-    GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
-        [this](int index) { return getFileName(files[index]); }, nullptr,
-        [this](int index) { return UITheme::getFileIcon(files[index]); },
-        [this](int index) { return getFileExtension(files[index]); }, false);
+    // No row icons; extension on the right (epub) marks files vs folders.
+    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
+                 [this](int index) { return getFileName(files[index]); }, nullptr, nullptr,
+                 [this](int index) { return getFileExtensionLabel(files[index]); }, false);
   }
 
   // Full path display (+ root hint for hidden-files toggle)
   const int pathY = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
   const int separatorY = pathY - metrics.verticalSpacing / 2;
-  renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 3, true);
+  renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 1, true);
   const int pathMaxWidth = pageWidth - metrics.contentSidePadding * 2;
   // Left-truncate so the deepest directory is always visible
   const char* pathStr = basepath.c_str();
@@ -544,7 +556,7 @@ void FileBrowserActivity::render(RenderLock&&) {
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  // At SD root: tip for long-press HOME to show/hide dotfiles (CrossInk parity).
+  // At library root: tip for long-press Back to show/hide dotfiles (CrossInk parity).
   if (mode == Mode::Books && basepath == "/") {
     const int usedPathWidth = renderer.getTextWidth(SMALL_FONT_ID, basepath.c_str());
     const int hintMaxWidth = pathMaxWidth - usedPathWidth - ROOT_HINT_GAP;

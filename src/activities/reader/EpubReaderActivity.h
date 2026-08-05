@@ -73,11 +73,13 @@ class EpubReaderActivity final : public Activity {
   bool ignoreNextConfirmRelease = false;
   bool currentPageBookmarked = false;
   // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
-  // (scan mode draws nothing) and load its missing glyphs from SD during idle,
-  // so the next turn's in-render prewarm is a cache hit instead of ~100 ms of
-  // SD reads on the page-turn critical path. One attempt per position.
+  // (scan mode draws nothing) and load glyphs into the font cache (kept until
+  // the next turn when heap allows). One attempt per position.
   int idlePrewarmSpine = -1;
-  int idlePrewarmPage = -1;
+  int idlePrewarmPage = -1;  // page that was *current* when idle prewarm ran
+  // Spine/page whose glyphs are currently retained in FontCacheManager (or -1).
+  int glyphCacheSpine = -1;
+  int glyphCachePage = -1;
   unsigned long lastRenderCompleteMs = 0;
   bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
   std::vector<BookmarkEntry> cachedBookmarks;
@@ -85,8 +87,8 @@ class EpubReaderActivity final : public Activity {
   // removeReadBooksFromRecents feature (set at End-of-Book, cleared if paged back in).
   bool recentsEntryRemoved = false;
   unsigned long bookmarkMessageTime = 0UL;
-  // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
-  // Consumed in onExit() to relocate the finished book into /Read/.
+  // Set when end-of-book / Mark Finished needs a Finished Books move on exit
+  // (or as a retry if an immediate move failed). Consumed in onExit().
   bool pendingReadFolderMove = false;
   // Next-book suggestion menu for the End-of-Book screen
   EndOfBookOptions endOfBookOptions;
@@ -126,6 +128,9 @@ class EpubReaderActivity final : public Activity {
   bool openPreferFastFirstRefresh = false;
   bool openDeferTextAa = false;
   bool pendingDeferredOpenAa = false;
+  // Set when INDEXING/Loading chrome was drawn this open — first page must scrub
+  // (HALF) or residual popup greys wash out the text until a page turn.
+  bool openNeedsScrubAfterChrome = false;
   uint32_t openWallStartMs = 0;
   bool openFirstInkLogged = false;
 
@@ -156,9 +161,22 @@ class EpubReaderActivity final : public Activity {
   // any single allocation can actually have it. 16 KB also keeps the advance-table
   // batch path (16 KB scratch) viable during builds.
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
+  // Open-path (blocking build-to-target): prefer smaller chunks under pressure so
+  // ParsedText / CSS parse never grows huge vectors in one pump (field abort #1/#2).
+  static constexpr size_t OPEN_BUILD_TIGHT_FREE_HEAP = 48 * 1024;
+  static constexpr size_t OPEN_BUILD_TIGHT_MAX_ALLOC = 20 * 1024;
+  // Pages per chunk when heap is tight (vs BUILD_PAGES_PER_CHUNK).
+  static constexpr int OPEN_BUILD_PAGES_TIGHT = 2;
   // Gate for a background build tick: true when the heap can take parse allocations.
   // Updates buildHeapPaused as a side effect.
   bool buildTickHeapGate();
+  // Adaptive chunk size for render-path build pumps (open / page catch-up).
+  int openBuildPagesPerChunk() const;
+  // Suspend mid-chapter build + drop retained glyphs before stacking a child UI
+  // (menu/dict/etc.) so nested activities have headroom.
+  void parkHeavyWorkForChild();
+  // True when free heap can keep page glyph buffers after paint / idle prewarm.
+  static bool canRetainGlyphCache();
   // True while the background build is gated on the heap floors. Lets skipLoopDelay()
   // return the loop to normal delay/power-saving during the pause: isBuilding() stays
   // true the whole time, and without this the loop would spin at full CPU speed doing
@@ -191,10 +209,9 @@ class EpubReaderActivity final : public Activity {
   // whole HTML must be inflated before page 1 can lay out (the giant single-spine case), which is
   // a multi-second wait. Normal chapters are well under this and stay popup-free.
   static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
-  // Deadline backstop for the predictive gates above: if the blocking build-to-target still
-  // hasn't produced the landing page this long after the build started, surface the popup
-  // mid-build. Builds that finish under the deadline stay popup-free.
-  static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 1000;
+  // Deadline backstop: surface INDEXING sooner so long opens are never a silent freeze
+  // (quick reopen / deep layout without predictive popup was ~30s of blank home).
+  static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 400;
   // True only during onEnter's blocking build-to-target phase, until the popup has been
   // drawn. Gates showBuildPopup() so the parser's popup callback (which persists into
   // background buildSomeMore chunks) can never draw over a displayed page.
@@ -225,6 +242,8 @@ class EpubReaderActivity final : public Activity {
   // Prefer leave-sync when applicable; otherwise onGoHome().
   void leaveReaderToHome();
   float getCurrentBookProgressPercent() const;
+  // Write progress % into the book's stats file for Home Recents bars (X4-safe).
+  void persistHomeProgressPercent();
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
@@ -242,11 +261,18 @@ class EpubReaderActivity final : public Activity {
   void resumeReadingStatsClock();
   void resetReadingPaceData();
 
+  // After a child (Text Settings, dictionary, BT, …) finishes on Back press, the
+  // release edge would hit handleBackNavigation and leave the book. Wait until
+  // Back is idle and drain residual edges before treating Back as leave-home.
+  bool awaitChildButtonRelease = false;
+
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
       : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
   void onEnter() override;
+  void startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler) override;
   void onExit() override;
+  void onResume() override;
   void loop() override;
   void render(RenderLock&& lock) override;
   // Full CPU speed + fast loop ticks while a section build runs: at the low-power

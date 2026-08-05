@@ -25,6 +25,7 @@
 #include "components/icons/image24.h"
 #include "components/icons/library.h"
 #include "components/icons/recent.h"
+#include "components/icons/bluetooth.h"
 #include "components/icons/settings2.h"
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
@@ -78,6 +79,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return HotspotIcon;
       case UIIcon::Bookmark:
         return BookmarkIcon;
+      case UIIcon::Bluetooth:
+        return BluetoothIcon;
       default:
         return nullptr;
     }
@@ -112,7 +115,8 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   // System top chrome: Left / Middle / Right (Display → Status Bar).
   drawSystemStatusBar(renderer, rect.y, nullptr);
 
-  constexpr int kHeaderRuleThickness = 3;
+  // 1px: thick rules ghosted on FAST settings navigation.
+  constexpr int kHeaderRuleThickness = 1;
   const int ruleY = rect.y + rect.height - kHeaderRuleThickness;
   const int sideReserve = systemStatusSideReserve(renderer);
   const int maxTitleWidth = std::max(40, rect.width - sideReserve * 2);
@@ -163,7 +167,7 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
   // Same thickness as the Settings header rule under the title (drawHeader).
-  constexpr int kRuleThickness = 3;
+  constexpr int kRuleThickness = 1;
   // Same air as Manage Fonts Preview label band (lineH + 10).
   constexpr int kBandExtraPad = 10;
 
@@ -229,8 +233,58 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
   return true;
 }
 
+namespace {
+// Shared with Bare/Penumbra (they inherit LyraTheme::drawList).
+// Single-line row height for short titles/folders. Wrapped titles use a tighter
+// line step than full advanceY (body leading is too loose for list UI) and only
+// those rows grow taller so short names stay dense.
+constexpr int kLyraTitleSubtitleGap = 2;
+constexpr int kLyraRowPad = 10;
+
+int lyraTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
+  const int advanceY = renderer.getLineHeight(titleFont);
+  if (nLines <= 1) return advanceY;
+  // Bring the second line up toward the first (~70% of body leading).
+  return std::max(18, (advanceY * 7) / 10);
+}
+
+int lyraTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {
+  const int advanceY = renderer.getLineHeight(titleFont);
+  const int step = lyraTitleLineStep(renderer, titleFont, nLines);
+  // Last line still needs full advanceY for descenders.
+  return (nLines <= 1) ? advanceY : ((nLines - 1) * step + advanceY);
+}
+
+int lyraListRowHeightForLines(const GfxRenderer& renderer, const bool hasSubtitle, const int nTitleLines) {
+  const int titleFont = SETTINGS.getMenuListFontId();
+  int contentH = lyraTitleBlockHeight(renderer, titleFont, std::max(1, nTitleLines));
+  if (hasSubtitle) {
+    contentH += kLyraTitleSubtitleGap + renderer.getLineHeight(SMALL_FONT_ID);
+  }
+  const int computed = contentH + kLyraRowPad;
+  const int baseline =
+      hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  return std::max(baseline, computed);
+}
+
+int lyraListRowHeight(const GfxRenderer& renderer, const bool hasSubtitle) {
+  // Navigation / touch use single-line height; paint path sizes per item.
+  return lyraListRowHeightForLines(renderer, hasSubtitle, 1);
+}
+}  // namespace
+
 int LyraTheme::getListRowStep(bool hasSubtitle) const {
-  int rowHeight = (hasSubtitle) ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  // Approximate without GfxRenderer (navigation page size). Painting uses live measure.
+  // Split-title mode does not inflate step — wrap is per-item when text needs it.
+  int rowHeight =
+      hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_LARGE) {
+    rowHeight += 4;
+  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_XSMALL) {
+    rowHeight = std::max(26, rowHeight - 4);
+  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_SMALL) {
+    rowHeight = std::max(28, rowHeight - 2);
+  }
   return rowHeight;
 }
 
@@ -247,9 +301,12 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          const std::function<bool(int index)>& rowDimmed,
                          const std::function<bool(int index)>& rowApplied) const {
-  int rowHeight =
-      (rowSubtitle != nullptr) ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
-  int pageItems = rowHeight > 0 ? std::max(1, rect.height / rowHeight) : 1;
+  // Icons no longer drawn — free horizontal space for long book titles.
+  (void)rowIcon;
+
+  const bool hasSubtitleCb = (rowSubtitle != nullptr);
+  const int singleRowH = lyraListRowHeight(renderer, hasSubtitleCb);
+  int pageItems = singleRowH > 0 ? std::max(1, rect.height / singleRowH) : 1;
 
   const int totalPages = (itemCount + pageItems - 1) / pageItems;
   if (totalPages > 1) {
@@ -270,141 +327,109 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       (totalPages > 1 ? (LyraMetrics::values.scrollBarWidth + LyraMetrics::values.scrollBarRightOffset) : 1);
   const int maxRowWidth = std::max(0, contentWidth - LyraMetrics::values.contentSidePadding * 2);
 
-  int textX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
-  int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - hPaddingInSelection * 2;
-  int iconSize = 0;
-  if (rowIcon != nullptr) {
-    iconSize = (rowSubtitle != nullptr) ? mainMenuIconSize : listIconSize;
-    textX += iconSize + hPaddingInSelection;
-    textWidth -= iconSize + hPaddingInSelection;
-  }
+  const int textX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
+  const int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - hPaddingInSelection * 2;
 
-  // Draw all items
-  const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  const int titleFont = SETTINGS.getMenuListFontId();
+  const int titleMaxLines = SETTINGS.getMenuListTitleMaxLines();
   constexpr int kRadioR = 5;
   constexpr int kRadioReserve = kRadioR * 2 + 8;
+
+  // Draw all items with cumulative Y so wrapped titles can be taller without
+  // forcing empty double-height on short names/folders.
+  const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  int itemY = rect.y;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
-    const int itemY = rect.y + (i % pageItems) * rowHeight;
     int rowTextWidth = textWidth;
     const bool applied = rowApplied && rowApplied(i);
     if (applied) rowTextWidth -= kRadioReserve;
 
-    // Draw name
     int valueWidth = 0;
-    std::string valueText = "";
+    std::string valueText;
     if (rowValue != nullptr) {
       valueText = rowValue(i);
       if (!valueText.empty()) {
-        valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxListValueWidth);
-        valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + hPaddingInSelection;
+        valueText = renderer.truncatedText(titleFont, valueText.c_str(), maxListValueWidth);
+        valueWidth = renderer.getTextWidth(titleFont, valueText.c_str()) + hPaddingInSelection;
         rowTextWidth -= valueWidth;
       }
     }
 
-    auto itemName = rowTitle(i);
-    auto item = renderer.truncatedText(UI_10_FONT_ID, itemName.c_str(), rowTextWidth);
-    const int titleWidth = renderer.getTextWidth(UI_10_FONT_ID, item.c_str());
+    const auto itemName = rowTitle(i);
+    std::vector<std::string> titleLines =
+        renderer.wrappedText(titleFont, itemName.c_str(), rowTextWidth, titleMaxLines, EpdFontFamily::REGULAR);
+    if (titleLines.empty()) titleLines.emplace_back("");
+    if (static_cast<int>(titleLines.size()) >= titleMaxLines) {
+      titleLines.back() = renderer.truncatedText(titleFont, titleLines.back().c_str(), rowTextWidth);
+    }
+    const int nTitleLines = static_cast<int>(titleLines.size());
+    const int lineStep = lyraTitleLineStep(renderer, titleFont, nTitleLines);
+    const int titleBlockH = lyraTitleBlockHeight(renderer, titleFont, nTitleLines);
 
-    // Selection:
-    // - Settings rows with a value (On/Off, enum): black chip on the value.
-    // - Settings rows with no value (Clock folder, other actions): black chip on the name.
-    // - File browser: black chip over icon + name.
+    // Focus: bold only — no outline/fill (minimal residual on FAST scroll).
     const bool isSelected = (i == selectedIndex);
-    const bool valueChip = isSelected && highlightValue && !valueText.empty();
-    const bool namePill = isSelected && !valueChip;
-    const int titleLineH = renderer.getLineHeight(UI_10_FONT_ID);
-    // Single-line rows: center label/icon in the row. Subtitle rows (Recent Books):
-    // center the title+author block so they no longer stack on top of each other.
-    int textDrawY = itemY + std::max(0, (rowHeight - titleLineH) / 2);
-    int subtitleDrawY = textDrawY;
+    (void)highlightValue;
+    (void)maxRowWidth;
+
     std::string subtitleDrawn;
+    int subtitleLineH = 0;
     if (rowSubtitle != nullptr) {
       const std::string subtitleRaw = rowSubtitle(i);
       if (!subtitleRaw.empty()) {
         subtitleDrawn = renderer.truncatedText(SMALL_FONT_ID, subtitleRaw.c_str(), rowTextWidth);
-        const int subtitleLineH = renderer.getLineHeight(SMALL_FONT_ID);
-        constexpr int kTitleSubtitleGap = 2;
-        const int blockH = titleLineH + kTitleSubtitleGap + subtitleLineH;
-        const int blockY = itemY + std::max(0, (rowHeight - blockH) / 2);
-        textDrawY = blockY;
-        subtitleDrawY = blockY + titleLineH + kTitleSubtitleGap;
+        subtitleLineH = renderer.getLineHeight(SMALL_FONT_ID);
       }
     }
-    const int iconDrawY = itemY + std::max(0, (rowHeight - iconSize) / 2);
-    const int iconX = rect.x + LyraMetrics::values.contentSidePadding + hPaddingInSelection;
 
-    if (namePill) {
-      int textRight = textX + titleWidth;
-      if (!subtitleDrawn.empty()) {
-        textRight = std::max(textRight, textX + renderer.getTextWidth(SMALL_FONT_ID, subtitleDrawn.c_str()));
-      }
-      // Union of icon bounds + title/subtitle + padding. Always reserve the icon
-      // slot when a rowIcon callback is present (folder, book, file, image, …).
-      const int selX = rect.x + LyraMetrics::values.contentSidePadding;
-      int contentRight = textRight + hPaddingInSelection;
-      if (rowIcon != nullptr) {
-        contentRight = std::max(contentRight, iconX + iconSize + hPaddingInSelection);
-      }
-      int selW = contentRight - selX;
-      selW = std::min(selW, maxRowWidth);
-      selW = std::max(selW, std::max(hPaddingInSelection * 2 + 12, cornerRadius * 2 + 4));
-      // Full row height so 24×24 file/folder icons are never clipped top/bottom.
-      const int selH = rowHeight;
-      const int selRadius = std::min(cornerRadius, std::min(selW, selH) / 2);
-      renderer.fillRoundedRect(selX, itemY, selW, selH, selRadius, Color::Black);
+    const int rowHeight = lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    // Stop if this taller row would leave the list area (keep at least one row).
+    if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
+      break;
     }
 
-    // White text on black name pill; otherwise normal black text.
-    renderer.drawText(UI_10_FONT_ID, textX, textDrawY, item.c_str(), !namePill);
+    const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kLyraTitleSubtitleGap + subtitleLineH));
+    const int textDrawY = itemY + std::max(0, (rowHeight - blockH) / 2);
+    const int subtitleDrawY = textDrawY + titleBlockH + kLyraTitleSubtitleGap;
 
-    // Apply checkerboard dither to create gray text effect for dimmed items
+    const auto focusStyle = isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    for (size_t li = 0; li < titleLines.size(); ++li) {
+      const int ly = textDrawY + static_cast<int>(li) * lineStep;
+      renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+    }
+
     if (rowDimmed && rowDimmed(i) && !isSelected) {
-      for (int py = textDrawY; py < textDrawY + titleLineH; py++)
-        for (int px = textX; px < textX + titleWidth; px++)
-          if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
-    }
-
-    if (rowIcon != nullptr) {
-      UIIcon icon = rowIcon(i);
-      const uint8_t* iconBitmap = iconForName(icon, iconSize);
-      if (iconBitmap != nullptr) {
-        // White ink on the black selection pill (folder, book, file, text, image).
-        renderer.drawIcon(iconBitmap, iconX, iconDrawY, iconSize, /*black=*/!namePill);
+      const int dimH = renderer.getLineHeight(titleFont);
+      for (size_t li = 0; li < titleLines.size(); ++li) {
+        const int ly = textDrawY + static_cast<int>(li) * lineStep;
+        const int tw = renderer.getTextWidth(titleFont, titleLines[li].c_str());
+        for (int py = ly; py < ly + dimH; py++)
+          for (int px = textX; px < textX + tw; px++)
+            if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
       }
     }
 
     if (!subtitleDrawn.empty()) {
-      renderer.drawText(SMALL_FONT_ID, textX, subtitleDrawY, subtitleDrawn.c_str(), !namePill);
+      renderer.drawText(SMALL_FONT_ID, textX, subtitleDrawY, subtitleDrawn.c_str(), /*black=*/true);
     }
 
-    // Settings-style black value chip (On / Off / enum) when the row has a value.
-    // Do not use a value chip for applied-state (radio circle) — focus stays on the name.
     if (!valueText.empty()) {
-      if (valueChip) {
-        renderer.fillRoundedRect(
-            rect.x + contentWidth - LyraMetrics::values.contentSidePadding - hPaddingInSelection - valueWidth, itemY,
-            valueWidth + hPaddingInSelection, rowHeight, cornerRadius, Color::Black);
-      }
-
-      const int valueLineH = renderer.getLineHeight(UI_10_FONT_ID);
+      const int valueLineH = renderer.getLineHeight(titleFont);
       const int valueY = itemY + std::max(0, (rowHeight - valueLineH) / 2);
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
-                        valueY, valueText.c_str(), !valueChip);
+      renderer.drawText(titleFont, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth, valueY,
+                        valueText.c_str(), /*black=*/true, focusStyle);
     }
 
     if (applied) {
       const int cx = rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kRadioR;
       const int cy = itemY + rowHeight / 2;
-      // Radio sits on the right. Name-pill focus only blacks the left label —
-      // white ink there was invisible. Only invert when a right-side value chip
-      // is under the radio (On/Off style rows).
-      const bool ink = !valueChip;
       for (int dy = -kRadioR; dy <= kRadioR; ++dy) {
         for (int dx = -kRadioR; dx <= kRadioR; ++dx) {
-          if (dx * dx + dy * dy <= kRadioR * kRadioR) renderer.drawPixel(cx + dx, cy + dy, ink);
+          if (dx * dx + dy * dy <= kRadioR * kRadioR) renderer.drawPixel(cx + dx, cy + dy, /*black=*/true);
         }
       }
     }
+
+    itemY += rowHeight;
   }
 }
 
@@ -583,36 +608,33 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  // Home Menu: centered text-only list (no icons). Optional rowIcon kept for
+  // any legacy callers that still pass one.
+  const bool drawIcons = static_cast<bool>(rowIcon);
   for (int i = 0; i < buttonCount; ++i) {
-    int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
-    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding,
-                         rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing), tileWidth,
-                         LyraMetrics::values.menuRowHeight};
-
+    const int tileY =
+        rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing);
     const bool selected = selectedIndex == i;
-
-    // Black selection chip (same language as Settings). Light gray showed cover
-    // ghosting badly on e-ink when opening the home menu over a book cover.
-    if (selected) {
-      renderer.fillRoundedRect(tileRect.x, tileRect.y, tileRect.width, tileRect.height, cornerRadius, Color::Black);
-    }
-
     std::string labelStr = buttonLabel(i);
     const char* label = labelStr.c_str();
-    int textX = tileRect.x + 16;
+    const auto style = selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-    const int textY = tileRect.y + (LyraMetrics::values.menuRowHeight - lineHeight) / 2;
+    const int textY = tileY + (LyraMetrics::values.menuRowHeight - lineHeight) / 2;
 
-    if (rowIcon != nullptr) {
+    if (drawIcons) {
+      const int tileX = rect.x + LyraMetrics::values.contentSidePadding;
+      int textX = tileX + 16;
       UIIcon icon = rowIcon(i);
       const uint8_t* iconBitmap = iconForName(icon, mainMenuIconSize);
       if (iconBitmap != nullptr) {
-        // White ink on black chip; black ink otherwise.
-        renderer.drawIcon(iconBitmap, textX, textY, mainMenuIconSize, /*black=*/!selected);
+        renderer.drawIcon(iconBitmap, textX, textY, mainMenuIconSize, /*black=*/true);
         textX += mainMenuIconSize + hPaddingInSelection + 2;
       }
+      renderer.drawText(UI_12_FONT_ID, textX, textY, label, /*black=*/true, style);
+    } else {
+      const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, label, style);
+      const int textX = rect.x + (rect.width - textWidth) / 2;
+      renderer.drawText(UI_12_FONT_ID, textX, textY, label, /*black=*/true, style);
     }
-
-    renderer.drawText(UI_12_FONT_ID, textX, textY, label, !selected);
   }
 }

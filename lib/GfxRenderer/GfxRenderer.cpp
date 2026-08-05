@@ -1715,20 +1715,60 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
 
-  std::string item = text;
   // U+2026 HORIZONTAL ELLIPSIS (UTF-8: 0xE2 0x80 0xA6)
   const char* ellipsis = "\xe2\x80\xa6";
-  int textWidth = getTextWidth(fontId, item.c_str(), style);
-  if (textWidth <= maxWidth) {
-    // Text fits, return as is
-    return item;
+  const int fullWidth = getTextWidth(fontId, text, style);
+  if (fullWidth <= maxWidth) {
+    return text;
   }
 
-  while (!item.empty() && getTextWidth(fontId, (item + ellipsis).c_str(), style) >= maxWidth) {
-    utf8RemoveLastChar(item);
+  // Binary search on UTF-8 codepoint count (not linear utf8RemoveLastChar).
+  // Each probe builds a prefix of mid codepoints + ellipsis and measures once.
+  int cpCount = 0;
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ++p) {
+    if ((*p & 0xC0) != 0x80) cpCount++;
   }
+  if (cpCount <= 0) return ellipsis;
 
-  return item.empty() ? ellipsis : item + ellipsis;
+  auto prefixWithEllipsis = [&](int nCp) -> std::string {
+    if (nCp <= 0) return ellipsis;
+    const char* start = text;
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
+    int seen = 0;
+    while (*p && seen < nCp) {
+      // Advance one full UTF-8 codepoint (not stop on lead alone).
+      if ((*p & 0x80) == 0) {
+        p += 1;
+      } else if ((*p & 0xE0) == 0xC0) {
+        p += 2;
+      } else if ((*p & 0xF0) == 0xE0) {
+        p += 3;
+      } else if ((*p & 0xF8) == 0xF0) {
+        p += 4;
+      } else {
+        p += 1;  // invalid lead — skip one byte
+      }
+      seen++;
+    }
+    std::string out(start, static_cast<size_t>(reinterpret_cast<const char*>(p) - start));
+    out += ellipsis;
+    return out;
+  };
+
+  int lo = 0;
+  int hi = cpCount;
+  std::string best = ellipsis;
+  while (lo <= hi) {
+    const int mid = lo + (hi - lo) / 2;
+    std::string candidate = prefixWithEllipsis(mid);
+    if (getTextWidth(fontId, candidate.c_str(), style) <= maxWidth) {
+      best = std::move(candidate);
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
 }
 
 std::vector<std::string> GfxRenderer::wrappedText(const int fontId, const char* text, const int maxWidth,

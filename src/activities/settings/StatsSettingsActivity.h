@@ -3,7 +3,7 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// System → Stats: enable tracking, auto backup (when on), backup now.
+// System → Stats: enable tracking, session idle time, auto backup (when on), backup now.
 class StatsSettingsActivity final : public Activity {
  public:
   explicit StatsSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

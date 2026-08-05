@@ -67,10 +67,8 @@ class MappedInputManager {
   // True while a raw front button is held (hardware index, not logical remap).
   bool isFrontButtonPressed(uint8_t buttonIndex) const;
 
-  // True when the control axis is flipped relative to the physical buttons: the user opted into
-  // orientation-following front buttons AND the screen is *currently rendered* rotated (INVERTED /
-  // LANDSCAPE_CCW). Keyed on the live renderer orientation rather than the persisted reader setting,
-  // so portrait UI (home, settings) never swaps while the reader and its menus do.
+  // True when Orient Front Buttons is On and the live orientation needs axis follow
+  // (Portrait 180° or Landscape CCW). Portrait / Landscape CW never swap.
   [[nodiscard]] bool isNavDirectionSwapped() const;
 
  private:

@@ -17,7 +17,15 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
+enum class HomeMenuItem {
+  NONE,
+  FILE_BROWSER,
+  RECENTS,
+  OPDS_BROWSER,
+  FILE_TRANSFER,
+  BLUETOOTH,
+  SETTINGS_MENU
+};
 
 /**
  * ActivityManager
@@ -102,7 +110,8 @@ class ActivityManager {
   void goToRecentBooks();
   void goToBrowser();
   void goToReader(std::string path);
-  void goToSleep(bool fromTimeout = false);
+  // useQuickResume: last-frame sleep (power QR action or timeout QR). Wallpaper otherwise.
+  void goToSleep(bool fromTimeout = false, bool useQuickResume = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();

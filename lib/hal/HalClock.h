@@ -11,8 +11,14 @@ class HalClock {
   mutable Rtc _sdkRtc;
   mutable uint8_t _cachedHour = 0;
   mutable uint8_t _cachedMinute = 0;
+  mutable uint16_t _cachedYear = 0;
+  mutable uint8_t _cachedMonth = 0;
+  mutable uint8_t _cachedDay = 0;
+  mutable uint8_t _cachedWeekday = 0;
   mutable bool _hasCachedTime = false;
+  mutable bool _hasCachedDateTime = false;
   mutable unsigned long _lastPollMs = 0;
+  mutable unsigned long _lastDatePollMs = 0;
 
   static constexpr unsigned long CLOCK_POLL_MS = 10000;  // 10 seconds
 

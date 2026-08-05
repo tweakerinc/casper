@@ -367,10 +367,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->xpathListItemIndex++;
   }
 
-  // Extract class, style, id, and dir attributes for CSS/RTL processing
+  // Extract class, style, id, dir, and HTML align attributes for CSS/RTL processing
   std::string classAttr;
   std::string styleAttr;
   std::string dirAttr;
+  std::string alignAttr;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "class") == 0) {
@@ -401,6 +402,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       } else if (strcmp(atts[i], "dir") == 0) {
         dirAttr = atts[i + 1];
+      } else if (strcmp(atts[i], "align") == 0) {
+        // Legacy HTML align="center|left|right|justify" on p/h1/div/td.
+        alignAttr = atts[i + 1];
       }
     }
   }
@@ -411,12 +415,31 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Compute CSS style for this element early so display:none can short-circuit
   // before tag-specific branches emit any content or metadata.
+  //
+  // Full stylesheets load only when embeddedStyle is on. Inline style="" and
+  // HTML align= still apply always — many EPUBs center chapter titles that way
+  // without a class rule, and Casper defaults embedded style off for speed.
   CssStyle cssStyle;
   if (self->cssParser) {
     cssStyle = self->cssParser->resolveStyle(name, classAttr);
-    if (!styleAttr.empty()) {
-      CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
-      cssStyle.applyOver(inlineStyle);
+  }
+  if (!styleAttr.empty()) {
+    CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
+    cssStyle.applyOver(inlineStyle);
+  }
+  if (!alignAttr.empty() && !cssStyle.hasTextAlign()) {
+    if (strcasecmp(alignAttr.c_str(), "center") == 0) {
+      cssStyle.textAlign = CssTextAlign::Center;
+      cssStyle.defined.textAlign = 1;
+    } else if (strcasecmp(alignAttr.c_str(), "right") == 0) {
+      cssStyle.textAlign = CssTextAlign::Right;
+      cssStyle.defined.textAlign = 1;
+    } else if (strcasecmp(alignAttr.c_str(), "left") == 0) {
+      cssStyle.textAlign = CssTextAlign::Left;
+      cssStyle.defined.textAlign = 1;
+    } else if (strcasecmp(alignAttr.c_str(), "justify") == 0) {
+      cssStyle.textAlign = CssTextAlign::Justify;
+      cssStyle.defined.textAlign = 1;
     }
   }
 
@@ -893,10 +916,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
     self->currentCssStyle = cssStyle;
+    // h1–h6 default to centered (e-reader convention). Explicit book CSS/inline
+    // left/right/justify still wins so intentional author layout is preserved.
     auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
     headerBlockStyle.textAlignDefined = true;
-    if (self->embeddedStyle && cssStyle.hasTextAlign()) {
+    if (cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
+    } else {
+      headerBlockStyle.alignment = CssTextAlign::Center;
     }
     const auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);

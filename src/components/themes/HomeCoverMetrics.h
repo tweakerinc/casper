@@ -24,6 +24,8 @@ constexpr int bareImageHeight = 560;
 constexpr int imageWidth = bareImageWidth;
 constexpr int imageHeight = bareImageHeight;
 constexpr int thumbHeight = bareImageHeight;
+// Compact shelf thumbs (legacy Dashboard helper paths still reference this size).
+constexpr int homeShelfThumbHeight = 168;
 
 // Height key so gen width == maxCoverW (3:4 plate fills the column).
 inline int thumbHeightForCoverWidth(const int maxCoverW) {

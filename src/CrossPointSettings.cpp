@@ -44,9 +44,15 @@ bool CrossPointSettings::isButtonFunctionMapValid(const uint8_t* map, const uint
   bool hasConfirm = false;
   bool hasPrev = false;  // Left or Up
   bool hasNext = false;  // Right or Down
+  // Each real function at most once (NONE may repeat). Stops "two Backs" puzzles.
+  bool seenFunc[BTN_FUNC_COUNT] = {};
   for (uint8_t i = 0; i < count; i++) {
     const uint8_t fn = map[i];
     if (fn >= BTN_FUNC_COUNT) return false;
+    if (fn != BTN_FUNC_NONE) {
+      if (seenFunc[fn]) return false;
+      seenFunc[fn] = true;
+    }
     switch (fn) {
       case BTN_FUNC_BACK:
         hasBack = true;
@@ -258,11 +264,12 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   doc["fontFamily"] = fontFamily;
-  // Theme + battery % use DynamicEnum (display remapping); valuePtr is null so the
-  // generic loop skips them — persist the real storage values here or every reboot
-  // would fall back to struct defaults (Dashboard / show %).
+  // Theme + battery % + sleep screen use DynamicEnum (display remapping); valuePtr
+  // is null so the generic loop skips them — persist the real storage values here
+  // or every reboot would fall back to struct defaults (theme / show % / Quick Resume).
   doc["uiTheme"] = uiTheme;
   doc["hideBatteryPercentage"] = hideBatteryPercentage;
+  doc["sleepScreen"] = sleepScreen;
   // SD card font family name — not in SettingsList, save manually
   if (sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = sdFontFamilyName;
@@ -282,7 +289,9 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // Casper migration flags (not in SettingsList).
   doc["casperHomeMigrated"] = casperHomeMigrated;
   doc["casperControlsMigrated"] = casperControlsMigrated;
+  doc["casperChapterTimeLeftDefaultMigrated"] = casperChapterTimeLeftDefaultMigrated;
   doc["casperClockDefaultsMigrated"] = casperClockDefaultsMigrated;
+  doc["casperUtcOffsetFixMigrated"] = casperUtcOffsetFixMigrated;
   doc["casperStatusBarCornersMigrated"] = casperStatusBarCornersMigrated;
   doc["casperStatusBarSixSlotsMigrated"] = casperStatusBarSixSlotsMigrated;
   doc["casperStatusBarTitleSplitMigrated"] = casperStatusBarTitleSplitMigrated;
@@ -295,6 +304,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperAntiGhost15Migrated"] = casperAntiGhost15Migrated;
   doc["casperStatsThemeDisabledMigrated"] = casperStatsThemeDisabledMigrated;
   doc["casperX4SpectralDefaultMigrated"] = casperX4SpectralDefaultMigrated;
+  doc["casperMenuFont10ptMigrated"] = casperMenuFont10ptMigrated;
+
   // System top chrome slots (also in SettingsList when present).
   doc["systemStatusBarLeft"] = systemStatusBarLeft;
   doc["systemStatusBarMiddle"] = systemStatusBarMiddle;
@@ -317,6 +328,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["statusBarLowerLeft"] = statusBarLowerLeft;
   doc["statusBarLowerMiddle"] = statusBarLowerMiddle;
   doc["statusBarLowerRight"] = statusBarLowerRight;
+  doc["statusBarFontSize"] = statusBarFontSize;
 }
 
 bool CrossPointSettings::fromJson(JsonVariantConst doc) {
@@ -505,7 +517,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     if (storedFontFamily >= BUILTIN_FONT_COUNT) needsResave = true;
   }
 
-  // Theme / battery %: DynamicEnum (no valuePtr) — load real storage values.
+  // Theme / battery % / sleep screen: DynamicEnum (no valuePtr) — load real storage.
   // Unknown / out-of-range theme ids fall back to Stats (then remapped if needed).
   if (!doc["uiTheme"].isNull()) {
     const uint8_t storedTheme = doc["uiTheme"] | static_cast<uint8_t>(STATS);
@@ -516,6 +528,20 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     hideBatteryPercentage =
         clamp(doc["hideBatteryPercentage"] | static_cast<uint8_t>(HIDE_NEVER), HIDE_BATTERY_PERCENTAGE_COUNT,
               static_cast<uint8_t>(HIDE_NEVER));
+  }
+  // Sleep Screen was converted to DynamicEnum for alphabetical UI order; without this
+  // load path CUSTOM (and every non-default mode) was lost on boot.
+  if (!doc["sleepScreen"].isNull()) {
+    sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(LIGHT),
+                        static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT), static_cast<uint8_t>(LIGHT));
+    // Legacy enum value only: Sleep Screen no longer offers Quick Resume in the picker.
+    // Remap the obsolete value → Light wallpaper. Do NOT rewrite power-button settings —
+    // Timeout QR / Short Power are independent and must stay as the user left them.
+    if (sleepScreen == QUICK_RESUME) {
+      sleepScreen = LIGHT;
+      needsResave = true;
+      LOG_DBG("CPS", "migrated legacy sleepScreen QUICK_RESUME → LIGHT (power buttons unchanged)");
+    }
   }
   // Stat tracking: prefer readingStatsEnabled; migrate legacy disableReadingStats (inverted).
   if (!doc["readingStatsEnabled"].isNull()) {
@@ -546,27 +572,42 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   // Time-left (may also be loaded via SettingsList if present).
   statusBarTimeLeft =
-      clamp(doc["statusBarTimeLeft"] | (uint8_t)TIME_LEFT_BOOK, STATUS_BAR_TIME_LEFT_COUNT, TIME_LEFT_BOOK);
+      clamp(doc["statusBarTimeLeft"] | (uint8_t)TIME_LEFT_CHAPTER, STATUS_BAR_TIME_LEFT_COUNT, TIME_LEFT_CHAPTER);
 
-  // One-time Casper home migration: old SD settings often still have uiTheme=Lyra (1).
-  // Default Penumbra on both (X3 clock face / X4 title+progress). Bare remains selectable.
-  // After this runs once, the user can change theme freely in Settings.
+  // One-time Casper home migration flag. Never overwrite keys the user already saved —
+  // only seed factory defaults when a field is absent from settings.json.
   const uint8_t migrated = doc["casperHomeMigrated"] | (uint8_t)0;
   if (migrated == 0) {
-    uiTheme = static_cast<uint8_t>(PENUMBRA);
-    statusBarProgressBar = BOOK_PROGRESS;
-    statusBarProgressBarThickness = PROGRESS_BAR_THIN;
-    statusBarBattery = 1;
-    statusBarBookProgressPercentage = 1;
-    statusBarChapterPageCount = 1;
-    statusBarTimeLeft = TIME_LEFT_BOOK;
-    screenMargin = 10;
+    if (doc["uiTheme"].isNull()) {
+      uiTheme = static_cast<uint8_t>(PENUMBRA);
+    }
+    if (doc["statusBarProgressBar"].isNull()) {
+      statusBarProgressBar = BOOK_PROGRESS;
+    }
+    if (doc["statusBarProgressBarThickness"].isNull()) {
+      statusBarProgressBarThickness = PROGRESS_BAR_THIN;
+    }
+    if (doc["statusBarBattery"].isNull()) {
+      statusBarBattery = 1;
+    }
+    if (doc["statusBarBookProgressPercentage"].isNull()) {
+      statusBarBookProgressPercentage = 1;
+    }
+    if (doc["statusBarChapterPageCount"].isNull()) {
+      statusBarChapterPageCount = 1;
+    }
+    if (doc["statusBarTimeLeft"].isNull()) {
+      statusBarTimeLeft = TIME_LEFT_CHAPTER;
+    }
+    if (doc["screenMargin"].isNull()) {
+      screenMargin = 10;
+    }
     casperHomeMigrated = 1;
-    casperProgressBarOrderMigrated = 1;  // BOOK_PROGRESS already uses new enum values
+    casperProgressBarOrderMigrated = 1;
     casperStatsThemeDisabledMigrated = 1;
     casperX4SpectralDefaultMigrated = 1;
     needsResave = true;
-    LOG_DBG("CPS", "casperHomeMigrated: defaulted uiTheme=Penumbra, screenMargin=10");
+    LOG_DBG("CPS", "casperHomeMigrated: seeded missing keys only (no overwrite)");
   } else {
     casperHomeMigrated = 1;
   }
@@ -599,16 +640,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperStatsThemeDisabledMigrated = 1;
   }
 
-  // One-time X4: previous build remapped Stats→Bare; prefer Penumbra (progress face).
+  // Historical X4 Stats→Bare fix flag. Do not force Bare → Penumbra (user may prefer Bare).
   const uint8_t x4SpectralMigrated = doc["casperX4SpectralDefaultMigrated"] | (uint8_t)0;
   if (x4SpectralMigrated == 0) {
-    if (gpio.deviceIsX4() && uiTheme == BARE) {
-      uiTheme = PENUMBRA;
-      needsResave = true;
-      LOG_DBG("CPS", "casperX4SpectralDefaultMigrated: X4 Bare → Penumbra");
-    }
     casperX4SpectralDefaultMigrated = 1;
     needsResave = true;
+    LOG_DBG("CPS", "casperX4SpectralDefaultMigrated: marked (no theme overwrite)");
   } else {
     casperX4SpectralDefaultMigrated = 1;
   }
@@ -646,61 +683,102 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperProgressBarOrderMigrated = 1;
   }
 
-  // One-time controls migration: short sleep / long force-refresh / long-press dictionary.
+  // Controls: never force short/long power or long-press over a saved map.
+  // Factory defaults live on the struct when keys are absent; SettingsList already loaded them.
   const uint8_t controlsMigrated = doc["casperControlsMigrated"] | (uint8_t)0;
   if (controlsMigrated == 0) {
-    shortPwrBtn = SLEEP;
-    longPwrBtn = FORCE_REFRESH;
-    longPressMenuFunction = LP_MENU_DICTIONARY;
+    if (doc["shortPwrBtn"].isNull()) {
+      shortPwrBtn = PWR_QUICK_RESUME;
+    }
+    if (doc["longPwrBtn"].isNull()) {
+      longPwrBtn = FORCE_REFRESH;
+    }
+    if (doc["longPressMenuFunction"].isNull()) {
+      longPressMenuFunction = LP_MENU_DICTIONARY;
+    }
     casperControlsMigrated = 1;
     needsResave = true;
-    LOG_DBG("CPS", "casperControlsMigrated: short=Sleep long=ForceRefresh menu=Dictionary");
+    LOG_DBG("CPS", "casperControlsMigrated: seeded missing control keys only");
   } else {
     casperControlsMigrated = 1;
   }
 
-  // One-time clock defaults: 12-hour + UTC-7; keep clocks visible by default.
+  // Clock: seed missing keys only. Do not flip 24h→12h or re-show a clock the user hid.
+  // Timezone: never force; only fill UTC+0 when the offset key is absent.
   const uint8_t clockMigrated = doc["casperClockDefaultsMigrated"] | (uint8_t)0;
   if (clockMigrated == 0) {
-    clockFormat = 1;        // 12-hour with AM/PM
-    clockUtcOffsetQ = 20;   // UTC-7 (48 + (-7)*4)
-    if (statusBarClock == STATUS_BAR_CLOCK_HIDE) {
+    if (doc["clockFormat"].isNull()) {
+      clockFormat = 1;  // 12-hour with AM/PM
+    }
+    if (!doc["clockUtcOffsetQ"].is<uint8_t>() && !doc["clockUtcOffsetQ"].is<int>()) {
+      clockUtcOffsetQ = 48;  // UTC+0 until the user picks their zone
+    }
+    if (doc["statusBarClock"].isNull() && statusBarClock == STATUS_BAR_CLOCK_HIDE) {
       statusBarClock = STATUS_BAR_CLOCK_SHOW;
     }
-    systemClock = STATUS_BAR_CLOCK_SHOW;
+    if (doc["systemClock"].isNull()) {
+      systemClock = STATUS_BAR_CLOCK_SHOW;
+    }
     casperClockDefaultsMigrated = 1;
     needsResave = true;
-    LOG_DBG("CPS", "casperClockDefaultsMigrated: 12h UTC-7 system+reader clock visible");
+    LOG_DBG("CPS", "casperClockDefaultsMigrated: seeded missing clock keys only");
   } else {
     casperClockDefaultsMigrated = 1;
   }
 
-  // One-time speed defaults: text AA and embedded CSS off (open/page-turn cost).
-  // Users can re-enable either in Manage Fonts after this migration runs once.
+  // One-time undo of the old "force UTC-7" migration for users still on that
+  // factory stamp who never customized TZ (still exactly 20). Users who truly
+  // live in UTC-7 re-select it once under Status Bar → UTC offset.
+  const uint8_t tzFixMigrated = doc["casperUtcOffsetFixMigrated"] | (uint8_t)0;
+  if (tzFixMigrated == 0) {
+    if (clockUtcOffsetQ == 20) {
+      clockUtcOffsetQ = 48;  // reset forced UTC-7 → UTC+0
+      needsResave = true;
+      LOG_DBG("CPS", "casperUtcOffsetFixMigrated: cleared forced UTC-7 → UTC+0");
+    }
+    casperUtcOffsetFixMigrated = 1;
+    needsResave = true;
+  } else {
+    casperUtcOffsetFixMigrated = 1;
+  }
+
+  // Historical one-time: forced text AA + embedded off for speed. That fought the
+  // shipping goal (Book's Style + Embedded on). Still honor the flag so we never
+  // re-apply; do not overwrite the user's (or new default) embeddedStyle/AA.
   const uint8_t speedMigrated = doc["casperSpeedDefaultsMigrated"] | (uint8_t)0;
   if (speedMigrated == 0) {
-    textAntiAliasing = 0;
-    embeddedStyle = 0;
     casperSpeedDefaultsMigrated = 1;
     needsResave = true;
-    LOG_DBG("CPS", "casperSpeedDefaultsMigrated: textAA=off embeddedStyle=off");
+    LOG_DBG("CPS", "casperSpeedDefaultsMigrated: marked complete (no longer force embedded off)");
   } else {
     casperSpeedDefaultsMigrated = 1;
   }
 
-  // One-time: Anti-Ghosting default 10 → 15 (fewer HALF scrubs on X4; still cleans).
-  // Only rewrite installs still on the old default of 10 — leave 5/30/60/Never alone.
+  // Anti-Ghosting: mark flag only. Do not rewrite 10→15 if the user left it on 10.
+  // New installs get the struct/default refresh frequency without a migration rewrite.
   const uint8_t ag15Migrated = doc["casperAntiGhost15Migrated"] | (uint8_t)0;
   if (ag15Migrated == 0) {
-    if (refreshFrequency == REFRESH_10) {
-      refreshFrequency = REFRESH_15;
-      needsResave = true;
-      LOG_DBG("CPS", "casperAntiGhost15Migrated: refreshFrequency 10 -> 15");
-    }
     casperAntiGhost15Migrated = 1;
     needsResave = true;
+    LOG_DBG("CPS", "casperAntiGhost15Migrated: marked (refreshFrequency unchanged)");
   } else {
     casperAntiGhost15Migrated = 1;
+  }
+
+  // Menu font: insert 10pt at index 0. Old on-disk 0/1/2 (12/14/16) → 1/2/3.
+  // Only shift when menuFontSize was present in JSON (saved install); fresh SD keeps default 12pt.
+  const uint8_t menu10Migrated = doc["casperMenuFont10ptMigrated"] | (uint8_t)0;
+  if (menu10Migrated == 0) {
+    if (!doc["menuFontSize"].isNull() && menuFontSize <= 2) {
+      menuFontSize = static_cast<uint8_t>(menuFontSize + 1u);
+      LOG_DBG("CPS", "casperMenuFont10ptMigrated: shifted menuFontSize → %u", menuFontSize);
+    }
+    menuFontSize = clamp(menuFontSize, MENU_FONT_SIZE_COUNT, static_cast<uint8_t>(MENU_FONT_SMALL));
+    casperMenuFont10ptMigrated = 1;
+    needsResave = true;
+  } else {
+    casperMenuFont10ptMigrated = 1;
+    menuFontSize = clamp(menuFontSize, MENU_FONT_SIZE_COUNT, static_cast<uint8_t>(MENU_FONT_SMALL));
   }
 
   // Clock is always top-center when shown. Collapse legacy Left (2) / invalid into Show.
@@ -741,6 +819,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
   if (!doc["readerBatteryDisplay"].isNull()) {
     readerBatteryDisplay = clampBattDisplay(doc["readerBatteryDisplay"] | (uint8_t)BATTERY_DISPLAY_ICON_PERCENT);
+  }
+  {
+    const uint8_t fs = doc["statusBarFontSize"] | statusBarFontSize;
+    statusBarFontSize = (fs < STATUS_BAR_FONT_SIZE_COUNT) ? fs : static_cast<uint8_t>(STATUS_BAR_FONT_8);
   }
   {
     const uint8_t bw = doc["batteryWarning"] | batteryWarning;
@@ -893,6 +975,19 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   // Sync legacy clock toggle from slot placement (web clients that still read statusBarClock).
   statusBarClock = statusBarCornerHas(CORNER_CLOCK) ? STATUS_BAR_CLOCK_SHOW : STATUS_BAR_CLOCK_HIDE;
+
+  // Reader chrome time-left: never rewrite BOOK → CHAPTER (or any saved slot).
+  // Factory defaults already use CHAPTER when keys/slots are absent.
+  {
+    const uint8_t chapterTimeMigrated = doc["casperChapterTimeLeftDefaultMigrated"] | (uint8_t)0;
+    if (chapterTimeMigrated == 0) {
+      casperChapterTimeLeftDefaultMigrated = 1;
+      needsResave = true;
+      LOG_DBG("CPS", "casperChapterTimeLeftDefaultMigrated: marked (reader slots unchanged)");
+    } else {
+      casperChapterTimeLeftDefaultMigrated = 1;
+    }
+  }
 
   // XTC overlay: load legacy mode, then prefer slot placement if present.
   if (!doc["xtcStatusBarMode"].isNull()) {
@@ -1075,6 +1170,32 @@ CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
   return spec;
 }
 
+int CrossPointSettings::getStatusBarFontId() const {
+  switch (statusBarFontSize) {
+    case STATUS_BAR_FONT_10:
+      return SOURCESERIF4_10_FONT_ID;
+    case STATUS_BAR_FONT_12:
+      return SOURCESERIF4_12_FONT_ID;  // same face as UI_10 list chrome
+    case STATUS_BAR_FONT_8:
+    default:
+      return SMALL_FONT_ID;  // Source Serif 8
+  }
+}
+
+int CrossPointSettings::getStatusBarTextLaneHeight() const {
+  // Slightly taller than metrics.statusBarVerticalMargin (19) for larger type so
+  // lower-lane titles do not collide with the progress bar / page edge.
+  switch (statusBarFontSize) {
+    case STATUS_BAR_FONT_10:
+      return 23;
+    case STATUS_BAR_FONT_12:
+      return 27;
+    case STATUS_BAR_FONT_8:
+    default:
+      return 19;
+  }
+}
+
 ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWidth,
                                                       const uint16_t viewportHeight) const {
   ReaderRenderSpec spec;
@@ -1184,6 +1305,22 @@ int CrossPointSettings::getReaderFontId() const {
         case EXTRA_LARGE:
           return SOURCESERIF4_18_FONT_ID;
       }
+  }
+}
+
+int CrossPointSettings::getMenuListFontId() const {
+  // Fixed Source Serif UI sizes — independent of reader family / SD fonts.
+  // Labels: 10pt / 12pt / 14pt / 16pt (shipping default is 12pt).
+  switch (menuFontSize) {
+    case MENU_FONT_XSMALL:
+      return SOURCESERIF4_10_FONT_ID;
+    case MENU_FONT_MEDIUM:
+      return SOURCESERIF4_14_FONT_ID;
+    case MENU_FONT_LARGE:
+      return SOURCESERIF4_16_FONT_ID;
+    case MENU_FONT_SMALL:
+    default:
+      return SOURCESERIF4_12_FONT_ID;
   }
 }
 

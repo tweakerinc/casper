@@ -12,9 +12,9 @@ struct WifiCredential {
 
 /**
  * Singleton class for storing WiFi credentials on the SD card.
- * Passwords are XOR-obfuscated with the device's unique hardware MAC address
- * and base64-encoded before writing to JSON (not cryptographically secure,
- * but prevents casual reading and ties credentials to the specific device).
+ * Uses the shared CrossPoint/CrossInk wifi.json format: password_obf is
+ * base64(XOR("CPV1" || salt[4] || password, eFuse MAC)). Same file works when
+ * swapping firmwares on the same device (MAC-tied; not cryptographically secure).
  */
 class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
  private:

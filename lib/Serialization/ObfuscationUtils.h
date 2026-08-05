@@ -22,12 +22,22 @@ void xorTransform(std::string& data);
 // Legacy overload for binary migration (uses the old per-store hardcoded keys)
 void xorTransform(std::string& data, const uint8_t* key, size_t keyLen);
 
-// Obfuscate a plaintext string: XOR with hardware key, then base64-encode for JSON storage
+// Obfuscate a plaintext string: XOR with hardware key, then base64-encode for JSON storage.
+// Used for generic secrets (KOReader, OPDS, settings). WiFi uses the CPV1 helpers below.
 String obfuscateToBase64(const std::string& plaintext);
 
 // Decode base64 and de-obfuscate back to plaintext.
 // Returns empty string on invalid base64 input; sets *ok to false if decode fails.
 std::string deobfuscateFromBase64(const char* encoded, bool* ok = nullptr);
+
+// Shared CrossPoint / CrossInk WiFi credential envelope (same wifi.json on SD):
+//   password_obf = base64( XOR( "CPV1" || salt[4] || password, eFuse MAC ) )
+// Casper reads and writes this so users can swap firmware without re-entering WiFi.
+String obfuscateWifiPasswordToBase64(const std::string& plaintext);
+
+// Strip a CPV1 envelope from an already de-XORed blob. Bare passwords (legacy Casper)
+// are returned unchanged. Always safe to call on wifi credential payloads.
+std::string unwrapWifiPassword(std::string deobfuscated);
 
 // Self-test: verifies round-trip obfuscation with hardware key. Logs PASS/FAIL.
 void selfTest();

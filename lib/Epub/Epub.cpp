@@ -8,6 +8,9 @@
 #include <Utf8.h>
 #include <ZipFile.h>
 
+#include <algorithm>
+#include <cctype>
+
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -1190,6 +1193,91 @@ int Epub::getSpineIndexForTextReference() const {
   }
   // This should not happen, as we checked for empty textReferenceHref earlier
   LOG_DBG("EBP", "Section not found for text reference");
+  return 0;
+}
+
+namespace {
+// Basename of a spine href, lowercased, extension stripped, _ → - for matching.
+std::string spineHrefBaseName(const std::string& href) {
+  std::string path = href;
+  const size_t hash = path.find('#');
+  if (hash != std::string::npos) path.resize(hash);
+  const size_t slash = path.find_last_of("/\\");
+  if (slash != std::string::npos) path = path.substr(slash + 1);
+  const size_t dot = path.find_last_of('.');
+  if (dot != std::string::npos) path.resize(dot);
+  for (char& c : path) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    if (c == '_') c = '-';
+  }
+  return path;
+}
+
+bool baseNameLooksCoverOnly(const std::string& base) {
+  if (base.empty()) return false;
+  // Exact short names publishers use for image-only / near-empty front matter.
+  if (base == "cover" || base == "cover-page" || base == "coverpage" || base == "book-cover" ||
+      base == "title" || base == "title-page" || base == "titlepage" || base == "half-title" ||
+      base == "halftitle" || base == "half-title-page" || base == "frontispiece" || base == "jacket") {
+    return true;
+  }
+  // cover01, cover-01, cover_image, etc. — keep short so "coverage" / "recover" stay out.
+  if (base.rfind("cover", 0) == 0 && base.size() <= 16) return true;
+  if (base.find("titlepage") != std::string::npos) return true;
+  if (base.find("title-page") != std::string::npos) return true;
+  if (base.find("coverpage") != std::string::npos) return true;
+  if (base.find("cover-page") != std::string::npos) return true;
+  return false;
+}
+}  // namespace
+
+bool Epub::spineLooksCoverOnly(const int spineIndex) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return false;
+  const int n = getSpineItemsCount();
+  if (spineIndex < 0 || spineIndex >= n) return false;
+
+  const auto entry = getSpineItem(spineIndex);
+  const std::string base = spineHrefBaseName(entry.href);
+  if (!baseNameLooksCoverOnly(base)) return false;
+
+  // Large spine with a cover-ish name is still real content — do not skip.
+  const uint32_t cum = entry.cumulativeSize;
+  const uint32_t prev = spineIndex > 0 ? getSpineItem(spineIndex - 1).cumulativeSize : 0;
+  const uint32_t bytes = cum >= prev ? (cum - prev) : cum;
+  constexpr uint32_t kMaxCoverOnlyBytes = 48 * 1024;  // inflated XHTML; pure img wrappers are tiny
+  if (bytes > kMaxCoverOnlyBytes) {
+    LOG_DBG("EBP", "Spine %d name looks cover (%s) but size %u — treating as content", spineIndex, base.c_str(),
+            static_cast<unsigned>(bytes));
+    return false;
+  }
+  return true;
+}
+
+int Epub::getFirstOpenSpineIndex() const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return 0;
+
+  // 1) Publisher-declared body start (OPF guide text/start).
+  const int textRef = getSpineIndexForTextReference();
+  if (textRef > 0) {
+    LOG_DBG("EBP", "First-open land: OPF text reference spine %d", textRef);
+    return textRef;
+  }
+
+  // 2) Skip only cover/title-like spines at the front (href name + small size).
+  // Cap so we never walk deep into the book if naming is weird.
+  const int n = getSpineItemsCount();
+  if (n <= 1) return 0;
+  constexpr int kMaxCoverSkips = 3;
+  const int limit = std::min(n - 1, kMaxCoverSkips);
+  for (int i = 0; i <= limit; ++i) {
+    if (!spineLooksCoverOnly(i)) {
+      if (i > 0) {
+        LOG_DBG("EBP", "First-open land: skipped %d cover-like spine(s) → spine %d", i, i);
+      }
+      return i;
+    }
+  }
+  LOG_DBG("EBP", "First-open land: first %d spines look cover-like — staying at 0", limit + 1);
   return 0;
 }
 

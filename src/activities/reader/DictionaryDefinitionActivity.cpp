@@ -25,11 +25,19 @@ constexpr int kPopupPadY = 12;
 constexpr int kHeaderLineGap = 4;
 constexpr int kTitleBodyGap = 10;
 constexpr int kCorner = 10;
+// Scroll rail sits near the right edge; reserve the same horizontal air as the
+// left pad so wrapped text never runs into the bar (symmetric gutters).
+constexpr int kScrollBarInset = 8;  // matches drawDefinitionScrollBar trackX
 // Long multi-pack entries (e.g. "head") need many wrap lines; card height is capped.
 constexpr int kMaxBodyLines = 160;
 // Air between card and top chrome / bottom Back·Done strip.
 constexpr int kPopupGapTop = 12;
 constexpr int kPopupGapAboveHints = 10;
+
+// Body/title wrap width: left pad + content + gap(=left pad) + scroll rail.
+int definitionContentWidth(const int popupW) {
+  return std::max(40, popupW - kPopupPadX * 2 - kScrollBarInset);
+}
 
 // StarDict type-code bytes that may prefix a definition when sametypesequence is absent.
 bool isStarDictTypeCode(const unsigned char c) {
@@ -543,7 +551,7 @@ void extractPronunciation(std::string& text, std::string& outPron) {
 void drawDefinitionScrollBar(GfxRenderer& renderer, const int popupX, const int popupW, const int bodyTop,
                              const int bodyH, const int totalLines, const int visible, const int scroll) {
   if (totalLines <= visible || bodyH <= 4) return;
-  const int trackX = popupX + popupW - 8;
+  const int trackX = popupX + popupW - kScrollBarInset;
   const int trackH = bodyH;
   const int thumbH = std::max(8, trackH * visible / totalLines);
   const int maxScroll = std::max(1, totalLines - visible);
@@ -632,7 +640,8 @@ void DictionaryDefinitionActivity::layoutPopup() {
 void DictionaryDefinitionActivity::rebuildLines() {
   lines.clear();
   layoutPopup();  // need popupW for wrap width
-  const int contentW = std::max(40, popupW - kPopupPadX * 2 - 6);
+  // Hard wrap cutoff: same left pad and text→scrollbar gap (see definitionContentWidth).
+  const int contentW = definitionContentWidth(popupW);
 
   if (definition.empty()) {
     lines.emplace_back(tr(STR_DICT_NOT_FOUND));
@@ -819,7 +828,8 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   // Header: bold headword + regular pronunciation on one line, e.g.
   //   pendulous /pĕn′jə-ləs, pĕn′dyə-, -də-/
   // Saves a definition line and matches the common dictionary layout.
-  const int contentInnerW = popupW - kPopupPadX * 2;
+  // Same right cutoff as body wrap so title/pron never enter the scroll rail.
+  const int contentInnerW = definitionContentWidth(popupW);
   const int titleY = popupY + kPopupPadY;
   const int textLeft = popupX + kPopupPadX;
   constexpr int kHeadPronGap = 6;
@@ -874,6 +884,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   int y = bodyTop;
   const int textX = popupX + kPopupPadX;
   const int bodyBottom = popupY + popupH - kPopupPadY;
+  const int bodyContentW = definitionContentWidth(popupW);
   for (int i = scrollLine; i < static_cast<int>(lines.size()) && y + lineH <= bodyBottom + 2; ++i) {
     const std::string& line = lines[static_cast<size_t>(i)];
     if (line.empty()) {
@@ -881,21 +892,32 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
       continue;
     }
     // Hierarchy: pack headers centered bold, gender italic, POS bold, senses indented.
+    // Truncate as a hard safety net so any unwrapped long line still stops before the rail.
     if (!line.empty() && line[0] == '@') {
       const char* packName = line.c_str() + 1;
-      const int packW = renderer.getTextWidth(bodyFont, packName, EpdFontFamily::BOLD);
+      const std::string packVis =
+          renderer.truncatedText(bodyFont, packName, bodyContentW, EpdFontFamily::BOLD);
+      const int packW = renderer.getTextWidth(bodyFont, packVis.c_str(), EpdFontFamily::BOLD);
       const int packX = popupX + std::max(kPopupPadX, (popupW - packW) / 2);
-      renderer.drawText(bodyFont, packX, y, packName, true, EpdFontFamily::BOLD);
+      renderer.drawText(bodyFont, packX, y, packVis.c_str(), true, EpdFontFamily::BOLD);
     } else if (!line.empty() && line[0] == '~') {
       // Gender label above its senses. UI fonts may lack a true italic face — ITALIC
       // falls back to regular (not bold), which still separates them from POS headers.
-      renderer.drawText(bodyFont, textX, y, line.c_str() + 1, true, EpdFontFamily::ITALIC);
+      const std::string vis =
+          renderer.truncatedText(bodyFont, line.c_str() + 1, bodyContentW, EpdFontFamily::ITALIC);
+      renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::ITALIC);
     } else if (isGenderLabel(line)) {
-      renderer.drawText(bodyFont, textX, y, line.c_str(), true, EpdFontFamily::ITALIC);
+      const std::string vis =
+          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::ITALIC);
+      renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::ITALIC);
     } else if (isPosLabel(line)) {
-      renderer.drawText(bodyFont, textX, y, line.c_str(), true, EpdFontFamily::BOLD);
+      const std::string vis =
+          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::BOLD);
+      renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::BOLD);
     } else {
-      renderer.drawText(bodyFont, textX, y, line.c_str(), true, EpdFontFamily::REGULAR);
+      const std::string vis =
+          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::REGULAR);
+      renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::REGULAR);
     }
     y += lineH;
   }

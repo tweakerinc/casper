@@ -60,6 +60,11 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
 }
 
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
+  // CrossPoint / stock: X3 HALF must requestResync so the driver takes the full
+  // quality image-write path (white DTM1 baseline + _full bank), not the weak
+  // half-LUT soft pull. Without this, Force Refresh and UI maintenance look
+  // like a gentle grey wash and leave salt-and-pepper / SUNDAY-ghost residual
+  // on white plates (see user photos vs CrossInk/CrossPoint clean whites).
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }

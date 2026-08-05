@@ -85,9 +85,16 @@ void WifiSelectionActivity::onExit() {
   WiFi.scanDelete();
   LOG_DBG("WIFI", "Free heap after scanDelete: %d bytes", ESP.getFreeHeap());
 
-  // Note: We do NOT disconnect WiFi here - the parent activity
-  // (CrossPointWebServerActivity) manages WiFi connection state. We just clean
-  // up the scan and task.
+  // Parents that need STA (OTA, web server, KOReader, …) only care when we
+  // actually connected. Cancel / scan-only / failed-connect paths leave
+  // WIFI_STA up otherwise and bleed heap for the next activity.
+  if (WiFi.status() != WL_CONNECTED && WiFi.getMode() != WIFI_MODE_NULL) {
+    LOG_DBG("WIFI", "Not connected on exit — tearing down STA");
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
+  // When connected, leave STA up for the parent; parents that only manage
+  // credentials (Settings → Network) must disconnect / silentRestart themselves.
 
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
@@ -353,6 +360,9 @@ void WifiSelectionActivity::attemptConnection() {
 
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
   WiFi.mode(WIFI_STA);
+  // Free scan result tables before the association/DHCP path — they sit in
+  // internal heap that TLS (OTA / OPDS) needs immediately after connect.
+  WiFi.scanDelete();
   WiFi.disconnect(true, true);  // Abort any in-progress SDK auto-connect and clear NVS-saved SSID
   delay(100);
 
@@ -366,6 +376,10 @@ void WifiSelectionActivity::attemptConnection() {
   mac.replace(":", "");
   String hostname = "CrossPoint-Reader-" + mac;
   WiFi.setHostname(hostname.c_str());
+
+  LOG_INF("WIFI", "begin ssid=%s enc=%d passLen=%u heap=%u maxAlloc=%u", selectedSSID.c_str(),
+          selectedRequiresPassword ? 1 : 0, static_cast<unsigned>(enteredPassword.size()), ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap());
 
   if (selectedRequiresPassword && !enteredPassword.empty()) {
     WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
@@ -401,13 +415,14 @@ void WifiSelectionActivity::checkConnectionStatus() {
             WiFi.RSSI());
 #endif
 
-    // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
-    // drifts ~2 ppm so one sync is enough; users can force a re-sync from
-    // Settings > Customise Status Bar > Sync clock now.
+    // Sync RTC from NTP on the first successful WiFi connection only (X3 has RTC).
+    // NTP writes UTC into the chip; display applies SETTINGS.clockUtcOffsetQ.
+    // Do not change the user's timezone here — that used to force UTC-7 for everyone.
     if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();
+        LOG_INF("WIFI", "NTP sync OK (UTC stored; display offset Q=%u)", SETTINGS.clockUtcOffsetQ);
       }
     }
 

@@ -3,6 +3,7 @@
 #include <Logging.h>
 #include <base64.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 #include <mbedtls/base64.h>
 
 #include <cstring>
@@ -73,6 +74,48 @@ std::string deobfuscateFromBase64(const char* encoded, bool* ok) {
   return result;
 }
 
+namespace {
+// Shared with CrossInk / upstream CrossPoint wifi.json on SD.
+constexpr char kWifiMagic[] = "CPV1";
+constexpr size_t kWifiMagicLen = 4;
+constexpr size_t kWifiSaltLen = 4;
+}  // namespace
+
+String obfuscateWifiPasswordToBase64(const std::string& plaintext) {
+  // Envelope: CPV1 || 4-byte salt || password  (same layout CrossInk writes).
+  std::string blob;
+  blob.reserve(kWifiMagicLen + kWifiSaltLen + plaintext.size());
+  blob.append(kWifiMagic, kWifiMagicLen);
+  for (size_t i = 0; i < kWifiSaltLen; ++i) {
+    blob.push_back(static_cast<char>(esp_random() & 0xFF));
+  }
+  blob.append(plaintext);
+  xorTransform(blob);
+  return base64::encode(reinterpret_cast<const uint8_t*>(blob.data()), blob.size());
+}
+
+std::string unwrapWifiPassword(std::string deobfuscated) {
+  // Accept both envelope (CrossInk / Casper v0.1.5+) and bare password (older Casper).
+  if (deobfuscated.size() <= kWifiMagicLen || deobfuscated.compare(0, kWifiMagicLen, kWifiMagic) != 0) {
+    return deobfuscated;
+  }
+  deobfuscated.erase(0, kWifiMagicLen);
+  if (deobfuscated.size() > kWifiSaltLen) {
+    bool saltLooksBinary = false;
+    for (size_t i = 0; i < kWifiSaltLen; ++i) {
+      const unsigned char c = static_cast<unsigned char>(deobfuscated[i]);
+      if (c < 32 || c > 126) {
+        saltLooksBinary = true;
+        break;
+      }
+    }
+    if (saltLooksBinary) {
+      deobfuscated.erase(0, kWifiSaltLen);
+    }
+  }
+  return deobfuscated;
+}
+
 void selfTest() {
   const char* testInputs[] = {"", "hello", "WiFi P@ssw0rd!", "a"};
   bool allPassed = true;
@@ -89,6 +132,17 @@ void selfTest() {
   if (enc == "test123") {
     LOG_ERR("OBF", "FAIL: obfuscated output identical to plaintext");
     allPassed = false;
+  }
+  // WiFi CPV1 envelope round-trip (non-empty passwords only; empty stays empty on disk).
+  {
+    const std::string pw = "IoT-test-pass";
+    String wEnc = obfuscateWifiPasswordToBase64(pw);
+    bool ok = false;
+    std::string wDec = unwrapWifiPassword(deobfuscateFromBase64(wEnc.c_str(), &ok));
+    if (!ok || wDec != pw) {
+      LOG_ERR("OBF", "FAIL: wifi envelope round-trip");
+      allPassed = false;
+    }
   }
   if (allPassed) {
     LOG_DBG("OBF", "Obfuscation self-test PASSED");

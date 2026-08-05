@@ -1,4 +1,5 @@
 #pragma once
+#include <HalGPIO.h>
 #include <I18n.h>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ButtonNavigator.h"
 
 class OptionPopup {
  public:
@@ -59,7 +61,41 @@ class OptionPopup {
     active = true;
   }
 
+  // Normal menus: logical remapped buttons (Back/Confirm/Up/Down/Left/Right).
   bool handleInput(MappedInputManager& input, const std::function<void()>& requestUpdate) {
+    return handleInputCommon(input, requestUpdate, /*lockedFrontChrome=*/false);
+  }
+
+  // Remap Buttons editor: physical front only — Back · Select · Up · Down on hw 0–3.
+  // Ignores the user's remap so labels and presses always match the locked footer.
+  bool handleInputLockedFront(MappedInputManager& input, const std::function<void()>& requestUpdate) {
+    return handleInputCommon(input, requestUpdate, /*lockedFrontChrome=*/true);
+  }
+
+  bool processRender(GfxRenderer& renderer, const MappedInputManager& input) const {
+    if (!active) return false;
+    const auto popupLabels = input.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, popupLabels.btn1, popupLabels.btn2, popupLabels.btn3, popupLabels.btn4);
+    render(renderer);
+    renderer.displayBuffer();
+    return true;
+  }
+
+  void render(const GfxRenderer& renderer) const {
+    if (!active) return;
+    GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selectedIndex);
+  }
+
+  bool isActive() const { return active; }
+
+ private:
+  struct Layout {
+    Rect dialog{0, 0, 0, 0};
+    std::vector<Rect> options;
+  };
+
+  bool handleInputCommon(MappedInputManager& input, const std::function<void()>& requestUpdate,
+                         const bool lockedFrontChrome) {
     if (!active) return false;
 
     const int count = static_cast<int>(ownedStrings.size());
@@ -97,51 +133,55 @@ class OptionPopup {
       return true;
     }
 
-    if (input.wasPressed(MappedInputManager::Button::Up) || input.wasPressed(MappedInputManager::Button::Left)) {
+    // Locked editor chrome: raw front slots match fixed footer labels
+    // (Back · Select · Up · Down) on hw 0–3 — not the user's remapped functions.
+    //
+    // Normal popups: same orientation-aware front Up/Down as EpubReaderMenuActivity
+    // (getFrontPrevious/NextButtons). Raw Up/Down ignored Orient Front Buttons while
+    // mapLabels still swapped the footer — Portrait 180° then moved opposite the labels.
+    auto anyPressed = [&input](const std::vector<MappedInputManager::Button>& buttons) {
+      for (const auto button : buttons) {
+        if (input.wasPressed(button)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const bool prev = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_LEFT)
+                                        : anyPressed(ButtonNavigator::getFrontPreviousButtons());
+    const bool next = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_RIGHT)
+                                        : anyPressed(ButtonNavigator::getFrontNextButtons());
+    const bool confirm =
+        lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_CONFIRM)
+                          : input.wasPressed(MappedInputManager::Button::Confirm);
+    const bool back =
+        lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_BACK) : input.wasPressed(MappedInputManager::Button::Back);
+
+    if (prev) {
       selectedIndex = (selectedIndex - 1 + count) % count;
       layoutValid = false;  // scroll window may move with selection
       requestUpdate();
       return true;
-    } else if (input.wasPressed(MappedInputManager::Button::Down) ||
-               input.wasPressed(MappedInputManager::Button::Right)) {
+    }
+    if (next) {
       selectedIndex = (selectedIndex + 1) % count;
       layoutValid = false;
       requestUpdate();
       return true;
-    } else if (input.wasPressed(MappedInputManager::Button::Confirm)) {
+    }
+    if (confirm) {
       active = false;
       if (onSelectCallback) onSelectCallback(selectedIndex);
       requestUpdate();
       return true;
-    } else if (input.wasPressed(MappedInputManager::Button::Back)) {
+    }
+    if (back) {
       active = false;
       requestUpdate();
       return true;
     }
     return true;
   }
-
-  bool processRender(GfxRenderer& renderer, const MappedInputManager& input) const {
-    if (!active) return false;
-    const auto popupLabels = input.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-    GUI.drawButtonHints(renderer, popupLabels.btn1, popupLabels.btn2, popupLabels.btn3, popupLabels.btn4);
-    render(renderer);
-    renderer.displayBuffer();
-    return true;
-  }
-
-  void render(const GfxRenderer& renderer) const {
-    if (!active) return;
-    GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selectedIndex);
-  }
-
-  bool isActive() const { return active; }
-
- private:
-  struct Layout {
-    Rect dialog{0, 0, 0, 0};
-    std::vector<Rect> options;
-  };
 
   // Text measurement is expensive and wasScreenTouchDown() is level-triggered, so the
   // layout is computed once per show() and cached rather than rebuilt every loop().

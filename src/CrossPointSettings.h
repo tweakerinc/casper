@@ -111,6 +111,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     STATUS_BAR_TIME_LEFT_COUNT
   };
 
+  // Customize Reader UI — chrome text size (clock, battery %, pages, ETAs, titles).
+  enum STATUS_BAR_FONT_SIZE {
+    STATUS_BAR_FONT_8 = 0,   // Source Serif 8 pt (shipping default)
+    STATUS_BAR_FONT_10 = 1,  // Source Serif 10 pt
+    STATUS_BAR_FONT_12 = 2,  // Source Serif 12 pt
+    STATUS_BAR_FONT_SIZE_COUNT
+  };
+
   // Content placed in one of six status-bar slots (reader chrome).
   // Each non-Hide value may appear in at most one slot.
   enum STATUS_BAR_CORNER_CONTENT {
@@ -199,6 +207,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Font size options
   enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
+  // Shared list / settings menus (Library, Recents activity, Settings rows) — not reader body,
+  // not Penumbra home under-panel. Maps to Source Serif 12 / 14 / 16 (labels: 12pt / 14pt / 16pt).
+  // Menu list title size (Source Serif bitmaps). Values are stable on-disk.
+  // 0=10pt, 1=12pt, 2=14pt, 3=16pt. Pre-10pt firmware used 0=12/1=14/2=16 — migrated on load.
+  enum MENU_FONT_SIZE {
+    MENU_FONT_XSMALL = 0,  // 10pt
+    MENU_FONT_SMALL = 1,   // 12pt
+    MENU_FONT_MEDIUM = 2,  // 14pt
+    MENU_FONT_LARGE = 3,   // 16pt
+    MENU_FONT_SIZE_COUNT
+  };
   enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, LINE_COMPRESSION_COUNT };
   enum PARAGRAPH_ALIGNMENT {
     JUSTIFIED = 0,
@@ -235,8 +254,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr int REFRESH_COUNTDOWN_DISABLED = -1;
   static constexpr int REFRESH_COUNTDOWN_FORCE_SCRUB = 0;
 
-  // Short power button press actions
-  enum SHORT_PWRBTN { IGNORE = 0, SLEEP = 1, PAGE_TURN = 2, FORCE_REFRESH = 3, FOOTNOTES = 4, SHORT_PWRBTN_COUNT };
+  // Short/long power button actions (append-only — SettingsList enumValues must match).
+  // Note: cannot be named QUICK_RESUME — that enumerator already exists on SLEEP_SCREEN_MODE
+  // (legacy value 6) and unscoped enums share the class scope.
+  enum SHORT_PWRBTN {
+    IGNORE = 0,
+    SLEEP = 1,              // wallpaper / Sleep Screen style
+    PAGE_TURN = 2,
+    FORCE_REFRESH = 3,
+    FOOTNOTES = 4,
+    PWR_QUICK_RESUME = 5,   // last-frame + fast wake (not a Sleep Screen value)
+    SHORT_PWRBTN_COUNT
+  };
 
   // Long-press Confirm action while reading an EPUB. The setting cycles through these values.
   // Persisted in settings.json by index: any new function (e.g. dictionary, bookmark) MUST use a
@@ -327,9 +356,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
-  // Sleep screen settings (Casper default: light logo wallpaper)
-  // Factory default: Quick Resume (short power → sleep with QR wake screen).
-  uint8_t sleepScreen = QUICK_RESUME;
+  // Sleep wallpaper style (Dark/Light/Cover/Custom/…). Not used when the sleep
+  // path is Quick Resume (power action or Timeout QR). Default: Casper Light.
+  uint8_t sleepScreen = LIGHT;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
@@ -343,6 +372,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBarTitle = CHAPTER_TITLE;
   uint8_t statusBarBattery = 1;
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
+  // Reader status chrome font size (Manage Reader UI → Font Size). Default 8 pt.
+  uint8_t statusBarFontSize = STATUS_BAR_FONT_8;
   // Six reader chrome slots: UL / UM / UR / LL / LM / LR.
   // Factory defaults for Customize Reader UI (six slots + progress bar).
   uint8_t statusBarUpperLeft = CORNER_BATTERY;
@@ -370,12 +401,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Derived from system status slots (synced on assign); kept for JSON/web + older readers.
   uint8_t systemClock = STATUS_BAR_CLOCK_SHOW;
   // Legacy single time-left mode (synced from corners when possible).
-  uint8_t statusBarTimeLeft = TIME_LEFT_BOOK;
+  uint8_t statusBarTimeLeft = TIME_LEFT_CHAPTER;
   // Clock UTC offset in quarter-hour steps, biased by 48 so it fits in uint8_t.
   // Value 48 = UTC+0, 0 = UTC-12:00, 104 = UTC+14:00.
   // Quarter-hour granularity supports oddball zones like Nepal (+5:45) and Chatham (+12:45).
-  // Factory default UTC-7 (48 = UTC+0 → 48 + (-7)*4 = 20).
-  uint8_t clockUtcOffsetQ = 20;
+  // Factory default UTC+0. Display applies this offset to the RTC (which stores UTC after NTP).
+  // Never force a developer timezone on other users — they set it under Status Bar → UTC offset.
+  uint8_t clockUtcOffsetQ = 48;
   // Clock display format: 0 = 24-hour, 1 = 12-hour (factory default 12h).
   uint8_t clockFormat = 1;
   // Set once an NTP sync succeeds. Used to skip re-syncing on every WiFi connect.
@@ -385,8 +417,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t extraParagraphSpacing = 1;
   // Off by default: AA greys are the main open/page-turn cost on e-ink.
   uint8_t textAntiAliasing = 0;
-  // Short power button click behaviour (Casper: enter sleep; screen mode defaults to Quick Resume)
-  uint8_t shortPwrBtn = SLEEP;
+  // Short power: Quick Resume by default (wallpaper sleep is SHORT_PWRBTN::SLEEP).
+  uint8_t shortPwrBtn = PWR_QUICK_RESUME;
   // Long power button press (held past getPowerButtonLongPressDuration); same SHORT_PWRBTN values.
   // Casper default: force full refresh (short remains sleep).
   uint8_t longPwrBtn = FORCE_REFRESH;
@@ -396,7 +428,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
+  // When 1: front nav follows rotated reader orientation (nested under Reading Orientation).
+  // Portrait / Landscape CW: default Off. Portrait 180° / Landscape CCW: default On
+  // (CCW: front slot 3 = Down, slot 4 = Up). Applied when orientation changes; user can still toggle.
   uint8_t frontButtonFollowOrientation = 0;
+
+  // Factory default for Orient Front Buttons for a given Reading Orientation.
+  static constexpr uint8_t defaultFrontButtonFollowForOrientation(uint8_t orient) {
+    return (orient == INVERTED || orient == LANDSCAPE_CCW) ? 1 : 0;
+  }
   // Front button remap (logical -> hardware) — legacy fields kept for migration / older tools.
   // Prefer hwButtonFunction[] (physical slot → function).
   uint8_t frontButtonBack = FRONT_HW_BACK;
@@ -412,8 +452,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Reader font settings
   uint8_t fontFamily = SOURCESERIF4;
   uint8_t fontSize = MEDIUM;  // 14 pt Source Serif 4 (Casper default)
+  // Library / Recents / Settings list title size (not reader body, not Penumbra home panel).
+  uint8_t menuFontSize = MENU_FONT_SMALL;  // 12pt Source Serif (shipping default)
+  // One-time: old menuFontSize 0/1/2 (12/14/16) → 1/2/3 after inserting 10pt at 0.
+  uint8_t casperMenuFont10ptMigrated = 0;
+  // When 1, list titles wrap to two lines before ellipsis (UI: "Text Wrapping").
+  // Default on (including 12pt) — long titles need it on X4 list width too.
+  uint8_t splitBookTitleLines = 1;
   uint8_t lineSpacing = NORMAL;
-  uint8_t paragraphAlignment = LEFT_ALIGN;
+  // Ship Book's Style: follow EPUB CSS alignment (titles center, body as designed).
+  uint8_t paragraphAlignment = BOOK_STYLE;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
   // E-ink refresh frequency (default 15 pages)
@@ -453,10 +501,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Default 1 so a first save after factory defaults does not re-force Penumbra
   // if the user already switched theme before reboot.
   uint8_t casperHomeMigrated = 1;
-  // One-time migration: force short=Sleep / long=ForceRefresh / long-press menu=Dictionary.
+  // One-time: seed missing control keys only (never overwrite saved power / long-press).
   uint8_t casperControlsMigrated = 0;
-  // One-time migration: factory clock defaults (12h, UTC-7) + keep status-bar clock shown.
+  // One-time flag only — does not rewrite reader time-left slots.
+  uint8_t casperChapterTimeLeftDefaultMigrated = 0;
+  // One-time migration: factory clock defaults (12h) + keep status-bar clock shown.
   uint8_t casperClockDefaultsMigrated = 0;
+  // One-time: undo forced UTC-7 from pre-0.1.6 clock migration (only if still stamp 20).
+  uint8_t casperUtcOffsetFixMigrated = 0;
   // One-time migration: map legacy battery/%/page/time-left toggles into four corners.
   uint8_t casperStatusBarCornersMigrated = 0;
   // One-time: expand 4 corners + clock/title toggles into 6 exclusive slots.
@@ -473,8 +525,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t casperBuiltinFontsSlimMigrated = 0;
   // One-time: classic Left/Right list axes → Up/Down list + Left/Right sides.
   uint8_t casperButtonAxisMigrated = 0;
-  // One-time: text AA + embedded style off (faster open / page turn defaults).
-  uint8_t casperSpeedDefaultsMigrated = 0;
+  // One-time: historical AA/embedded speed defaults. Default 1 so factory installs
+  // keep Book's Style + Embedded on (migration must not re-force embedded off).
+  uint8_t casperSpeedDefaultsMigrated = 1;
   // One-time: bump Anti-Ghosting default 10 → 15 for existing installs still on 10.
   uint8_t casperAntiGhost15Migrated = 0;
   // One-time: Stats (FocusTheme) removed from firmware → Penumbra (legacy flag).
@@ -483,12 +536,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // One-time: X4 Bare (after Stats drop) → Penumbra (title + progress face).
   // Default 1 so first-boot users who choose Bare are not remapped on next load.
   uint8_t casperX4SpectralDefaultMigrated = 1;
+
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
-  // Book CSS: off by default (simpler layout, faster cold index). Users can re-enable.
-  uint8_t embeddedStyle = 0;
+  // Book CSS: on by default so publisher layout (centered titles, etc.) matches expectation.
+  // Users can turn off for slightly faster open / simpler layout.
+  uint8_t embeddedStyle = 1;
   // Bionic Reading (UI label; JSON key remains focusReadingEnabled for migration).
   // Bolds the first portion of each word — CrossInk calls this Bionic Reading;
   // upstream CrossPoint called it Focus Reading.
@@ -512,9 +567,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   void setEnabledDictionaries(const std::vector<std::string>& names);
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
-  // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
+  // Child of moveFinishedToReadFolder in UI. When On + parent On: drop finished books from Recents.
+  // Default off — user opts in after enabling Move Finished.
   uint8_t removeReadBooksFromRecents = 0;
-  // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
+  // Move EPUB to /read/ when marked finished (0 = off by default, 1 = on)
   uint8_t moveFinishedToReadFolder = 0;
   // X3 only: before deep sleep, copy lifetime stats to /.casper-stats-backup/
   // (one dated file per calendar day when RTC is available). Default on.
@@ -532,8 +588,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   bool readingStatsTrackingEnabled() const;
   static constexpr uint8_t MIN_SESSION_IDLE_MINUTES = 1;
   static constexpr uint8_t MAX_SESSION_IDLE_MINUTES = 30;
-  // Short press Back goes to file browser instead of home (0 = disabled, 1 = enabled)
-  uint8_t backShortToFileBrowser = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
@@ -561,16 +615,21 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // takes ~1.5–3s on e-ink. Was 500ms and felt like multi-second holds with HALF lag.
   static constexpr uint16_t POWER_BUTTON_LONG_PRESS_MS = 350;
 
-  // Short-press / wake verification duration. Stays short when short action is SLEEP
-  // so a quick tap wakes and re-sleeps correctly; longer otherwise.
+  // Short-press / wake verification duration. Stays short when short action is
+  // Sleep or Quick Resume so a quick tap wakes and re-sleeps correctly.
   uint16_t getPowerButtonDuration() const {
-    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? POWER_BUTTON_WAKE_SHORT_MS
-                                                                   : POWER_BUTTON_WAKE_LONG_MS;
+    const bool shortWake = shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+                           shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
+    return shortWake ? POWER_BUTTON_WAKE_SHORT_MS : POWER_BUTTON_WAKE_LONG_MS;
   }
   uint16_t getPowerButtonWakeDuration() const { return getPowerButtonDuration(); }
   // Hold threshold that distinguishes short vs long power press.
   uint16_t getPowerButtonLongPressDuration() const { return POWER_BUTTON_LONG_PRESS_MS; }
   int getReaderFontId() const;
+  // Source Serif font id for shared list titles (Library, Recents, Settings, etc.).
+  int getMenuListFontId() const;
+  // Max lines for list titles when Text Wrapping is on (wrap only if text needs it).
+  int getMenuListTitleMaxLines() const { return splitBookTitleLines ? 2 : 1; }
 
   // Session idle threshold in seconds (for pace samples and stats accumulation).
   uint32_t getReadingSessionIdleSeconds() const {
@@ -636,6 +695,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     }
   };
   StatusBarSpec statusBarSpec() const;
+  // GfxRenderer font id for reader status chrome (clock, %, pages, ETAs, titles).
+  int getStatusBarFontId() const;
+  // Bottom text-lane height reservation (scales with statusBarFontSize).
+  int getStatusBarTextLaneHeight() const;
   // Assign a slot content type; clears that type from any other slot (exclusive).
   void assignStatusBarCorner(uint8_t& cornerField, uint8_t content);
   bool statusBarCornerHas(uint8_t content) const;

@@ -78,9 +78,8 @@ class HomeActivity final : public Activity {
   char penumbraLastDrawnTime[8] = "";
   // Penumbra Recents under-panel list focus (independent of upper "last read" book).
   int penumbraRecentsFocus = 0;
-  // After one HALF (white baseline) this session, further full-frame Penumbra
-  // paints use FAST (~0.45s on X3) instead of HALF (~3.2s). Reader return used
-  // to always HALF and felt frozen / multi-pressy.
+  // After one HALF this theme session, further full Penumbra shells use the
+  // snappy path (UiGhostPolicy may still promote FAST→HALF every N UI paints).
   bool penumbraHalfBaselineDone = false;
 
  public:
@@ -118,6 +117,10 @@ class HomeActivity final : public Activity {
     if (hasOpdsUrl) ++i;
     if (item == HomeMenuItem::FILE_TRANSFER) return i;
     ++i;
+#if FREEINK_CAP_BLE_HID_HOST
+    if (item == HomeMenuItem::BLUETOOTH) return i;
+    ++i;
+#endif
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -129,6 +132,9 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::RECENTS;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
+#if FREEINK_CAP_BLE_HID_HOST
+    if (idx == i++) return HomeMenuItem::BLUETOOTH;
+#endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -138,6 +144,7 @@ class HomeActivity final : public Activity {
   void onRecentsOpen();
   void onSettingsOpen();
   void onFileTransferOpen();
+  void onBluetoothOpen();
   void onOpdsBrowserOpen();
   void showCurrentBookActionMenu(bool ignoreInitialConfirmRelease = false);
   void reloadHomeAfterBookAction();
@@ -186,6 +193,9 @@ class HomeActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool isHomeActivity() const override { return true; }
+  // Drop large cover snapshot while Home is parked under the reader (snappy Back
+  // keeps Home on the stack — without this, ~10–40 KB stays reserved all session).
+  void releaseHeavyResourcesForReader();
   // Power long-press FORCE_REFRESH: full redraw with HALF scrub (Penumbra) or
   // cover multipass (Bare). Must not FAST-only — that leaves grey mud on glass.
   bool handleForcedRefresh() override;

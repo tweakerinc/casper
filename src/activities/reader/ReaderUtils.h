@@ -12,16 +12,29 @@
 
 namespace ReaderUtils {
 
-// Long-hold Back to leave reader / go home (half of original 1s).
+// Hold threshold used by end-of-book short-Back (last page) and similar chords.
+// Reader leave-to-home is on Back *release* only (no long-press Back).
 constexpr unsigned long GO_HOME_MS = 500;
-constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
+constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;  // alias kept for call sites
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
 
 // Extra air under top chrome (battery/clock) and matching reserve above bottom
 // chrome so page text never sits under the status bar or dictionary button strip.
-constexpr int kReaderTopChromeExtra = 24;
+// Bumps slightly when Manage Reader UI → Font Size is larger than 8 pt.
+inline int readerTopChromeExtra() {
+  switch (SETTINGS.statusBarFontSize) {
+    case CrossPointSettings::STATUS_BAR_FONT_10:
+      return 28;
+    case CrossPointSettings::STATUS_BAR_FONT_12:
+      return 32;
+    default:
+      return 24;
+  }
+}
+inline int readerBottomChromeExtra() { return readerTopChromeExtra(); }
+constexpr int kReaderTopChromeExtra = 24;     // legacy default; prefer readerTopChromeExtra()
 constexpr int kReaderBottomChromeExtra = 24;  // mirror top air
 constexpr int kReaderBottomChromePad = 4;
 
@@ -59,13 +72,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  // PageBack/PageForward already include Up/Down/Left/Right + Side Layout + Orient Front Buttons.
   const bool prev =
-      tiltPrev ||
-      (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))
-                : (input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(prevButton)));
+      tiltPrev || (usePress ? input.wasPressed(MappedInputManager::Button::PageBack)
+                            : input.wasReleased(MappedInputManager::Button::PageBack));
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
   const unsigned long held = input.getHeldTime();
   const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
@@ -73,10 +83,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                              held >= SETTINGS.getPowerButtonLongPressDuration();
   const bool powerTurn = shortPowerTurn || longPowerTurn;
-  const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasPressed(nextButton))
-                                          : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasReleased(nextButton)));
+  const bool next =
+      tiltNext || powerTurn ||
+      (usePress ? input.wasPressed(MappedInputManager::Button::PageForward)
+                : input.wasReleased(MappedInputManager::Button::PageForward));
   return {prev, next, tiltPrev || tiltNext};
 }
 
@@ -206,10 +216,10 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 //   - FORCE_SCRUB (0) / popups / images / manual: always HALF (hard clean)
 //   - Interval "Never": FAST only (required cleanups still scrub)
 //
-// Note: greyscale-base is intentional *only* for this X3 reader maintenance path
-// (and Penumbra under-panel soft scrolls). Do not spam it on every menu FAST —
-// that was the UI white-mud regression. Reader interval hits have a correct DTM1
-// baseline from continuous paging, matching YACP's soft reinforce.
+// Note: greyscale-base is intentional *only* for this X3 reader maintenance path.
+// Do not spam it on every menu FAST — that was the UI white-mud regression.
+// BW UI uses UiGhostPolicy (plain FAST + periodic HALF). Reader interval hits
+// have a correct DTM1 baseline from continuous paging, matching YACP soft reinforce.
 //
 // Async: starts FAST/HALF non-blocking when possible; X3 soft reinforce is blocking.
 // Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
@@ -277,49 +287,25 @@ struct BackNavCallback {
 
 // Returns true if the back button was consumed (caller should return).
 //
-// Long press (observed while still held for >= GO_BACK_OR_HOME_MS):
-// - default: go to file browser
-// - with backShortToFileBrowser: go home
-// Short press (Back release that was not already handled as long-press):
-// - default: go home
-// - with backShortToFileBrowser: go to file browser
+// Back release → Home. No long-press Back path (that delayed leaving the book
+// and felt sluggish). Library is reached from Home / menu, not a hold-Back chord.
 //
-// Important: any Back *release* always navigates short. We must not require
-// held < threshold on release. When the main loop is busy (section build, SD,
+// Do not gate on held time: when the main loop is busy (section build, SD,
 // first-page work), a physical short press can be sampled only on release with
-// held already >= threshold because isPressed was never polled during the hold.
-// The old (wasReleased && held < 500) check then no-oped — feeling like
-// "Back needs two presses". Long-press is only the while-held branch so a
-// missed long sample still leaves via short (home), which matches intent.
-inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
-                                 const char* filePath, BackNavCallback goHome) {
-  auto leaveHome = [&]() {
-    // Drain residual Back edges so the resumed Home does not treat this release
-    // as Menu (minimal front-button map: short Back = Menu).
-    (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
-    (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
-    goHome.fn(goHome.ctx);
-  };
-  // Long-press only while held — must be observed across the threshold in-loop.
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS) {
-    if (SETTINGS.backShortToFileBrowser) {
-      leaveHome();
-    } else {
-      activityManager.goToFileBrowser(filePath);
-    }
-    return true;
+// held already high because isPressed was never polled during the hold. An old
+// (wasReleased && held < 500) check then no-oped — "Back needs two presses".
+// activityManager/filePath kept for call-site stability (unused).
+inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& /*activityManager*/,
+                                 const char* /*filePath*/, BackNavCallback goHome) {
+  if (!mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    return false;
   }
-  // Any Back release → short navigation. Do not gate on held time (see above).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (SETTINGS.backShortToFileBrowser) {
-      activityManager.goToFileBrowser(filePath);
-    } else {
-      leaveHome();
-    }
-    return true;
-  }
-  return false;
+  // Drain residual Back edges so the resumed Home does not treat this release
+  // as Menu (minimal front-button map: short Back = Menu).
+  (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
+  (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+  goHome.fn(goHome.ctx);
+  return true;
 }
 
 }  // namespace ReaderUtils

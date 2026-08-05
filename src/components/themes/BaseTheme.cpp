@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 
+#include "CrossPointSettings.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -103,6 +104,9 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const ui
   const bool showPct = mode != M::BATTERY_DISPLAY_ICON;
   const uint16_t percentage = powerManager.getBatteryPercentage();
   const int y = rect.y + 6;
+  // Reader chrome uses Manage Reader UI → Font Size; system bar callers stay on 8 pt
+  // unless they pass a different path (drawStatusBar uses getStatusBarFontId via override below).
+  const int pctFont = SETTINGS.getStatusBarFontId();
 
   if (showIcon) {
     const Rect iconRect{rect.x, y, rect.width, rect.height};
@@ -112,9 +116,9 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const ui
   if (showPct) {
     const auto percentageText = std::to_string(percentage) + "%";
     if (showIcon) {
-      renderer.drawText(SMALL_FONT_ID, rect.x + batteryPercentSpacing + rect.width, rect.y, percentageText.c_str());
+      renderer.drawText(pctFont, rect.x + batteryPercentSpacing + rect.width, rect.y, percentageText.c_str());
     } else {
-      renderer.drawText(SMALL_FONT_ID, rect.x, rect.y, percentageText.c_str());
+      renderer.drawText(pctFont, rect.x, rect.y, percentageText.c_str());
     }
   }
 }
@@ -131,6 +135,7 @@ void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const u
   const uint16_t percentage = powerManager.getBatteryPercentage();
   const int y = rect.y + 6;
   const int rightEdge = rect.x + rect.width;
+  const int pctFont = SETTINGS.getStatusBarFontId();
 
   if (showIcon) {
     const Rect iconRect{rect.x, y, rect.width, rect.height};
@@ -139,11 +144,11 @@ void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const u
   }
   if (showPct) {
     const auto percentageText = std::to_string(percentage) + "%";
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
+    const int textWidth = renderer.getTextWidth(pctFont, percentageText.c_str());
     if (showIcon) {
-      renderer.drawText(SMALL_FONT_ID, rect.x - textWidth - batteryPercentSpacing, rect.y, percentageText.c_str());
+      renderer.drawText(pctFont, rect.x - textWidth - batteryPercentSpacing, rect.y, percentageText.c_str());
     } else {
-      renderer.drawText(SMALL_FONT_ID, rightEdge - textWidth, rect.y, percentageText.c_str());
+      renderer.drawText(pctFont, rightEdge - textWidth, rect.y, percentageText.c_str());
     }
   }
 }
@@ -176,22 +181,35 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
                                 const char* btn4) const {
   // Canonical front-button chrome — same geometry on home, settings, dictionary,
   // and every theme. buttonHintsHeight is both reserved layout height and drawn
-  // button height (flush to the physical bottom).
+  // button height (flush to the physical front-button edge).
   if (gpio.hasTouch()) {
     return;
   }
 
+  // Portrait / Portrait inverted: draw in the *live* orientation so labels stay
+  // readable with the page (Portrait 180 was forcing Portrait chrome → upside-down
+  // words when the device is held inverted). Landscape still forces Portrait so
+  // the strip stays on the physical button edge without a full landscape layout.
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  const bool landscape = orig_orientation == GfxRenderer::LandscapeClockwise ||
+                         orig_orientation == GfxRenderer::LandscapeCounterClockwise;
+  const bool inverted = orig_orientation == GfxRenderer::PortraitInverted;
+  if (landscape) {
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
 
   const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
   constexpr int buttonWidth = 80;
   constexpr int smallButtonHeight = 15;
   constexpr int cornerRadius = 6;
   constexpr int textYOffset = 7;  // top of button → text baseline (SMALL_FONT)
   const int buttonHeight = metrics.buttonHintsHeight;
-  const int buttonY = metrics.buttonHintsHeight;
+  // Portrait: bar at logical bottom (physical front keys). Inverted: logical top
+  // maps to the same physical edge when the page is rotated 180°.
+  const int barY = inverted ? 0 : (pageHeight - buttonHeight);
+  const int stubY = inverted ? 0 : (pageHeight - smallButtonHeight);
   // X3 is wider in portrait (528 vs 480).
   constexpr int x4ButtonPositions[] = {58, 146, 254, 342};
   constexpr int x3ButtonPositions[] = {65, 157, 291, 383};
@@ -199,24 +217,32 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   const char* labels[] = {btn1, btn2, btn3, btn4};
 
   for (int i = 0; i < 4; i++) {
-    const int x = buttonPositions[i];
+    // Mirror X in inverted so slot i stays over the same physical key.
+    int x = buttonPositions[i];
+    if (inverted) {
+      x = pageWidth - x - buttonWidth;
+    }
     if (labels[i] != nullptr && labels[i][0] != '\0') {
-      renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius, Color::White);
-      renderer.drawRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, 1, cornerRadius, true, true, false,
-                               false, true);
+      // Open the edge toward page content (bottom open in portrait; top open when inverted).
+      const bool roundTop = !inverted;
+      const bool roundBottom = inverted;
+      renderer.fillRoundedRect(x, barY, buttonWidth, buttonHeight, cornerRadius, Color::White);
+      renderer.drawRoundedRect(x, barY, buttonWidth, buttonHeight, 1, cornerRadius, roundTop, roundTop, roundBottom,
+                               roundBottom, true);
       const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
       const int textX = x + (buttonWidth - 1 - textWidth) / 2;
-      renderer.drawText(SMALL_FONT_ID, textX, pageHeight - buttonY + textYOffset, labels[i]);
+      renderer.drawText(SMALL_FONT_ID, textX, barY + textYOffset, labels[i]);
     } else {
       // Empty slot: short stub so the bar rhythm stays consistent across screens.
-      renderer.fillRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, cornerRadius,
-                               Color::White);
-      renderer.drawRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, 1, cornerRadius, true,
-                               true, false, false, true);
+      renderer.fillRoundedRect(x, stubY, buttonWidth, smallButtonHeight, cornerRadius, Color::White);
+      renderer.drawRoundedRect(x, stubY, buttonWidth, smallButtonHeight, 1, cornerRadius, !inverted, !inverted,
+                               inverted, inverted, true);
     }
   }
 
-  renderer.setOrientation(orig_orientation);
+  if (landscape) {
+    renderer.setOrientation(orig_orientation);
+  }
 }
 
 void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {
@@ -288,8 +314,55 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   }
 }
 
+namespace {
+// Row height for shared lists (Library / Recents / Settings). Short titles stay
+// single-line dense; wrapped titles use tighter line step and a taller row only
+// for that item.
+constexpr int kBaseTitleSubtitleGap = 2;
+constexpr int kBaseRowPad = 8;
+
+int baseTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
+  const int advanceY = renderer.getLineHeight(titleFont);
+  if (nLines <= 1) return advanceY;
+  return std::max(18, (advanceY * 7) / 10);
+}
+
+int baseTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {
+  const int advanceY = renderer.getLineHeight(titleFont);
+  const int step = baseTitleLineStep(renderer, titleFont, nLines);
+  return (nLines <= 1) ? advanceY : ((nLines - 1) * step + advanceY);
+}
+
+int computeListRowHeightForLines(const GfxRenderer& renderer, const bool hasSubtitle, const int nTitleLines) {
+  const int titleFont = SETTINGS.getMenuListFontId();
+  int contentH = baseTitleBlockHeight(renderer, titleFont, std::max(1, nTitleLines));
+  if (hasSubtitle) {
+    contentH += kBaseTitleSubtitleGap + renderer.getLineHeight(SMALL_FONT_ID);
+  }
+  const int computed = contentH + kBaseRowPad;
+  const int baseline =
+      hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  return std::max(baseline, computed);
+}
+
+int computeListRowHeight(const GfxRenderer& renderer, const bool hasSubtitle) {
+  return computeListRowHeightForLines(renderer, hasSubtitle, 1);
+}
+}  // namespace
+
 int BaseTheme::getListRowStep(bool hasSubtitle) const {
-  int rowHeight = (hasSubtitle) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  // Approximate step without GfxRenderer (page-size math). drawList measures with
+  // the live font for exact row height when painting.
+  // Split-title mode does not inflate step — wrap is per-item when text needs it.
+  int rowHeight =
+      hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_LARGE) {
+    rowHeight += 4;
+  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_XSMALL) {
+    rowHeight = std::max(26, rowHeight - 4);
+  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_SMALL) {
+    rowHeight = std::max(28, rowHeight - 2);
+  }
   return rowHeight;
 }
 
@@ -307,9 +380,12 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<bool(int index)>& rowDimmed,
                          const std::function<bool(int index)>& rowApplied) const {
   (void)highlightValue;
-  int rowHeight =
-      (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
-  int pageItems = rowHeight > 0 ? std::max(1, rect.height / rowHeight) : 1;
+  // Icons reserved title width for no gain on Bare/Penumbra; ignore rowIcon.
+  (void)rowIcon;
+
+  const bool hasSubtitleCb = (rowSubtitle != nullptr);
+  const int singleRowH = computeListRowHeight(renderer, hasSubtitleCb);
+  int pageItems = singleRowH > 0 ? std::max(1, rect.height / singleRowH) : 1;
 
   const int totalPages = (itemCount + pageItems - 1) / pageItems;
   if (totalPages > 1) {
@@ -337,19 +413,18 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     }
   }
 
-  // Focus highlight only — does not follow the applied/current setting.
   int contentWidth = rect.width - 5;
-  if (selectedIndex >= 0) {
-    renderer.fillRect(rect.x, rect.y + selectedIndex % pageItems * rowHeight - 2, rect.width, rowHeight);
-  }
   constexpr int minValueGap = 10;
   constexpr int kRadioR = 5;
   constexpr int kRadioReserve = kRadioR * 2 + 8;
 
-  // Draw all items
+  const int titleFont = SETTINGS.getMenuListFontId();
+  const int titleMaxLines = SETTINGS.getMenuListTitleMaxLines();
+
+  // Cumulative Y: wrapped titles get a taller row; short names stay dense.
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  int itemY = rect.y;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
-    const int itemY = rect.y + (i % pageItems) * rowHeight;
     const bool focused = (i == selectedIndex);
     const bool applied = rowApplied && rowApplied(i);
 
@@ -361,61 +436,80 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       valueText = rowValue(i);
       if (!valueText.empty()) {
         int maxValW = std::max(0, rowTextWidth - 40 - minValueGap);
-        valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxValW);
-        int valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + minValueGap;
+        valueText = renderer.truncatedText(titleFont, valueText.c_str(), maxValW);
+        int valueWidth = renderer.getTextWidth(titleFont, valueText.c_str()) + minValueGap;
         rowTextWidth -= valueWidth;
       }
     }
 
-    auto itemName = rowTitle(i);
-    auto font = UI_10_FONT_ID;
-    auto item = renderer.truncatedText(font, itemName.c_str(), rowTextWidth);
-    const int lineH = renderer.getLineHeight(font);
-    // With a subtitle (e.g. Recent Books author), center the title+subtitle block
-    // as a unit so they never overlap after single-line vertical centering.
-    int textY = itemY + std::max(0, (rowHeight - lineH) / 2);
-    int subtitleY = textY;
+    const auto itemName = rowTitle(i);
+    std::vector<std::string> titleLines =
+        renderer.wrappedText(titleFont, itemName.c_str(), rowTextWidth, titleMaxLines, EpdFontFamily::REGULAR);
+    if (titleLines.empty()) titleLines.emplace_back("");
+    // Ellipsize last line if the full title still does not fit.
+    if (static_cast<int>(titleLines.size()) >= titleMaxLines) {
+      titleLines.back() = renderer.truncatedText(titleFont, titleLines.back().c_str(), rowTextWidth);
+    }
+    const int nTitleLines = static_cast<int>(titleLines.size());
+    const int lineStep = baseTitleLineStep(renderer, titleFont, nTitleLines);
+    const int titleBlockH = baseTitleBlockHeight(renderer, titleFont, nTitleLines);
+
     std::string subtitleDrawn;
+    int subtitleLineH = 0;
     if (rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       if (!subtitleText.empty()) {
         subtitleDrawn = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-        const int subtitleLineH = renderer.getLineHeight(SMALL_FONT_ID);
-        constexpr int kTitleSubtitleGap = 2;
-        const int blockH = lineH + kTitleSubtitleGap + subtitleLineH;
-        const int blockY = itemY + std::max(0, (rowHeight - blockH) / 2);
-        textY = blockY;
-        subtitleY = blockY + lineH + kTitleSubtitleGap;
+        subtitleLineH = renderer.getLineHeight(SMALL_FONT_ID);
       }
     }
-    renderer.drawText(font, rect.x + BaseMetrics::values.contentSidePadding, textY, item.c_str(), !focused);
+
+    const int rowHeight =
+        computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
+      break;
+    }
+
+    // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
+    const int blockH =
+        titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
+    int textY = itemY + std::max(0, (rowHeight - blockH) / 2);
+    const int textX = rect.x + BaseMetrics::values.contentSidePadding;
+    const auto focusStyle = focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+
+    for (size_t li = 0; li < titleLines.size(); ++li) {
+      const int ly = textY + static_cast<int>(li) * lineStep;
+      renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+    }
 
     // Apply checkerboard dither to create gray text effect for dimmed items
     if (rowDimmed && rowDimmed(i) && !focused) {
-      const int titleWidth = renderer.getTextWidth(font, item.c_str());
-      const int tx = rect.x + BaseMetrics::values.contentSidePadding;
-      for (int py = textY; py < textY + lineH; py++)
-        for (int px = tx; px < tx + titleWidth; px++)
-          if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
+      const int dimH = renderer.getLineHeight(titleFont);
+      for (size_t li = 0; li < titleLines.size(); ++li) {
+        const int ly = textY + static_cast<int>(li) * lineStep;
+        const int titleWidth = renderer.getTextWidth(titleFont, titleLines[li].c_str());
+        for (int py = ly; py < ly + dimH; py++)
+          for (int px = textX; px < textX + titleWidth; px++)
+            if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
+      }
     }
 
     if (!subtitleDrawn.empty()) {
-      renderer.drawText(SMALL_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, subtitleY,
-                        subtitleDrawn.c_str(), !focused);
+      const int subtitleY = textY + titleBlockH + kBaseTitleSubtitleGap;
+      renderer.drawText(SMALL_FONT_ID, textX, subtitleY, subtitleDrawn.c_str(), /*black=*/true);
     }
 
     if (!valueText.empty()) {
-      const auto valueTextWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str());
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - BaseMetrics::values.contentSidePadding - valueTextWidth,
-                        textY, valueText.c_str(), !focused);
+      const auto valueTextWidth = renderer.getTextWidth(titleFont, valueText.c_str(), focusStyle);
+      renderer.drawText(titleFont, rect.x + contentWidth - BaseMetrics::values.contentSidePadding - valueTextWidth,
+                        textY, valueText.c_str(), /*black=*/true, focusStyle);
     }
 
     // Applied/current setting: filled radio circle (stays put while focus moves).
     if (applied) {
       const int cx = rect.x + contentWidth - BaseMetrics::values.contentSidePadding - kRadioR;
       const int cy = itemY + rowHeight / 2 - 1;
-      // Ink color matches row text: white on black focus bar, black otherwise.
-      const bool ink = !focused;
+      const bool ink = true;  // black on white (no invert focus bar)
       for (int dy = -kRadioR; dy <= kRadioR; ++dy) {
         for (int dx = -kRadioR; dx <= kRadioR; ++dx) {
           if (dx * dx + dy * dy <= kRadioR * kRadioR) {
@@ -424,6 +518,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         }
       }
     }
+
+    itemY += rowHeight;
   }
 }
 
@@ -432,7 +528,8 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   drawSystemStatusBar(renderer, rect.y, nullptr);
 
   // Full-width rule under the title band (shared edge with the tab bar below).
-  constexpr int kHeaderRuleThickness = 3;
+  // 1px: 3px rules left heavy residual on FAST settings navigation.
+  constexpr int kHeaderRuleThickness = 1;
   const int ruleY = rect.y + rect.height - kHeaderRuleThickness;
 
   const int sideReserve = systemStatusSideReserve(renderer);
@@ -485,8 +582,8 @@ void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 
 void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
-  // Match drawHeader / Preview rule thickness.
-  constexpr int kRuleThickness = 3;
+  // Match drawHeader / Preview rule thickness (thin for e-ink residual).
+  constexpr int kRuleThickness = 1;
   // Same air as Manage Fonts Preview label band (lineH + 10).
   constexpr int kBandExtraPad = 10;
 
@@ -790,29 +887,22 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  (void)rowIcon;  // Home menu is text-only; icons unused.
   for (int i = 0; i < buttonCount; ++i) {
-    const int tileY = BaseMetrics::values.verticalSpacing + rect.y +
-                      static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing);
+    // Layout from rect.y (caller vertically centers the full stack).
+    const int tileY =
+        rect.y + static_cast<int>(i) * (BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing);
 
     const bool selected = selectedIndex == i;
-
-    if (selected) {
-      renderer.fillRect(rect.x + BaseMetrics::values.contentSidePadding, tileY,
-                        rect.width - BaseMetrics::values.contentSidePadding * 2, BaseMetrics::values.menuRowHeight);
-    } else {
-      renderer.drawRect(rect.x + BaseMetrics::values.contentSidePadding, tileY,
-                        rect.width - BaseMetrics::values.contentSidePadding * 2, BaseMetrics::values.menuRowHeight);
-    }
-
+    // Bold only for selection; labels centered (no icons).
     std::string labelStr = buttonLabel(i);
     const char* label = labelStr.c_str();
-    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
+    const auto style = selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label, style);
     const int textX = rect.x + (rect.width - textWidth) / 2;
     const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-    const int textY =
-        tileY + (BaseMetrics::values.menuRowHeight - lineHeight) / 2;  // vertically centered assuming y is top of text
-    // Invert text when the tile is selected, to contrast with the filled background
-    renderer.drawText(UI_10_FONT_ID, textX, textY, label, selectedIndex != i);
+    const int textY = tileY + (BaseMetrics::values.menuRowHeight - lineHeight) / 2;
+    renderer.drawText(UI_10_FONT_ID, textX, textY, label, /*black=*/true, style);
   }
 }
 
@@ -895,7 +985,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                               const char* timeLeftChapterLabel, const bool drawTopBattery, const int bookPage,
                               const int bookPageCount, const bool bookPageCountEstimated, const int chapterIndex,
                               const int chapterTotal, std::string chapterTitle,
-                              const bool previewIgnoreBatteryMasterHide) const {
+                              const bool previewIgnoreBatteryMasterHide, const char* previewClockTime) const {
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -951,10 +1041,16 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     snprintf(buf, len, "%.0f%% %s", bookProgress, tr(STR_COMPLETE));
   };
   auto clockText = [&](char* buf, size_t len) -> const char* {
+    // Settings preview: always show a sample clock so layout can be judged without RTC.
+    if (previewClockTime != nullptr && previewClockTime[0] != '\0') {
+      return previewClockTime;
+    }
     if (!halClock.isAvailable()) return nullptr;
     if (!halClock.formatTime(buf, len, SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) return nullptr;
     return buf;
   };
+
+  const int chromeFont = SETTINGS.getStatusBarFontId();
 
   // align: 0=left, 1=center, 2=right. Returns drawn width (0 if empty).
   auto drawSlot = [&](uint8_t content, int anchorX, int y, int align, int maxWidth) -> int {
@@ -965,7 +1061,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       if (!batteryAllowed) return 0;
       if (!drawTopBattery && y == topTextY) return 0;
       const int iconW = metrics.batteryWidth;
-      const int pctW = showBattPct ? renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
+      const int pctW = showBattPct ? renderer.getTextWidth(chromeFont, "100%") : 0;
       int groupW = 0;
       if (showBattIcon && showBattPct) {
         groupW = iconW + batteryPercentSpacing + pctW;
@@ -1021,7 +1117,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
         if (bookTitle.empty()) return 0;
         titleScratch = bookTitle;
         if (maxWidth > 0) {
-          titleScratch = renderer.truncatedText(SMALL_FONT_ID, titleScratch.c_str(), maxWidth);
+          titleScratch = renderer.truncatedText(chromeFont, titleScratch.c_str(), maxWidth);
         }
         text = titleScratch.c_str();
         break;
@@ -1029,7 +1125,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
         if (chapterTitle.empty()) return 0;
         titleScratch = chapterTitle;
         if (maxWidth > 0) {
-          titleScratch = renderer.truncatedText(SMALL_FONT_ID, titleScratch.c_str(), maxWidth);
+          titleScratch = renderer.truncatedText(chromeFont, titleScratch.c_str(), maxWidth);
         }
         text = titleScratch.c_str();
         break;
@@ -1040,7 +1136,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
         return 0;
     }
     if (!text || !text[0]) return 0;
-    int w = renderer.getTextWidth(SMALL_FONT_ID, text);
+    int w = renderer.getTextWidth(chromeFont, text);
     if (maxWidth > 0 && w > maxWidth && content != C::CORNER_BOOK_TITLE && content != C::CORNER_CHAPTER_TITLE) {
       // Non-title strings are short; skip rather than overflow corners.
       return 0;
@@ -1048,7 +1144,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     int x = anchorX;
     if (align == 2) x = anchorX - w;
     else if (align == 1) x = anchorX - w / 2;
-    renderer.drawText(SMALL_FONT_ID, x, y, text);
+    renderer.drawText(chromeFont, x, y, text);
     return w;
   };
 
@@ -1070,16 +1166,20 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   if (sb.showsProgressBar()) {
     const int barMarginLeft = fillMargin ? 0 : orientedMarginLeft;
     const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
-    const int progressBarMaxWidth = renderer.getScreenWidth() - barMarginLeft - barMarginRight;
+    const int progressBarMaxWidth = std::max(0, renderer.getScreenWidth() - barMarginLeft - barMarginRight);
     const int progressBarY = renderer.getScreenHeight() - orientedMarginBottom - sb.progressBarHeightPx -
                              paddingBottom + (fillMargin ? 1 : 0);
-    size_t progress;
+    // bookProgress is 0–100 float; never cast through size_t (truncates 0–1 by mistake to 0).
+    float progressPct = 0.0f;
     if (sb.progressBarMode == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
-      progress = static_cast<size_t>(bookProgress);
-    } else {
-      progress = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) * 100 : 0;
+      progressPct = bookProgress;
+    } else if (pageCount > 0) {
+      progressPct = (static_cast<float>(currentPage) / static_cast<float>(pageCount)) * 100.0f;
     }
-    const int barWidth = std::max(0, static_cast<int>(progressBarMaxWidth * progress / 100));
+    if (progressPct < 0.0f) progressPct = 0.0f;
+    if (progressPct > 100.0f) progressPct = 100.0f;
+    const int barWidth =
+        std::max(0, static_cast<int>((static_cast<float>(progressBarMaxWidth) * progressPct) / 100.0f + 0.5f));
     const int barHeight = std::max(static_cast<int>(sb.progressBarHeightPx),
                                    sb.progressBarHeightPx + (fillMargin ? orientedMarginBottom - 1 : 0));
     if (barWidth > 0 && barHeight > 0) {

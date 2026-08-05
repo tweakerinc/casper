@@ -21,7 +21,8 @@
 namespace {
 // Logical menu rows (visible set is rebuilt dynamically).
 enum MenuItem {
-  ITEM_UPPER_LEFT = 0,
+  ITEM_FONT_SIZE = 0,  // top of list — scales clock / % / pages / ETAs / titles
+  ITEM_UPPER_LEFT,
   ITEM_UPPER_MIDDLE,
   ITEM_UPPER_RIGHT,
   ITEM_LOWER_LEFT,
@@ -35,6 +36,8 @@ enum MenuItem {
 
 StrId menuNameForItem(int item) {
   switch (item) {
+    case ITEM_FONT_SIZE:
+      return StrId::STR_STATUS_BAR_FONT_SIZE;
     case ITEM_UPPER_LEFT:
       return StrId::STR_UPPER_LEFT;
     case ITEM_UPPER_MIDDLE:
@@ -107,6 +110,11 @@ constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_C
 const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
     StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT};
 
+// Order matches STATUS_BAR_FONT_SIZE: 8 / 10 / 12 pt.
+constexpr int STATUS_BAR_FONT_ITEMS = CrossPointSettings::STATUS_BAR_FONT_SIZE_COUNT;
+const StrId statusBarFontNames[STATUS_BAR_FONT_ITEMS] = {
+    StrId::STR_STATUS_BAR_FONT_8, StrId::STR_STATUS_BAR_FONT_10, StrId::STR_STATUS_BAR_FONT_12};
+
 // Air between list and preview footer (label band for "Preview").
 const int kPreviewLabelBand = 22;
 // Extra lift above button hints so progress bar / titles do not sit on the footer.
@@ -140,6 +148,7 @@ void pushNestedForSlot(uint8_t slotContent) {
 
 void rebuildVisibleMenu() {
   gVisibleCount = 0;
+  pushVisible(ITEM_FONT_SIZE);
   pushVisible(ITEM_UPPER_LEFT);
   pushNestedForSlot(SETTINGS.statusBarUpperLeft);
   pushVisible(ITEM_UPPER_MIDDLE);
@@ -252,6 +261,9 @@ void StatusBarSettingsActivity::onEnter() {
   if (SETTINGS.statusBarProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
     SETTINGS.statusBarProgressBarThickness = CrossPointSettings::PROGRESS_BAR_THIN;
   }
+  if (SETTINGS.statusBarFontSize >= STATUS_BAR_FONT_ITEMS) {
+    SETTINGS.statusBarFontSize = CrossPointSettings::STATUS_BAR_FONT_8;
+  }
   rebuildVisibleMenu();
   visibleItemCount = gVisibleCount;
   if (selectedIndex >= visibleItemCount) selectedIndex = 0;
@@ -335,6 +347,17 @@ void StatusBarSettingsActivity::handleSelection() {
   }
 
   switch (item) {
+    case ITEM_FONT_SIZE: {
+      const uint8_t cur =
+          SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
+      optionPopup.show(StrId::STR_STATUS_BAR_FONT_SIZE, statusBarFontNames, STATUS_BAR_FONT_ITEMS, cur,
+                       [this](int idx) {
+                         if (idx < 0 || idx >= STATUS_BAR_FONT_ITEMS) return;
+                         SETTINGS.statusBarFontSize = static_cast<uint8_t>(idx);
+                         SETTINGS.saveToFile();
+                       });
+      return;
+    }
     case ITEM_BATTERY_DISPLAY: {
       const uint8_t cur =
           SETTINGS.readerBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.readerBatteryDisplay : 0;
@@ -408,6 +431,11 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
       nullptr, nullptr,
       [](int index) -> std::string {
         switch (itemAt(index)) {
+          case ITEM_FONT_SIZE: {
+            const uint8_t fs =
+                SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
+            return std::string(I18N.get(statusBarFontNames[fs]));
+          }
           case ITEM_UPPER_LEFT:
             return cornerContentLabel(SETTINGS.statusBarUpperLeft);
           case ITEM_UPPER_MIDDLE:
@@ -451,13 +479,22 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   const char* bookPtr = sb.wantsTimeLeftBook ? bookTl : nullptr;
   const char* chapPtr = sb.wantsTimeLeftChapter ? chapTl : nullptr;
 
+  // Sample clock for preview even when RTC is missing (X4) or not ready — otherwise
+  // Upper Middle "Clock" draws nothing and users think the slot is broken.
+  char clockSample[16];
+  if (SETTINGS.clockFormat == 1) {
+    snprintf(clockSample, sizeof(clockSample), "12:34 PM");
+  } else {
+    snprintf(clockSample, sizeof(clockSample), "12:34");
+  }
+
   // Preview ignores Display → Battery Hide so corner slots set to Battery still
   // render (real reader chrome continues to honor the master Battery setting).
   // verticalPreviewPad lifts chrome above the button-hint strip.
   GUI.drawStatusBar(renderer, 75, 8, 32, bookTitle, verticalPreviewPad, 0, false, false, false, bookPtr, chapPtr,
                     /*drawTopBattery=*/true, /*bookPage=*/120, /*bookPageCount=*/480, /*bookPageCountEstimated=*/true,
                     /*chapterIndex=*/5, /*chapterTotal=*/40, chapterTitle,
-                    /*previewIgnoreBatteryMasterHide=*/true);
+                    /*previewIgnoreBatteryMasterHide=*/true, clockSample);
 
   // "Preview" label in the reserved band between list and footer chrome.
   {

@@ -55,7 +55,8 @@ class Activity {
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes
-  void startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler);
+  // Virtual so the reader can park heavy work (section build / font cache) first.
+  virtual void startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler);
 
   // Set the result to be passed back to the previous activity when this activity finishes
   void setResult(ActivityResult&& result);

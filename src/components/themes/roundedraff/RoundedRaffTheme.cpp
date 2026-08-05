@@ -63,7 +63,7 @@ void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const 
     auto headerTitle = renderer.truncatedText(kTitleFontId, title, maxTitleWidth, EpdFontFamily::BOLD);
     renderer.drawCenteredText(kTitleFontId, titleBelowChromeY, headerTitle.c_str(), true, EpdFontFamily::BOLD);
     // Full-width rule under the title (matched by drawTabBar bottom rule).
-    constexpr int kHeaderRuleThickness = 3;
+    constexpr int kHeaderRuleThickness = 1;
     renderer.drawLine(rect.x, rect.y + rect.height - kHeaderRuleThickness, rect.x + rect.width - 1,
                       rect.y + rect.height - kHeaderRuleThickness, kHeaderRuleThickness, true);
   }
@@ -96,7 +96,7 @@ void RoundedRaffTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const 
   }
 
   // Full-width divider between tabs and setting rows (match Lyra/BaseTheme header rule).
-  constexpr int kRuleThickness = 3;
+  constexpr int kRuleThickness = 1;
   const int ruleY = rect.y + rect.height - kRuleThickness;
   renderer.drawLine(rect.x, ruleY, rect.x + rect.width - 1, ruleY, kRuleThickness, true);
 }
@@ -227,14 +227,12 @@ void RoundedRaffTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int butt
     const int rowWidth = std::min(
         menuMaxWidth, renderer.getTextWidth(kTitleFontId, truncatedLabel.c_str(), EpdFontFamily::BOLD) + kRowPaddingX);
     const bool isSelected = selectedIndex == i;
-    renderer.fillRoundedRect(rowX, rowY, rowWidth, rowHeight, kMenuRadius, isSelected ? Color::Black : Color::White);
+    // Hollow outline only — no solid black chip (e-ink residual on FAST scroll).
+    renderer.drawRoundedRect(rowX, rowY, rowWidth, rowHeight, isSelected ? 2 : 1, kMenuRadius, /*black=*/true);
     const int textY = rowY + (rowHeight - textLineHeight) / 2;
     const int textX = rowX + kInteractiveInsetX;
-    if (selectedIndex == i) {
-      renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), false, EpdFontFamily::BOLD);
-    } else {
-      renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), true, EpdFontFamily::BOLD);
-    }
+    renderer.drawText(kTitleFontId, textX, textY, truncatedLabel.c_str(), /*black=*/true,
+                      isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
   }
 
   drawScrollBar(renderer, rect, buttonCount, pageStartIndex, pageItems);
@@ -333,36 +331,36 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
       }
     }
 
-    // Selection / row pill hugs the name (like Settings category chips), not full width.
+    // Hollow outline pill hugs the name — no black fill.
     int pillW = std::min(rowWidth, pillContentW + kRowPaddingX);
     pillW = std::max(pillW, kRowPaddingX + 12);
     if (isSelected) {
-      renderer.fillRoundedRect(rowX, rowY, pillW, rowHeight, kRowRadius, Color::Black);
+      renderer.drawRoundedRect(rowX, rowY, pillW, rowHeight, 2, kRowRadius, /*black=*/true);
     }
 
+    const auto focusStyle = isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     if (valueW > 0) {
       renderer.drawText(kTitleFontId, rowX + rowWidth - kInteractiveInsetX - valueW,
                         rowY + (rowHeight - renderer.getLineHeight(kTitleFontId)) / 2, truncatedValue.c_str(),
-                        !isSelected, EpdFontFamily::REGULAR);
+                        /*black=*/true, EpdFontFamily::REGULAR);
     }
 
     if (hasSubtitle) {
       if (subtitle.empty()) {
         const int centeredTitleY = rowY + (rowHeight - titleLineHeight) / 2;
-        renderer.drawText(kTitleFontId, rowX + kInteractiveInsetX, centeredTitleY, title.c_str(), !isSelected,
-                          EpdFontFamily::BOLD);
+        renderer.drawText(kTitleFontId, rowX + kInteractiveInsetX, centeredTitleY, title.c_str(), /*black=*/true,
+                          focusStyle);
       } else {
         const int titleY = rowY + subtitleTopPadding;
         const int subtitleY = titleY + titleLineHeight + subtitleInterLineGap;
-        renderer.drawText(kTitleFontId, rowX + kInteractiveInsetX, titleY, title.c_str(), !isSelected,
-                          EpdFontFamily::BOLD);
-        renderer.drawText(kSubtitleFontId, rowX + kInteractiveInsetX, subtitleY, subtitle.c_str(), !isSelected,
+        renderer.drawText(kTitleFontId, rowX + kInteractiveInsetX, titleY, title.c_str(), /*black=*/true, focusStyle);
+        renderer.drawText(kSubtitleFontId, rowX + kInteractiveInsetX, subtitleY, subtitle.c_str(), /*black=*/true,
                           EpdFontFamily::REGULAR);
       }
     } else {
       renderer.drawText(kTitleFontId, rowX + kInteractiveInsetX,
-                        rowY + (rowHeight - renderer.getLineHeight(kTitleFontId)) / 2, title.c_str(), !isSelected,
-                        EpdFontFamily::BOLD);
+                        rowY + (rowHeight - renderer.getLineHeight(kTitleFontId)) / 2, title.c_str(), /*black=*/true,
+                        focusStyle);
     }
   }
 

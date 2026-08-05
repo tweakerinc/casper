@@ -43,9 +43,33 @@ bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t
                            uint8_t* weekday) const {
   if (!_available) return false;
 
+  // Cache full date/time like getTime(). SD FAT timestamps call this on every
+  // file write — without caching a flaky PCF8563 was hit constantly and could
+  // hang the UI (especially on battery before Wire had a timeout).
+  const unsigned long now = millis();
+  if (_hasCachedDateTime && _lastDatePollMs != 0 && (now - _lastDatePollMs) < CLOCK_POLL_MS) {
+    year = _cachedYear;
+    month = _cachedMonth;
+    day = _cachedDay;
+    hour = _cachedHour;
+    minute = _cachedMinute;
+    if (weekday) *weekday = _cachedWeekday;
+    return true;
+  }
+
   Rtc::DateTime dt;
   if (!_sdkRtc.now(dt)) {
-    return false;
+    // Soft-fail: serve last good sample so FAT/Penumbra keep working if one
+    // I2C poll times out.
+    if (!_hasCachedDateTime) return false;
+    year = _cachedYear;
+    month = _cachedMonth;
+    day = _cachedDay;
+    hour = _cachedHour;
+    minute = _cachedMinute;
+    if (weekday) *weekday = _cachedWeekday;
+    _lastDatePollMs = now;
+    return true;
   }
 
   year = dt.year;
@@ -59,16 +83,22 @@ bool HalClock::getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t
   day = dt.day;
   hour = dt.hour;
   minute = dt.minute;
+  const uint8_t wd = static_cast<uint8_t>(dt.weekday % 7U);
   if (weekday) {
     // Hardware weekday is 0=Sunday .. 6=Saturday (Rtc.h). Clamp bad BCD.
-    *weekday = static_cast<uint8_t>(dt.weekday % 7U);
+    *weekday = wd;
   }
 
-  // Keep the time cache coherent with the full date-time poll.
   _cachedHour = dt.hour;
   _cachedMinute = dt.minute;
-  _lastPollMs = millis();
+  _cachedYear = year;
+  _cachedMonth = month;
+  _cachedDay = day;
+  _cachedWeekday = wd;
+  _lastPollMs = now;
+  _lastDatePollMs = now;
   _hasCachedTime = true;
+  _hasCachedDateTime = true;
   return true;
 }
 

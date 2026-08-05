@@ -8,6 +8,7 @@
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
+#include "util/FinishedBooks.h"
 
 class RecentBooksActivity final : public Activity {
  private:
@@ -22,12 +23,25 @@ class RecentBooksActivity final : public Activity {
   // nav/select until every open/nav button is released, then require a new press.
   bool awaitOpenButtonRelease = false;
 
-  // Recent tab state
-  std::vector<RecentBook> recentBooks;
+  // Recents list (excludes books under /read). Or read-books view from SD scan.
+  enum class ViewMode : uint8_t { Recents, ReadBooks };
+  ViewMode viewMode = ViewMode::Recents;
 
-  // Data loading
+  std::vector<RecentBook> recentBooks;
+  std::vector<FinishedBooks::FinishedBookEntry> readBooks;
+
+  // In Recents mode, list row 0 is "Show Read Books" when the read folder has books
+  // or we always show the row (always — empty read list still navigable).
+  static constexpr bool kShowReadRow = true;
+
   void loadRecentBooks();
+  void loadReadBooks();
   void reloadAfterBookAction();
+
+  int listRowCount() const;
+  // Maps selector index to book index; returns -1 for the "Show Read Books" row.
+  int bookIndexForSelector(size_t sel) const;
+  void activateSelector();
 
   // CrossInk-style long-press menu; side effects stay in the menu activity.
   void showBookActionMenu(size_t bookIndex, bool ignoreInitialConfirmRelease = false);

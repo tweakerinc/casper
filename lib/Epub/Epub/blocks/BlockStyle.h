@@ -129,9 +129,15 @@ struct BlockStyle {
       blockStyle.textIndentDefined = true;
     }
     blockStyle.textAlignDefined = cssStyle.hasTextAlign();
-    // User setting overrides CSS, unless "Book's Style" alignment setting is selected
+    // User setting overrides CSS body copy, unless "Book's Style" is selected.
+    // Explicit center/right from the book (chapter titles, epigraphs, pull-quotes)
+    // is layout intent and must win over a global Left/Justify preference —
+    // otherwise titles look left-biased vs CrossInk when embedded/inline CSS is on.
     if (paragraphAlignment == CssTextAlign::None) {
       blockStyle.alignment = blockStyle.textAlignDefined ? cssStyle.textAlign : CssTextAlign::Justify;
+    } else if (blockStyle.textAlignDefined &&
+               (cssStyle.textAlign == CssTextAlign::Center || cssStyle.textAlign == CssTextAlign::Right)) {
+      blockStyle.alignment = cssStyle.textAlign;
     } else {
       blockStyle.alignment = paragraphAlignment;
     }

@@ -4,59 +4,75 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 
-// Lightweight display helpers for home / settings / menus.
+// UI display policy for home / settings / menus (not reader page turns).
 //
-// Reader Anti-Ghosting (SETTINGS.refreshFrequency, default 15) is ONLY applied
-// by ReaderUtils::displayWithRefreshCycle while reading a book.
+// Reader Anti-Ghosting (SETTINGS.refreshFrequency) is applied only by
+// ReaderUtils::displayWithRefreshCycle.
 //
-// Home under-panel (Penumbra Recents / stats strip)
-// ------------------------------------------------
-// Every under-panel scroll on X3 uses displayGrayscaleBase(FAST) — the OEM
-// AA-pre-BW(mid) bank in differential mode. That is a *soft* reinforce: strong
-// BW/WB on changed ink, gentle WW/BB on "white stays white" so residual black
-// is pulled down without a full HALF black flash. Full menus/settings stay on
-// plain FAST so we do not precondition the whole UI the way that muddied white
-// when greyscale-base was spammed everywhere.
-//
-// X4: true windowed FAST for the dirty band (no soft bank); periodic full HALF
-// is not used on under-scroll (avoids hard flashes).
-//
-// Hard scrub: force-refresh / first Penumbra HALF baseline / reader interval.
+// Balance
+// -------
+// Hard HALF (X3 resync flash) is for *transitions only*: open/close menu,
+// enter/leave Settings, Force Refresh, full home shell. Cursor / list scrolling
+// must stay FAST forever — a mid-scroll HALF every N steps feels like "random
+// black flashes while navigating." Residual on pure UI is acceptable; users
+// can Force Refresh.
 
 namespace UiGhostPolicy {
 
-// Home under-panel / Recents focus scroll. Upper chrome must remain valid in FB
-// (redraw only dirties the under band; full soft path re-latches the whole panel).
-inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int winY, int winW, int winH) {
-  if (gpio.deviceIsX3()) {
-    // Soft anti-ghost every under-panel scroll (pull residual black out of white).
-    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+namespace detail {
+inline bool& hardScrubArmed() {
+  static bool armed = false;
+  return armed;
+}
+}  // namespace detail
+
+inline void noteHalf() { detail::hardScrubArmed() = false; }
+
+// Next full-frame paint must hard-scrub (Force Refresh, home return, menu open,
+// Settings enter). Cleared after the scrub runs.
+inline void requestHardScrub() { detail::hardScrubArmed() = true; }
+
+inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
+
+// Hard clean — X3 HALF + HalDisplay resync. Visible flash; use sparingly.
+inline void displayHalf(const GfxRenderer& renderer) {
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  noteHalf();
+}
+
+// Full-frame UI (settings list, popup shell): FAST unless a transition armed scrub.
+// Never auto-HALF after N list steps — that caused mid-menu flash storms.
+inline void displayMenuFrame(const GfxRenderer& renderer) {
+  if (detail::hardScrubArmed()) {
+    displayHalf(renderer);
   } else {
-    renderer.displayWindow(winX, winY, winW, winH);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   }
 }
 
-// Full-frame UI paint: settings lists, popup menus, home shell.
-// Plain FAST — no greyscale-base (keeps menus snappy, avoids mid-bank mud).
-inline void displayMenuFrame(const GfxRenderer& renderer) {
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
-// Windowed menu band (home menu cursor move).
+// Menu *cursor* / band only: always snappy FAST. Never HALF.
 inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, int h) {
   if (gpio.deviceIsX3()) {
+    // X3 has no reliable partial for UI bands — full FAST, still no hard scrub.
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   } else {
     renderer.displayWindow(x, y, w, h);
   }
 }
 
-// Snappy full-frame FAST (resume, clock) — no soft bank, no HALF.
-inline void displaySoftFull(const GfxRenderer& renderer) {
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+// Home under-panel scroll: snappy FAST only (no mid-scroll HALF).
+inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int winY, int winW, int winH) {
+  if (gpio.deviceIsX3()) {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  } else {
+    renderer.displayWindow(winX, winY, winW, winH);
+  }
 }
 
-// True partial when the panel supports it; X3 falls back to full FAST.
+// Full-frame resume/shell helper (same as menu frame).
+inline void displaySoftFull(const GfxRenderer& renderer) { displayMenuFrame(renderer); }
+
+// Partial clock / strip: snappy only.
 inline void displayPartialOrSoft(const GfxRenderer& renderer, int x, int y, int w, int h) {
   if (gpio.deviceIsX3()) {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);

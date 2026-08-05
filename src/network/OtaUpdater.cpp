@@ -7,15 +7,16 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() { return NO_UPDATE; }
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*) { return NO_UPDATE; }
 #else
 #include <Arduino.h>
+#include <HalStorage.h>
 #include <Logging.h>
 #include <ReleaseJsonParser.h>
 #include <strings.h>
 
 #include <cstring>
 
+#include "FirmwareFlasher.h"
 #include "HttpDownloader.h"
 #include "OtaUpdater.h"
-#include "esp_http_client.h"
 #include "esp_ota_ops.h"
 #include "network/WifiPowerSaveGuard.h"
 
@@ -32,10 +33,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*) {
 
 namespace {
 constexpr char latestReleaseUrl[] = CASPER_OTA_RELEASE_URL;
-// Preferred GitHub asset names: Casper-v0.1.0 / Casper-v0.1.0.bin (also firmware.bin).
+// Download to a hidden cache, then flash via the same path as SD-card update
+// (raw partition write + otadata switch). Avoids esp_ota_end / esp_image_verify
+// which reject our patched images on X4, and keeps TLS + flash erase from
+// competing for the same internal-heap arena at once.
+constexpr char kOtaCachePath[] = "/.crosspoint/ota-firmware.bin";
 constexpr size_t VERSION_SEGMENT_COUNT = 4;
 constexpr size_t OTA_PROGRESS_UPDATE_BYTES = 64 * 1024;
-constexpr int HTTP_TIMEOUT_MS = 30000;
 
 struct ParsedVersion {
   int segments[VERSION_SEGMENT_COUNT] = {0, 0, 0, 0};
@@ -60,7 +64,6 @@ ParsedVersion parseVersion(const char* version) {
   size_t segmentIndex = 0;
   while (segmentIndex < VERSION_SEGMENT_COUNT) {
     if (!isDigit(*p)) {
-      // Allow trailing build metadata after numbers we already parsed.
       if (segmentIndex > 0) {
         parsed.valid = true;
       }
@@ -88,9 +91,7 @@ int compareVersions(const char* latestVersion, const char* currentVersion) {
   const ParsedVersion latest = parseVersion(latestVersion);
   const ParsedVersion current = parseVersion(currentVersion);
   if (!latest.valid || !current.valid) {
-    // Fall back to string inequality only when both look like tags.
     if (latestVersion && currentVersion && strcmp(latestVersion, currentVersion) != 0) {
-      // Prefer latest if current is a long dev string (branch+sha).
       if (strchr(currentVersion, '-') != nullptr && parseVersion(latestVersion).valid) {
         return 1;
       }
@@ -104,30 +105,6 @@ int compareVersions(const char* latestVersion, const char* currentVersion) {
     }
   }
   return 0;
-}
-
-/*
- * When esp_crt_bundle.h is included under Arduino, wrong headers can be pulled.
- * Extern the bundle attach the same way CrossInk does.
- */
-extern "C" {
-extern esp_err_t esp_crt_bundle_attach(void* conf);
-}
-
-size_t totalBytesReceived = 0;
-
-esp_err_t release_manifest_event_handler(esp_http_client_event_t* event) {
-  if (event->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
-  if (event->data_len <= 0) return ESP_OK;
-
-  auto* parser = static_cast<ReleaseJsonParser*>(event->user_data);
-  if (parser == nullptr) {
-    return ESP_ERR_INVALID_ARG;
-  }
-
-  totalBytesReceived += static_cast<size_t>(event->data_len);
-  parser->feed(static_cast<const char*>(event->data), event->data_len);
-  return ESP_OK;
 }
 
 struct OtaInstallContext {
@@ -151,6 +128,12 @@ void notifyOtaProgress(OtaInstallContext* ctx, const bool force) {
   }
 }
 
+void removeOtaCache() {
+  if (Storage.exists(kOtaCachePath)) {
+    Storage.remove(kOtaCachePath);
+  }
+}
+
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
@@ -165,47 +148,27 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
 
   ReleaseJsonParser releaseParser;
 
-  esp_http_client_config_t client_config = {};
-  client_config.url = latestReleaseUrl;
-  client_config.event_handler = release_manifest_event_handler;
-  client_config.buffer_size = 4096;
-  client_config.buffer_size_tx = 1024;
-  client_config.user_data = &releaseParser;
-  client_config.crt_bundle_attach = esp_crt_bundle_attach;
-  client_config.timeout_ms = HTTP_TIMEOUT_MS;
-  client_config.keep_alive_enable = true;
+  // Stream GitHub release JSON via HttpDownloader (wolfSSL when enabled). Do NOT
+  // use a separate esp_http_client + mbedTLS session here: a dual TLS stack
+  // fragments the ~320KB internal heap and the following firmware download OOMs.
+  LOG_INF("OTA", "Checking for update (current: %s) heap=%u maxAlloc=%u url=%s", CROSSPOINT_VERSION, ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap(), latestReleaseUrl);
 
-  totalBytesReceived = 0;
-  LOG_INF("OTA", "Checking for update (current: %s) url=%s", CROSSPOINT_VERSION, latestReleaseUrl);
+  size_t totalBytesReceived = 0;
+  const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&](const uint8_t* data, const size_t len) -> bool {
+    totalBytesReceived += len;
+    releaseParser.feed(reinterpret_cast<const char*>(data), len);
+    return true;
+  });
 
-  esp_http_client_handle_t client_handle = esp_http_client_init(&client_config);
-  if (!client_handle) {
-    LOG_ERR("OTA", "HTTP client init failed");
-    return INTERNAL_UPDATE_ERROR;
-  }
-
-  esp_err_t esp_err = esp_http_client_set_header(client_handle, "User-Agent", "Casper-ESP32-" CROSSPOINT_VERSION);
-  if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "set_header failed: %s", esp_err_to_name(esp_err));
-    esp_http_client_cleanup(client_handle);
-    return INTERNAL_UPDATE_ERROR;
-  }
-
-  esp_err = esp_http_client_perform(client_handle);
-  const int status = esp_http_client_get_status_code(client_handle);
-  esp_http_client_cleanup(client_handle);
-
-  if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "HTTP perform failed: %s", esp_err_to_name(esp_err));
-    return HTTP_ERROR;
-  }
-  if (status < 200 || status >= 300) {
-    LOG_ERR("OTA", "HTTP status %d", status);
+  if (!ok) {
+    LOG_ERR("OTA", "Release manifest fetch failed after %zu bytes heap=%u maxAlloc=%u", totalBytesReceived,
+            ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return HTTP_ERROR;
   }
 
-  LOG_DBG("OTA", "Release JSON %zu bytes tag=%s firmware=%s", totalBytesReceived,
-          releaseParser.foundTag() ? "yes" : "no", releaseParser.foundFirmware() ? "yes" : "no");
+  LOG_DBG("OTA", "Release JSON %zu bytes tag=%s firmware=%s heap=%u", totalBytesReceived,
+          releaseParser.foundTag() ? "yes" : "no", releaseParser.foundFirmware() ? "yes" : "no", ESP.getFreeHeap());
 
   if (!releaseParser.foundTag()) {
     LOG_ERR("OTA", "No tag_name in release JSON");
@@ -224,7 +187,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   totalSize = otaSize;
   updateAvailable = true;
 
-  LOG_INF("OTA", "Found release %s size=%zu", latestVersion.c_str(), otaSize);
+  LOG_INF("OTA", "Found release %s size=%zu heap=%u maxAlloc=%u", latestVersion.c_str(), otaSize, ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap());
   return OK;
 }
 
@@ -238,11 +202,8 @@ bool OtaUpdater::isUpdateNewer() const {
   const int comparison = compareVersions(latestVersion.c_str(), CROSSPOINT_VERSION);
   LOG_DBG("OTA", "Version compare latest=%s current=%s result=%d", latestVersion.c_str(), CROSSPOINT_VERSION,
           comparison);
-  // Dev builds (branch+sha) parse poorly; if release is a clean tag and current is not equal, allow update
-  // when compare is non-negative and latest looks like a version tag.
   if (comparison > 0) return true;
   if (comparison == 0 && latestVersion != CROSSPOINT_VERSION) {
-    // e.g. current v0.1-dev-... vs latest v0.1.0 — treat clean release as newer when base matches.
     const ParsedVersion latest = parseVersion(latestVersion.c_str());
     const ParsedVersion current = parseVersion(CROSSPOINT_VERSION);
     if (latest.valid && current.valid) {
@@ -280,105 +241,106 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
 
   WifiPowerSaveGuard wifiPowerSaveGuard;
 
-  if (otaSize > 0) {
-    totalSize = otaSize;
-  }
-
-  LOG_INF("OTA", "Downloading firmware: %s heap=%u maxAlloc=%u", otaUrl.c_str(), ESP.getFreeHeap(),
-          ESP.getMaxAllocHeap());
-
-  // Stream via HttpDownloader (wolfSSL when FREEINK_NET_WOLFSSL=1). Manual redirect
-  // handling there avoids the esp_http_client auto-redirect crash:
-  //   assert failed: http_utils_append_string ... (old_str)
-  // which GitHub release CDN hops hit on open()+auto-redirect.
-  esp_ota_handle_t otaHandle = 0;
-  bool otaStarted = false;
-  esp_err_t otaBeginError = ESP_OK;
-  esp_err_t otaWriteError = ESP_OK;
+  // Progress spans download + flash so the UI does not jump backward.
+  // Phase 1: 0 .. half (download to SD). Phase 2: half .. total (flash).
+  size_t downloadDenom = otaSize > 0 ? otaSize : (512 * 1024);  // provisional if Content-Length missing
+  totalSize = downloadDenom * 2;
 
   OtaInstallContext installCtx;
   installCtx.processedSize = &processedSize;
-  installCtx.totalSize = totalSize > 0 ? totalSize : 1;
+  installCtx.totalSize = totalSize;
   installCtx.onProgress = onProgress;
   installCtx.progressCtx = ctx;
 
-  const bool ok = HttpDownloader::fetchUrl(
-      otaUrl,
-      [&](const uint8_t* data, const size_t len) -> bool {
-        if (!otaStarted) {
-          const size_t firmwareSize = otaSize > 0 ? otaSize : OTA_SIZE_UNKNOWN;
-          LOG_INF("OTA", "Writing firmware to %s @0x%x size=%zu heap=%u maxAlloc=%u", updatePartition->label,
-                  static_cast<unsigned>(updatePartition->address), firmwareSize, ESP.getFreeHeap(),
-                  ESP.getMaxAllocHeap());
-          otaBeginError = esp_ota_begin(updatePartition, firmwareSize, &otaHandle);
-          if (otaBeginError != ESP_OK) {
-            LOG_ERR("OTA", "esp_ota_begin failed: %s (heap=%u maxAlloc=%u)", esp_err_to_name(otaBeginError),
-                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-            return false;
-          }
-          otaStarted = true;
-        }
+  LOG_INF("OTA", "Downloading firmware to SD: %s heap=%u maxAlloc=%u", otaUrl.c_str(), ESP.getFreeHeap(),
+          ESP.getMaxAllocHeap());
 
-        otaWriteError = esp_ota_write(otaHandle, data, len);
-        if (otaWriteError != ESP_OK) {
-          LOG_ERR("OTA", "esp_ota_write failed after %zu bytes: %s", processedSize, esp_err_to_name(otaWriteError));
-          return false;
-        }
+  Storage.mkdir("/.crosspoint");
+  removeOtaCache();
 
-        processedSize += len;
-        if (totalSize == 0 || totalSize < processedSize) {
-          // Content-Length unknown: grow progress denominator so UI doesn't spike.
-          totalSize = processedSize + 1024 * 64;
+  // Stream TLS download to SD only — do not call esp_ota_write while the TLS
+  // session is open. Measured OOM floor on C3 was ~2–8KB free contiguous when
+  // erase/write + wolfSSL shared the arena for multi-minute GitHub CDN downloads.
+  const auto dlErr = HttpDownloader::downloadToFile(
+      otaUrl, kOtaCachePath,
+      [&](size_t downloaded, size_t reportedTotal) {
+        if (reportedTotal > 0 && reportedTotal != downloadDenom) {
+          downloadDenom = reportedTotal;
+          totalSize = downloadDenom * 2;
+          installCtx.totalSize = totalSize;
+        } else if (downloaded > downloadDenom) {
+          downloadDenom = downloaded + 64 * 1024;
+          totalSize = downloadDenom * 2;
           installCtx.totalSize = totalSize;
         }
+        processedSize = downloaded;
         notifyOtaProgress(&installCtx, false);
-        return true;
       });
 
-  if (!ok) {
-    if (otaStarted) {
-      esp_ota_abort(otaHandle);
+  if (dlErr != HttpDownloader::OK) {
+    LOG_ERR("OTA", "Firmware download failed err=%d after %zu bytes heap=%u maxAlloc=%u", static_cast<int>(dlErr),
+            processedSize, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    removeOtaCache();
+    if (dlErr == HttpDownloader::ABORTED) return HTTP_ERROR;
+    return HTTP_ERROR;
+  }
+
+  {
+    HalFile check;
+    if (!Storage.openFileForRead("OTA", kOtaCachePath, check) || !check) {
+      LOG_ERR("OTA", "Downloaded file missing: %s", kOtaCachePath);
+      removeOtaCache();
+      return HTTP_ERROR;
     }
-    if (otaBeginError != ESP_OK) {
-      return otaBeginError == ESP_ERR_NO_MEM ? OOM_ERROR : INTERNAL_UPDATE_ERROR;
+    const size_t got = check.fileSize();
+    check.close();
+    if (got == 0) {
+      LOG_ERR("OTA", "Downloaded file empty");
+      removeOtaCache();
+      return HTTP_ERROR;
     }
-    if (otaWriteError != ESP_OK) {
+    if (otaSize > 0 && got != otaSize) {
+      LOG_ERR("OTA", "Size mismatch: got %zu expected %zu", got, otaSize);
+      removeOtaCache();
       return INTERNAL_UPDATE_ERROR;
     }
-    LOG_ERR("OTA", "Firmware download failed after %zu bytes", processedSize);
-    return HTTP_ERROR;
+    // Anchor end of download phase.
+    processedSize = downloadDenom;
+    notifyOtaProgress(&installCtx, true);
   }
 
-  if (!otaStarted || processedSize == 0) {
-    LOG_ERR("OTA", "Firmware download returned no data");
-    if (otaStarted) {
-      esp_ota_abort(otaHandle);
-    }
-    return HTTP_ERROR;
-  }
-  if (otaSize > 0 && processedSize != otaSize) {
-    LOG_ERR("OTA", "Size mismatch: got %zu expected %zu", processedSize, otaSize);
-    esp_ota_abort(otaHandle);
+  LOG_INF("OTA", "Flashing from SD heap=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+  // Drop WiFi modem work during flash — flash path needs stable SPI + heap.
+  // Parent activity will disconnect/silentRestart on exit; stay associated for now.
+  const auto flashRes = firmware_flash::flashFromSdPath(
+      kOtaCachePath,
+      [](size_t written, size_t flashTotal, void* user) {
+        auto* c = static_cast<OtaInstallContext*>(user);
+        if (!c || !c->processedSize) return;
+        // Map flash 0..flashTotal into second half of progress bar.
+        const size_t half = c->totalSize / 2;
+        if (flashTotal == 0) {
+          *c->processedSize = half;
+        } else {
+          *c->processedSize = half + (written * half) / flashTotal;
+        }
+        notifyOtaProgress(c, false);
+      },
+      &installCtx, /*alreadyValidated=*/false);
+
+  removeOtaCache();
+
+  if (flashRes != firmware_flash::Result::OK) {
+    LOG_ERR("OTA", "Flash failed: %s heap=%u maxAlloc=%u", firmware_flash::resultName(flashRes), ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    if (flashRes == firmware_flash::Result::OOM) return OOM_ERROR;
     return INTERNAL_UPDATE_ERROR;
   }
 
-  totalSize = processedSize;
-  installCtx.totalSize = totalSize > 0 ? totalSize : 1;
+  processedSize = totalSize;
   notifyOtaProgress(&installCtx, true);
-
-  esp_err_t err = esp_ota_end(otaHandle);
-  if (err != ESP_OK) {
-    LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(err));
-    return INTERNAL_UPDATE_ERROR;
-  }
-
-  err = esp_ota_set_boot_partition(updatePartition);
-  if (err != ESP_OK) {
-    LOG_ERR("OTA", "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-    return INTERNAL_UPDATE_ERROR;
-  }
-
-  LOG_INF("OTA", "Update complete: %zu bytes → reboot into new app", processedSize);
+  LOG_INF("OTA", "Update complete → reboot into new app");
   return OK;
 }
 #endif

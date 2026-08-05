@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <cstring>
 
+#include <BoardConfig.h>
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/icons/settings2.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 
 namespace {
 
@@ -76,6 +79,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasClippings, isCurrentPageBookmarked, isBookCompleted)),
       title(title),
       pendingOrientation(currentOrientation),
+      pendingFrontButtonFollow(SETTINGS.frontButtonFollowOrientation ? 1 : 0),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
@@ -89,7 +93,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
   auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
   auto& settingsItems = items[SETTINGS_TAB_INDEX];
 
-  mainItems.reserve(11 + (hasFootnotes ? 1u : 0u));
+  mainItems.reserve(12 + (hasFootnotes ? 1u : 0u));
   bookmarkItems.reserve(8 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
   settingsItems.reserve(4 + (hasBookmarks ? 1u : 0u));
 
@@ -103,7 +107,12 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
   // Under Go to %: tweak type without leaving the book (Back → reader, not home).
   mainItems.push_back({MenuAction::MANAGE_FONTS, StrId::STR_TEXT_SETTINGS});
   mainItems.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
+#if FREEINK_CAP_BLE_HID_HOST
+  mainItems.push_back({MenuAction::BLUETOOTH, StrId::STR_BT_QUICK_CONNECT});
+#endif
   mainItems.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
+  // Nested under Reading Orientation (same placement as Settings).
+  mainItems.push_back({MenuAction::ORIENT_FRONT_BUTTONS, StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION});
   // Mark finished is not session tracking — drives finished folder / recents rules.
   mainItems.push_back(
       {MenuAction::TOGGLE_COMPLETED, isBookCompleted ? StrId::STR_MARK_UNFINISHED : StrId::STR_MARK_FINISHED});
@@ -160,10 +169,14 @@ void EpubReaderMenuActivity::onEnter() {
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
+MenuResult EpubReaderMenuActivity::makeMenuResult(const int action) const {
+  return MenuResult{action, pendingOrientation, selectedPageTurnOption, pendingFrontButtonFollow};
+}
+
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
   result.isCancelled = true;
-  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+  result.data = makeMenuResult(-1);
   setResult(std::move(result));
   finish();
 }
@@ -223,9 +236,21 @@ void EpubReaderMenuActivity::activateSelected() {
   if (selectedAction == MenuAction::ROTATE_SCREEN) {
     optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
                      pendingOrientation, [this](int idx) {
-                       pendingOrientation = idx;
+                       pendingOrientation = static_cast<uint8_t>(idx);
+                       // Same seed as Settings when Reading Orientation changes.
+                       pendingFrontButtonFollow =
+                           CrossPointSettings::defaultFrontButtonFollowForOrientation(pendingOrientation);
+                       // Live so footer / list nav match before leaving the menu.
+                       SETTINGS.frontButtonFollowOrientation = pendingFrontButtonFollow;
                        requestUpdate();
                      });
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::ORIENT_FRONT_BUTTONS) {
+    pendingFrontButtonFollow = pendingFrontButtonFollow ? 0 : 1;
+    SETTINGS.frontButtonFollowOrientation = pendingFrontButtonFollow;
     requestUpdate();
     return;
   }
@@ -240,7 +265,9 @@ void EpubReaderMenuActivity::activateSelected() {
     return;
   }
 
-  setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
+  ActivityResult result;
+  result.data = makeMenuResult(static_cast<int>(selectedAction));
+  setResult(std::move(result));
   finish();
 }
 
@@ -423,7 +450,11 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
 
   GUI.drawList(
       renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, static_cast<int>(items.size()), selectedIndex,
-      [&items](int index) { return I18N.get(items[index].labelId); }, nullptr, nullptr,
+      [&items](int index) {
+        const bool nested = items[index].action == MenuAction::ORIENT_FRONT_BUTTONS;
+        return NestedMenuLabel::format(I18N.get(items[index].labelId), nested);
+      },
+      nullptr, nullptr,
       [this](int index) -> std::string {
         const auto& list = activeMenuItems();
         if (index < 0 || index >= static_cast<int>(list.size())) {
@@ -432,6 +463,9 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         const auto value = list[static_cast<size_t>(index)].action;
         if (value == MenuAction::ROTATE_SCREEN) {
           return I18N.get(orientationLabels[pendingOrientation]);
+        }
+        if (value == MenuAction::ORIENT_FRONT_BUTTONS) {
+          return pendingFrontButtonFollow ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         }
         if (value == MenuAction::AUTO_PAGE_TURN) {
           return pageTurnLabels[selectedPageTurnOption];

@@ -15,6 +15,7 @@
 #include "activities/reader/GlobalReadingStats.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
 namespace BookActions {
@@ -158,13 +159,38 @@ bool toggleBookCompleted(const std::string& fullPath, const std::string& display
   }
   stats.save(cachePath);
 
+  // Move / restore EPUB when the Finished Books setting is on (EPUB only).
+  // Must run after stats save so progress rides along with the cache rename.
+  std::string activePath = fullPath;
+  if (isEpub && SETTINGS.moveFinishedToReadFolder) {
+    if (completed) {
+      const std::string moved = FinishedBooks::moveToFinished(fullPath);
+      if (!moved.empty()) {
+        activePath = moved;
+        cachePath = BookReadingStats::cachePathForBook(activePath);
+      } else {
+        LOG_ERR("BookActions", "Mark Finished: move to Finished Books failed for %s", fullPath.c_str());
+      }
+    } else {
+      const std::string restored = FinishedBooks::restoreFromFinished(fullPath);
+      if (!restored.empty()) {
+        activePath = restored;
+        cachePath = BookReadingStats::cachePathForBook(activePath);
+      }
+    }
+  }
+
   if (completed) {
     if (SETTINGS.removeReadBooksFromRecents) {
-      RECENT_BOOKS.removeByPath(fullPath);
+      RECENT_BOOKS.removeByPath(activePath);
+      // Also drop old path if move happened after a prior recents entry.
+      if (activePath != fullPath) {
+        RECENT_BOOKS.removeByPath(fullPath);
+      }
     }
   } else {
     if (SETTINGS.removeReadBooksFromRecents) {
-      RECENT_BOOKS.addBook(fullPath, title, author, thumbPath);
+      RECENT_BOOKS.addBook(activePath, title, author, thumbPath);
     }
   }
 

@@ -62,17 +62,17 @@ inline SettingInfo buildUiThemeSetting() {
       "uiTheme", StrId::STR_CAT_DISPLAY);
 }
 
-// Sleep Screen picker. Stored enum values stay append-only (DARK=0 … QUICK_RESUME=6).
-// X3 redo (shared X3+X4): Casper Dark / Casper Light labels, alphabetical by English:
-//   Casper Dark, Casper Light, Cover, Cover + Custom, Custom, None, Quick Resume
+// Sleep Screen picker — wallpaper styles only. Quick Resume is a power / timeout
+// action, not a sleep-screen value. Stored enum stays append-only (incl. legacy QR=6).
+// UI order: Casper Dark, Casper Light, Cover, Cover + Custom, Custom, None.
 inline SettingInfo buildSleepScreenSetting() {
   using M = CrossPointSettings::SLEEP_SCREEN_MODE;
   static constexpr M kOrder[] = {
-      M::DARK, M::LIGHT, M::COVER, M::COVER_CUSTOM, M::CUSTOM, M::BLANK, M::QUICK_RESUME,
+      M::DARK, M::LIGHT, M::COVER, M::COVER_CUSTOM, M::CUSTOM, M::BLANK,
   };
   static constexpr StrId kLabels[] = {
-      StrId::STR_DARK,         StrId::STR_LIGHT,  StrId::STR_COVER,       StrId::STR_COVER_CUSTOM,
-      StrId::STR_CUSTOM,       StrId::STR_NONE_OPT, StrId::STR_QUICK_RESUME,
+      StrId::STR_DARK,   StrId::STR_LIGHT,  StrId::STR_COVER, StrId::STR_COVER_CUSTOM,
+      StrId::STR_CUSTOM, StrId::STR_NONE_OPT,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
 
@@ -86,16 +86,23 @@ inline SettingInfo buildSleepScreenSetting() {
       StrId::STR_SLEEP_SCREEN, std::move(labels),
       [] {
         const auto mode = static_cast<M>(SETTINGS.sleepScreen);
+        // Legacy QUICK_RESUME (6) displays as Light until next explicit pick.
+        if (mode == M::QUICK_RESUME) {
+          for (uint8_t i = 0; i < kCount; ++i) {
+            if (kOrder[i] == M::LIGHT) return i;
+          }
+        }
         for (uint8_t i = 0; i < kCount; ++i) {
           if (kOrder[i] == mode) return i;
         }
-        return static_cast<uint8_t>(0);
+        return static_cast<uint8_t>(1);  // Light
       },
       [](uint8_t displayIdx) {
-        if (displayIdx >= kCount) displayIdx = 0;
+        if (displayIdx >= kCount) displayIdx = 1;
         SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
       },
-      "sleepScreen", StrId::STR_CAT_DISPLAY);
+      "sleepScreen", StrId::STR_CAT_DISPLAY)
+      .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
 }
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
@@ -236,7 +243,11 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // Picker: Bare · Penumbra (X3 clock face / X4 title+progress).
         buildUiThemeSetting(),
         // No Penumbra side-button remap rows (X3 L/R cycle panels; X4 U/D scroll recents).
-        // X3 redo: Quick Resume on Timeout directly above Sleep Screen (same on X4).
+        // Idle timeout sits with sleep chrome: Time to Sleep → Quick Resume on Timeout → Sleep Screen.
+        SettingInfo::Value(
+            StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
+            {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
+            "sleepTimeoutMinutes", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
                           StrId::STR_CAT_DISPLAY),
@@ -248,11 +259,6 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY)
             .withNestedUnderParent(),  // under Sleep Screen
-        SettingInfo::Enum(
-            StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
-            {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30,
-             StrId::STR_PAGES_60, StrId::STR_NEVER},
-            "refreshFrequency", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
 
@@ -297,6 +303,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
             {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
             "orientation", StrId::STR_CAT_READER),
+        // Nested under Reading Orientation: nav keys follow rotated reader layout.
+        SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
+                            "frontButtonFollowOrientation", StrId::STR_CAT_READER)
+            .withNestedUnderParent(),
         SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                             "extraParagraphSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
@@ -306,15 +316,36 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
+        // Page-turn anti-ghosting (HALF scrub interval) — reader only, not home/menus.
+        SettingInfo::Enum(
+            StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
+            {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30,
+             StrId::STR_PAGES_60, StrId::STR_NEVER},
+            "refreshFrequency", StrId::STR_CAT_READER),
+        // Library / Recents / Settings list chrome (not reader body, not Penumbra home panel).
+        SettingInfo::Enum(StrId::STR_MENU_FONT_SIZE, &CrossPointSettings::menuFontSize,
+                          {StrId::STR_MENU_FONT_XSMALL, StrId::STR_MENU_FONT_SMALL, StrId::STR_MENU_FONT_MEDIUM,
+                           StrId::STR_MENU_FONT_LARGE},
+                          "menuFontSize", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_SPLIT_BOOK_TITLE_LINES, &CrossPointSettings::splitBookTitleLines,
+                            "splitBookTitleLines", StrId::STR_CAT_DISPLAY)
+            .withNestedUnderParent(),  // under Menu Font Size
         // --- Controls (order matches product UI) ---
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
+            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+             StrId::STR_QUICK_RESUME},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(
             StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPwrBtn,
-            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
+            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
+             StrId::STR_QUICK_RESUME},
             "longPwrBtn", StrId::STR_CAT_CONTROLS),
+        // Long-press side buttons (chapter skip / flip orientation) — directly under Long-Press Power.
+        SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
+                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
                           {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY,
                            StrId::STR_SLEEP, StrId::STR_FORCE_REFRESH, StrId::STR_BROWSE_FILES,
@@ -324,17 +355,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),
-        // Remap Front Buttons is inserted by SettingsActivity *before* Orient.
-        // Orient is marked nestedUnderParent there only when Remap is present (no-touch).
-        SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
-                            "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
-        // Tilt (if IMU) is inserted after Orient by getSettingsList below.
-        SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
-                            "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
-                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
+        // Remap Front Buttons is inserted by SettingsActivity after Side Button Layout (no-touch).
+        // Tilt (if IMU) is inserted after Side Button Layout by getSettingsList below.
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
         // Shown only when short or long power is Footnotes (filtered in SettingsActivity).
@@ -343,17 +365,19 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             .withNestedUnderParent(),
 
         // --- System ---
-        SettingInfo::Value(
-            StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
-            {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
-            "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
-        SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
-                            StrId::STR_CAT_SYSTEM),
-        SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
-                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
+        // On-device order is rebuilt in SettingsActivity (Network → … → Language → Hidden → Logging → …).
+        // Time to Sleep lives under Display (above Quick Resume on Timeout).
+        // Parent of Clear Read from Recents (nested + shown only when this is On).
+        // Moves finished EPUBs into hidden /read (browse via Recents → Show Read Books).
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
                             "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
-        // Enable Logging (Off / On). On = Timing. On-device order: above Language (see SettingsActivity).
+        SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
+                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM)
+            .withNestedUnderParent(),  // under Move Finished Books
+        SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
+                            StrId::STR_CAT_SYSTEM),
+        // Enable Logging (Off / On). On = Timing. DynamicEnum (not Toggle) because the
+        // stored field is multi-level; UI still one-click toggles like other switches.
         SettingInfo::DynamicEnum(
             StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
             [] {
@@ -555,10 +579,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             StrId::STR_STATUS_BAR),
     };
     // Only show tilt page turn when the QMI8658 IMU is present (X3).
-    // After Orient (Remap sits above Orient via SettingsActivity).
+    // After Side Button Layout (Remap is inserted before Tilt in SettingsActivity).
     if (halTiltSensor.isAvailable()) {
       for (auto it = v.begin(); it != v.end(); ++it) {
-        if (it->nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION) {
+        if (it->nameId == StrId::STR_SIDE_BTN_LAYOUT) {
           v.insert(it + 1, SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                                              {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED},
                                              "tiltPageTurn", StrId::STR_CAT_CONTROLS));

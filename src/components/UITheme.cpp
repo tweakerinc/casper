@@ -13,7 +13,8 @@
 #include "components/themes/BaseTheme.h"
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
-// Stats (FocusTheme) excluded from firmware — see SettingsList / CrossPointSettings.
+// Only Bare + Penumbra are constructed. Parked themes (Focus, Dashboard cpp,
+// RoundedRaff, Lyra3Covers, Carousel) are excluded via platformio build_src_filter.
 
 UITheme UITheme::instance;
 
@@ -40,8 +41,9 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<PenumbraTheme>();
       currentMetrics = &PenumbraMetrics::values;
       break;
-    case CrossPointSettings::UI_THEME::GHOST:  // parked — fall through to Bare
-    case CrossPointSettings::UI_THEME::STATS:  // disabled (not in binary)
+    // Legacy JSON theme ids → Bare (picker only offers Bare + Penumbra).
+    case CrossPointSettings::UI_THEME::GHOST:
+    case CrossPointSettings::UI_THEME::STATS:
     case CrossPointSettings::UI_THEME::STATS_LIFE:
     case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
     case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
@@ -54,7 +56,7 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
     case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
     case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     default:
-      LOG_DBG("UI", "Using Bare theme (Stats/legacy remapped or default)");
+      LOG_DBG("UI", "Using Bare theme (legacy id remapped)");
       currentTheme = std::make_unique<BareTheme>();
       currentMetrics = &BareMetrics::values;
       break;
@@ -160,8 +162,10 @@ int UITheme::getStatusBarHeight() {
 
   // Layout reservation is hardware-agnostic: pass clockAvailable=true so the
   // reserved height does not depend on whether an RTC is present.
-  return (sb.textLaneVisible(true) ? (metrics.statusBarVerticalMargin) : 0) +
-         (sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0);
+  // Bottom text lane scales with Manage Reader UI → Font Size.
+  const int textLane =
+      sb.textLaneVisible(true) ? SETTINGS.getStatusBarTextLaneHeight() : 0;
+  return textLane + (sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0);
 }
 
 int UITheme::getProgressBarHeight() {

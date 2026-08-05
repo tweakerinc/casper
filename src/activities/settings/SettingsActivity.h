@@ -13,6 +13,7 @@
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
 enum class SettingAction {
+  Bluetooth,
   None,
   RemapFrontButtons,
   CustomiseStatusBar,
@@ -20,7 +21,8 @@ enum class SettingAction {
   ClockSettings,
   KOReaderSync,
   OPDSBrowser,
-  Network,
+  Network,        // Wi‑Fi credentials (also opened from Network folder)
+  NetworkFolder,  // System → Network (Wi‑Fi / KOReader / OPDS)
   ClearCache,
   BackupStats,  // legacy; Backup Now lives under Stats folder
   Stats,
@@ -184,11 +186,18 @@ class SettingsActivity final : public Activity {
   // Debounce SD writes: mark dirty on change, flush once on exit / when leaving for a child.
   bool settingsDirty = false;
 
+  // Long-press Menu → Settings leaves the physical key held; remap can make that
+  // key Left/Up so continuous tab nav would fire until release. Wait for quiet.
+  // Also re-armed onResume after children (Button Remap applies a new map on Back).
+  bool awaitOpenButtonRelease = false;
+
   static constexpr int categoryCount = 4;
   static const StrId categoryNames[categoryCount];
 
   void markSettingsDirty() { settingsDirty = true; }
   void flushSettingsIfDirty();
+  // force=true: always wait one quiet frame (after child). force=false: only if a key is held.
+  void armAwaitOpenButtonRelease(bool force = false);
 
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
@@ -201,6 +210,7 @@ class SettingsActivity final : public Activity {
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity("Settings", renderer, mappedInput) {}
   void onEnter() override;
+  void onResume() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

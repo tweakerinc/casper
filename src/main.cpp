@@ -42,6 +42,12 @@
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SystemLog.h"
+#include "util/UiGhostPolicy.h"
+
+#if FREEINK_CAP_BLE_HID_HOST
+// Symbol defined in NimBLE-Arduino (patched) / BleKeyboardHost; declare for log.
+extern "C" bool btInUse(void);
+#endif
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -52,12 +58,18 @@ FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts
 static unsigned long allowSleepAt = 0;
 static bool longPowerButtonHandled = false;
 
-void enterDeepSleep(bool fromTimeout = false);
+void enterDeepSleep(bool fromTimeout = false, bool powerQuickResume = false);
 
-// Global long-press power actions that fire while still held (sleep / refresh).
+// Global long-press power actions that fire while still held (sleep / QR / refresh).
 static bool isGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
   return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME ||
          action == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH;
+}
+
+static bool isSleepStylePowerAction(const CrossPointSettings::SHORT_PWRBTN action) {
+  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
 }
 
 static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
@@ -72,17 +84,14 @@ static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
       longPowerButtonHandled = false;
       return CrossPointSettings::SHORT_PWRBTN::IGNORE;
     }
-    // Long hold past threshold with a while-held global action (Force Refresh /
-    // Sleep): that action should have fired on the hold. Never also run short
-    // SLEEP on release — Force Refresh's blocking HALF used to clear the latch
-    // before this edge, then short=SLEEP put the device to sleep after the scrub.
+    // Long hold past threshold with a while-held global action: that action should
+    // have fired on the hold. Never also run short sleep/QR on release.
     if (held >= longMs && isGlobalPowerButtonAction(longAction)) {
       return CrossPointSettings::SHORT_PWRBTN::IGNORE;
     }
-    // shortPwrBtn=SLEEP: sleep on release for true short taps (held < longMs).
-    // Long holds that are not global long-actions still map to longAction below.
-    if (shortAction == CrossPointSettings::SHORT_PWRBTN::SLEEP) {
-      return CrossPointSettings::SHORT_PWRBTN::SLEEP;
+    // Sleep / Quick Resume short actions fire on release for true short taps.
+    if (isSleepStylePowerAction(shortAction)) {
+      return shortAction;
     }
     return held < longMs ? shortAction : longAction;
   }
@@ -91,8 +100,7 @@ static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
     return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
 
-  // While held past threshold: only fire long if it is a global sleep/refresh.
-  // (Force Refresh still works on long-hold; Sleep short-press is release-edge above.)
+  // While held past threshold: only fire long if it is a global sleep/QR/refresh.
   if (!isGlobalPowerButtonAction(longAction)) {
     return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
@@ -103,16 +111,20 @@ static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
 static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
   switch (action) {
     case CrossPointSettings::SHORT_PWRBTN::SLEEP:
-      enterDeepSleep();
+      enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/false);
+      return true;
+    case CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME:
+      enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/true);
       return true;
     case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
       SystemLog::logTiming("MAIN", "force_refresh long-power held=%lums",
                            static_cast<unsigned long>(gpio.getPowerButtonHeldTime()));
       if (!activityManager.handleForcedRefresh()) {
-        // No activity override: scrub current framebuffer (HALF + X3 resync).
+        // No activity override: hard scrub current framebuffer (X3 HALF+resync).
         RenderLock lock;
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        UiGhostPolicy::noteHalf();
       }
       // Action is latched; release power anytime — do not require holding through scrub.
       return true;
@@ -267,8 +279,9 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
-// Enter deep sleep mode
-void enterDeepSleep(bool fromTimeout) {
+// Enter deep sleep mode.
+// powerQuickResume: true when Short/Long power action is Quick Resume (not wallpaper Sleep).
+void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   // Resume target for Quick Resume: reader only if we actually slept in a book.
   // Home / Settings / Library / etc. all wake to Home (Settings must never auto-resume).
@@ -279,10 +292,14 @@ void enterDeepSleep(bool fromTimeout) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
+  // QR paths: power action, idle timeout toggle, or legacy Sleep Screen == QR.
   const bool isQuickResumeSleep =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
+      powerQuickResume ||
       (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+       SETTINGS.quickResumeSleepScreen ==
+           CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
+      (!fromTimeout && !powerQuickResume &&
+       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
@@ -290,14 +307,14 @@ void enterDeepSleep(bool fromTimeout) {
   // are not lost if a prior save failed or never ran.
   SETTINGS.saveToFile();
 
-  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d lastSleepFromReader=%d", fromTimeout ? 1 : 0,
-                       APP_STATE.lastSleepFromReader ? 1 : 0);
+  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d qr=%d lastSleepFromReader=%d", fromTimeout ? 1 : 0,
+                       isQuickResumeSleep ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0);
   SystemLog::flush();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
-  activityManager.goToSleep(fromTimeout);
+  activityManager.goToSleep(fromTimeout, isQuickResumeSleep);
 
   // Snapshot after the moon is on the FB so X3 wake re-seed matches the glass
   // (needed for no-flash differential). Moon is ink-only in the top chrome band.
@@ -459,8 +476,14 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration (sleep wake)");
-      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
-                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+      // Short-tap wake must be allowed for both Sleep and Quick Resume short-power
+      // actions. When shortPressAllowed is false, a released button (normal quick
+      // tap) fails verification and immediately re-enters deep sleep — looks like
+      // "won't wake" especially after sleeping from Settings / Home (QR default).
+      if (!gpio.verifyPowerButtonWakeup(
+              SETTINGS.getPowerButtonDuration(),
+              isSleepStylePowerAction(
+                  static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)))) {
         powerManager.startDeepSleep(gpio);
       }
       break;
@@ -502,6 +525,13 @@ void setup() {
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting Casper version " CROSSPOINT_VERSION);
+#if FREEINK_CAP_BLE_HID_HOST
+  // Fingerprint for the BT-memory-retention fix: with btInUse() true the
+  // controller BSS is kept and free heap at boot is ~35-40 KB lower than when
+  // Arduino released it (old builds sat near 83-98 KB free on X3 Home).
+  LOG_INF("MAIN", "btInUse=%d heap=%u maxAlloc=%u", btInUse() ? 1 : 0,
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+#endif
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -684,7 +714,9 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
+  gpio.setSharedConfirmPowerShortPressEmitsPower(
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 

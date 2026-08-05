@@ -55,8 +55,8 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
     return Action::GoHome;  // "Home" entry selected
   }
 
-  // Short-press Back returns to the last page; a long press falls through to the
-  // reader's own handler (file browser). Home is reached through the list's Home entry.
+  // Short-press Back returns to the last page. (Hold-Back no longer opens Library.)
+  // Home is available via the list's Home entry, or leave the end screen first.
   if (input.wasReleased(MappedInputManager::Button::Back) && input.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     return Action::LastPage;
   }

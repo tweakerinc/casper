@@ -15,6 +15,7 @@ std::string normalisePath(const std::string& path);
 // before str2. Same ordering sortFileList applies within the file/directory groups.
 bool naturalLess(const std::string& str1, const std::string& str2);
 
+// Directories first, then natural sort.
 void sortFileList(std::vector<std::string>& strs);
 
 /**

@@ -78,7 +78,10 @@ bool FontDecompressor::decompressGroup(const EpdFontData* fontData, uint16_t gro
   inflateReader.setSource(&fontData->bitmap[group.compressedOffset], group.compressedSize);
   if (!inflateReader.read(outBuf, outSize)) {
     stats.decompressTimeMs += millis() - tDecomp;
-    LOG_ERR("FDC", "Decompression failed for group %u", groupIndex);
+    // Field crashes (#3): capture heap so crash reports / serial show pressure.
+    LOG_ERR("FDC", "Decompression failed for group %u (uncomp=%u comp=%u free=%u maxAlloc=%u)", groupIndex,
+            static_cast<unsigned>(group.uncompressedSize), static_cast<unsigned>(group.compressedSize),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return false;
   }
   stats.decompressTimeMs += millis() - tDecomp;
@@ -190,14 +193,25 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     hotGroupFont = nullptr;
     hotGroupIndex = UINT16_MAX;
     if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
-      LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u", group.uncompressedSize, groupIndex);
-      stats.getBitmapTimeUs += micros() - tStart;
-      return nullptr;
+      // Free page prewarm buffers and retry once (Home cover-gen + UI text can race).
+      freePageBuffer();
+      if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
+        LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u free=%u maxAlloc=%u",
+                group.uncompressedSize, groupIndex, static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+        stats.getBitmapTimeUs += micros() - tStart;
+        return nullptr;
+      }
     }
 
     if (!decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
-      stats.getBitmapTimeUs += micros() - tStart;
-      return nullptr;
+      // One retry after shedding page cache (inflate can fail under extreme heap pressure).
+      freePageBuffer();
+      if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize) ||
+          !decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
+        stats.getBitmapTimeUs += micros() - tStart;
+        return nullptr;
+      }
     }
 
     hotGroupFont = fontData;

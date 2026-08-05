@@ -40,8 +40,8 @@ constexpr const char* kPreviewPara1 =
 constexpr const char* kPreviewPara2 =
     "How vexingly quick daft zebras jump across the bright open field today.";
 
-// Match Settings / tab chrome rule thickness.
-constexpr int kRuleThickness = 3;
+// Match Settings / tab chrome rule thickness (1px — thick rules ghost on FAST).
+constexpr int kRuleThickness = 1;
 
 // Map the paragraph-alignment setting to the engine's CssTextAlign.
 // BOOK_STYLE (CssTextAlign::None in the reader) follows EPUB CSS — typically

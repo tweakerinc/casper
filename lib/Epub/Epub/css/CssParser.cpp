@@ -305,6 +305,125 @@ bool CssParser::tryInterpretLength(std::string_view val, CssLength& out) {
   return true;
 }
 
+bool CssParser::tryInterpretFontSize(std::string_view val, CssLength& out) {
+  val = trimCssWhitespace(val);
+  val = stripTrailingImportant(val);
+  if (val.empty() || iequalsAscii(val, "inherit") || iequalsAscii(val, "initial") || iequalsAscii(val, "unset") ||
+      iequalsAscii(val, "auto")) {
+    return false;
+  }
+
+  // Absolute / relative keywords → em multipliers (resolved to sizeStep in PR1b+).
+  if (iequalsAscii(val, "xx-small")) {
+    out = CssLength{0.60f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "x-small")) {
+    out = CssLength{0.75f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "small")) {
+    out = CssLength{0.875f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "medium")) {
+    out = CssLength{1.0f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "large")) {
+    out = CssLength{1.125f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "x-large")) {
+    out = CssLength{1.25f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "xx-large") || iequalsAscii(val, "xxx-large")) {
+    out = CssLength{1.5f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "smaller")) {
+    out = CssLength{0.83f, CssUnit::Em};
+    return true;
+  }
+  if (iequalsAscii(val, "larger")) {
+    out = CssLength{1.2f, CssUnit::Em};
+    return true;
+  }
+
+  return tryInterpretLength(val, out);
+}
+
+bool CssParser::tryInterpretLineHeight(std::string_view val, CssLineHeightKind& kind, float& unitless,
+                                       CssLength& length) {
+  val = trimCssWhitespace(val);
+  val = stripTrailingImportant(val);
+  if (val.empty() || iequalsAscii(val, "normal") || iequalsAscii(val, "inherit") || iequalsAscii(val, "initial") ||
+      iequalsAscii(val, "unset")) {
+    return false;
+  }
+
+  // Unitless number (e.g. 1.5) — must not be confused with bare "15" px lengths that include a unit.
+  // If any alphabetic unit or % follows the number, treat as length.
+  size_t unitStart = val.size();
+  for (size_t i = 0; i < val.size(); ++i) {
+    const char c = val[i];
+    if (!std::isdigit(static_cast<unsigned char>(c)) && c != '.' && c != '-' && c != '+') {
+      unitStart = i;
+      break;
+    }
+  }
+  if (unitStart == val.size()) {
+    float factor = 0.0f;
+    if (!tryParseNumber(val, factor) || factor <= 0.0f) {
+      return false;
+    }
+    kind = CssLineHeightKind::Unitless;
+    unitless = factor;
+    length = CssLength{};
+    return true;
+  }
+
+  CssLength len;
+  if (!tryInterpretLength(val, len)) {
+    return false;
+  }
+  kind = CssLineHeightKind::Length;
+  unitless = 0.0f;
+  length = len;
+  return true;
+}
+
+CssFloat CssParser::interpretFloat(std::string_view val) {
+  val = trimCssWhitespace(val);
+  val = stripTrailingImportant(val);
+  if (iequalsAscii(val, "left")) return CssFloat::Left;
+  if (iequalsAscii(val, "right")) return CssFloat::Right;
+  return CssFloat::None;
+}
+
+CssClear CssParser::interpretClear(std::string_view val) {
+  val = trimCssWhitespace(val);
+  val = stripTrailingImportant(val);
+  if (iequalsAscii(val, "left")) return CssClear::Left;
+  if (iequalsAscii(val, "right")) return CssClear::Right;
+  if (iequalsAscii(val, "both")) return CssClear::Both;
+  return CssClear::None;
+}
+
+CssFontVariant CssParser::interpretFontVariant(std::string_view val) {
+  val = trimCssWhitespace(val);
+  val = stripTrailingImportant(val);
+  // font-variant / font-variant-caps may be multi-token; accept if any token is small-caps.
+  bool smallCaps = false;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "small-caps") || iequalsAscii(token, "all-small-caps")) {
+      smallCaps = true;
+    }
+  });
+  return smallCaps ? CssFontVariant::SmallCaps : CssFontVariant::Normal;
+}
+
 // Declaration parsing
 
 void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style) {
@@ -409,6 +528,31 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.verticalAlign = CssVerticalAlign::Sub;
       style.defined.verticalAlign = 1;
     }
+  } else if (iequalsAscii(name, "font-size")) {
+    CssLength len;
+    if (tryInterpretFontSize(value, len)) {
+      style.fontSize = len;
+      style.defined.fontSize = 1;
+    }
+  } else if (iequalsAscii(name, "line-height")) {
+    CssLineHeightKind kind = CssLineHeightKind::None;
+    float unitless = 0.0f;
+    CssLength length;
+    if (tryInterpretLineHeight(value, kind, unitless, length)) {
+      style.lineHeightKind = kind;
+      style.lineHeightUnitless = unitless;
+      style.lineHeightLength = length;
+      style.defined.lineHeight = 1;
+    }
+  } else if (iequalsAscii(name, "float")) {
+    style.floatSide = interpretFloat(value);
+    style.defined.floatSide = 1;
+  } else if (iequalsAscii(name, "clear")) {
+    style.clear = interpretClear(value);
+    style.defined.clear = 1;
+  } else if (iequalsAscii(name, "font-variant") || iequalsAscii(name, "font-variant-caps")) {
+    style.fontVariant = interpretFontVariant(value);
+    style.defined.fontVariant = 1;
   }
 }
 
@@ -745,26 +889,40 @@ bool CssParser::saveToCache() const {
     file.write(static_cast<uint8_t>(style.display));
     file.write(static_cast<uint8_t>(style.verticalAlign));
 
+    // Rivulet CSS v9 fields (always written; defined bits mark validity)
+    writeLength(style.fontSize);
+    file.write(static_cast<uint8_t>(style.lineHeightKind));
+    file.write(reinterpret_cast<const uint8_t*>(&style.lineHeightUnitless), sizeof(style.lineHeightUnitless));
+    writeLength(style.lineHeightLength);
+    file.write(static_cast<uint8_t>(style.floatSide));
+    file.write(static_cast<uint8_t>(style.clear));
+    file.write(static_cast<uint8_t>(style.fontVariant));
+
     // Write defined flags as uint32_t
     uint32_t definedBits = 0;
-    if (style.defined.textAlign) definedBits |= 1 << 0;
-    if (style.defined.fontStyle) definedBits |= 1 << 1;
-    if (style.defined.fontWeight) definedBits |= 1 << 2;
-    if (style.defined.textDecoration) definedBits |= 1 << 3;
-    if (style.defined.textIndent) definedBits |= 1 << 4;
-    if (style.defined.marginTop) definedBits |= 1 << 5;
-    if (style.defined.marginBottom) definedBits |= 1 << 6;
-    if (style.defined.marginLeft) definedBits |= 1 << 7;
-    if (style.defined.marginRight) definedBits |= 1 << 8;
-    if (style.defined.paddingTop) definedBits |= 1 << 9;
-    if (style.defined.paddingBottom) definedBits |= 1 << 10;
-    if (style.defined.paddingLeft) definedBits |= 1 << 11;
-    if (style.defined.paddingRight) definedBits |= 1 << 12;
-    if (style.defined.imageHeight) definedBits |= 1 << 13;
-    if (style.defined.imageWidth) definedBits |= 1 << 14;
-    if (style.defined.display) definedBits |= 1 << 15;
-    if (style.defined.direction) definedBits |= 1 << 16;
-    if (style.defined.verticalAlign) definedBits |= 1 << 17;
+    if (style.defined.textAlign) definedBits |= 1u << 0;
+    if (style.defined.fontStyle) definedBits |= 1u << 1;
+    if (style.defined.fontWeight) definedBits |= 1u << 2;
+    if (style.defined.textDecoration) definedBits |= 1u << 3;
+    if (style.defined.textIndent) definedBits |= 1u << 4;
+    if (style.defined.marginTop) definedBits |= 1u << 5;
+    if (style.defined.marginBottom) definedBits |= 1u << 6;
+    if (style.defined.marginLeft) definedBits |= 1u << 7;
+    if (style.defined.marginRight) definedBits |= 1u << 8;
+    if (style.defined.paddingTop) definedBits |= 1u << 9;
+    if (style.defined.paddingBottom) definedBits |= 1u << 10;
+    if (style.defined.paddingLeft) definedBits |= 1u << 11;
+    if (style.defined.paddingRight) definedBits |= 1u << 12;
+    if (style.defined.imageHeight) definedBits |= 1u << 13;
+    if (style.defined.imageWidth) definedBits |= 1u << 14;
+    if (style.defined.display) definedBits |= 1u << 15;
+    if (style.defined.direction) definedBits |= 1u << 16;
+    if (style.defined.verticalAlign) definedBits |= 1u << 17;
+    if (style.defined.fontSize) definedBits |= 1u << 18;
+    if (style.defined.lineHeight) definedBits |= 1u << 19;
+    if (style.defined.floatSide) definedBits |= 1u << 20;
+    if (style.defined.clear) definedBits |= 1u << 21;
+    if (style.defined.fontVariant) definedBits |= 1u << 22;
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -815,10 +973,18 @@ bool CssParser::loadFromCache() {
     return static_cast<size_t>(file.available()) >= neededBytes;
   };
 
-  constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
+  // v9 wire: 5 enums + 11 classic lengths + display + verticalAlign
+  //        + fontSize + lineHeightKind + unitless float + lineHeightLength
+  //        + floatSide + clear + fontVariant + definedBits
+  constexpr size_t CSS_LENGTH_FIELD_COUNT = 13;  // 11 classic + fontSize + lineHeightLength
   constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
   constexpr size_t CSS_FIXED_STYLE_BYTES =
-      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + sizeof(uint8_t) + sizeof(uint32_t);
+      5 * sizeof(uint8_t) +                                      // textAlign..direction
+      (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) +              // lengths including fontSize + lineHeightLength
+      2 * sizeof(uint8_t) +                                      // display + verticalAlign
+      sizeof(uint8_t) + sizeof(float) +                          // lineHeightKind + unitless
+      3 * sizeof(uint8_t) +                                      // floatSide + clear + fontVariant
+      sizeof(uint32_t);                                          // definedBits
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
@@ -923,30 +1089,65 @@ bool CssParser::loadFromCache() {
     }
     style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlignVal);
 
+    // Rivulet CSS v9 fields
+    if (!readLength(style.fontSize)) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    uint8_t lineHeightKindVal = 0;
+    if (file.read(&lineHeightKindVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.lineHeightKind = static_cast<CssLineHeightKind>(lineHeightKindVal);
+    if (file.read(&style.lineHeightUnitless, sizeof(style.lineHeightUnitless)) != sizeof(style.lineHeightUnitless)) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    if (!readLength(style.lineHeightLength)) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    uint8_t floatVal = 0;
+    uint8_t clearVal = 0;
+    uint8_t fontVariantVal = 0;
+    if (file.read(&floatVal, 1) != 1 || file.read(&clearVal, 1) != 1 || file.read(&fontVariantVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.floatSide = static_cast<CssFloat>(floatVal);
+    style.clear = static_cast<CssClear>(clearVal);
+    style.fontVariant = static_cast<CssFontVariant>(fontVariantVal);
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
       rulesBySelector_.clear();
       return false;
     }
-    style.defined.textAlign = (definedBits & 1 << 0) != 0;
-    style.defined.fontStyle = (definedBits & 1 << 1) != 0;
-    style.defined.fontWeight = (definedBits & 1 << 2) != 0;
-    style.defined.textDecoration = (definedBits & 1 << 3) != 0;
-    style.defined.textIndent = (definedBits & 1 << 4) != 0;
-    style.defined.marginTop = (definedBits & 1 << 5) != 0;
-    style.defined.marginBottom = (definedBits & 1 << 6) != 0;
-    style.defined.marginLeft = (definedBits & 1 << 7) != 0;
-    style.defined.marginRight = (definedBits & 1 << 8) != 0;
-    style.defined.paddingTop = (definedBits & 1 << 9) != 0;
-    style.defined.paddingBottom = (definedBits & 1 << 10) != 0;
-    style.defined.paddingLeft = (definedBits & 1 << 11) != 0;
-    style.defined.paddingRight = (definedBits & 1 << 12) != 0;
-    style.defined.imageHeight = (definedBits & 1 << 13) != 0;
-    style.defined.imageWidth = (definedBits & 1 << 14) != 0;
-    style.defined.display = (definedBits & 1 << 15) != 0;
-    style.defined.direction = (definedBits & 1 << 16) != 0;
-    style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.textAlign = (definedBits & (1u << 0)) != 0;
+    style.defined.fontStyle = (definedBits & (1u << 1)) != 0;
+    style.defined.fontWeight = (definedBits & (1u << 2)) != 0;
+    style.defined.textDecoration = (definedBits & (1u << 3)) != 0;
+    style.defined.textIndent = (definedBits & (1u << 4)) != 0;
+    style.defined.marginTop = (definedBits & (1u << 5)) != 0;
+    style.defined.marginBottom = (definedBits & (1u << 6)) != 0;
+    style.defined.marginLeft = (definedBits & (1u << 7)) != 0;
+    style.defined.marginRight = (definedBits & (1u << 8)) != 0;
+    style.defined.paddingTop = (definedBits & (1u << 9)) != 0;
+    style.defined.paddingBottom = (definedBits & (1u << 10)) != 0;
+    style.defined.paddingLeft = (definedBits & (1u << 11)) != 0;
+    style.defined.paddingRight = (definedBits & (1u << 12)) != 0;
+    style.defined.imageHeight = (definedBits & (1u << 13)) != 0;
+    style.defined.imageWidth = (definedBits & (1u << 14)) != 0;
+    style.defined.display = (definedBits & (1u << 15)) != 0;
+    style.defined.direction = (definedBits & (1u << 16)) != 0;
+    style.defined.verticalAlign = (definedBits & (1u << 17)) != 0;
+    style.defined.fontSize = (definedBits & (1u << 18)) != 0;
+    style.defined.lineHeight = (definedBits & (1u << 19)) != 0;
+    style.defined.floatSide = (definedBits & (1u << 20)) != 0;
+    style.defined.clear = (definedBits & (1u << 21)) != 0;
+    style.defined.fontVariant = (definedBits & (1u << 22)) != 0;
 
     rulesBySelector_[selector] = style;
   }

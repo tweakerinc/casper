@@ -324,3 +324,38 @@ if (parsedSize != fileSize) {
     std::warning(std::format("Unparsed data detected: {} bytes remaining at offset 0x{:X}", fileSize - parsedSize, parsedSize));
 }
 ```
+
+## CSS rules cache (`css_rules.bin`)
+
+Written by `CssParser::saveToCache()` under the book cache directory. Bump
+`CssParser::CSS_CACHE_VERSION` whenever the per-rule wire format changes; stale
+files are deleted and rebuilt on the next open.
+
+### Version 9 (Rivulet PR1a)
+
+Adds typography / float fields used by Rivulet Layout Core. Layout still ignores
+them until later section-file PRs; parse + cascade + cache round-trip only.
+
+Per-file layout:
+
+| Field | Type | Notes |
+|-------|------|--------|
+| version | `u8` | `9` |
+| ruleCount | `u16` | |
+| rules[ruleCount] | … | see below |
+
+Per rule:
+
+| Field | Type |
+|-------|------|
+| selectorLen | `u16` |
+| selector | `char[selectorLen]` |
+| textAlign, fontStyle, fontWeight, textDecoration, direction | `u8` each |
+| textIndent … imageWidth | 11× `CssLength` (`f32` value + `u8` unit) |
+| display, verticalAlign | `u8` each |
+| fontSize | `CssLength` |
+| lineHeightKind | `u8` (`None` / `Unitless` / `Length`) |
+| lineHeightUnitless | `f32` |
+| lineHeightLength | `CssLength` |
+| floatSide, clear, fontVariant | `u8` each |
+| definedBits | `u32` bits 0–22 (bit 18=fontSize, 19=lineHeight, 20=float, 21=clear, 22=fontVariant) |

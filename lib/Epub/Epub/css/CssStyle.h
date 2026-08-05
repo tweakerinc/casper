@@ -7,6 +7,13 @@ enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3
 enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4 };
 enum class CssTextDirection : uint8_t { Ltr = 0, Rtl = 1 };
 
+// Rivulet Layout Core (RLC) — float / clear / font-variant / line-height kind.
+// Parsed and cached in CSS v9; layout application is gated by later PRs.
+enum class CssFloat : uint8_t { None = 0, Left = 1, Right = 2 };
+enum class CssClear : uint8_t { None = 0, Left = 1, Right = 2, Both = 3 };
+enum class CssFontVariant : uint8_t { Normal = 0, SmallCaps = 1 };
+enum class CssLineHeightKind : uint8_t { None = 0, Unitless = 1, Length = 2 };
+
 // Represents a CSS length value with its unit, allowing deferred resolution to pixels
 struct CssLength {
   float value = 0.0f;
@@ -26,6 +33,8 @@ struct CssLength {
 
   // Resolve to pixels given the current em size (font line height)
   // containerWidth is needed for percentage units (e.g. viewport width)
+  // NOTE: line-height % is font-relative and must NOT use this with viewport height;
+  // see Rivulet resolveLineHeightPx() (PR1b+).
   [[nodiscard]] float toPixels(const float emSize, const float containerWidth = 0) const {
     switch (unit) {
       case CssUnit::Em:
@@ -72,26 +81,33 @@ enum class CssDisplay : uint8_t { Block = 0, None = 1 };
 // Vertical alignment options for inline elements (e.g. superscript/subscript)
 enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 
-// Bitmask for tracking which properties have been explicitly set
+// Bitmask for tracking which properties have been explicitly set.
+// Cache serializes as uint32_t with bit indices 0..22 (see CssParser.cpp).
 struct CssPropertyFlags {
-  uint16_t textAlign : 1;
-  uint16_t fontStyle : 1;
-  uint16_t fontWeight : 1;
-  uint16_t textDecoration : 1;
-  uint16_t textIndent : 1;
-  uint16_t marginTop : 1;
-  uint16_t marginBottom : 1;
-  uint16_t marginLeft : 1;
-  uint16_t marginRight : 1;
-  uint16_t paddingTop : 1;
-  uint16_t paddingBottom : 1;
-  uint16_t paddingLeft : 1;
-  uint16_t paddingRight : 1;
-  uint16_t imageHeight : 1;
-  uint16_t imageWidth : 1;
-  uint16_t display : 1;
-  uint16_t direction : 1;
-  uint16_t verticalAlign : 1;
+  uint32_t textAlign : 1;
+  uint32_t fontStyle : 1;
+  uint32_t fontWeight : 1;
+  uint32_t textDecoration : 1;
+  uint32_t textIndent : 1;
+  uint32_t marginTop : 1;
+  uint32_t marginBottom : 1;
+  uint32_t marginLeft : 1;
+  uint32_t marginRight : 1;
+  uint32_t paddingTop : 1;
+  uint32_t paddingBottom : 1;
+  uint32_t paddingLeft : 1;
+  uint32_t paddingRight : 1;
+  uint32_t imageHeight : 1;
+  uint32_t imageWidth : 1;
+  uint32_t display : 1;
+  uint32_t direction : 1;
+  uint32_t verticalAlign : 1;
+  // Rivulet CSS v9+
+  uint32_t fontSize : 1;
+  uint32_t lineHeight : 1;
+  uint32_t floatSide : 1;
+  uint32_t clear : 1;
+  uint32_t fontVariant : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -111,12 +127,18 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
-        verticalAlign(0) {}
+        verticalAlign(0),
+        fontSize(0),
+        lineHeight(0),
+        floatSide(0),
+        clear(0),
+        fontVariant(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign;
+           imageWidth || display || direction || verticalAlign || fontSize || lineHeight || floatSide || clear ||
+           fontVariant;
   }
 
   void clearAll() {
@@ -124,10 +146,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = 0;
+    fontSize = lineHeight = floatSide = clear = fontVariant = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..17.
+// Cache serializes defined flags as uint32_t with bit indices 0..22.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -154,6 +177,15 @@ struct CssStyle {
   CssLength imageWidth;     // Width for img when both or only width set
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
+
+  // Rivulet: typography / float metrics (CSS cache v9+). Layout ignores until PR1b+.
+  CssLength fontSize;
+  CssLineHeightKind lineHeightKind = CssLineHeightKind::None;
+  float lineHeightUnitless = 0.0f;  // valid iff kind == Unitless
+  CssLength lineHeightLength;       // valid iff kind == Length
+  CssFloat floatSide = CssFloat::None;
+  CssClear clear = CssClear::None;
+  CssFontVariant fontVariant = CssFontVariant::Normal;
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -232,6 +264,28 @@ struct CssStyle {
       verticalAlign = base.verticalAlign;
       defined.verticalAlign = 1;
     }
+    if (base.hasFontSize()) {
+      fontSize = base.fontSize;
+      defined.fontSize = 1;
+    }
+    if (base.hasLineHeight()) {
+      lineHeightKind = base.lineHeightKind;
+      lineHeightUnitless = base.lineHeightUnitless;
+      lineHeightLength = base.lineHeightLength;
+      defined.lineHeight = 1;
+    }
+    if (base.hasFloatSide()) {
+      floatSide = base.floatSide;
+      defined.floatSide = 1;
+    }
+    if (base.hasClear()) {
+      clear = base.clear;
+      defined.clear = 1;
+    }
+    if (base.hasFontVariant()) {
+      fontVariant = base.fontVariant;
+      defined.fontVariant = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -252,6 +306,11 @@ struct CssStyle {
   [[nodiscard]] bool hasDisplay() const { return defined.display; }
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
+  [[nodiscard]] bool hasFontSize() const { return defined.fontSize; }
+  [[nodiscard]] bool hasLineHeight() const { return defined.lineHeight; }
+  [[nodiscard]] bool hasFloatSide() const { return defined.floatSide; }
+  [[nodiscard]] bool hasClear() const { return defined.clear; }
+  [[nodiscard]] bool hasFontVariant() const { return defined.fontVariant; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -265,6 +324,13 @@ struct CssStyle {
     imageHeight = imageWidth = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
+    fontSize = CssLength{};
+    lineHeightKind = CssLineHeightKind::None;
+    lineHeightUnitless = 0.0f;
+    lineHeightLength = CssLength{};
+    floatSide = CssFloat::None;
+    clear = CssClear::None;
+    fontVariant = CssFontVariant::Normal;
     defined.clearAll();
   }
 };

@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "Epub/css/StyleResolve.h"
+
 namespace {
 constexpr char GUIDE_DOT_UTF8[] = "\xc2\xb7";  // U+00B7 middle dot
 }  // namespace
@@ -134,8 +136,15 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     return;
   }
 
+  // Rivulet PR1b-min: paint with block sizeStep resolved from reader base fontId.
+  // Never skip sizeStep (0 means "two steps smaller", not unset).
+  StyleResolveContext rivuletCtx;
+  initStyleResolveContext(rivuletCtx, fontId, /*lineCompression unused for face pick*/ 1.0f,
+                          /*embeddedStyle*/ true, renderer);
+  const int paintFontId = resolveRelativeFontId(rivuletCtx, blockStyle.sizeStep);
+
   const bool scanning = renderer.isFontCacheScanning();
-  const int ascender = renderer.getFontAscenderSize(fontId);
+  const int ascender = renderer.getFontAscenderSize(paintFontId);
 
   struct DecorationLineTracker {
     EpdFontFamily::Style style;
@@ -194,17 +203,17 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(fontId, wordX, wordY, boldBuf, true, boldStyle, baseDir);
+      renderer.drawText(paintFontId, wordX, wordY, boldBuf, true, boldStyle, baseDir);
       const int suffixX = wordX + focusSuffixXArr[i];
-      renderer.drawText(fontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir);
+      renderer.drawText(paintFontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir);
     } else {
-      renderer.drawText(fontId, wordX, wordY, word, true, currentStyle, baseDir);
+      renderer.drawText(paintFontId, wordX, wordY, word, true, currentStyle, baseDir);
     }
 
     // Guide Dots: · placed after this word (offset measured at layout time).
     const uint16_t dotOffset = guideDotXOffset(i);
     if (dotOffset > 0 && !scanning) {
-      renderer.drawText(fontId, wordX + static_cast<int>(dotOffset), wordY, GUIDE_DOT_UTF8, true,
+      renderer.drawText(paintFontId, wordX + static_cast<int>(dotOffset), wordY, GUIDE_DOT_UTF8, true,
                         EpdFontFamily::REGULAR, baseDir);
     }
 
@@ -214,7 +223,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
     if (EpdFontFamily::hasTextDecoration(currentStyle)) {
       int lineStartX = wordX;
-      int lineWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir);
+      int lineWidth = renderer.getTextWidth(paintFontId, word, currentStyle, baseDir);
 
       if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
         lineWidth = (lineWidth + 1) / 2;
@@ -223,8 +232,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       if (wordTextLen(i) >= 3 && static_cast<uint8_t>(word[0]) == 0xE2 && static_cast<uint8_t>(word[1]) == 0x80 &&
           static_cast<uint8_t>(word[2]) == 0x83) {
         const char* visibleText = word + 3;
-        lineStartX += renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle);
-        lineWidth = renderer.getTextWidth(fontId, visibleText, currentStyle, baseDir);
+        lineStartX += renderer.getTextAdvanceX(paintFontId, "\xe2\x80\x83", currentStyle);
+        lineWidth = renderer.getTextWidth(paintFontId, visibleText, currentStyle, baseDir);
         if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
           lineWidth = (lineWidth + 1) / 2;
         }
@@ -285,6 +294,8 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.textIndentDefined);
   serialization::writePod(file, blockStyle.isRtl);
   serialization::writePod(file, blockStyle.directionDefined);
+  serialization::writePod(file, blockStyle.sizeStep);
+  serialization::writePod(file, blockStyle.lineHeightPx);
 
   return true;
 }
@@ -360,6 +371,12 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.textIndentDefined);
   serialization::readPod(file, blockStyle.isRtl);
   serialization::readPod(file, blockStyle.directionDefined);
+  serialization::readPod(file, blockStyle.sizeStep);
+  serialization::readPod(file, blockStyle.lineHeightPx);
+  // Guard corrupt/old partial reads: sizeStep must stay in 0..4; default to base.
+  if (blockStyle.sizeStep > SIZE_STEP_MAX) {
+    blockStyle.sizeStep = SIZE_STEP_BASE;
+  }
 
   return block;
 }

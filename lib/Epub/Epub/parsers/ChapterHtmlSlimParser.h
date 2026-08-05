@@ -15,6 +15,7 @@
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
+#include "Epub/css/StyleResolve.h"
 
 class Page;
 class GfxRenderer;
@@ -84,6 +85,9 @@ class ChapterHtmlSlimParser {
   int tableColIndex = 0;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
+  // Rivulet: relative size ladder + line-height resolution (filled in startParse).
+  StyleResolveContext styleResolve_;
+
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
@@ -120,6 +124,11 @@ class ChapterHtmlSlimParser {
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
+  // Resolve block font for measure/advance from BlockStyle.sizeStep.
+  [[nodiscard]] int blockFontId(const BlockStyle& style) const {
+    return resolveRelativeFontId(styleResolve_, style.sizeStep);
+  }
+  [[nodiscard]] int lineAdvancePx(const BlockStyle& style) const;
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);

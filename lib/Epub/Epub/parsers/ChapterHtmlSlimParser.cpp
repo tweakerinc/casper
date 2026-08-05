@@ -257,7 +257,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         // The empty block was created by a <br> section separator. Inject a full line of
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
-        const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+        const int16_t lineHeight = static_cast<int16_t>(lineAdvancePx(incoming));
         incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
 
@@ -308,7 +308,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
     currentPageNextY = 0;
   }
 
-  const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+  const int16_t lineHeight = static_cast<int16_t>(lineAdvancePx(blockStyle));
   const int16_t defaultVerticalSpacing = static_cast<int16_t>(lineHeight / 2);
   const int16_t topSpacing =
       static_cast<int16_t>((blockStyle.marginTop > 0 ? blockStyle.marginTop : defaultVerticalSpacing) +
@@ -892,11 +892,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
-  const auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(
+  auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(
       cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment), self->viewportWidth);
+  applyRivuletBlockMetrics(userAlignmentBlockStyle, cssStyle, self->styleResolve_, self->renderer, 0);
 
   if (strcmp(name, "hr") == 0) {
     auto hrBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth);
+    applyRivuletBlockMetrics(hrBlockStyle, cssStyle, self->styleResolve_, self->renderer, 0);
     if (!self->embeddedStyle) {
       hrBlockStyle.marginLeft = 0;
       hrBlockStyle.marginRight = 0;
@@ -919,6 +921,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     // h1–h6 default to centered (e-reader convention). Explicit book CSS/inline
     // left/right/justify still wins so intentional author layout is preserved.
     auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
+    int headingLevel = 0;
+    if (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && name[2] == '\0') {
+      headingLevel = name[1] - '0';
+    }
+    applyRivuletBlockMetrics(headerBlockStyle, cssStyle, self->styleResolve_, self->renderer, headingLevel);
     headerBlockStyle.textAlignDefined = true;
     if (cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
@@ -1231,8 +1238,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
                                         ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
                                         : self->viewportWidth;
+    const int measureFontId = self->blockFontId(self->currentTextBlock->getBlockStyle());
     self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
+        self->renderer, measureFontId, effectiveWidth,
         [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
   }
 }
@@ -1379,6 +1387,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() { abortParse(); }
 
 bool ChapterHtmlSlimParser::beginParse() {
+  // Rivulet: precompute size-step font ladder once per section parse.
+  initStyleResolveContext(styleResolve_, fontId, lineCompression, embeddedStyle, renderer);
+
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
@@ -1386,6 +1397,9 @@ bool ChapterHtmlSlimParser::beginParse() {
   rootBlockStyle.alignment = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
                                  ? CssTextAlign::Justify
                                  : static_cast<CssTextAlign>(this->paragraphAlignment);
+  rootBlockStyle.sizeStep = SIZE_STEP_BASE;
+  rootBlockStyle.lineHeightPx =
+      static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
   blockStyleStack.clear();
   blockStyleStack.reserve(8);
   blockStyleStack.push_back(rootBlockStyle);
@@ -1394,6 +1408,8 @@ bool ChapterHtmlSlimParser::beginParse() {
   paragraphAlignmentBlockStyle.textAlignDefined = true;
   const auto align = rootBlockStyle.alignment;
   paragraphAlignmentBlockStyle.alignment = align;
+  paragraphAlignmentBlockStyle.sizeStep = SIZE_STEP_BASE;
+  paragraphAlignmentBlockStyle.lineHeightPx = rootBlockStyle.lineHeightPx;
   startNewTextBlock(paragraphAlignmentBlockStyle);
 
   xmlParser_ = XML_ParserCreate(nullptr);
@@ -1502,8 +1518,15 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return finishParse();
 }
 
+int ChapterHtmlSlimParser::lineAdvancePx(const BlockStyle& style) const {
+  if (style.lineHeightPx > 0) {
+    return style.lineHeightPx;
+  }
+  return renderer.getLineHeight(blockFontId(style), lineCompression);
+}
+
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
+  const int lineHeight = lineAdvancePx(line->getBlockStyle());
 
   if (!currentPage) {
     currentPage.reset(new Page());
@@ -1543,10 +1566,11 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY = 0;
   }
 
-  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
-
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  const int lineHeight = lineAdvancePx(blockStyle);
+  const int measureFontId = blockFontId(blockStyle);
+
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }
@@ -1559,8 +1583,9 @@ void ChapterHtmlSlimParser::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
+  // Measure with the block's resolved face so paint(sizeStep) matches layout.
   currentTextBlock->layoutAndExtractLines(
-      renderer, fontId, effectiveWidth,
+      renderer, measureFontId, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
 
   // Fallback: transfer any remaining pending footnotes to current page.

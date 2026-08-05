@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "Epub/css/CssStyle.h"
+#include "Epub/css/StyleResolve.h"
 
 /**
  * BlockStyle - Block-level styling properties
@@ -31,6 +32,11 @@ struct BlockStyle {
   bool textAlignDefined = false;   // true if text-align was explicitly set in CSS
   bool isRtl = false;              // true if resolved direction is RTL
   bool directionDefined = false;   // true if direction was explicitly set in CSS/HTML
+
+  // Rivulet PR1b-min: relative size step (default = user base face) and resolved line advance px.
+  // sizeStep 0 means "two steps smaller" — never treat 0 as unset (use SIZE_STEP_BASE).
+  uint8_t sizeStep = SIZE_STEP_BASE;
+  int16_t lineHeightPx = 0;  // 0 → fall back to renderer.getLineHeight(base) at layout time
 
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
@@ -95,6 +101,15 @@ struct BlockStyle {
     if (!child.directionDefined && directionDefined) {
       result.isRtl = isRtl;
       result.directionDefined = true;
+    }
+
+    // Rivulet metrics: prefer child's size/line-height (result starts as child).
+    // If child still has defaults and parent has non-default, inherit parent.
+    if (child.sizeStep == SIZE_STEP_BASE && sizeStep != SIZE_STEP_BASE) {
+      result.sizeStep = sizeStep;
+    }
+    if (child.lineHeightPx == 0 && lineHeightPx > 0) {
+      result.lineHeightPx = lineHeightPx;
     }
 
     // fromBrElement is consumed by startNewTextBlock when an empty <br> block

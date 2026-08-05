@@ -21,7 +21,8 @@ namespace {
 //      (lazy extraction: images are header-probed at build time and extracted on
 //      first render).
 // v33: Guide Dots (guideReadingEnabled) in render-spec header + TextBlock guide arena.
-constexpr uint8_t SECTION_FILE_VERSION = 33;
+// v34: Rivulet PR1b-min — BlockStyle.sizeStep + lineHeightPx; block font metrics in layout/paint.
+constexpr uint8_t SECTION_FILE_VERSION = 34;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

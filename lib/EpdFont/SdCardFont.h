@@ -242,8 +242,12 @@ class SdCardFont {
   };
   OverflowContext overflowCtx_[MAX_STYLES] = {};
 
-  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler)
-  static constexpr uint32_t OVERFLOW_CAPACITY = 8;
+  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler).
+  // 8 was far too small for page paint: Latin pages need ~50–100 unique codepoints, and
+  // thrashing (reload from SD ~15–20ms each) freezes the UI for multi-second "lags".
+  // 96 keeps a full page of common Latin + punctuation resident; bitmaps are still freed
+  // when a slot is reused. (~few KB metadata + bitmaps only while in use)
+  static constexpr uint32_t OVERFLOW_CAPACITY = 96;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;

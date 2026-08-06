@@ -1495,8 +1495,13 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   self->overflow_[slot].codepoint = codepoint;
   self->overflow_[slot].styleIdx = styleIdx;
 
-  LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
-          OVERFLOW_CAPACITY);
+  // Do not log every miss — thrash storms were multi-thousand-line serial floods
+  // that themselves slowed the device. Sample occasionally for diagnosis.
+  static uint32_t s_overflowLogCounter = 0;
+  if ((++s_overflowLogCounter % 64u) == 1u) {
+    LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u (slot %u/%u, sample #%u)", codepoint, styleIdx, slot,
+            OVERFLOW_CAPACITY, s_overflowLogCounter);
+  }
 
   return &self->overflow_[slot].glyph;
 }

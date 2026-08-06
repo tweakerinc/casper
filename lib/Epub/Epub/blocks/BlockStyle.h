@@ -18,7 +18,8 @@ struct BlockStyle {
   // Vertical margins often use % of *viewport width* in our CssLength resolver
   // (e.g. .ct1 { margin: 10% 0 8% 25% } → ~50px top on X3). Uncapped, epigraph
   // attribution lines ("— THE STOLEN JOURNALS") get pushed to the next page.
-  static constexpr float MAX_VERTICAL_MARGIN_EM = 1.25f;
+  // Keep this tight so quote + attribution stay on one page on X3.
+  static constexpr float MAX_VERTICAL_MARGIN_EM = 0.75f;
 
   CssTextAlign alignment = CssTextAlign::Justify;
 

@@ -264,6 +264,12 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
 
       flushPendingAnchor();
+      // Reused empty block is still the "next" paragraph for drop-cap arming.
+      if (armDropCapOnNextTextBlock_) {
+        pendingDropCap_ = true;
+        armDropCapOnNextTextBlock_ = false;
+        LOG_DBG("RLC", "Drop-cap pending on reused empty text block");
+      }
       return;
     }
 
@@ -278,6 +284,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       return;
     }
 
+    // Flush previous paragraph BEFORE arming drop-cap on the new block.
     makePages();
   }
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
@@ -287,6 +294,11 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled, blockStyle));
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
+  if (armDropCapOnNextTextBlock_) {
+    pendingDropCap_ = true;
+    armDropCapOnNextTextBlock_ = false;
+    LOG_DBG("RLC", "Drop-cap pending on new text block");
+  }
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -941,10 +953,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Body paragraph after visible h1 / .ct1 gets a synthetic drop-cap (no ::first-letter engine).
   // Skip paragraphs *inside* the .ct1 blockquote (epigraph), only the first p after it.
+  // Do NOT set pendingDropCap_ here — startNewTextBlock may still flush the previous
+  // paragraph (e.g. "— THE STOLEN JOURNALS") via makePages; arm the *next* text block only.
   if (strcmp(name, "p") == 0 && self->nextParagraphGetsDropCap_ && self->embeddedStyle &&
       !self->openBlockquoteIsCt1_) {
-    self->pendingDropCap_ = true;
+    self->armDropCapOnNextTextBlock_ = true;
     self->nextParagraphGetsDropCap_ = false;
+    LOG_DBG("RLC", "Drop-cap armed for next text block");
   }
 
   if (strcmp(name, "h1") == 0) {

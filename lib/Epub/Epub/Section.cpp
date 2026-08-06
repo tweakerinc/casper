@@ -24,7 +24,8 @@ namespace {
 // v34: Rivulet PR1b-min — BlockStyle.sizeStep + lineHeightPx; block font metrics in layout/paint.
 // v37: Rivulet PR4 — float wrap + drop-cap first letter (geometry differs from v34 block place).
 // v38: drop-cap paintFontIdOverride + tighter vertical margin caps (epigraph pagination).
-constexpr uint8_t SECTION_FILE_VERSION = 38;
+// v39: drop-cap arm after previous paragraph flush (was peeling journals em-dash).
+constexpr uint8_t SECTION_FILE_VERSION = 39;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

@@ -101,7 +101,11 @@ class ChapterHtmlSlimParser {
   int floatCount_ = 0;
 
   // Drop-cap: next <p> after visible h1 or .ct1 (God Emperor / common tradepub pattern).
+  // armDropCapOnNextTextBlock_ is set on <p> open; pendingDropCap_ is set only when the
+  // new ParsedText for that <p> is created — never while makePages still runs on the
+  // previous paragraph (which was peeling "—" from THE STOLEN JOURNALS by mistake).
   bool nextParagraphGetsDropCap_ = false;
+  bool armDropCapOnNextTextBlock_ = false;
   bool pendingDropCap_ = false;
   bool openBlockquoteIsCt1_ = false;
   bool openH1WasVisible_ = false;

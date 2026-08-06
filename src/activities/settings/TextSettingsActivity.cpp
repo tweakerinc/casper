@@ -77,9 +77,25 @@ void TextSettingsActivity::onEnter() {
   // user can pick Font / Size / Layout / … before diving into a list item.
   std::fill(std::begin(selectedIndex_), std::end(selectedIndex_), 0);
 
+  // Reader menu / Settings open this with Confirm (or a remapped key). That
+  // release must not count as "cycle tab" on the first frame.
+  armAwaitOpenButtonRelease(/*force=*/true);
+
   // One scrub on open; scrolling/tabs stay FAST (no periodic HALF while navigating).
   UiGhostPolicy::requestHardScrub();
   requestUpdate();
+}
+
+void TextSettingsActivity::armAwaitOpenButtonRelease(const bool force) {
+  using B = MappedInputManager::Button;
+  const bool held = mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) ||
+                    mappedInput.isPressed(B::Left) || mappedInput.isPressed(B::Right) ||
+                    mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
+                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) ||
+                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) ||
+                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+  awaitOpenButtonRelease_ = force || held;
 }
 
 void TextSettingsActivity::onExit() { Activity::onExit(); }
@@ -176,6 +192,37 @@ bool TextSettingsActivity::handleTouch() {
 }
 
 void TextSettingsActivity::loop() {
+  if (awaitOpenButtonRelease_) {
+    using B = MappedInputManager::Button;
+    const bool held = mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) ||
+                      mappedInput.isPressed(B::Left) || mappedInput.isPressed(B::Right) ||
+                      mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
+                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) ||
+                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) ||
+                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+    if (held) {
+      return;
+    }
+    // Drain residual edges from the open gesture so they cannot cycle tabs or exit.
+    (void)mappedInput.wasPressed(B::Back);
+    (void)mappedInput.wasReleased(B::Back);
+    (void)mappedInput.wasPressed(B::Confirm);
+    (void)mappedInput.wasReleased(B::Confirm);
+    (void)mappedInput.wasPressed(B::Left);
+    (void)mappedInput.wasReleased(B::Left);
+    (void)mappedInput.wasPressed(B::Right);
+    (void)mappedInput.wasReleased(B::Right);
+    (void)mappedInput.wasPressed(B::Up);
+    (void)mappedInput.wasReleased(B::Up);
+    (void)mappedInput.wasPressed(B::Down);
+    (void)mappedInput.wasReleased(B::Down);
+    (void)mappedInput.getReleasedFrontButton();
+    (void)mappedInput.getPressedFrontButton();
+    awaitOpenButtonRelease_ = false;
+    return;
+  }
+
   if (optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) return;  // picker owns input while open
 
   // Finish on release, not press. When this screen is opened from the reader

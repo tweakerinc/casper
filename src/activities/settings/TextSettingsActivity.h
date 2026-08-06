@@ -74,6 +74,10 @@ class TextSettingsActivity final : public Activity {
   };
 
   void rebuildFontList();
+  // Drain the Confirm/Back/nav edge that opened this screen (same pattern as SettingsActivity).
+  // Without this, Confirm-release cycles Font → Size on the first loop because selection
+  // starts on the tab bar (index 0).
+  void armAwaitOpenButtonRelease(bool force = false);
 
   struct SizeEntry {
     std::string name;
@@ -92,6 +96,7 @@ class TextSettingsActivity final : public Activity {
   int selectedIndex_[static_cast<int>(Tab::Count)] = {};
   int currentFamilyIndex_ = 0;
   int currentSizeIndex_ = 0;
+  bool awaitOpenButtonRelease_ = false;
 
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;

@@ -138,10 +138,15 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
   // Rivulet PR1b-min: paint with block sizeStep resolved from reader base fontId.
   // Never skip sizeStep (0 means "two steps smaller", not unset).
-  StyleResolveContext rivuletCtx;
-  initStyleResolveContext(rivuletCtx, fontId, /*lineCompression unused for face pick*/ 1.0f,
-                          /*embeddedStyle*/ true, renderer);
-  const int paintFontId = resolveRelativeFontId(rivuletCtx, blockStyle.sizeStep);
+  // Cache ladder by base fontId — page paint touches every TextBlock; re-init was
+  // spamming RLC logs and burning CPU on SD Bookerly (single-size collapse).
+  static int s_cachedBaseFontId = 0;
+  static StyleResolveContext s_rivuletPaintCtx;
+  if (s_cachedBaseFontId != fontId) {
+    initStyleResolveContext(s_rivuletPaintCtx, fontId, 1.0f, /*embeddedStyle*/ true, renderer);
+    s_cachedBaseFontId = fontId;
+  }
+  const int paintFontId = resolveRelativeFontId(s_rivuletPaintCtx, blockStyle.sizeStep);
 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(paintFontId);

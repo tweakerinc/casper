@@ -77,7 +77,13 @@ void initStyleResolveContext(StyleResolveContext& ctx, const int baseFontId, con
 
   // SD / unknown: no multi-size ladder without registry API in this lib.
   fillCollapsed(ctx);
-  LOG_DBG("RLC", "SD/unknown font ladder collapsed to single size (fontId=%d)", baseFontId);
+  // Log once per baseFontId — paint calls initStyleResolveContext every line; spam can flood
+  // the serial log and thrash the logger during page turns.
+  static int s_loggedCollapsedFontId = 0;
+  if (baseFontId != s_loggedCollapsedFontId) {
+    s_loggedCollapsedFontId = baseFontId;
+    LOG_DBG("RLC", "SD/unknown font ladder collapsed to single size (fontId=%d)", baseFontId);
+  }
 }
 
 uint8_t sizeStepFromCssFontSize(const CssStyle& css, const StyleResolveContext& ctx) {

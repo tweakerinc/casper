@@ -15,6 +15,10 @@ struct BlockStyle {
   // cap, effectiveWidth collapses to 1-2 words per line and justification dumps
   // the remaining space into a single gap.
   static constexpr float MAX_HORIZONTAL_INSET_EM = 2.0f;
+  // Vertical margins often use % of *viewport width* in our CssLength resolver
+  // (e.g. .ct1 { margin: 10% 0 8% 25% } → ~50px top on X3). Uncapped, epigraph
+  // attribution lines ("— THE STOLEN JOURNALS") get pushed to the next page.
+  static constexpr float MAX_VERTICAL_MARGIN_EM = 1.25f;
 
   CssTextAlign alignment = CssTextAlign::Justify;
 
@@ -37,6 +41,9 @@ struct BlockStyle {
   // sizeStep 0 means "two steps smaller" — never treat 0 as unset (use SIZE_STEP_BASE).
   uint8_t sizeStep = SIZE_STEP_BASE;
   int16_t lineHeightPx = 0;  // 0 → fall back to renderer.getLineHeight(base) at layout time
+  // Drop-cap (and rare absolute faces): non-zero forces TextBlock::render to this fontId
+  // instead of resolveRelativeFontId(readerBase, sizeStep). 0 = normal resolve path.
+  int paintFontIdOverride = 0;
 
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
@@ -126,14 +133,19 @@ struct BlockStyle {
     BlockStyle blockStyle;
     const float vw = viewportWidth;
     const auto maxHorizontalInsetPx = static_cast<int16_t>(emSize * MAX_HORIZONTAL_INSET_EM);
+    const auto maxVerticalMarginPx = static_cast<int16_t>(emSize * MAX_VERTICAL_MARGIN_EM);
     // Resolve all CssLength values to pixels using the current font's em size and viewport width
-    blockStyle.marginTop = cssStyle.marginTop.toPixelsInt16(emSize, vw);
-    blockStyle.marginBottom = cssStyle.marginBottom.toPixelsInt16(emSize, vw);
+    blockStyle.marginTop =
+        std::min(cssStyle.marginTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.marginBottom =
+        std::min(cssStyle.marginBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.marginLeft = std::min(cssStyle.marginLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
     blockStyle.marginRight = std::min(cssStyle.marginRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
 
-    blockStyle.paddingTop = cssStyle.paddingTop.toPixelsInt16(emSize, vw);
-    blockStyle.paddingBottom = cssStyle.paddingBottom.toPixelsInt16(emSize, vw);
+    blockStyle.paddingTop =
+        std::min(cssStyle.paddingTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.paddingBottom =
+        std::min(cssStyle.paddingBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.paddingLeft = std::min(cssStyle.paddingLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
     blockStyle.paddingRight = std::min(cssStyle.paddingRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
 

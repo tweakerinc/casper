@@ -1276,6 +1276,8 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
+    // Drop-cap must peel before the first soft-flush consumes the lead letter.
+    self->emitDropCapIfPending();
     const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
     const int leftEx = self->floatLeftExtra();
     const int rightEx = self->floatRightExtra();
@@ -1699,30 +1701,84 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   pendingDropCap_ = false;
 
   std::string letter = currentTextBlock->peelDropCapLetter();
-  if (letter.empty()) return;
+  if (letter.empty()) {
+    LOG_DBG("RLC", "Drop-cap armed but peel returned empty");
+    return;
+  }
 
   BlockStyle& bs = currentTextBlock->getBlockStyle();
-  // Large step for the initial (clamp to max ladder step)
+  const int bodyFontId = blockFontId(bs);
+  // Prefer +2 size steps on the ladder; if SD single-size collapses the ladder,
+  // hunt for any larger face already loaded in the renderer (Source Serif / Bitter 16/18).
   const uint8_t capStep =
       static_cast<uint8_t>(std::min(static_cast<int>(SIZE_STEP_MAX), static_cast<int>(bs.sizeStep) + 2));
-  const int capFontId = resolveRelativeFontId(styleResolve_, capStep);
+  int capFontId = resolveRelativeFontId(styleResolve_, capStep);
+  if (capFontId == bodyFontId || styleResolve_.singleSizeFamily) {
+    // Hard-coded larger builtins (must match src/fontIds.h); only if already loaded.
+    static constexpr int kLargerCandidates[] = {
+        326065580,    // SOURCESERIF4_18
+        1231166843,   // SOURCESERIF4_16
+        -582927980,   // BITTER_18
+        1467653849,   // BITTER_16
+        -1077864260,  // SOURCESERIF4_14
+    };
+    const int bodyAsc = renderer.getFontAscenderSize(bodyFontId);
+    int bestId = capFontId;
+    int bestAsc = bodyAsc;
+    const auto& fontMap = renderer.getFontMap();
+    for (const int cand : kLargerCandidates) {
+      if (cand == bodyFontId) continue;
+      if (fontMap.find(cand) == fontMap.end()) continue;
+      const int asc = renderer.getFontAscenderSize(cand);
+      if (asc > bestAsc) {
+        bestAsc = asc;
+        bestId = cand;
+      }
+    }
+    capFontId = bestId;
+  }
+
   const int bodyLine = lineAdvancePx(bs);
   // Target ~3 body lines tall for exclusion (classic drop-cap depth)
   constexpr int kDropCapLines = 3;
-  const int capH = std::max(bodyLine * kDropCapLines, renderer.getLineHeight(capFontId, lineCompression) + 4);
+  const int capLineH = std::max(1, renderer.getLineHeight(capFontId, lineCompression));
+  const int capH = std::max(bodyLine * kDropCapLines, capLineH + 4);
 
   // Measure letter width at cap face (bold for presence)
-  const int letterW = std::max(1, renderer.getTextAdvanceX(capFontId, letter.c_str(), EpdFontFamily::BOLD) + 4);
-  LOG_DBG("RLC", "Drop-cap letter w=%d h=%d step=%u", letterW, capH, capStep);
+  const int letterW = std::max(8, renderer.getTextAdvanceX(capFontId, letter.c_str(), EpdFontFamily::BOLD) + 6);
+  LOG_DBG("RLC", "Drop-cap '%s' bodyFont=%d capFont=%d w=%d h=%d", letter.c_str(), bodyFontId, capFontId, letterW,
+          capH);
 
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }
-  // Drop-cap letter as a one-word TextBlock line
+  // Drop-cap letter as a one-word TextBlock; sizeStep only helps when ladder works —
+  // paint still uses resolveRelativeFontId(base, sizeStep). When we picked a foreign
+  // larger fontId, store sizeStep base and measure/paint with explicit capFontId by
+  // temporarily using that id as the layout font (Page still passes reader base at
+  // paint — CRITICAL). TextBlock::render re-resolves sizeStep from reader baseFontId,
+  // so a foreign larger face would paint small again!
+  //
+  // Fix: store sizeStep at MAX and ensure paint ladder maps MAX to a larger face.
+  // For SD single-size, paint collapses too — so force capStyle to use a sizeStep
+  // that paint can only honor if we also teach paint about drop-cap.
+  //
+  // Practical approach: put the drop-cap letter's sizeStep = SIZE_STEP_MAX and
+  // ensure StyleResolve for paint finds larger builtins… paint only knows Bitter/SS
+  // ladders from base id. If base is Bookerly, paint stays Bookerly.
+  //
+  // So for true larger paint under Bookerly we must either (a) change TextBlock paint
+  // to allow an absolute font override, or (b) embed the letter as image, or
+  // (c) use SUP inverted — not available.
+  //
+  // Absolute override: BlockStyle optional paintFontId (0 = use resolve). SECTION bump.
+
   BlockStyle capStyle = bs;
   capStyle.sizeStep = capStep;
-  capStyle.lineHeightPx = static_cast<int16_t>(renderer.getLineHeight(capFontId, lineCompression));
+  // paintFontIdOverride: non-zero means TextBlock::render uses this id instead of resolve.
+  capStyle.paintFontIdOverride = (capFontId != bodyFontId) ? capFontId : 0;
+  capStyle.lineHeightPx = static_cast<int16_t>(capLineH);
   capStyle.alignment = CssTextAlign::Left;
   capStyle.textAlignDefined = true;
   capStyle.marginTop = 0;
@@ -1731,16 +1787,20 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   capStyle.paddingBottom = 0;
   capStyle.textIndent = 0;
   capStyle.textIndentDefined = true;
+  capStyle.marginLeft = 0;
+  capStyle.paddingLeft = 0;
 
   auto capText = std::make_unique<ParsedText>(false, false, false, false, capStyle);
   capText->addWord(letter, EpdFontFamily::BOLD);
-  // Layout as single line at full letter width
   const int leftInset = bs.leftInset();
   std::shared_ptr<TextBlock> capLine;
   capText->layoutAndExtractLines(
-      renderer, capFontId, static_cast<uint16_t>(std::max(letterW + 2, 8)),
+      renderer, capFontId, static_cast<uint16_t>(std::max(letterW + 2, 12)),
       [&](const std::shared_ptr<TextBlock>& line) { capLine = line; }, true);
-  if (!capLine) return;
+  if (!capLine) {
+    LOG_DBG("RLC", "Drop-cap layout produced no line");
+    return;
+  }
 
   if (currentPageNextY + capH > viewportHeight && !currentPage->elements.empty()) {
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
@@ -1752,13 +1812,11 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   const int16_t xOff = static_cast<int16_t>(leftInset);
   currentPage->elements.push_back(std::make_shared<PageLine>(capLine, xOff, currentPageNextY));
 
-  // Exclusion width = letter advance only (leftInset already applied via xOff / body leftInset)
-  const int16_t floatW = static_cast<int16_t>(letterW);
+  // Exclusion: letter width + small gap so wrap does not collide
+  const int16_t floatW = static_cast<int16_t>(letterW + 4);
   if (!floatPush(CssFloat::Left, floatW, static_cast<int16_t>(capH), /*isDropCap=*/true)) {
-    // Could not float — leave the letter as a normal line and advance
     currentPageNextY = static_cast<int16_t>(currentPageNextY + capStyle.lineHeightPx);
   }
-  // Do not advance Y by full capH — body wraps beside the letter
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
@@ -1809,18 +1867,28 @@ void ChapterHtmlSlimParser::makePages() {
   emitDropCapIfPending();
 
   // Apply top spacing before the paragraph (stored in pixels)
-  const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
   const int lineHeight = lineAdvancePx(blockStyle);
   const int measureFontId = blockFontId(blockStyle);
 
-  // CSS clear: push past floats before this block
-  // (BlockStyle has no clear field yet — honor Css clear via pending only if we add later)
-
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY = static_cast<int16_t>(currentPageNextY + blockStyle.marginTop);
+  // Keep short attribution lines (e.g. "— THE STOLEN JOURNALS") on the same page as
+  // the preceding epigraph when only a large CSS marginTop would force a break.
+  int marginTop = blockStyle.marginTop;
+  int paddingTop = blockStyle.paddingTop;
+  if (currentTextBlock->size() <= 12 && currentPage && !currentPage->elements.empty()) {
+    const int need = lineHeight + 4;
+    if (currentPageNextY + marginTop + paddingTop + need > viewportHeight &&
+        currentPageNextY + need <= viewportHeight) {
+      marginTop = 0;
+      paddingTop = 0;
+    }
   }
-  if (blockStyle.paddingTop > 0) {
-    currentPageNextY = static_cast<int16_t>(currentPageNextY + blockStyle.paddingTop);
+
+  if (marginTop > 0) {
+    currentPageNextY = static_cast<int16_t>(currentPageNextY + marginTop);
+  }
+  if (paddingTop > 0) {
+    currentPageNextY = static_cast<int16_t>(currentPageNextY + paddingTop);
   }
 
   // Effective width: block insets + active float exclusions

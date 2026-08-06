@@ -136,17 +136,22 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     return;
   }
 
-  // Rivulet PR1b-min: paint with block sizeStep resolved from reader base fontId.
+  // Rivulet: paint with block sizeStep, or absolute override (drop-cap larger face).
   // Never skip sizeStep (0 means "two steps smaller", not unset).
   // Cache ladder by base fontId — page paint touches every TextBlock; re-init was
   // spamming RLC logs and burning CPU on SD Bookerly (single-size collapse).
-  static int s_cachedBaseFontId = 0;
-  static StyleResolveContext s_rivuletPaintCtx;
-  if (s_cachedBaseFontId != fontId) {
-    initStyleResolveContext(s_rivuletPaintCtx, fontId, 1.0f, /*embeddedStyle*/ true, renderer);
-    s_cachedBaseFontId = fontId;
+  int paintFontId = fontId;
+  if (blockStyle.paintFontIdOverride != 0) {
+    paintFontId = blockStyle.paintFontIdOverride;
+  } else {
+    static int s_cachedBaseFontId = 0;
+    static StyleResolveContext s_rivuletPaintCtx;
+    if (s_cachedBaseFontId != fontId) {
+      initStyleResolveContext(s_rivuletPaintCtx, fontId, 1.0f, /*embeddedStyle*/ true, renderer);
+      s_cachedBaseFontId = fontId;
+    }
+    paintFontId = resolveRelativeFontId(s_rivuletPaintCtx, blockStyle.sizeStep);
   }
-  const int paintFontId = resolveRelativeFontId(s_rivuletPaintCtx, blockStyle.sizeStep);
 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(paintFontId);
@@ -301,6 +306,7 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.directionDefined);
   serialization::writePod(file, blockStyle.sizeStep);
   serialization::writePod(file, blockStyle.lineHeightPx);
+  serialization::writePod(file, blockStyle.paintFontIdOverride);
 
   return true;
 }
@@ -378,6 +384,7 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.directionDefined);
   serialization::readPod(file, blockStyle.sizeStep);
   serialization::readPod(file, blockStyle.lineHeightPx);
+  serialization::readPod(file, blockStyle.paintFontIdOverride);
   // Guard corrupt/old partial reads: sizeStep must stay in 0..4; default to base.
   if (blockStyle.sizeStep > SIZE_STEP_MAX) {
     blockStyle.sizeStep = SIZE_STEP_BASE;

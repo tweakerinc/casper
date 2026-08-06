@@ -88,6 +88,24 @@ class ChapterHtmlSlimParser {
   // Rivulet: relative size ladder + line-height resolution (filled in startParse).
   StyleResolveContext styleResolve_;
 
+  // Rivulet PR4: float exclusion zones (images + drop caps). Cap 2 concurrent floats.
+  struct FloatBox {
+    CssFloat side = CssFloat::None;
+    int16_t w = 0;
+    int16_t h = 0;
+    int16_t remainingH = 0;  // exclusion height still active below current page Y
+    bool isDropCap = false;
+  };
+  static constexpr int kMaxFloats = 2;
+  FloatBox floatBoxes_[kMaxFloats] = {};
+  int floatCount_ = 0;
+
+  // Drop-cap: next <p> after visible h1 or .ct1 (God Emperor / common tradepub pattern).
+  bool nextParagraphGetsDropCap_ = false;
+  bool pendingDropCap_ = false;
+  bool openBlockquoteIsCt1_ = false;
+  bool openH1WasVisible_ = false;
+
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
@@ -129,6 +147,15 @@ class ChapterHtmlSlimParser {
     return resolveRelativeFontId(styleResolve_, style.sizeStep);
   }
   [[nodiscard]] int lineAdvancePx(const BlockStyle& style) const;
+  // Float helpers (PR4)
+  [[nodiscard]] int floatLeftExtra() const;
+  [[nodiscard]] int floatRightExtra() const;
+  void floatConsumeLineAdvance(int advancePx);
+  void floatClearPast();  // advance Y past all active float bottoms (CSS clear)
+  bool floatPush(CssFloat side, int16_t w, int16_t h, bool isDropCap);
+  void emitDropCapIfPending();
+  void placeFloatImage(const std::shared_ptr<ImageBlock>& imageBlock, int displayWidth, int displayHeight,
+                       CssFloat side, int16_t marginTop, int16_t marginBottom);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);

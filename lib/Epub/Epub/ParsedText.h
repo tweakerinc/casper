@@ -67,6 +67,10 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // Rivulet drop-cap: peel first non-soft-hyphen UTF-8 codepoint from the first word.
+  // Remainder stays as first word with wordContinues so no extra space before the rest.
+  // Returns empty string if nothing to peel.
+  std::string peelDropCapLetter();
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true);

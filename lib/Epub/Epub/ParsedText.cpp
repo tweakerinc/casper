@@ -493,6 +493,59 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   }
 }
 
+std::string ParsedText::peelDropCapLetter() {
+  if (words.empty()) return {};
+
+  std::string& first = words[0];
+  if (first.empty()) return {};
+
+  // Skip leading soft hyphens; take first real codepoint (already NFC-composed at addWord).
+  const auto* ptr = reinterpret_cast<const unsigned char*>(first.c_str());
+  const auto* start = ptr;
+  uint32_t cp = 0;
+  while (true) {
+    const auto* before = ptr;
+    cp = utf8NextCodepoint(&ptr);
+    if (cp == 0) return {};
+    if (cp == 0x00AD) {  // soft hyphen
+      start = ptr;
+      continue;
+    }
+    // Skip pure whitespace letters for drop-cap (should not appear as word head)
+    if (cp == ' ' || cp == '\t') {
+      start = ptr;
+      continue;
+    }
+    (void)before;
+    break;
+  }
+
+  std::string letter;
+  utf8AppendCodepoint(cp, letter);
+  // Rest of word after the letter (and any soft hyphens we skipped before it)
+  const size_t letterBytes = static_cast<size_t>(ptr - reinterpret_cast<const unsigned char*>(first.c_str()));
+  // Account for soft hyphens stripped from the front: rebuild from remaining bytes at ptr
+  std::string rest(reinterpret_cast<const char*>(ptr));
+  if (rest.empty()) {
+    // Single-letter word: remove the word entirely so layout starts at the next word
+    words.erase(words.begin());
+    wordStyles.erase(wordStyles.begin());
+    wordContinues.erase(wordContinues.begin());
+    wordNoSpaceBefore.erase(wordNoSpaceBefore.begin());
+    wordIsFocusSuffix.erase(wordIsFocusSuffix.begin());
+  } else {
+    first = std::move(rest);
+    // Rest attaches to previous (the drop-cap glyph on the page) with no synthetic space
+    if (!wordContinues.empty()) {
+      wordContinues[0] = true;
+      wordNoSpaceBefore[0] = true;
+    }
+  }
+  (void)letterBytes;
+  (void)start;
+  return letter;
+}
+
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
   if (!isFirstLine || !isNaturalAlign) {
     return 0;

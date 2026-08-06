@@ -704,7 +704,11 @@ void EpubReaderActivity::onEnter() {
   uint32_t openT0 = 0;
   ReaderActivity::takeOpenHints(preferFast, deferAa, openT0);
   openPreferFastFirstRefresh = preferFast;
-  openDeferTextAa = deferAa && SETTINGS.textAntiAliasing;
+  // Defer-AA was: first paint solid BW (looks bold/black), then greys (looks thinner).
+  // That flash breaks immersion. Prefer one complete AA pass on first page when AA is on.
+  // (Home still uses FAST/scrub hints for ghosting; only the BW→grey text flash is dropped.)
+  openDeferTextAa = false;
+  (void)deferAa;
   openWallStartMs = openT0 != 0 ? openT0 : millis();
   openFirstInkLogged = false;
   pendingDeferredOpenAa = false;
@@ -1073,8 +1077,8 @@ void EpubReaderActivity::showBuildPopup() {
   // If it fires while the loan is active (e.g. the parser's size-based call during
   // startBuild), pending stays set and the deadline check retries after the loan.
   if (!buildPopupPending || !renderer.hasFrameBuffer()) return;
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
-  // HALF-clear the popup when the page replaces it, else "INDEXING" ghosts.
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  // HALF-clear the popup when the page replaces it, else "Loading" ghosts.
   pagesUntilFullRefresh = 1;
   openNeedsScrubAfterChrome = true;
   openPreferFastFirstRefresh = false;
@@ -2581,16 +2585,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // without indexing the whole chapter.
       const bool needsFullBuild = pendingPercentJump;
       if (needsFullBuild) {
-        GUI.drawPopup(renderer, tr(STR_INDEXING));
+        // Single open chrome: "Loading" (INDEXING was a second, confusing label after Home Loading).
+        GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
         // The popup's own refresh is a plain FAST, so force the page that replaces it onto the HALF
-        // ghost-cleanup path -- otherwise the "INDEXING" text ghosts under the rendered page.
+        // ghost-cleanup path -- otherwise the popup text ghosts under the rendered page.
         pagesUntilFullRefresh = 1;
         openNeedsScrubAfterChrome = true;
         openPreferFastFirstRefresh = false;
         // No popup redraws while the framebuffer is lent to the build below;
         // the panel holds the popup displayed above (e-ink is persistent).
         const auto popupFn = [this]() {
-          if (renderer.hasFrameBuffer()) GUI.drawPopup(renderer, tr(STR_INDEXING));
+          if (renderer.hasFrameBuffer()) GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
         };
         // Lend the framebuffer's 48 KB to the blocking full build; restored
         // (white) at scope exit, and the page render below redraws everything.
@@ -2644,8 +2649,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                                              target > BUILD_POPUP_PAGE_THRESHOLD);
           }
           if (showPopup) {
-            GUI.drawPopup(renderer, tr(STR_INDEXING));
-            // HALF-clear the popup when the page replaces it, else "INDEXING" ghosts under the page.
+            GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            // HALF-clear the popup when the page replaces it, else "Loading" ghosts under the page.
             pagesUntilFullRefresh = 1;
             openNeedsScrubAfterChrome = true;
             openPreferFastFirstRefresh = false;
@@ -2780,11 +2785,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   //
   // Crossing a partial's watermark before the extension rebuild has caught up means a
   // synchronous wait spanning the remaining prefix re-layout -- potentially tens of
-  // seconds on a giant spine. Show the indexing popup so it isn't a silent freeze
+  // seconds on a giant spine. Show Loading so it isn't a silent freeze
   // (the page that replaces it takes the HALF ghost-cleanup path). Ordinary window
   // catch-ups on a non-partial build are a page or two and stay popup-free.
   if (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
     pagesUntilFullRefresh = 1;
   }
   while (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
@@ -3145,7 +3150,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderStatusBar();
   const auto tBwRender = millis();
 
-  // Loading/INDEXING chrome leaves FAST residue; force scrub on first real page.
+  // Loading chrome leaves FAST residue; force scrub on first real page.
   if (openNeedsScrubAfterChrome && !openFirstInkLogged) {
     pagesUntilFullRefresh = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
     openNeedsScrubAfterChrome = false;

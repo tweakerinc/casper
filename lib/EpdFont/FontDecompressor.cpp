@@ -24,33 +24,45 @@ void FontDecompressor::clearCache() {
 }
 
 void FontDecompressor::freePageBuffer() {
-  for (uint8_t s = 0; s < pageSlotCount; s++) {
-    free(pageSlots[s].buffer);
-    free(pageSlots[s].glyphs);
-    pageSlots[s] = {};
-  }
+  // Null before free so a concurrent getBitmap cannot observe dangling slots
+  // mid-clear (issue #5: multi_heap_free head!=NULL after leave-to-home).
+  const uint8_t n = pageSlotCount;
   pageSlotCount = 0;
+  for (uint8_t s = 0; s < n; s++) {
+    uint8_t* buffer = pageSlots[s].buffer;
+    PageGlyphEntry* glyphs = pageSlots[s].glyphs;
+    pageSlots[s] = {};
+    free(buffer);
+    free(glyphs);
+  }
 }
 
 void FontDecompressor::freeHotGroup() {
-  free(hotGroup);
+  uint8_t* group = hotGroup;
+  uint8_t* glyph = hotGlyphBuf;
   hotGroup = nullptr;
   hotGroupCapacity = 0;
   hotGroupFont = nullptr;
   hotGroupIndex = UINT16_MAX;
-  free(hotGlyphBuf);
   hotGlyphBuf = nullptr;
   hotGlyphBufCapacity = 0;
+  free(group);
+  free(glyph);
 }
 
 bool FontDecompressor::ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed) {
-  if (capacity >= needed) return true;
+  if (buf != nullptr && capacity >= needed) return true;
   // Grow-only, free-then-malloc: every caller fully rewrites the buffer after a grow, so the
   // old contents are dead -- freeing first gives the allocator its best shot on a tight heap.
-  free(buf);
+  uint8_t* old = buf;
+  buf = nullptr;
+  capacity = 0;
+  free(old);
+  if (needed == 0) return true;
   buf = static_cast<uint8_t*>(malloc(needed));  // owned by FontDecompressor, freed in freeHotGroup()
-  capacity = buf ? needed : 0;
-  return buf != nullptr;
+  if (!buf) return false;
+  capacity = needed;
+  return true;
 }
 
 uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex) {
@@ -71,14 +83,32 @@ uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t g
 
 bool FontDecompressor::decompressGroup(const EpdFontData* fontData, uint16_t groupIndex, uint8_t* outBuf,
                                        uint32_t outSize) {
+  if (!fontData || !fontData->groups || groupIndex >= fontData->groupCount || !outBuf || outSize == 0) {
+    return false;
+  }
   const EpdFontGroup& group = fontData->groups[groupIndex];
+  if (group.uncompressedSize == 0 || group.compressedSize == 0 || !fontData->bitmap) {
+    return false;
+  }
+  // Caller must pass a buffer at least as large as the declared uncompressed size.
+  if (outSize < group.uncompressedSize) {
+    LOG_ERR("FDC", "Group %u buffer too small (%u < %u)", groupIndex, static_cast<unsigned>(outSize),
+            static_cast<unsigned>(group.uncompressedSize));
+    return false;
+  }
 
   const uint32_t tDecomp = millis();
-  inflateReader.init(false);
-  inflateReader.setSource(&fontData->bitmap[group.compressedOffset], group.compressedSize);
-  if (!inflateReader.read(outBuf, outSize)) {
+  if (!inflateReader.init(false)) {
     stats.decompressTimeMs += millis() - tDecomp;
-    // Field crashes (#3): capture heap so crash reports / serial show pressure.
+    LOG_ERR("FDC", "Inflate init failed for group %u", groupIndex);
+    return false;
+  }
+  inflateReader.setSource(&fontData->bitmap[group.compressedOffset], group.compressedSize);
+  if (!inflateReader.read(outBuf, group.uncompressedSize)) {
+    stats.decompressTimeMs += millis() - tDecomp;
+    // Field crashes: capture heap so crash reports / serial show pressure.
+    // Issue #5: this can log with *healthy* free heap when the fail is a race or
+    // bad inflate state, not OOM — still soft-fail (return false), never abort.
     LOG_ERR("FDC", "Decompression failed for group %u (uncomp=%u comp=%u free=%u maxAlloc=%u)", groupIndex,
             static_cast<unsigned>(group.uncompressedSize), static_cast<unsigned>(group.compressedSize),
             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
@@ -206,8 +236,13 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     if (!decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
       // One retry after shedding page cache (inflate can fail under extreme heap pressure).
       freePageBuffer();
+      hotGroupFont = nullptr;
+      hotGroupIndex = UINT16_MAX;
       if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize) ||
           !decompressGroup(fontData, groupIndex, hotGroup, group.uncompressedSize)) {
+        // Leave hot group untagged so a partial buffer is never treated as valid.
+        hotGroupFont = nullptr;
+        hotGroupIndex = UINT16_MAX;
         stats.getBitmapTimeUs += micros() - tStart;
         return nullptr;
       }

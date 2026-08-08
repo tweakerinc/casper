@@ -1010,6 +1010,10 @@ void EpubReaderActivity::showExitSavingChrome() {
 }
 
 void EpubReaderActivity::onExit() {
+  // Stop any in-flight page paint before we free font/page caches (issue #5:
+  // multi_heap_free assert when FDC free raced a decompress on Back→Home).
+  activityManager.waitForRenderIdle();
+
   // Back→Home: "Saving..." so leave is not a frozen book page with no feedback.
   // Sleep / Quick Resume: never flash this — goToSleep paints moon/wallpaper next
   // and may snapshot the panel; a Saving popup ruins that path.
@@ -1037,6 +1041,8 @@ void EpubReaderActivity::onExit() {
       css->clear();
     }
   }
+  // Idle again after Saving chrome (uses fonts) before free.
+  activityManager.waitForRenderIdle();
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->clearCache();
   }
@@ -2597,6 +2603,8 @@ void EpubReaderActivity::leaveReaderToHome() {
   if (tryStartAutoKoUpload()) {
     return;
   }
+  // Finish reader multipass before Saving chrome / teardown (issue #5 heap free race).
+  activityManager.waitForRenderIdle();
   // Instant chrome before PopToHome is processed (onExit may run a tick later).
   showExitSavingChrome();
   // Prefer PopToHome over a fresh HomeActivity. Drain residual Back edges so

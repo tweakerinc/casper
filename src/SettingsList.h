@@ -381,7 +381,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY,
                            StrId::STR_SLEEP, StrId::STR_FORCE_REFRESH, StrId::STR_BROWSE_FILES,
                            StrId::STR_SCREENSHOT_BUTTON, StrId::STR_FOOTNOTES, StrId::STR_FILE_TRANSFER,
-                           StrId::STR_READING_STATS},
+                           StrId::STR_READING_STATS, StrId::STR_CLIPPINGS},
                           "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",

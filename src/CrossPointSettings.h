@@ -300,6 +300,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LP_MENU_FOOTNOTES = 8,
     LP_MENU_FILE_TRANSFER = 9,
     LP_MENU_READING_STATS = 10,
+    // Append-only: starts Create Clipping (word select) on long-press Confirm.
+    LP_MENU_CLIPPINGS = 11,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 

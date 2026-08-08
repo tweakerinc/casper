@@ -37,10 +37,10 @@ class ClipSelectionActivity final : public Activity {
 
  private:
   static constexpr size_t BUFFER_CHUNK_SIZE = 4096;
-  static constexpr size_t MAX_SAVED_BUFFER_CHUNKS = 16;
-  // Small fonts (10–12 pt) can put 400–700+ words on a dense page; 240 truncated
-  // selection so Down could not reach the bottom of the page.
-  static constexpr size_t MAX_READING_ORDER_WORDS = 768;
+  // Snapshot at most ~48 KB (12×4 KB). Full X4 FB is larger — skip snapshot then.
+  static constexpr size_t MAX_SAVED_BUFFER_CHUNKS = 12;
+  // Keep in sync with harvest caps (issue #4: 768 + SDCF mini-kern OOM'd X4).
+  static constexpr size_t MAX_READING_ORDER_WORDS = 400;
 
   std::vector<WordRef> words;
   int renderFontId = 0;
@@ -60,6 +60,12 @@ class ClipSelectionActivity final : public Activity {
   bool needsPageSwitch = false;
   bool hasSavedBuffer = false;
   bool usingFallbackFont = false;
+  // Opened via Long-Press Back/Menu (or residual edges): require Back/Confirm to
+  // go idle once and eat release edges so the open gesture cannot cancel/select.
+  bool ignoreBackUntilReleased = true;
+  bool ignoreConfirmUntilReleased = true;
+  // Extra time fence after onEnter (harvest can outlast the physical hold).
+  unsigned long openGuardUntilMs = 0;
   std::array<uint16_t, MAX_READING_ORDER_WORDS> readingOrder{};
   size_t readingOrderSize = 0;
 

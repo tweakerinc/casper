@@ -75,6 +75,19 @@ void ClipSelectionActivity::onEnter() {
     finish();
     return;
   }
+
+  // Long-Press Back/Menu → Clipping Tool: the open key may still be held, or the
+  // release may already be latched after a slow harvest. Always arm until idle
+  // (and a short time fence) so residual edges cannot cancel or Select.
+  using Button = MappedInputManager::Button;
+  ignoreBackUntilReleased = true;
+  ignoreConfirmUntilReleased = true;
+  openGuardUntilMs = millis() + 450UL;
+  (void)mappedInput.wasPressed(Button::Back);
+  (void)mappedInput.wasReleased(Button::Back);
+  (void)mappedInput.wasPressed(Button::Confirm);
+  (void)mappedInput.wasReleased(Button::Confirm);
+
   requestUpdate();
 }
 
@@ -91,23 +104,42 @@ void ClipSelectionActivity::onExit() {
 }
 
 bool ClipSelectionActivity::allocateSavedBuffer() {
-  savedBufferSize = renderer.getBufferSize();
-  const size_t chunkCount = (savedBufferSize + BUFFER_CHUNK_SIZE - 1) / BUFFER_CHUNK_SIZE;
+  // Snapshot is optional. Under pressure (issue #4) always re-render pages instead
+  // of holding a second full frame buffer + word list + SD font mini data.
+  savedBufferSize = 0;
   savedBufferChunkCount = 0;
+  hasSavedBuffer = false;
 
-  if (chunkCount > savedBufferChunks.size()) {
-    LOG_ERR("CLIP", "Framebuffer snapshot needs %u chunks; using rerender fallback", static_cast<unsigned>(chunkCount));
-    savedBufferSize = 0;
+  const size_t fbSize = renderer.getBufferSize();
+  const uint8_t* fb = renderer.getFrameBuffer();
+  if (fb == nullptr || fbSize == 0) {
+    LOG_DBG("CLIP", "No framebuffer; clip UI will re-render pages");
     return true;
   }
 
+  const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  // Need contiguous room for one chunk + headroom for page load / paint.
+  if (maxAlloc < BUFFER_CHUNK_SIZE + 24U * 1024U || freeHeap < fbSize + 40U * 1024U) {
+    LOG_DBG("CLIP", "Skip FB snapshot free=%u maxAlloc=%u fb=%u", freeHeap, maxAlloc,
+            static_cast<unsigned>(fbSize));
+    return true;
+  }
+
+  const size_t chunkCount = (fbSize + BUFFER_CHUNK_SIZE - 1) / BUFFER_CHUNK_SIZE;
+  if (chunkCount > savedBufferChunks.size()) {
+    LOG_DBG("CLIP", "FB %u too large for snapshot (%u chunks); re-render", static_cast<unsigned>(fbSize),
+            static_cast<unsigned>(chunkCount));
+    return true;
+  }
+
+  savedBufferSize = fbSize;
   for (size_t i = 0; i < chunkCount; i++) {
     const size_t offset = i * BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BUFFER_CHUNK_SIZE, savedBufferSize - offset);
     auto chunk = makeUniqueNoThrow<uint8_t[]>(chunkSize);
     if (!chunk) {
-      LOG_ERR("CLIP", "OOM: clipping page snapshot chunk %u (%u bytes); using rerender fallback",
-              static_cast<unsigned>(i), static_cast<unsigned>(chunkSize));
+      LOG_ERR("CLIP", "OOM: snapshot chunk %u; re-render fallback", static_cast<unsigned>(i));
       resetSavedBufferChunks();
       savedBufferSize = 0;
       return true;
@@ -126,13 +158,21 @@ void ClipSelectionActivity::resetSavedBufferChunks() {
 }
 
 void ClipSelectionActivity::storeCurrentBuffer() {
-  if (savedBufferChunkCount == 0) {
+  if (savedBufferChunkCount == 0 || savedBufferSize == 0) {
     hasSavedBuffer = false;
     return;
   }
 
   const uint8_t* frameBuffer = renderer.getFrameBuffer();
+  if (frameBuffer == nullptr) {
+    hasSavedBuffer = false;
+    return;
+  }
   for (size_t i = 0; i < savedBufferChunkCount; i++) {
+    if (!savedBufferChunks[i]) {
+      hasSavedBuffer = false;
+      return;
+    }
     const size_t offset = i * BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BUFFER_CHUNK_SIZE, savedBufferSize - offset);
     memcpy(savedBufferChunks[i].get(), frameBuffer + offset, chunkSize);
@@ -141,10 +181,12 @@ void ClipSelectionActivity::storeCurrentBuffer() {
 }
 
 void ClipSelectionActivity::restoreSavedBuffer() const {
-  if (!hasSavedBuffer) return;
+  if (!hasSavedBuffer || savedBufferChunkCount == 0) return;
 
   uint8_t* frameBuffer = renderer.getFrameBuffer();
+  if (frameBuffer == nullptr) return;
   for (size_t i = 0; i < savedBufferChunkCount; i++) {
+    if (!savedBufferChunks[i]) return;
     const size_t offset = i * BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BUFFER_CHUNK_SIZE, savedBufferSize - offset);
     memcpy(frameBuffer + offset, savedBufferChunks[i].get(), chunkSize);
@@ -190,6 +232,34 @@ void ClipSelectionActivity::loop() {
   const int total = static_cast<int>(readingOrderSize);
   using Button = MappedInputManager::Button;
 
+  // Drain residual open-gesture (long-press Back/Confirm) before treating edges.
+  // Always consume wasReleased while latching — release may have fired before
+  // onEnter (slow word harvest) when isPressed was already false.
+  if (ignoreBackUntilReleased) {
+    if (!mappedInput.isPressed(Button::Back)) {
+      ignoreBackUntilReleased = false;
+    }
+    (void)mappedInput.wasReleased(Button::Back);
+    (void)mappedInput.wasPressed(Button::Back);
+  }
+  if (ignoreConfirmUntilReleased) {
+    if (!mappedInput.isPressed(Button::Confirm)) {
+      ignoreConfirmUntilReleased = false;
+    }
+    (void)mappedInput.wasReleased(Button::Confirm);
+    (void)mappedInput.wasPressed(Button::Confirm);
+  }
+  const bool openGuardActive = openGuardUntilMs != 0 && millis() < openGuardUntilMs;
+  if (openGuardActive) {
+    (void)mappedInput.wasReleased(Button::Back);
+    (void)mappedInput.wasReleased(Button::Confirm);
+  } else {
+    openGuardUntilMs = 0;
+  }
+  // While waiting for the open hold / guard to end, still allow L/R/U/D navigation.
+  const bool confirmReady = !ignoreConfirmUntilReleased && !openGuardActive;
+  const bool backReady = !ignoreBackUntilReleased && !openGuardActive;
+
   auto moveCursor = [this](const int nextOrderIdx) {
     if (nextOrderIdx == cursorIdx || nextOrderIdx < 0 || nextOrderIdx >= static_cast<int>(readingOrderSize)) return;
     const int previousPage = words[readingOrder[cursorIdx]].pageIdx;
@@ -217,7 +287,7 @@ void ClipSelectionActivity::loop() {
   buttonNavigator.onRelease({Button::Up}, [this, &moveCursor] { moveCursor(lineEndBackward(cursorIdx)); });
   buttonNavigator.onContinuous({Button::Up}, [this, &moveCursor] { moveCursor(lineEndBackward(cursorIdx)); });
 
-  if (mappedInput.wasReleased(Button::Confirm)) {
+  if (confirmReady && mappedInput.wasReleased(Button::Confirm)) {
     if (startMarkIdx == -1) {
       startMarkIdx = cursorIdx;
       requestUpdate();
@@ -235,7 +305,7 @@ void ClipSelectionActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(Button::Back)) {
+  if (backReady && mappedInput.wasReleased(Button::Back)) {
     if (startMarkIdx != -1) {
       startMarkIdx = -1;
       requestUpdate();
@@ -282,17 +352,14 @@ bool ClipSelectionActivity::switchToPage(const int pageIdx) {
     return false;
   }
 
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    auto scope = fcm->createPrewarmScope();
-    // Scan pass for glyph prewarm (same pattern as EpubReaderActivity::renderContents).
-    page->render(renderer, renderFontId, marginLeft, marginTop);
-    scope.endScanAndPrewarm();
-    renderer.clearScreen();
-    page->render(renderer, renderFontId, marginLeft, marginTop);
-  } else {
-    renderer.clearScreen();
-    page->render(renderer, renderFontId, marginLeft, marginTop);
+  // Single paint only — no SD mini-kern prewarm scan (issue #4 OOM path).
+  // Highlights are dither overlays on snapshotted or re-rendered glyphs.
+  if (renderer.isSdCardFont(renderFontId) && ESP.getMaxAllocHeap() < 28U * 1024U) {
+    useFallbackFont("switchToPage low maxAlloc");
   }
+
+  renderer.clearScreen();
+  page->render(renderer, renderFontId, marginLeft, marginTop);
 
   storeCurrentBuffer();
   currentDisplayPage = pageIdx;

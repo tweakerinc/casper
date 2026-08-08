@@ -496,13 +496,13 @@ ReaderViewportLayout computeReaderViewportLayout(GfxRenderer& renderer, const bo
 
 // Harvest page words for clip selection. Returns false if nothing usable.
 // Cap by free heap so vector::reserve / string growth never abort() under -fno-exceptions.
+// Clipping harvest: prefer current page, tight heap caps. SD mini-kern prewarm is
+// skipped here — issue #4 (X4 OOM after 768-word harvest + SDCF kern alloc fail).
 bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub, const int currentSpineIndex,
                             const bool automaticPageTurnActive, ReaderViewportLayout& layout, int& readerFontId,
                             int& startPage, std::vector<WordRef>& words, std::string* bookTitle, std::string* author,
-                            std::string* chapterTitle, const char* logTag, const int maxPages = 3,
-                            // Match ClipSelectionActivity::MAX_READING_ORDER_WORDS so harvest
-                            // is not the tighter gate on small-font full-page clips.
-                            const size_t maxWordsCap = 768, const uint32_t headroomBytes = 16U * 1024U) {
+                            std::string* chapterTitle, const char* logTag, const int maxPages = 1,
+                            const size_t maxWordsCap = 320, const uint32_t headroomBytes = 28U * 1024U) {
   layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
   readerFontId = SETTINGS.getReaderFontId();
   const int lineHeight = renderer.getLineHeight(readerFontId);
@@ -511,13 +511,36 @@ bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub,
     LOG_ERR(logTag, "No pages available for word selection (page=%d count=%d)", startPage, section.pageCount);
     return false;
   }
-  const int pagesToLoad = std::min(maxPages, section.pageCount - startPage);
-  std::array<uint16_t, 3> pageWordCounts{};
-  const size_t requested = maxWordsCap > 0 ? maxWordsCap : 768;
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  // Refuse early when contiguous heap cannot hold a modest selection + paint.
+  if (maxAlloc < 20U * 1024U || freeHeap < 36U * 1024U) {
+    LOG_ERR(logTag, "Heap too low for clipping free=%u maxAlloc=%u", freeHeap, maxAlloc);
+    section.currentPage = startPage;
+    return false;
+  }
+
+  int pagesBudget = maxPages;
+  size_t requested = maxWordsCap > 0 ? maxWordsCap : 320;
+  // Scale pages/words with headroom (never approach the old 768 peak on thin heap).
+  if (maxAlloc < 40U * 1024U || freeHeap < 56U * 1024U) {
+    pagesBudget = 1;
+    requested = std::min(requested, static_cast<size_t>(200));
+  } else if (maxAlloc < 56U * 1024U || freeHeap < 72U * 1024U) {
+    pagesBudget = 1;
+    requested = std::min(requested, static_cast<size_t>(280));
+  } else if (maxAlloc >= 72U * 1024U && freeHeap >= 96U * 1024U) {
+    pagesBudget = std::min(pagesBudget, 2);
+    requested = std::min(requested, static_cast<size_t>(400));
+  } else {
+    pagesBudget = 1;
+    requested = std::min(requested, static_cast<size_t>(320));
+  }
+  pagesBudget = std::max(1, std::min(pagesBudget, 3));
+  const int pagesToLoad = std::min(pagesBudget, section.pageCount - startPage);
+  std::array<uint16_t, 3> pageWordCounts{};
   constexpr size_t kBytesPerWordRef = sizeof(WordRef) + 8;
-  constexpr size_t kBytesPerWordExtra = 40;
+  constexpr size_t kBytesPerWordExtra = 48;
   size_t byContig = 0;
   if (maxAlloc > headroomBytes) {
     byContig = static_cast<size_t>((maxAlloc - headroomBytes) / kBytesPerWordRef);
@@ -535,12 +558,18 @@ bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub,
     return false;
   }
   if (maxSelectableWords < requested) {
-    LOG_DBG(logTag, "Word harvest capped to %u (heap free=%u maxAlloc=%u)", static_cast<unsigned>(maxSelectableWords),
-            freeHeap, maxAlloc);
+    LOG_DBG(logTag, "Word harvest capped to %u (heap free=%u maxAlloc=%u pages=%d)",
+            static_cast<unsigned>(maxSelectableWords), freeHeap, maxAlloc, pagesToLoad);
   }
   words.clear();
-  words.reserve(maxSelectableWords);
+  if (words.capacity() < maxSelectableWords) {
+    words.reserve(maxSelectableWords);
+  }
   bool wordLimitLogged = false;
+
+  // Never prewarm SD mini-kern during harvest — that is what OOMs after a full
+  // word list (issue #4). Paint path uses advances already measured or fallback face.
+  const bool prewarmSdFonts = false;
 
   for (int pageIdx = 0; pageIdx < pagesToLoad; ++pageIdx) {
     section.currentPage = startPage + pageIdx;
@@ -554,7 +583,7 @@ bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub,
 
       const auto& block = *line.getBlock();
       const uint16_t count = block.wordCount();
-      if (renderer.isSdCardFont(readerFontId) && count > 0) {
+      if (prewarmSdFonts && renderer.isSdCardFont(readerFontId) && count > 0) {
         for (uint16_t i = 0; i < count; ++i) {
           const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(block.wordStyle(i)) & 0x03));
           renderer.ensureSdCardFontReady(readerFontId, block.wordText(i), styleMask);
@@ -1296,118 +1325,101 @@ void EpubReaderActivity::handleClippingJump(const ClippingJumpResult& clipping) 
   section.reset();
 }
 
-bool EpubReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
+bool EpubReaderActivity::fireMenuShortcut(const uint8_t function) {
   switch (function) {
     case CrossPointSettings::LP_MENU_BOOKMARK:
-      // Hold ~0.4s drops a bookmark at the current page.
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showBookmarkMessage) {
-        addBookmark();
-        showBookmarkMessage = true;
-        suppressRelease = true;
-        bookmarkMessageTime = millis();
-        requestUpdate();
-        return true;
-      }
-      break;
+      if (showBookmarkMessage) return false;
+      addBookmark();
+      showBookmarkMessage = true;
+      bookmarkMessageTime = millis();
+      requestUpdate();
+      return true;
     case CrossPointSettings::LP_MENU_KOSYNC:
-      // Hold ~1s launches KOReader sync. If sync can't run, fall through (no suppress).
-      if (mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
-        if (launchKOReaderSync()) {
-          suppressRelease = true;
-          return true;
-        }
-      }
-      break;
+      return launchKOReaderSync();
     case CrossPointSettings::LP_MENU_DICTIONARY:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showDictionaryMessage) {
-        suppressRelease = true;
-        openDictionaryWordSelect();
-        return true;
-      }
-      break;
+      if (showDictionaryMessage) return false;
+      openDictionaryWordSelect();
+      return true;
     case CrossPointSettings::LP_MENU_SLEEP:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        activityManager.goToSleep();
-        return true;
-      }
-      break;
+      activityManager.goToSleep();
+      return true;
     case CrossPointSettings::LP_MENU_FORCE_REFRESH:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        forcedRefreshPending = true;
-        pagesUntilFullRefresh = 0;
-        requestUpdate();
-        return true;
-      }
-      break;
+      forcedRefreshPending = true;
+      pagesUntilFullRefresh = 0;
+      requestUpdate();
+      return true;
     case CrossPointSettings::LP_MENU_FILE_BROWSER:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        activityManager.goToFileBrowser();
-        return true;
-      }
-      break;
+      activityManager.goToFileBrowser();
+      return true;
     case CrossPointSettings::LP_MENU_SCREENSHOT:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        pendingScreenshot = true;
-        requestUpdate();
-        return true;
-      }
-      break;
+      pendingScreenshot = true;
+      requestUpdate();
+      return true;
     case CrossPointSettings::LP_MENU_FOOTNOTES:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        if (footnoteDepth > 0) {
-          restoreSavedPosition();
-        } else if (currentPageFootnotes.size() == 1) {
-          navigateToHref(currentPageFootnotes[0].href, true);
-        } else if (currentPageFootnotes.size() > 1) {
-          startActivityForResult(
-              std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
-              [this](const ActivityResult& result) {
-                if (result.isCancelled) return;
-                if (const auto* fn = std::get_if<FootnoteResult>(&result.data)) {
-                  navigateToHref(fn->href, true);
-                }
-              });
-        }
-        return true;
+      if (footnoteDepth > 0) {
+        restoreSavedPosition();
+      } else if (currentPageFootnotes.size() == 1) {
+        navigateToHref(currentPageFootnotes[0].href, true);
+      } else if (currentPageFootnotes.size() > 1) {
+        startActivityForResult(
+            std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
+            [this](const ActivityResult& result) {
+              if (result.isCancelled) return;
+              if (const auto* fn = std::get_if<FootnoteResult>(&result.data)) {
+                navigateToHref(fn->href, true);
+              }
+            });
       }
-      break;
+      return true;
     case CrossPointSettings::LP_MENU_FILE_TRANSFER:
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        activityManager.goToFileTransfer();
-        return true;
-      }
-      break;
+      activityManager.goToFileTransfer();
+      return true;
     case CrossPointSettings::LP_MENU_READING_STATS:
-      if (!SETTINGS.readingStatsTrackingEnabled()) break;
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        openBookStats();
-        return true;
-      }
-      break;
+      if (!SETTINGS.readingStatsTrackingEnabled()) return false;
+      openBookStats();
+      return true;
     case CrossPointSettings::LP_MENU_CLIPPINGS:
       // Clipping Tool (word select) — not the stored-clippings list.
-      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-        suppressRelease = true;
-        startClipSelection();
-        return true;
-      }
-      break;
+      startClipSelection();
+      return true;
     case CrossPointSettings::LP_MENU_DISABLED:
     default:
-      break;
+      return false;
   }
-  return false;
+}
+
+bool EpubReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
+  if (function == CrossPointSettings::LP_MENU_DISABLED) return false;
+  const unsigned long needHold =
+      (function == CrossPointSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+  if (mappedInput.getHeldTime() < needHold) return false;
+  if (!fireMenuShortcut(function)) return false;
+  suppressRelease = true;
+  pendingConfirmMenuOpen = false;  // cancel deferred single-tap menu
+  return true;
 }
 
 void EpubReaderActivity::startClipSelection() {
   if (!section || !epub) {
+    resumeReadingStatsClock();
+    requestUpdate();
+    return;
+  }
+
+  // Drop SD glyph/mini-kern caches before harvest so clipping has contiguous heap
+  // (issue #4: OOM after 768-word harvest + SDCF mini kern).
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  glyphCacheSpine = -1;
+  glyphCachePage = -1;
+
+  const uint32_t freeBefore = ESP.getFreeHeap();
+  const uint32_t maxBefore = ESP.getMaxAllocHeap();
+  if (maxBefore < 20U * 1024U || freeBefore < 36U * 1024U) {
+    LOG_ERR("CLIP", "Refuse clip open free=%u maxAlloc=%u", freeBefore, maxBefore);
+    BookActions::drawToast(renderer, tr(STR_CLIPPING_FAILED));
+    delay(800);
     resumeReadingStatsClock();
     requestUpdate();
     return;
@@ -1430,6 +1442,8 @@ void EpubReaderActivity::startClipSelection() {
     }
     if (!harvestSelectableWords(renderer, *section, *epub, currentSpineIndex, automaticPageTurnActive, layout,
                                 readerFontId, startPage, words, &bookTitle, &author, &chapterTitle, "CLIP")) {
+      BookActions::drawToast(renderer, tr(STR_CLIPPING_FAILED));
+      delay(800);
       resumeReadingStatsClock();
       requestUpdate();
       return;
@@ -1438,15 +1452,25 @@ void EpubReaderActivity::startClipSelection() {
 
   if (words.empty()) {
     LOG_ERR("CLIP", "No selectable words on current EPUB page");
+    BookActions::drawToast(renderer, tr(STR_CLIPPING_FAILED));
+    delay(800);
     resumeReadingStatsClock();
     requestUpdate();
     return;
+  }
+
+  // Prefer builtin face when SD fonts already struggle under low maxAlloc.
+  if (renderer.isSdCardFont(readerFontId) && ESP.getMaxAllocHeap() < 32U * 1024U) {
+    LOG_DBG("CLIP", "Using builtin face for clip UI (maxAlloc=%u)", static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    readerFontId = UI_12_FONT_ID;
   }
 
   auto clipSelection = makeUniqueNoThrow<ClipSelectionActivity>(
       renderer, mappedInput, std::move(words), readerFontId, *section, startPage, layout.marginTop, layout.marginLeft);
   if (!clipSelection) {
     LOG_ERR("CLIP", "OOM: failed to allocate clip selection activity");
+    BookActions::drawToast(renderer, tr(STR_CLIPPING_FAILED));
+    delay(800);
     resumeReadingStatsClock();
     requestUpdate();
     return;
@@ -1755,6 +1779,13 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Deferred single Confirm after double-press window expires → open reader menu.
+  if (pendingConfirmMenuOpen &&
+      (millis() - lastConfirmReleaseMs) >= ReaderUtils::DOUBLE_PRESS_MENU_MS) {
+    pendingConfirmMenuOpen = false;
+    openReaderMenu();
+  }
+
   // Enter reader menu on short-press Confirm / top-edge swipe.
   // Long-press handlers set ignoreNextConfirmRelease so the release after a hold
   // does not open the menu. If a child activity (dictionary, sync, …) ate that
@@ -1766,8 +1797,28 @@ void EpubReaderActivity::loop() {
     } else if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
       ignoreNextConfirmRelease = false;
     }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-             ReaderUtils::isTouchMenuGesture(mappedInput)) {
+  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    const uint8_t dbl = SETTINGS.doublePressMenuFunction;
+    if (dbl != CrossPointSettings::LP_MENU_DISABLED) {
+      // Second Confirm release within window → shortcut (e.g. Clipping Tool).
+      if (pendingConfirmMenuOpen &&
+          (millis() - lastConfirmReleaseMs) < ReaderUtils::DOUBLE_PRESS_MENU_MS) {
+        pendingConfirmMenuOpen = false;
+        if (fireMenuShortcut(dbl)) {
+          return;
+        }
+        // Shortcut no-op (e.g. stats off) — open menu as fallback.
+        openReaderMenu();
+        return;
+      }
+      // First tap: wait for possible double; menu opens after DOUBLE_PRESS_MENU_MS.
+      pendingConfirmMenuOpen = true;
+      lastConfirmReleaseMs = millis();
+    } else {
+      openReaderMenu();
+    }
+  } else if (ReaderUtils::isTouchMenuGesture(mappedInput)) {
+    pendingConfirmMenuOpen = false;
     openReaderMenu();
   }
 

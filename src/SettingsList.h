@@ -117,10 +117,11 @@ inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CrossPointS
       A::LP_MENU_FILE_BROWSER, A::LP_MENU_FILE_TRANSFER, A::LP_MENU_READING_STATS,
   };
   static constexpr StrId kLabels[] = {
-      StrId::STR_DISABLED,         StrId::STR_DICTIONARY,    StrId::STR_BOOKMARK_OPTION,
-      StrId::STR_SCREENSHOT_BUTTON, StrId::STR_FOOTNOTES,    StrId::STR_CLIPPING_TOOL,
-      StrId::STR_KOSYNC,           StrId::STR_SLEEP,         StrId::STR_FORCE_REFRESH,
-      StrId::STR_BROWSE_FILES,     StrId::STR_FILE_TRANSFER, StrId::STR_READING_STATS,
+      // Same "Off" caption as power / side long-press (not STR_DISABLED / STR_IGNORE).
+      StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_DICTIONARY,    StrId::STR_BOOKMARK_OPTION,
+      StrId::STR_SCREENSHOT_BUTTON,       StrId::STR_FOOTNOTES,     StrId::STR_CLIPPING_TOOL,
+      StrId::STR_KOSYNC,                  StrId::STR_SLEEP,         StrId::STR_FORCE_REFRESH,
+      StrId::STR_BROWSE_FILES,            StrId::STR_FILE_TRANSFER, StrId::STR_READING_STATS,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
   static_assert(kCount == CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
@@ -148,15 +149,16 @@ inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CrossPointS
 
 // Short / Long power-button action picker.
 // Storage enum SHORT_PWRBTN is append-only (settings.json indices stay valid).
-// Display order (product): Ignore, Sleep, Quick Resume, Refresh Screen, Page Turn, Footnotes.
+// Display order (product): Off, Sleep, Quick Resume, Refresh Screen, Page Turn, Footnotes.
 inline SettingInfo buildPwrBtnSetting(StrId nameId, uint8_t CrossPointSettings::* field, const char* key) {
   using A = CrossPointSettings::SHORT_PWRBTN;
   static constexpr A kOrder[] = {
       A::IGNORE, A::SLEEP, A::PWR_QUICK_RESUME, A::FORCE_REFRESH, A::PAGE_TURN, A::FOOTNOTES,
   };
   static constexpr StrId kLabels[] = {
-      StrId::STR_IGNORE,        StrId::STR_SLEEP,     StrId::STR_QUICK_RESUME,
-      StrId::STR_FORCE_REFRESH, StrId::STR_PAGE_TURN, StrId::STR_FOOTNOTES,
+      // IGNORE storage value; caption unified to "Off" with other control pickers.
+      StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_SLEEP,     StrId::STR_QUICK_RESUME,
+      StrId::STR_FORCE_REFRESH,           StrId::STR_PAGE_TURN, StrId::STR_FOOTNOTES,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
   static_assert(kCount == CrossPointSettings::SHORT_PWRBTN_COUNT);

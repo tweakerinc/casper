@@ -75,6 +75,8 @@ class EpubReaderActivity final : public Activity {
   // session reading totals and page-pace samples.
   unsigned long statsPauseStartMs = 0UL;
   bool ignoreNextConfirmRelease = false;
+  // After long-press Back shortcut, ignore the release so we do not also leave to Home.
+  bool ignoreNextBackRelease = false;
   bool currentPageBookmarked = false;
   // Idle-time glyph prewarm: after a page settles, scan the LIKELY next page
   // (scan mode draws nothing) and load glyphs into the font cache (kept until
@@ -274,6 +276,9 @@ class EpubReaderActivity final : public Activity {
   void openReaderMenu();
   void openDictionaryWordSelect();
   void startClipSelection();
+  // Shared long-press Confirm / Back actions (LONG_PRESS_MENU_FUNCTION). Returns true if
+  // the caller should return from loop(); sets suppressRelease when short release must be ignored.
+  bool tryLongPressShortcut(uint8_t function, bool& suppressRelease);
   void handleClippingJump(const ClippingJumpResult& clipping);
   void openBookStats();
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op

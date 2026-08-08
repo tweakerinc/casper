@@ -261,8 +261,12 @@ void ClipSelectionActivity::render(RenderLock&&) {
 
   drawHighlights();
 
+  // mapLabels(back, confirm, previous, next): previous/next caption the *Up/Down*
+  // functions; Left/Right always get true L/R names. Passing Left/Right here made
+  // remapped front Up/Down show "Left"/"Right" while moving by line (clipping
+  // uses Up/Down for line jump, Left/Right for word step — same as dictionary).
   const auto confirmLabel = startMarkIdx == -1 ? tr(STR_SELECT) : tr(STR_DONE);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   UiGhostPolicy::displayMenuFrame(renderer);

@@ -324,8 +324,9 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // Short/long power buttons use DynamicEnum (no valuePtr) — persist storage values.
   doc["shortPwrBtn"] = shortPwrBtn;
   doc["longPwrBtn"] = longPwrBtn;
-  // Long-Press Menu uses DynamicEnum (display order ≠ storage index).
+  // Long-Press Menu / Back use DynamicEnum (display order ≠ storage index).
   doc["longPressMenuFunction"] = longPressMenuFunction;
+  doc["longPressBackFunction"] = longPressBackFunction;
   // Time-left mode is in SettingsList when STR_TIME_LEFT is wired; also persist manually
   // so older SettingsList builds without the enum still keep the value.
   doc["statusBarTimeLeft"] = statusBarTimeLeft;
@@ -1065,11 +1066,21 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (!doc["longPwrBtn"].isNull()) {
     longPwrBtn = clamp(doc["longPwrBtn"] | (uint8_t)FORCE_REFRESH, SHORT_PWRBTN_COUNT, (uint8_t)FORCE_REFRESH);
   }
-  // Long-Press Menu DynamicEnum — load storage enum (not display index).
+  // Long-Press Menu / Back DynamicEnum — load storage enum (not display index).
   if (!doc["longPressMenuFunction"].isNull()) {
     longPressMenuFunction =
         clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DICTIONARY, LONG_PRESS_MENU_FUNCTION_COUNT,
               (uint8_t)LP_MENU_DICTIONARY);
+  }
+  if (!doc["longPressBackFunction"].isNull()) {
+    longPressBackFunction =
+        clamp(doc["longPressBackFunction"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT,
+              (uint8_t)LP_MENU_DISABLED);
+  }
+  // Side long-press: retired value 3 (Clipping Tool) → Off.
+  if (longPressButtonBehavior >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT ||
+      longPressButtonBehavior == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) {
+    longPressButtonBehavior = OFF;
   }
 
   if (needsResave) {

@@ -105,9 +105,10 @@ inline SettingInfo buildSleepScreenSetting() {
       .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
 }
 
-// Long-Press Menu (Confirm hold while reading). Storage LONG_PRESS_MENU_FUNCTION is
-// append-only; display order is product priority (Disabled / Dictionary first…).
-inline SettingInfo buildLongPressMenuSetting() {
+// Long-Press Menu / Long-Press Back (Confirm or Back hold while reading).
+// Storage LONG_PRESS_MENU_FUNCTION is append-only; display order is product priority.
+inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CrossPointSettings::* field, const char* key,
+                                               uint8_t fallbackDisplayIdx = 0) {
   using A = CrossPointSettings::LONG_PRESS_MENU_FUNCTION;
   static constexpr A kOrder[] = {
       A::LP_MENU_DISABLED,     A::LP_MENU_DICTIONARY,    A::LP_MENU_BOOKMARK,
@@ -130,19 +131,19 @@ inline SettingInfo buildLongPressMenuSetting() {
   for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
 
   return SettingInfo::DynamicEnum(
-      StrId::STR_LONG_PRESS_MENU, std::move(labels),
-      [] {
-        const auto mode = static_cast<A>(SETTINGS.longPressMenuFunction);
+      nameId, std::move(labels),
+      [field, fallbackDisplayIdx] {
+        const auto mode = static_cast<A>(SETTINGS.*field);
         for (uint8_t i = 0; i < kCount; ++i) {
           if (kOrder[i] == mode) return i;
         }
-        return static_cast<uint8_t>(1);  // Dictionary
+        return fallbackDisplayIdx < kCount ? fallbackDisplayIdx : static_cast<uint8_t>(0);
       },
-      [](uint8_t displayIdx) {
-        if (displayIdx >= kCount) displayIdx = 1;
-        SETTINGS.longPressMenuFunction = static_cast<uint8_t>(kOrder[displayIdx]);
+      [field, fallbackDisplayIdx](uint8_t displayIdx) {
+        if (displayIdx >= kCount) displayIdx = fallbackDisplayIdx < kCount ? fallbackDisplayIdx : 0;
+        SETTINGS.*field = static_cast<uint8_t>(kOrder[displayIdx]);
       },
-      "longPressMenuFunction", StrId::STR_CAT_CONTROLS);
+      key, StrId::STR_CAT_CONTROLS);
 }
 
 // Short / Long power-button action picker.
@@ -415,10 +416,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // Long-press side buttons (chapter skip / flip orientation) — directly under Long-Press Power.
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_CLIPPING_TOOL},
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
-        // Display order remapped (storage indices append-only) — see buildLongPressMenuSetting.
-        buildLongPressMenuSetting(),
+        // Same action list for Back hold and Confirm hold (storage indices append-only).
+        // Default display: Back → Disabled (0), Menu → Dictionary (1).
+        buildLongPressActionSetting(StrId::STR_LONG_PRESS_BACK, &CrossPointSettings::longPressBackFunction,
+                                    "longPressBackFunction", /*fallbackDisplayIdx=*/0),
+        buildLongPressActionSetting(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
+                                    "longPressMenuFunction", /*fallbackDisplayIdx=*/1),
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),

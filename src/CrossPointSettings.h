@@ -313,8 +313,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     OFF = 0,
     CHAPTER_SKIP = 1,
     ORIENTATION_CHANGE = 2,
-    // Opens Create Clipping word select (not the stored-clippings list).
-    CLIPPING_TOOL = 3,
+    // Retired: was Clipping Tool on side hold; kept so old settings.json index 3
+    // does not collide with a new meaning. Load clamps unknown → OFF.
+    LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3 = 3,
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 
@@ -508,6 +509,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Casper: open stock CrossPoint dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;
+  // Long-press Back while reading — same action enum as longPressMenuFunction.
+  // Default Disabled: short Back release still leaves to Home.
+  uint8_t longPressBackFunction = LP_MENU_DISABLED;
   // UI Theme. Factory default Penumbra on both X3 and X4 (fresh SD / no settings file).
   // casperHomeMigrated still upgrades older saved themes once on load.
   uint8_t uiTheme = PENUMBRA;

@@ -1309,6 +1309,116 @@ void EpubReaderActivity::handleClippingJump(const ClippingJumpResult& clipping) 
   section.reset();
 }
 
+bool EpubReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
+  switch (function) {
+    case CrossPointSettings::LP_MENU_BOOKMARK:
+      // Hold ~0.4s drops a bookmark at the current page.
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showBookmarkMessage) {
+        addBookmark();
+        showBookmarkMessage = true;
+        suppressRelease = true;
+        bookmarkMessageTime = millis();
+        requestUpdate();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_KOSYNC:
+      // Hold ~1s launches KOReader sync. If sync can't run, fall through (no suppress).
+      if (mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
+        if (launchKOReaderSync()) {
+          suppressRelease = true;
+          return true;
+        }
+      }
+      break;
+    case CrossPointSettings::LP_MENU_DICTIONARY:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showDictionaryMessage) {
+        suppressRelease = true;
+        openDictionaryWordSelect();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_SLEEP:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        activityManager.goToSleep();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_FORCE_REFRESH:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        forcedRefreshPending = true;
+        pagesUntilFullRefresh = 0;
+        requestUpdate();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_FILE_BROWSER:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        activityManager.goToFileBrowser();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_SCREENSHOT:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        pendingScreenshot = true;
+        requestUpdate();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_FOOTNOTES:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        if (footnoteDepth > 0) {
+          restoreSavedPosition();
+        } else if (currentPageFootnotes.size() == 1) {
+          navigateToHref(currentPageFootnotes[0].href, true);
+        } else if (currentPageFootnotes.size() > 1) {
+          startActivityForResult(
+              std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
+              [this](const ActivityResult& result) {
+                if (result.isCancelled) return;
+                if (const auto* fn = std::get_if<FootnoteResult>(&result.data)) {
+                  navigateToHref(fn->href, true);
+                }
+              });
+        }
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_FILE_TRANSFER:
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        activityManager.goToFileTransfer();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_READING_STATS:
+      if (!SETTINGS.readingStatsTrackingEnabled()) break;
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        openBookStats();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_CLIPPINGS:
+      // Clipping Tool (word select) — not the stored-clippings list.
+      if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+        suppressRelease = true;
+        startClipSelection();
+        return true;
+      }
+      break;
+    case CrossPointSettings::LP_MENU_DISABLED:
+    default:
+      break;
+  }
+  return false;
+}
+
 void EpubReaderActivity::startClipSelection() {
   if (!section || !epub) {
     resumeReadingStatsClock();
@@ -1591,10 +1701,27 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  if (ReaderUtils::handleBackNavigation(
-          mappedInput, activityManager, epub ? epub->getPath().c_str() : "",
-          {this, [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->leaveReaderToHome(); }})) {
-    return;
+  // Long-press Back: same action list as Long-Press Menu. Default Disabled keeps
+  // short Back release → Home. After a long-press action, suppress that release.
+  if (ignoreNextBackRelease) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        !mappedInput.isPressed(MappedInputManager::Button::Back)) {
+      ignoreNextBackRelease = false;
+      (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
+      (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+    }
+  } else {
+    if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
+        SETTINGS.longPressBackFunction != CrossPointSettings::LP_MENU_DISABLED) {
+      if (tryLongPressShortcut(SETTINGS.longPressBackFunction, ignoreNextBackRelease)) {
+        return;
+      }
+    }
+    if (ReaderUtils::handleBackNavigation(
+            mappedInput, activityManager, epub ? epub->getPath().c_str() : "",
+            {this, [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->leaveReaderToHome(); }})) {
+      return;
+    }
   }
 
   // After Back has been sampled: finish recents/bookmarks/clippings/global stats.
@@ -1660,112 +1787,8 @@ void EpubReaderActivity::loop() {
 
   // Long-press Confirm runs the user-selected function (SETTINGS.longPressMenuFunction).
   if (mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-    switch (SETTINGS.longPressMenuFunction) {
-      case CrossPointSettings::LP_MENU_BOOKMARK:
-        // Hold ~0.4s drops a bookmark at the current page.
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showBookmarkMessage) {
-          addBookmark();
-          showBookmarkMessage = true;
-          ignoreNextConfirmRelease = true;  // Prevent accidental menu open after adding bookmark
-          bookmarkMessageTime = millis();
-          requestUpdate();
-        }
-        break;
-      case CrossPointSettings::LP_MENU_KOSYNC:
-        // Hold ~1s launches KOReader sync. If sync can't run (no credentials stored), fall
-        // through so the normal Confirm-release still opens the reader menu.
-        if (mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
-          if (launchKOReaderSync()) {
-            ignoreNextConfirmRelease = true;  // sync launched or error shown; suppress menu open
-            return;
-          }
-        }
-        break;
-      case CrossPointSettings::LP_MENU_DICTIONARY:
-        // Hold ~0.4s starts dictionary word selection on the current page.
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showDictionaryMessage) {
-          ignoreNextConfirmRelease = true;  // Prevent menu open on the release that follows
-          openDictionaryWordSelect();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_SLEEP:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          activityManager.goToSleep();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_FORCE_REFRESH:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          forcedRefreshPending = true;
-          pagesUntilFullRefresh = 0;
-          requestUpdate();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_FILE_BROWSER:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          activityManager.goToFileBrowser();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_SCREENSHOT:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          pendingScreenshot = true;
-          requestUpdate();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_FOOTNOTES:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          if (footnoteDepth > 0) {
-            restoreSavedPosition();
-          } else if (currentPageFootnotes.size() == 1) {
-            navigateToHref(currentPageFootnotes[0].href, true);
-          } else if (currentPageFootnotes.size() > 1) {
-            startActivityForResult(
-                std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
-                [this](const ActivityResult& result) {
-                  if (result.isCancelled) return;
-                  if (const auto* fn = std::get_if<FootnoteResult>(&result.data)) {
-                    navigateToHref(fn->href, true);
-                  }
-                });
-          }
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_FILE_TRANSFER:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          activityManager.goToFileTransfer();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_READING_STATS:
-        if (!SETTINGS.readingStatsTrackingEnabled()) break;
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          openBookStats();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_CLIPPINGS:
-        // Hold ~0.4s opens Clipping Tool (word select) — not the stored-clippings list.
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          ignoreNextConfirmRelease = true;
-          startClipSelection();
-          return;
-        }
-        break;
-      case CrossPointSettings::LP_MENU_DISABLED:
-      default:
-        break;
+    if (tryLongPressShortcut(SETTINGS.longPressMenuFunction, ignoreNextConfirmRelease)) {
+      return;
     }
   }
 
@@ -2032,12 +2055,6 @@ void EpubReaderActivity::loop() {
                       : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
     applyOrientation(newOrientation);
     requestUpdate();
-    return;
-  }
-
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CLIPPING_TOOL) {
-    // Side hold opens Clipping Tool (create selection), not View Clippings.
-    startClipSelection();
     return;
   }
 

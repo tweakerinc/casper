@@ -2,7 +2,8 @@ name: CI (build)
 
 on:
   push:
-    branches: [master]
+    # Casper uses main; keep master for older forks / renames.
+    branches: [main, master]
   pull_request:
 
 permissions:

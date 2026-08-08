@@ -308,11 +308,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Hide battery percentage
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
-  // Page turn button long press behavior
+  // Page turn button long press behavior (append-only storage indices).
   enum LONG_PRESS_BUTTON_BEHAVIOR {
     OFF = 0,
     CHAPTER_SKIP = 1,
     ORIENTATION_CHANGE = 2,
+    // Opens Create Clipping word select (not the stored-clippings list).
+    CLIPPING_TOOL = 3,
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 

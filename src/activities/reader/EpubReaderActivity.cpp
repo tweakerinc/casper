@@ -1756,7 +1756,7 @@ void EpubReaderActivity::loop() {
         }
         break;
       case CrossPointSettings::LP_MENU_CLIPPINGS:
-        // Hold ~0.4s starts Create Clipping (word select) on the current page.
+        // Hold ~0.4s opens Clipping Tool (word select) — not the stored-clippings list.
         if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
           ignoreNextConfirmRelease = true;
           startClipSelection();
@@ -2032,6 +2032,12 @@ void EpubReaderActivity::loop() {
                       : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
     applyOrientation(newOrientation);
     requestUpdate();
+    return;
+  }
+
+  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CLIPPING_TOOL) {
+    // Side hold opens Clipping Tool (create selection), not View Clippings.
+    startClipSelection();
     return;
   }
 

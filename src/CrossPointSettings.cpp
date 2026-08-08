@@ -324,6 +324,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // Short/long power buttons use DynamicEnum (no valuePtr) — persist storage values.
   doc["shortPwrBtn"] = shortPwrBtn;
   doc["longPwrBtn"] = longPwrBtn;
+  // Long-Press Menu uses DynamicEnum (display order ≠ storage index).
+  doc["longPressMenuFunction"] = longPressMenuFunction;
   // Time-left mode is in SettingsList when STR_TIME_LEFT is wired; also persist manually
   // so older SettingsList builds without the enum still keep the value.
   doc["statusBarTimeLeft"] = statusBarTimeLeft;
@@ -1062,6 +1064,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
   if (!doc["longPwrBtn"].isNull()) {
     longPwrBtn = clamp(doc["longPwrBtn"] | (uint8_t)FORCE_REFRESH, SHORT_PWRBTN_COUNT, (uint8_t)FORCE_REFRESH);
+  }
+  // Long-Press Menu DynamicEnum — load storage enum (not display index).
+  if (!doc["longPressMenuFunction"].isNull()) {
+    longPressMenuFunction =
+        clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DICTIONARY, LONG_PRESS_MENU_FUNCTION_COUNT,
+              (uint8_t)LP_MENU_DICTIONARY);
   }
 
   if (needsResave) {

@@ -3,6 +3,8 @@ on:
   push:
     tags:
       - '*'
+  # Manual re-run without retagging (uses current default branch tip if dispatched).
+  workflow_dispatch:
 
 jobs:
   build-release:
@@ -32,16 +34,24 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Build CrossPoint
-        run: pio run -e gh_release
+      - name: Build Casper release
+        # gh_release must inherit base pre-scripts (gen_i18n, wolfssl patch, …).
+        # See platformio.ini [env:gh_release] extra_scripts comment.
+        run: |
+          set -euo pipefail
+          pio run -e gh_release | tee pio-release.log
+          ls -la .pio/build/gh_release/firmware.bin
+          ls -la dist/Casper-*.bin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: CrossPoint-${{ github.ref_name }}
+          name: Casper-${{ github.ref_name }}
           path: |
+            dist/Casper-*.bin
             .pio/build/gh_release/bootloader.bin
             .pio/build/gh_release/firmware.bin
             .pio/build/gh_release/firmware.elf
             .pio/build/gh_release/firmware.map
             .pio/build/gh_release/partitions.bin
+          if-no-files-found: error

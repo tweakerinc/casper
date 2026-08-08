@@ -105,6 +105,46 @@ inline SettingInfo buildSleepScreenSetting() {
       .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
 }
 
+// Long-Press Menu (Confirm hold while reading). Storage LONG_PRESS_MENU_FUNCTION is
+// append-only; display order is product priority (Disabled / Dictionary first…).
+inline SettingInfo buildLongPressMenuSetting() {
+  using A = CrossPointSettings::LONG_PRESS_MENU_FUNCTION;
+  static constexpr A kOrder[] = {
+      A::LP_MENU_DISABLED,     A::LP_MENU_DICTIONARY,    A::LP_MENU_BOOKMARK,
+      A::LP_MENU_SCREENSHOT,   A::LP_MENU_FOOTNOTES,     A::LP_MENU_CLIPPINGS,
+      A::LP_MENU_KOSYNC,       A::LP_MENU_SLEEP,         A::LP_MENU_FORCE_REFRESH,
+      A::LP_MENU_FILE_BROWSER, A::LP_MENU_FILE_TRANSFER, A::LP_MENU_READING_STATS,
+  };
+  static constexpr StrId kLabels[] = {
+      StrId::STR_DISABLED,         StrId::STR_DICTIONARY,    StrId::STR_BOOKMARK_OPTION,
+      StrId::STR_SCREENSHOT_BUTTON, StrId::STR_FOOTNOTES,    StrId::STR_CLIPPING_TOOL,
+      StrId::STR_KOSYNC,           StrId::STR_SLEEP,         StrId::STR_FORCE_REFRESH,
+      StrId::STR_BROWSE_FILES,     StrId::STR_FILE_TRANSFER, StrId::STR_READING_STATS,
+  };
+  static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
+  static_assert(kCount == CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
+  static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kCount);
+
+  std::vector<StrId> labels;
+  labels.reserve(kCount);
+  for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
+
+  return SettingInfo::DynamicEnum(
+      StrId::STR_LONG_PRESS_MENU, std::move(labels),
+      [] {
+        const auto mode = static_cast<A>(SETTINGS.longPressMenuFunction);
+        for (uint8_t i = 0; i < kCount; ++i) {
+          if (kOrder[i] == mode) return i;
+        }
+        return static_cast<uint8_t>(1);  // Dictionary
+      },
+      [](uint8_t displayIdx) {
+        if (displayIdx >= kCount) displayIdx = 1;
+        SETTINGS.longPressMenuFunction = static_cast<uint8_t>(kOrder[displayIdx]);
+      },
+      "longPressMenuFunction", StrId::STR_CAT_CONTROLS);
+}
+
 // Short / Long power-button action picker.
 // Storage enum SHORT_PWRBTN is append-only (settings.json indices stay valid).
 // Display order (product): Ignore, Sleep, Quick Resume, Refresh Screen, Page Turn, Footnotes.
@@ -375,14 +415,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // Long-press side buttons (chapter skip / flip orientation) — directly under Long-Press Power.
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_CLIPPING_TOOL},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY,
-                           StrId::STR_SLEEP, StrId::STR_FORCE_REFRESH, StrId::STR_BROWSE_FILES,
-                           StrId::STR_SCREENSHOT_BUTTON, StrId::STR_FOOTNOTES, StrId::STR_FILE_TRANSFER,
-                           StrId::STR_READING_STATS, StrId::STR_CLIPPINGS},
-                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
+        // Display order remapped (storage indices append-only) — see buildLongPressMenuSetting.
+        buildLongPressMenuSetting(),
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),

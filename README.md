@@ -125,7 +125,25 @@ Minimal cover-focused theme. Same clean layout on both X3 and X4 — just you an
 | [docs/dictionary.md](./docs/dictionary.md) | StarDict install and lookup behavior |
 | [dist/dictionaries/README.txt](./dist/dictionaries/README.txt) | Shipping dictionary packs |
 
-## Build
+## Credits & Acknowledgements
 
-```bat
-pio run -e default
+Casper is personal firmware for the **Xteink X3/X4**. It stands on the shoulders of these projects:
+
+### Required lineage
+
+- **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** by **Dave Allie** and contributors — stable reader core, EPUB/TXT/XTC pipeline, dictionary/KOReader infrastructure, and the MIT-licensed base this firmware builds on ([release/1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)).
+- **[CrossInk](https://github.com/uxjulia/CrossInk)** by **uxjulia** — reading stats, progress tracking, and substantial UI/UX design influence.
+- **[FreeInk SDK](https://github.com/Free-Ink/freeink-sdk)** — shared X3/X4 hardware, display, storage, and device libraries (submodule).
+
+### Hardware / display ancestry (via FreeInk)
+
+- **[Open X4 E-Paper Community SDK](https://github.com/open-x4-epaper/community-sdk)** and community device ports — e-paper driver sequences and related work; FreeInk’s `NOTICE` retains the upstream MIT terms.
+- **[CidVonHighwind](https://github.com/CidVonHighwind)** — original e-ink display work in that lineage (also author of [MicroReader](https://github.com/CidVonHighwind/microreader), which Casper does **not** ship as source).
+
+### License
+
+See [LICENSE](./LICENSE) (MIT; upstream CrossPoint copyright retained) and FreeInk’s [LICENSE](./freeink-sdk/LICENSE) / [NOTICE](./freeink-sdk/NOTICE) for third-party attribution in the SDK.
+
+---
+
+*Casper’s UI, home themes (Penumbra / Bare), and **Rivulet** layout engine are original work on top of the stack above.*

@@ -25,7 +25,7 @@ enum class KOReaderSyncBehavior : uint8_t {
   PERCENT = 2,         // Leave: auto when +% gate met; remote ahead → ask.
   TIME = 3,            // Leave: auto when time gate met; remote ahead → ask.
   // Named OFF (not DISABLED): esp32-hal-gpio.h #defines DISABLED as 0x00.
-  OFF = 4,             // Fully off. Appended so existing 0–3 JSON values stay valid.
+  OFF = 4,  // Fully off. Appended so existing 0–3 JSON values stay valid.
   COUNT = 5,
 };
 

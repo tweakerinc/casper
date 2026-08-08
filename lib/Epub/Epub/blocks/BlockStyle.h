@@ -171,17 +171,13 @@ struct BlockStyle {
     const float vw = viewportWidth;
     const auto maxVerticalMarginPx = static_cast<int16_t>(emSize * MAX_VERTICAL_MARGIN_EM);
     // Resolve all CssLength values to pixels using the current font's em size and viewport width
-    blockStyle.marginTop =
-        std::min(cssStyle.marginTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
-    blockStyle.marginBottom =
-        std::min(cssStyle.marginBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.marginTop = std::min(cssStyle.marginTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.marginBottom = std::min(cssStyle.marginBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.marginLeft = cappedHorizontalInset(cssStyle.marginLeft, emSize, vw);
     blockStyle.marginRight = cappedHorizontalInset(cssStyle.marginRight, emSize, vw);
 
-    blockStyle.paddingTop =
-        std::min(cssStyle.paddingTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
-    blockStyle.paddingBottom =
-        std::min(cssStyle.paddingBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.paddingTop = std::min(cssStyle.paddingTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
+    blockStyle.paddingBottom = std::min(cssStyle.paddingBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.paddingLeft = cappedHorizontalInset(cssStyle.paddingLeft, emSize, vw);
     blockStyle.paddingRight = cappedHorizontalInset(cssStyle.paddingRight, emSize, vw);
 

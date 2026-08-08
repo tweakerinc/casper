@@ -404,8 +404,7 @@ void XtcReaderActivity::renderPage() {
     free(pageBuffer);
 
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
-    SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=2",
-                        static_cast<unsigned long>(currentPage + 1),
+    SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=2", static_cast<unsigned long>(currentPage + 1),
                         static_cast<unsigned long>(xtc->getPageCount()));
     return;
   } else {
@@ -440,8 +439,7 @@ void XtcReaderActivity::renderPage() {
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
-  SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=%u",
-                      static_cast<unsigned long>(currentPage + 1),
+  SystemLog::logTimed("XTC", millis() - t0, "page=%lu/%lu bits=%u", static_cast<unsigned long>(currentPage + 1),
                       static_cast<unsigned long>(xtc->getPageCount()), static_cast<unsigned>(bitDepth));
 }
 

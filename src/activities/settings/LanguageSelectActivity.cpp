@@ -1,5 +1,4 @@
 #include "LanguageSelectActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -11,6 +10,7 @@
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 void LanguageSelectActivity::onEnter() {
   Activity::onEnter();

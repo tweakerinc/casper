@@ -165,8 +165,8 @@ bool SleepActivity::renderPngSleepScreen(const std::string& pngPath) const {
   // (same crop/filter/HALF settings as sleep.bmp). Sleep has the whole heap free.
   constexpr size_t kMinFree = 48 * 1024;
   if (ESP.getFreeHeap() < kMinFree) {
-    LOG_ERR("SLP", "Not enough heap for PNG sleep image free=%u: %s",
-            static_cast<unsigned>(ESP.getFreeHeap()), pngPath.c_str());
+    LOG_ERR("SLP", "Not enough heap for PNG sleep image free=%u: %s", static_cast<unsigned>(ESP.getFreeHeap()),
+            pngPath.c_str());
     return false;
   }
 
@@ -189,8 +189,7 @@ bool SleepActivity::renderPngSleepScreen(const std::string& pngPath) const {
 
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
-  const bool ok =
-      PngToBmpConverter::pngFileToBmpStreamWithSize(pngIn, bmpOut, pageWidth, pageHeight);
+  const bool ok = PngToBmpConverter::pngFileToBmpStreamWithSize(pngIn, bmpOut, pageWidth, pageHeight);
   bmpOut.flush();
   bmpOut.close();
   pngIn.close();

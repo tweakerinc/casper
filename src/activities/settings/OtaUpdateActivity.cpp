@@ -1,5 +1,4 @@
 #include "OtaUpdateActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -14,6 +13,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/OtaUpdater.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 struct OtaActionRects {

@@ -15,8 +15,8 @@
 class BookDescriptionActivity final : public Activity {
  public:
   // body preloaded, or empty + bookPath for deferred load after first paint.
-  BookDescriptionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title,
-                          std::string body, std::string bookPath = {})
+  BookDescriptionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title, std::string body,
+                          std::string bookPath = {})
       : Activity("BookDescription", renderer, mappedInput),
         title(std::move(title)),
         body(std::move(body)),

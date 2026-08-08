@@ -1,5 +1,4 @@
 #include "KeyboardEntryActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <HalGPIO.h>
 #include <I18n.h>
@@ -10,6 +9,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace fui = freeink::ui;
 

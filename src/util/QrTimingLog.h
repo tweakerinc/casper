@@ -73,8 +73,7 @@ inline void begin(const char* reason) {
   appendRaw(header);
   // Also mark absolute boot age (millis since reset == wall since wake).
   char boot[64];
-  snprintf(boot, sizeof(boot), "+%5lums | BOOT_MARK (millis since reset)\n",
-           static_cast<unsigned long>(millis()));
+  snprintf(boot, sizeof(boot), "+%5lums | BOOT_MARK (millis since reset)\n", static_cast<unsigned long>(millis()));
   appendRaw(boot);
 }
 

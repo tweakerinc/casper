@@ -57,8 +57,8 @@ bool definitionLooksLikeInflectionStub(const std::string& def) {
   buf[n] = '\0';
 
   static const char* kMarkers[] = {
-      "simple past", "past participle", "present participle", "past tense",
-      "third-person singular", "third person singular", "plural of", "gerund of",
+      "simple past",           "past participle",       "present participle", "past tense",
+      "third-person singular", "third person singular", "plural of",          "gerund of",
   };
   for (const char* m : kMarkers) {
     const char* p = strstr(buf, m);
@@ -106,8 +106,8 @@ bool isWordByte(unsigned char c) { return c >= 0x80 || std::isalnum(c) != 0; }
 // Spanish object clitics longest-first (ayudame → ayuda, damelo → dame).
 constexpr const char* kEsClitics[] = {
     "melos", "melas", "telos", "telas", "selos", "selas", "noslos", "noslas", "noslo", "nosla",
-    "selo",  "sela",  "melo",  "mela",  "telo",  "tela",  "lelo",   "lela",
-    "les",   "los",   "las",   "nos",   "os",    "me",    "te",     "se",    "lo",    "la",    "le",
+    "selo",  "sela",  "melo",  "mela",  "telo",  "tela",  "lelo",   "lela",   "les",   "los",
+    "las",   "nos",   "os",    "me",    "te",    "se",    "lo",     "la",     "le",
 };
 
 bool trySpanishCliticStrip(std::string& word, std::string* strippedClitic = nullptr) {
@@ -264,8 +264,7 @@ void decorateCliticDefinition(const std::string& clitic, const std::string& matc
     snprintf(header, sizeof(header), "!%s %s\n!%s + %s (%s)\n", verbGloss.c_str(), obj, matchedHead.c_str(),
              clitic.c_str(), gloss);
   } else if (hasNatural) {
-    snprintf(header, sizeof(header), "!%s %s\n!%s + %s\n", verbGloss.c_str(), obj, matchedHead.c_str(),
-             clitic.c_str());
+    snprintf(header, sizeof(header), "!%s %s\n!%s + %s\n", verbGloss.c_str(), obj, matchedHead.c_str(), clitic.c_str());
   } else if (gloss && gloss[0]) {
     snprintf(header, sizeof(header), "!%s + %s (%s)\n", matchedHead.c_str(), clitic.c_str(), gloss);
   } else {
@@ -795,7 +794,7 @@ void Dictionary::stemVariants(const std::string& word, std::vector<std::string>&
 
   // English possessives / plurals / verbs (same as stock 1.5, plus -ly).
   if (endsWith("'s")) add(word.substr(0, n - 2));
-  if (endsWith("\xE2\x80\x99s")) add(word.substr(0, n - 4));  // U+2019
+  if (endsWith("\xE2\x80\x99s")) add(word.substr(0, n - 4));       // U+2019
   if (endsWith("ily") && n > 5) add(word.substr(0, n - 3) + "y");  // happily → happy
   if ((endsWith("ably") || endsWith("ibly")) && n > 6) {
     std::string v = word.substr(0, n - 1);
@@ -987,11 +986,11 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
       if (sp2 != std::string::npos) stem.resize(sp2);
       if (trySpanishCliticStrip(stem, &clitic)) {
         // Only decorate when we actually resolved that first token (or its stem).
-        if (hitCandidate == cleaned.substr(0, cleaned.find(' ') == std::string::npos ? cleaned.size() : cleaned.find(' ')) ||
+        if (hitCandidate ==
+                cleaned.substr(0, cleaned.find(' ') == std::string::npos ? cleaned.size() : cleaned.find(' ')) ||
             hitCandidate == stem || hitCandidate == stem + "ar" || hitCandidate == stem + "er" ||
             hitCandidate == stem + "ir" ||
-            (!matchedHeadwordOut.empty() &&
-             StringUtils::asciiCaseCmp(matchedHeadwordOut.c_str(), stem.c_str()) == 0)) {
+            (!matchedHeadwordOut.empty() && StringUtils::asciiCaseCmp(matchedHeadwordOut.c_str(), stem.c_str()) == 0)) {
           decorateCliticDefinition(clitic, matchedHeadwordOut.empty() ? stem : matchedHeadwordOut, definitionOut);
         }
       }

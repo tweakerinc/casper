@@ -19,8 +19,8 @@
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/reader/ReadingStatsUtils.h"
 #include "components/UITheme.h"
-#include "components/themes/HomeCoverMetrics.h"
 #include "components/icons/cover.h"
+#include "components/themes/HomeCoverMetrics.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
 
@@ -188,8 +188,7 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& artPlate, const R
 
 // Contain-fit full jacket (no crop); prefer 1:1 native blit. Returns art rect for snapshot.
 Rect drawCoverImage(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book) {
-  const std::string coverBmpPath =
-      coverPathForBook(book, renderer.getScreenWidth(), renderer.getScreenHeight());
+  const std::string coverBmpPath = coverPathForBook(book, renderer.getScreenWidth(), renderer.getScreenHeight());
   if (coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) {
     const Rect plate = typicalJacketArtRect(coverRect);
     drawMissingCover(renderer, plate, book);
@@ -399,8 +398,8 @@ void drawLifetimeCard(const GfxRenderer& renderer, const Rect& cardRect, const G
 // Time, Time Left, Progress, Daily Avg, Pages/Min, Days (Started), Finish date.
 // Calendar-dependent fields show "-" when RTC/date data is unavailable (typical X4).
 // rightX = pixel just past the rightmost text (text is right-aligned to rightX).
-void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int rightX,
-                    const BookReadingStats* stats, const float progressPercent) {
+void drawRightStats(const GfxRenderer& renderer, const Rect& statsCol, const int rightX, const BookReadingStats* stats,
+                    const float progressPercent) {
   const BookReadingStats empty{};
   const BookReadingStats& bookStats = stats != nullptr ? *stats : empty;
   // Vertical span = jacket box; horizontal pin is rightX.
@@ -537,8 +536,7 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
                                      const int /*selectorIndex*/, bool& coverRendered, bool& coverBufferStored,
                                      bool& bufferRestored, StoreCoverBufferFn storeCoverBuffer,
                                      const BookReadingStats* stats, float progressPercent,
-                                     const GlobalReadingStats* globalStats,
-                                     const char* /*currentChapterTitle*/) const {
+                                     const GlobalReadingStats* globalStats, const char* /*currentChapterTitle*/) const {
   (void)rect;
 
   const int pageW = renderer.getScreenWidth();
@@ -575,11 +573,10 @@ void FocusTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std
   // Under-box: lifetime card or title+author. Cover plate is fixed either way.
   const int textMaxW = std::max(40, pageW - kEdgeGap * 2);
   const int lifeH = minLifetimeCardHeight(renderer);
-  const int titleH =
-      measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
-  const int authorH = author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines,
-                                                    EpdFontFamily::REGULAR)
-                             : 0;
+  const int titleH = measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
+  const int authorH =
+      author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
+             : 0;
   const int titleAuthorH = titleH + (author ? (kTitleAuthorGap + authorH) : 0);
 
   // Horizontal: fixed shared plate (1:1 gen), stats take remaining right column.
@@ -657,11 +654,10 @@ Rect FocusThemeUi::redrawUnderBox(GfxRenderer& renderer, const std::vector<Recen
 
   const int textMaxW = std::max(40, pageW - kEdgeGap * 2);
   const int lifeH = minLifetimeCardHeight(renderer);
-  const int titleH =
-      measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
-  const int authorH = author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines,
-                                                    EpdFontFamily::REGULAR)
-                             : 0;
+  const int titleH = measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
+  const int authorH =
+      author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
+             : 0;
   const int titleAuthorH = titleH + (author ? (kTitleAuthorGap + authorH) : 0);
 
   paintUnderBoxContent(renderer, pageW, boxBottom, bandBottom, lifeMode, title, author, textMaxW, titleAuthorH, lifeH,
@@ -669,4 +665,3 @@ Rect FocusThemeUi::redrawUnderBox(GfxRenderer& renderer, const std::vector<Recen
 
   return dirty;
 }
-

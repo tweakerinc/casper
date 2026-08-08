@@ -119,10 +119,9 @@ void ClockSettingsActivity::loop() {
 void ClockSettingsActivity::handleSelection() {
   switch (selectedIndex) {
     case ITEM_SHOW:
-      SETTINGS.systemClock =
-          (SETTINGS.systemClock == CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE)
-              ? CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW
-              : CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
+      SETTINGS.systemClock = (SETTINGS.systemClock == CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE)
+                                 ? CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW
+                                 : CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
       SETTINGS.saveToFile();
       return;
     case ITEM_FORMAT:
@@ -154,10 +153,8 @@ void ClockSettingsActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount, static_cast<int>(selectedIndex),
-      [](int index) {
-        return NestedMenuLabel::format(I18N.get(menuNames[index]), index != ITEM_SHOW);
-      },
-      nullptr, nullptr,
+      [](int index) { return NestedMenuLabel::format(I18N.get(menuNames[index]), index != ITEM_SHOW); }, nullptr,
+      nullptr,
       [](int index) -> std::string {
         switch (index) {
           case ITEM_SHOW:

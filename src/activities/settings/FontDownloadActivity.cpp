@@ -1,5 +1,4 @@
 #include "FontDownloadActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <ArduinoJson.h>
 #include <GfxRenderer.h>
@@ -17,6 +16,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Names match CrossInk fonts.json for families compiled into firmware (main.cpp).

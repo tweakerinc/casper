@@ -1500,8 +1500,8 @@ void GfxRenderer::drawBitmap1BitCoverFill(const Bitmap& bitmap, const int x, con
   // zoomed into a small window of a 520px BMP and cut off most of the jacket.
   //
   // Cap scale at 1.0 (no 1-bit upscale). Thumbs are already Atkinson-dithered.
-  float scale = std::max(static_cast<float>(width) / static_cast<float>(bw),
-                         static_cast<float>(height) / static_cast<float>(bh));
+  float scale =
+      std::max(static_cast<float>(width) / static_cast<float>(bw), static_cast<float>(height) / static_cast<float>(bh));
   if (scale > 1.0f) scale = 1.0f;
 
   const int scaledW = std::max(1, static_cast<int>(std::floor(static_cast<float>(bw) * scale)));
@@ -1724,8 +1724,7 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
-  const AlignedMemRect mem =
-      screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
+  const AlignedMemRect mem = screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
   if (!mem.valid) return;
   LOG_DBG("GFX", "displayWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x, mem.y, mem.w,
           mem.h);
@@ -2321,11 +2320,10 @@ void GfxRenderer::displayGrayBuffer() const { display.displayGrayBuffer(fadingFi
 
 void GfxRenderer::displayGrayBufferWindow(const int x, const int y, const int width, const int height) const {
   if (width <= 0 || height <= 0) return;
-  const AlignedMemRect mem =
-      screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
+  const AlignedMemRect mem = screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
   if (!mem.valid) return;
-  LOG_DBG("GFX", "displayGrayBufferWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x,
-          mem.y, mem.w, mem.h);
+  LOG_DBG("GFX", "displayGrayBufferWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x, mem.y,
+          mem.w, mem.h);
   display.displayGrayBufferWindow(mem.x, mem.y, mem.w, mem.h, fadingFix);
 }
 

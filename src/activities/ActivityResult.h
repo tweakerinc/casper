@@ -95,10 +95,9 @@ struct ClippingJumpResult {
   uint16_t clippingIndex = UINT16_MAX;
 };
 
-using ResultVariant =
-    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
-                 FileBrowserActionResult, ClippingResult, ClippingJumpResult>;
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   IntervalResult, PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult,
+                                   FilePathResult, FileBrowserActionResult, ClippingResult, ClippingJumpResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

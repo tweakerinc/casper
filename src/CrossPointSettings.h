@@ -131,7 +131,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     CORNER_CLOCK = 6,
     CORNER_BOOK_TITLE = 7,  // was CORNER_TITLE (generic); value kept for migration
     CORNER_BOOK_PAGE_COUNTER = 8,
-    CORNER_CHAPTER_COUNTER = 9,   // TOC chapter index, e.g. "Ch. 5/40"
+    CORNER_CHAPTER_COUNTER = 9,  // TOC chapter index, e.g. "Ch. 5/40"
     CORNER_CHAPTER_TITLE = 10,
     // Placement marker for XTC books: upper slot → top overlay, lower → bottom; absent → hide.
     // Does not paint chrome text; only drives xtcStatusBarMode.
@@ -193,11 +193,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Built-in fonts only (SD card fonts use sdFontFamilyName).
   // 0 Source Serif 4 (default UI + reader), 1 Lexend Deca (OFL sans).
   // Older IDs (Lexend=0, Bitter=1, Source=2, Literata=3) remapped in fromJson.
-  enum FONT_FAMILY {
-    SOURCESERIF4 = 0,
-    LEXENDDECA = 1,
-    FONT_FAMILY_COUNT
-  };
+  enum FONT_FAMILY { SOURCESERIF4 = 0, LEXENDDECA = 1, FONT_FAMILY_COUNT };
   // Legacy aliases (older code / migrations).
   static constexpr uint8_t NOTOSERIF = SOURCESERIF4;
   static constexpr uint8_t NOTOSANS = LEXENDDECA;
@@ -207,14 +203,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Reader body size (pt). Enum order is stable on disk after casperReaderFontSizePtMigrated.
   // Pre-migration: 0..3 = 12/14/16/18. Post: 0..4 = 10/12/14/16/18.
-  enum FONT_SIZE {
-    SIZE_10 = 0,
-    SIZE_12 = 1,
-    SIZE_14 = 2,
-    SIZE_16 = 3,
-    SIZE_18 = 4,
-    FONT_SIZE_COUNT
-  };
+  enum FONT_SIZE { SIZE_10 = 0, SIZE_12 = 1, SIZE_14 = 2, SIZE_16 = 3, SIZE_18 = 4, FONT_SIZE_COUNT };
   // Legacy aliases (pre-5-size enum used these names for 12/14/16/18).
   static constexpr uint8_t SMALL = SIZE_12;
   static constexpr uint8_t MEDIUM = SIZE_14;
@@ -274,11 +263,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // (legacy value 6) and unscoped enums share the class scope.
   enum SHORT_PWRBTN {
     IGNORE = 0,
-    SLEEP = 1,              // wallpaper / Sleep Screen style
+    SLEEP = 1,  // wallpaper / Sleep Screen style
     PAGE_TURN = 2,
     FORCE_REFRESH = 3,
     FOOTNOTES = 4,
-    PWR_QUICK_RESUME = 5,   // last-frame + fast wake (not a Sleep Screen value)
+    PWR_QUICK_RESUME = 5,  // last-frame + fast wake (not a Sleep Screen value)
     SHORT_PWRBTN_COUNT
   };
 
@@ -353,8 +342,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Both sides same action → bidirectional (Left back / Right forward).
   // Only one side set → one-way cycle (Title→Stats→Lifetime, or newest→oldest).
   enum PENUMBRA_SIDE_ACTION : uint8_t {
-    PENUMBRA_SIDE_RECENTS = 0,       // recent books (up to 4)
-    PENUMBRA_SIDE_PANEL = 1,         // Title / Stats / Lifetime under-panel
+    PENUMBRA_SIDE_RECENTS = 0,  // recent books (up to 4)
+    PENUMBRA_SIDE_PANEL = 1,    // Title / Stats / Lifetime under-panel
     PENUMBRA_SIDE_ACTION_COUNT = 2,
     // Legacy aliases
     SPECTRAL_SIDE_RECENTS = PENUMBRA_SIDE_RECENTS,
@@ -467,8 +456,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // 5 = side right (X3) / lower (X4).
   // Default axes match names: front 3rd/4th = Up/Down (vertical list), sides = Left/Right
   // (horizontal tabs). Reader page turn accepts both pairs.
-  uint8_t hwButtonFunction[HW_REMAP_BUTTON_COUNT] = {
-      BTN_FUNC_BACK, BTN_FUNC_CONFIRM, BTN_FUNC_UP, BTN_FUNC_DOWN, BTN_FUNC_LEFT, BTN_FUNC_RIGHT};
+  uint8_t hwButtonFunction[HW_REMAP_BUTTON_COUNT] = {BTN_FUNC_BACK, BTN_FUNC_CONFIRM, BTN_FUNC_UP,
+                                                     BTN_FUNC_DOWN, BTN_FUNC_LEFT,    BTN_FUNC_RIGHT};
   // Reader font settings
   uint8_t fontFamily = SOURCESERIF4;
   uint8_t fontSize = SIZE_14;  // 14 pt Source Serif 4 (Casper default)
@@ -688,12 +677,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     bool showBattery = false;
     // BATTERY_DISPLAY_MODE for reader chrome (ignored when showBattery is false).
     uint8_t batteryDisplay = BATTERY_DISPLAY_ICON_PERCENT;
-    bool showsBatteryIcon() const {
-      return showBattery && batteryDisplay != BATTERY_DISPLAY_PERCENT;
-    }
-    bool showsBatteryPercent() const {
-      return showBattery && batteryDisplay != BATTERY_DISPLAY_ICON;
-    }
+    bool showsBatteryIcon() const { return showBattery && batteryDisplay != BATTERY_DISPLAY_PERCENT; }
+    bool showsBatteryPercent() const { return showBattery && batteryDisplay != BATTERY_DISPLAY_ICON; }
     bool clock12h = false;
     uint8_t clockUtcOffsetQ = 48;             // 48 = UTC+0
     uint8_t progressBarMode = HIDE_PROGRESS;  // STATUS_BAR_PROGRESS_BAR
@@ -708,9 +693,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     bool showsTitle() const { return wantsBookTitle || wantsChapterTitle; }
     bool showsBookTitle() const { return wantsBookTitle; }
     bool showsChapterTitle() const { return wantsChapterTitle; }
-    bool showsClock() const { return upperLeft == CORNER_CLOCK || upperMiddle == CORNER_CLOCK ||
-                                     upperRight == CORNER_CLOCK || lowerLeft == CORNER_CLOCK ||
-                                     lowerMiddle == CORNER_CLOCK || lowerRight == CORNER_CLOCK; }
+    bool showsClock() const {
+      return upperLeft == CORNER_CLOCK || upperMiddle == CORNER_CLOCK || upperRight == CORNER_CLOCK ||
+             lowerLeft == CORNER_CLOCK || lowerMiddle == CORNER_CLOCK || lowerRight == CORNER_CLOCK;
+    }
     bool hasLowerContent() const {
       return lowerLeft != CORNER_HIDE || lowerMiddle != CORNER_HIDE || lowerRight != CORNER_HIDE;
     }

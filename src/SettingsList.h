@@ -71,8 +71,8 @@ inline SettingInfo buildSleepScreenSetting() {
       M::DARK, M::LIGHT, M::COVER, M::COVER_CUSTOM, M::CUSTOM, M::BLANK,
   };
   static constexpr StrId kLabels[] = {
-      StrId::STR_DARK,   StrId::STR_LIGHT,  StrId::STR_COVER, StrId::STR_COVER_CUSTOM,
-      StrId::STR_CUSTOM, StrId::STR_NONE_OPT,
+      StrId::STR_DARK,         StrId::STR_LIGHT,  StrId::STR_COVER,
+      StrId::STR_COVER_CUSTOM, StrId::STR_CUSTOM, StrId::STR_NONE_OPT,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
 
@@ -83,25 +83,25 @@ inline SettingInfo buildSleepScreenSetting() {
   }
 
   return SettingInfo::DynamicEnum(
-      StrId::STR_SLEEP_SCREEN, std::move(labels),
-      [] {
-        const auto mode = static_cast<M>(SETTINGS.sleepScreen);
-        // Legacy QUICK_RESUME (6) displays as Light until next explicit pick.
-        if (mode == M::QUICK_RESUME) {
-          for (uint8_t i = 0; i < kCount; ++i) {
-            if (kOrder[i] == M::LIGHT) return i;
-          }
-        }
-        for (uint8_t i = 0; i < kCount; ++i) {
-          if (kOrder[i] == mode) return i;
-        }
-        return static_cast<uint8_t>(1);  // Light
-      },
-      [](uint8_t displayIdx) {
-        if (displayIdx >= kCount) displayIdx = 1;
-        SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
-      },
-      "sleepScreen", StrId::STR_CAT_DISPLAY)
+             StrId::STR_SLEEP_SCREEN, std::move(labels),
+             [] {
+               const auto mode = static_cast<M>(SETTINGS.sleepScreen);
+               // Legacy QUICK_RESUME (6) displays as Light until next explicit pick.
+               if (mode == M::QUICK_RESUME) {
+                 for (uint8_t i = 0; i < kCount; ++i) {
+                   if (kOrder[i] == M::LIGHT) return i;
+                 }
+               }
+               for (uint8_t i = 0; i < kCount; ++i) {
+                 if (kOrder[i] == mode) return i;
+               }
+               return static_cast<uint8_t>(1);  // Light
+             },
+             [](uint8_t displayIdx) {
+               if (displayIdx >= kCount) displayIdx = 1;
+               SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
+             },
+             "sleepScreen", StrId::STR_CAT_DISPLAY)
       .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
 }
 
@@ -111,17 +111,24 @@ inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CrossPointS
                                                uint8_t fallbackDisplayIdx = 0) {
   using A = CrossPointSettings::LONG_PRESS_MENU_FUNCTION;
   static constexpr A kOrder[] = {
-      A::LP_MENU_DISABLED,     A::LP_MENU_DICTIONARY,    A::LP_MENU_BOOKMARK,
-      A::LP_MENU_SCREENSHOT,   A::LP_MENU_FOOTNOTES,     A::LP_MENU_CLIPPINGS,
-      A::LP_MENU_KOSYNC,       A::LP_MENU_SLEEP,         A::LP_MENU_FORCE_REFRESH,
-      A::LP_MENU_FILE_BROWSER, A::LP_MENU_FILE_TRANSFER, A::LP_MENU_READING_STATS,
+      A::LP_MENU_DISABLED,      A::LP_MENU_DICTIONARY,   A::LP_MENU_BOOKMARK,      A::LP_MENU_SCREENSHOT,
+      A::LP_MENU_FOOTNOTES,     A::LP_MENU_CLIPPINGS,    A::LP_MENU_KOSYNC,        A::LP_MENU_SLEEP,
+      A::LP_MENU_FORCE_REFRESH, A::LP_MENU_FILE_BROWSER, A::LP_MENU_FILE_TRANSFER, A::LP_MENU_READING_STATS,
   };
   static constexpr StrId kLabels[] = {
       // Same "Off" caption as power / side long-press (not STR_DISABLED / STR_IGNORE).
-      StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_DICTIONARY,    StrId::STR_BOOKMARK_OPTION,
-      StrId::STR_SCREENSHOT_BUTTON,       StrId::STR_FOOTNOTES,     StrId::STR_CLIPPING_TOOL,
-      StrId::STR_KOSYNC,                  StrId::STR_SLEEP,         StrId::STR_FORCE_REFRESH,
-      StrId::STR_BROWSE_FILES,            StrId::STR_FILE_TRANSFER, StrId::STR_READING_STATS,
+      StrId::STR_LONG_PRESS_BEHAVIOR_OFF,
+      StrId::STR_DICTIONARY,
+      StrId::STR_BOOKMARK_OPTION,
+      StrId::STR_SCREENSHOT_BUTTON,
+      StrId::STR_FOOTNOTES,
+      StrId::STR_CLIPPING_TOOL,
+      StrId::STR_KOSYNC,
+      StrId::STR_SLEEP,
+      StrId::STR_FORCE_REFRESH,
+      StrId::STR_BROWSE_FILES,
+      StrId::STR_FILE_TRANSFER,
+      StrId::STR_READING_STATS,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
   static_assert(kCount == CrossPointSettings::LONG_PRESS_MENU_FUNCTION_COUNT);
@@ -398,11 +405,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
         // Page-turn anti-ghosting (HALF scrub interval) — reader only, not home/menus.
-        SettingInfo::Enum(
-            StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
-            {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30,
-             StrId::STR_PAGES_60, StrId::STR_NEVER},
-            "refreshFrequency", StrId::STR_CAT_READER),
+        SettingInfo::Enum(StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
+                          {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
+                           StrId::STR_PAGES_30, StrId::STR_PAGES_60, StrId::STR_NEVER},
+                          "refreshFrequency", StrId::STR_CAT_READER),
         // Library / Recents / Settings list chrome (not reader body, not Penumbra home panel).
         SettingInfo::Enum(StrId::STR_MENU_FONT_SIZE, &CrossPointSettings::menuFontSize,
                           {StrId::STR_MENU_FONT_XSMALL, StrId::STR_MENU_FONT_SMALL, StrId::STR_MENU_FONT_MEDIUM,
@@ -454,20 +460,17 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // stored field is multi-level; UI still one-click toggles like other switches.
         SettingInfo::DynamicEnum(
             StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
-            [] {
-              return static_cast<uint8_t>(SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF ? 1 : 0);
-            },
+            [] { return static_cast<uint8_t>(SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF ? 1 : 0); },
             [](uint8_t on) {
-              SETTINGS.systemLogLevel =
-                  on ? static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_TIMING)
-                     : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
+              SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_TIMING)
+                                           : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
             },
             "systemLogLevel", StrId::STR_CAT_SYSTEM),
         // Session idle gap for stats (device UI builds ordered System list separately).
-        SettingInfo::Value(StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
-                           {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES,
-                            1},
-                           "readingSessionIdleMinutes", StrId::STR_CAT_SYSTEM),
+        SettingInfo::Value(
+            StrId::STR_SESSION_TIME, &CrossPointSettings::readingSessionIdleMinutes,
+            {CrossPointSettings::MIN_SESSION_IDLE_MINUTES, CrossPointSettings::MAX_SESSION_IDLE_MINUTES, 1},
+            "readingSessionIdleMinutes", StrId::STR_CAT_SYSTEM),
         // Stats folder settings (web/JSON). On-device UI uses StatsSettingsActivity.
         SettingInfo::Toggle(StrId::STR_ENABLE_STAT_TRACKING, &CrossPointSettings::readingStatsEnabled,
                             "readingStatsEnabled", StrId::STR_STATS),
@@ -552,48 +555,48 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
         // Six exclusive slots. Labels must match STATUS_BAR_CORNER_CONTENT enum index order
         // (on-device popup reorders for UX; web uses this index order).
-        SettingInfo::Enum(StrId::STR_UPPER_LEFT, &CrossPointSettings::statusBarUpperLeft,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarUpperLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_UPPER_MIDDLE, &CrossPointSettings::statusBarUpperMiddle,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarUpperMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_UPPER_RIGHT, &CrossPointSettings::statusBarUpperRight,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarUpperRight", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_LOWER_LEFT, &CrossPointSettings::statusBarLowerLeft,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarLowerLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_LOWER_MIDDLE, &CrossPointSettings::statusBarLowerMiddle,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarLowerMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_LOWER_RIGHT, &CrossPointSettings::statusBarLowerRight,
-                          {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER,
-                           StrId::STR_PROGRESS_PERCENTAGE, StrId::STR_TIME_LEFT_BOOK_OPTION,
-                           StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK, StrId::STR_BOOK_TITLE,
-                           StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
-                           StrId::STR_XTC_STATUS_BAR},
-                          "statusBarLowerRight", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_UPPER_LEFT, &CrossPointSettings::statusBarUpperLeft,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarUpperLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_UPPER_MIDDLE, &CrossPointSettings::statusBarUpperMiddle,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarUpperMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_UPPER_RIGHT, &CrossPointSettings::statusBarUpperRight,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarUpperRight", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_LOWER_LEFT, &CrossPointSettings::statusBarLowerLeft,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarLowerLeft", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_LOWER_MIDDLE, &CrossPointSettings::statusBarLowerMiddle,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarLowerMiddle", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(
+            StrId::STR_LOWER_RIGHT, &CrossPointSettings::statusBarLowerRight,
+            {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CHAPTER_PAGE_COUNTER, StrId::STR_PROGRESS_PERCENTAGE,
+             StrId::STR_TIME_LEFT_BOOK_OPTION, StrId::STR_TIME_LEFT_CHAPTER_OPTION, StrId::STR_CLOCK,
+             StrId::STR_BOOK_TITLE, StrId::STR_BOOK_PAGE_COUNTER, StrId::STR_CHAPTER_COUNTER, StrId::STR_CHAPTER_TITLE,
+             StrId::STR_XTC_STATUS_BAR},
+            "statusBarLowerRight", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
                           {StrId::STR_HIDE, StrId::STR_BOOK, StrId::STR_CHAPTER}, "statusBarProgressBar",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
@@ -611,19 +614,18 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_HIDE, StrId::STR_BATTERY, StrId::STR_CLOCK, StrId::STR_BATTERY_WARNING},
                           "systemStatusBarRight", StrId::STR_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_BATTERY_DISPLAY, &CrossPointSettings::systemBatteryDisplay,
-                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT},
-                          "systemBatteryDisplay", StrId::STR_STATUS_BAR),
+                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT}, "systemBatteryDisplay",
+                          StrId::STR_STATUS_BAR),
         // Reader chrome battery display (Customize Reader UI nests this under Battery slots).
         SettingInfo::Enum(StrId::STR_BATTERY_DISPLAY, &CrossPointSettings::readerBatteryDisplay,
-                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT},
-                          "readerBatteryDisplay", StrId::STR_CUSTOMISE_STATUS_BAR),
+                          {StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT}, "readerBatteryDisplay",
+                          StrId::STR_CUSTOMISE_STATUS_BAR),
         // Legacy system clock show/hide (derived from slots; web-compatible).
         SettingInfo::DynamicEnum(
             StrId::STR_CLOCK, {StrId::STR_HIDE, StrId::STR_SHOW},
             [] {
-              return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)
-                         ? static_cast<uint8_t>(1)   // Show
-                         : static_cast<uint8_t>(0);  // Hide
+              return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK) ? static_cast<uint8_t>(1)   // Show
+                                                                                     : static_cast<uint8_t>(0);  // Hide
             },
             [](uint8_t displayIdx) {
               if (displayIdx == 1) {

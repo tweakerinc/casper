@@ -1,5 +1,4 @@
 #include "BackupStatsActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -11,6 +10,7 @@
 #include "activities/reader/StatsBackup.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 void BackupStatsActivity::onEnter() {
   Activity::onEnter();
@@ -52,8 +52,8 @@ void BackupStatsActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, midY - 24, tr(STR_BACKUP_STATS_DONE), true, EpdFontFamily::BOLD);
     const Rect fileRect{body.x, midY - 4, body.width, body.height / 2};
     UITheme::drawCenteredWrappedText(renderer, fileRect, UI_10_FONT_ID,
-                                     backupFileName[0] != '\0' ? backupFileName : "-", 4, true,
-                                     EpdFontFamily::REGULAR, UITheme::TextVerticalAlignment::TOP);
+                                     backupFileName[0] != '\0' ? backupFileName : "-", 4, true, EpdFontFamily::REGULAR,
+                                     UITheme::TextVerticalAlignment::TOP);
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

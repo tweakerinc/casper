@@ -1,5 +1,4 @@
 #include "ClockOffsetActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -12,6 +11,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 constexpr uint8_t MAX_POS_HOURS = 14;

@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include "BookmarkEntry.h"
 #include "BookReadingStats.h"
+#include "BookmarkEntry.h"
 #include "EndOfBookOptions.h"
 #include "EpubReaderMenuActivity.h"
 #include "GlobalReadingStats.h"
@@ -94,8 +94,8 @@ class EpubReaderActivity final : public Activity {
   enum class NeighborBuildState : uint8_t { Idle, Probe, Building, Settled };
   std::unique_ptr<Section> neighborSection_;
   int neighborSpineIndex_ = -1;
-  int neighborBaseSpine_ = -1;       // reading spine when window was anchored
-  int neighborPagesBuilt_ = 0;       // pages already laid out in later spines
+  int neighborBaseSpine_ = -1;  // reading spine when window was anchored
+  int neighborPagesBuilt_ = 0;  // pages already laid out in later spines
   NeighborBuildState neighborState_ = NeighborBuildState::Idle;
   unsigned long neighborHeapGateMs_ = 0;
   // WH imageProcessingActive_: while images are decoding for paint, do not start

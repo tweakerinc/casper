@@ -49,8 +49,7 @@ inline void writeString(HalFile& file, const std::string& s) {
 
 inline bool tryWriteString(HalFile& file, const std::string& s) {
   const uint32_t len = static_cast<uint32_t>(s.size());
-  return tryWritePod(file, len) &&
-         (len == 0 || file.write(reinterpret_cast<const uint8_t*>(s.data()), len) == len);
+  return tryWritePod(file, len) && (len == 0 || file.write(reinterpret_cast<const uint8_t*>(s.data()), len) == len);
 }
 
 inline void readString(std::istream& is, std::string& s) {

@@ -27,8 +27,8 @@ constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
 constexpr int kCoverCornerRadius = 4;
 // Narrow side margin so the cover can use almost the full screen width.
 constexpr int kSideInset = 12;
-constexpr int kTopPadNoChrome = 16;  // air above cover when battery + clock are hidden
-constexpr int kTopPadWithChrome = 10; // gap under battery/clock row before cover zone
+constexpr int kTopPadNoChrome = 16;    // air above cover when battery + clock are hidden
+constexpr int kTopPadWithChrome = 10;  // gap under battery/clock row before cover zone
 // Tight title→author so the pair reads as one unit.
 constexpr int kTitleAuthorGap = 3;
 // Gap between cover bottom and title (title/author stay tight under the jacket).
@@ -36,13 +36,9 @@ constexpr int kMinGapCoverToText = 10;
 constexpr int kTitleMaxLines = 3;  // full-width wrap; long titles must not ellipsize early
 constexpr int kAuthorMaxLines = 2;
 
-bool bareShowsBattery() {
-  return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY);
-}
+bool bareShowsBattery() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY); }
 
-bool bareShowsClock() {
-  return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
-}
+bool bareShowsClock() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK); }
 
 // Y where content may begin: under optional battery/clock chrome.
 int bareContentTopY() {
@@ -222,8 +218,7 @@ void BareTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
   // Title uses full content width (up to 3 lines) so long names are not cut off.
   const int textMaxW = std::max(40, pageW - kSideInset * 2);
-  const int titleH =
-      measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
+  const int titleH = measureWrappedHeight(renderer, kTitleFontId, textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
   const int authorH =
       author ? measureWrappedHeight(renderer, kAuthorFontId, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
              : 0;

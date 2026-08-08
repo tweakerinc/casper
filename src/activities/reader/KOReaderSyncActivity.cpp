@@ -1,10 +1,10 @@
 #include "KOReaderSyncActivity.h"
 
+#include <Arduino.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
-#include <Arduino.h>
 #include <WiFi.h>
 #include <esp_sntp.h>
 #include <esp_wifi.h>
@@ -601,8 +601,8 @@ void KOReaderSyncActivity::tickQuietWifiConnect() {
             static_cast<unsigned>(creds.size()), cred.ssid.c_str());
     // Show network name so multi-SSID try/timeout does not look stuck.
     char detail[48];
-    snprintf(detail, sizeof(detail), "%s (%u/%u)", cred.ssid.c_str(),
-             static_cast<unsigned>(quietWifiAttempts + 1), static_cast<unsigned>(creds.size()));
+    snprintf(detail, sizeof(detail), "%s (%u/%u)", cred.ssid.c_str(), static_cast<unsigned>(quietWifiAttempts + 1),
+             static_cast<unsigned>(creds.size()));
     showBusyStatus(CONNECTING, tr(STR_CONNECTING_SAVED_WIFI), detail);
     if (!cred.password.empty()) {
       WiFi.begin(cred.ssid.c_str(), cred.password.c_str());
@@ -726,10 +726,9 @@ void KOReaderSyncActivity::render(RenderLock&&) {
       return;
     }
     if (state == SYNC_FAILED) {
-      drawFullPageStatus(tr(STR_SYNC_FAILED_MSG),
-                         !statusDetail.empty() ? statusDetail.c_str()
-                         : !statusMessage.empty() ? statusMessage.c_str()
-                                                  : nullptr);
+      drawFullPageStatus(tr(STR_SYNC_FAILED_MSG), !statusDetail.empty()    ? statusDetail.c_str()
+                                                  : !statusMessage.empty() ? statusMessage.c_str()
+                                                                           : nullptr);
       return;
     }
     if (state == NO_REMOTE_PROGRESS) {

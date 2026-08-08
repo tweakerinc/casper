@@ -131,8 +131,8 @@ void selectBoardAndPanelController(bool isX3) {
   uint8_t ver[5] = {};
   uint8_t flg = 0;
   const freeink::DisplayControllerVerdict v = freeink::detectXteinkDisplayController(ver, &flg);
-  LOG_INF("HW", "%s panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", isX3 ? "X3" : "X4", ver[0],
-          ver[1], ver[2], ver[3], ver[4], flg, static_cast<unsigned>(v));
+  LOG_INF("HW", "%s panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", isX3 ? "X3" : "X4", ver[0], ver[1],
+          ver[2], ver[3], ver[4], flg, static_cast<unsigned>(v));
 
   // applyXteinkDisplayController re-probes and promotes ACTIVE.displayController
   // (UC8253→UC8279, SSD1677→UC8179 or UC8279 800x480 by LUT_VER).

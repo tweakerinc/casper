@@ -4,9 +4,9 @@
 
 #include <string>
 
-#include "activities/Activity.h"
 #include "BookReadingStats.h"
 #include "GlobalReadingStats.h"
+#include "activities/Activity.h"
 
 class BookStatsActivity final : public Activity {
   enum class Page : uint8_t { PerBook, ThisDevice, AllDevices, EditDates };

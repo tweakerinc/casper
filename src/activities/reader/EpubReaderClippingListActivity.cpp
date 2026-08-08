@@ -1,5 +1,4 @@
 #include "EpubReaderClippingListActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -14,6 +13,7 @@
 #include "activities/home/FileBrowserActionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 constexpr int ROW_HEIGHT = 56;
@@ -272,34 +272,32 @@ void EpubReaderClippingListActivity::showClippingActionMenu(const bool ignoreIni
     LOG_ERR("CLIP", "OOM: failed to allocate clipping action menu");
     return;
   }
-  startActivityForResult(
-      std::move(actionMenu),
-      [this, selectedSpineIndex, selectedStartPage, selectedStartWordIndex,
-       selectedTimestamp](const ActivityResult& result) {
-        longPressConfirmHandled = false;
-        if (result.isCancelled) {
-          requestUpdate();
-          return;
-        }
+  startActivityForResult(std::move(actionMenu), [this, selectedSpineIndex, selectedStartPage, selectedStartWordIndex,
+                                                 selectedTimestamp](const ActivityResult& result) {
+    longPressConfirmHandled = false;
+    if (result.isCancelled) {
+      requestUpdate();
+      return;
+    }
 
-        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
-        if (!actionResult || static_cast<FileBrowserAction>(actionResult->action) != FileBrowserAction::Delete) {
-          requestUpdate();
-          return;
-        }
+    const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+    if (!actionResult || static_cast<FileBrowserAction>(actionResult->action) != FileBrowserAction::Delete) {
+      requestUpdate();
+      return;
+    }
 
-        for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
-          const Clipping* clipping = CLIPPINGS.clippingAt(i);
-          if (!clipping) continue;
-          if (clipping->spineIndex == selectedSpineIndex && clipping->startPage == selectedStartPage &&
-              clipping->startWordIndex == selectedStartWordIndex && clipping->timestamp == selectedTimestamp) {
-            selectedIndex = static_cast<int>(i);
-            deleteSelectedClipping();
-            return;
-          }
-        }
-        requestUpdate();
-      });
+    for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
+      const Clipping* clipping = CLIPPINGS.clippingAt(i);
+      if (!clipping) continue;
+      if (clipping->spineIndex == selectedSpineIndex && clipping->startPage == selectedStartPage &&
+          clipping->startWordIndex == selectedStartWordIndex && clipping->timestamp == selectedTimestamp) {
+        selectedIndex = static_cast<int>(i);
+        deleteSelectedClipping();
+        return;
+      }
+    }
+    requestUpdate();
+  });
 }
 
 void EpubReaderClippingListActivity::loop() {

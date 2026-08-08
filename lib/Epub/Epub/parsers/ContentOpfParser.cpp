@@ -89,8 +89,7 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
     memcpy(buf, currentBufferPos, toRead);
 
-    const XML_Status status =
-        XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead);
+    const XML_Status status = XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead);
     if (status == XML_STATUS_ERROR) {
       // Intentional abort after description or </metadata> for metadata-only extracts.
       if (metadataOnly && metadataFinished && XML_GetErrorCode(parser) == XML_ERROR_ABORTED) {
@@ -434,9 +433,8 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
     return;
   }
 
-  if (self->state == IN_BOOK_DESCRIPTION &&
-      (strcmp(name, "dc:description") == 0 || strcmp(name, "description") == 0 ||
-       strcmp(name, "opf:description") == 0)) {
+  if (self->state == IN_BOOK_DESCRIPTION && (strcmp(name, "dc:description") == 0 || strcmp(name, "description") == 0 ||
+                                             strcmp(name, "opf:description") == 0)) {
     self->state = IN_METADATA;
     // Synopsis path only needs dc:description — stop as soon as we have it so we
     // never inflate the rest of metadata + the (huge) manifest/spine.

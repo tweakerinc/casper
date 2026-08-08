@@ -1,11 +1,12 @@
 #include "DictionarySelectActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
 
 #include <algorithm>
 #include <cstring>
+
+#include "util/UiGhostPolicy.h"
 // std::fill used when pre-selecting all packs on first open
 
 #include "CrossPointSettings.h"
@@ -70,8 +71,7 @@ bool DictionarySelectActivity::selectionChanged() const {
 }
 
 void DictionarySelectActivity::toggleSelected() {
-  if (dictionaries.empty() || selectedIndex < 0 ||
-      selectedIndex >= static_cast<int>(selected.size())) {
+  if (dictionaries.empty() || selectedIndex < 0 || selectedIndex >= static_cast<int>(selected.size())) {
     return;
   }
   selected[static_cast<size_t>(selectedIndex)] = selected[static_cast<size_t>(selectedIndex)] ? 0 : 1;
@@ -190,16 +190,14 @@ void DictionarySelectActivity::render(RenderLock&&) {
         [this](int i) { return dictionaries[static_cast<size_t>(i)].name; },
         /*rowSubtitle=*/nullptr,
         /*rowIcon=*/nullptr,
-        [this](int i) -> std::string {
-          return selected[static_cast<size_t>(i)] ? kBubbleOn : kBubbleOff;
-        },
+        [this](int i) -> std::string { return selected[static_cast<size_t>(i)] ? kBubbleOn : kBubbleOff; },
         /*highlightValue=*/true);
   }
 
   const bool dirty = selectionChanged();
-  const auto labels = mappedInput.mapLabels(dirty ? tr(STR_SAVE) : tr(STR_BACK),
-                                            dictionaries.empty() ? "" : tr(STR_SELECT), tr(STR_DIR_UP),
-                                            tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapLabels(dirty ? tr(STR_SAVE) : tr(STR_BACK), dictionaries.empty() ? "" : tr(STR_SELECT),
+                            tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   UiGhostPolicy::displayMenuFrame(renderer);
 }

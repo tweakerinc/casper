@@ -402,8 +402,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     connectedIP = ipStr;
     autoConnecting = false;
-    SystemLog::logTiming("WIFI", "connected ssid=%s ip=%s rssi=%d took=%lums", selectedSSID.c_str(), ipStr,
-                         WiFi.RSSI(), static_cast<unsigned long>(millis() - connectionStartTime));
+    SystemLog::logTiming("WIFI", "connected ssid=%s ip=%s rssi=%d took=%lums", selectedSSID.c_str(), ipStr, WiFi.RSSI(),
+                         static_cast<unsigned long>(millis() - connectionStartTime));
 
 #if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
     uint8_t connectedBssid[6] = {};

@@ -5,7 +5,6 @@
 
 #include <algorithm>
 
-#include "util/SystemLog.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -19,6 +18,7 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/SystemLog.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -291,10 +291,9 @@ void ActivityManager::goToFileBrowser(std::string path) {
   // Keep Home stacked (like Settings / Reader) so Back can FAST-resume Penumbra
   // instead of allocating a new Home and paying HALF baseline (~1.8s on X4).
   // Also push when Home is already under a parent (e.g. re-open Library).
-  const bool homeOnStack =
-      (currentActivity && currentActivity->isHomeActivity()) ||
-      std::any_of(stackActivities.begin(), stackActivities.end(),
-                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  const bool homeOnStack = (currentActivity && currentActivity->isHomeActivity()) ||
+                           std::any_of(stackActivities.begin(), stackActivities.end(),
+                                       [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
   if (homeOnStack) {
     pushActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
   } else {
@@ -303,10 +302,9 @@ void ActivityManager::goToFileBrowser(std::string path) {
 }
 
 void ActivityManager::goToRecentBooks() {
-  const bool homeOnStack =
-      (currentActivity && currentActivity->isHomeActivity()) ||
-      std::any_of(stackActivities.begin(), stackActivities.end(),
-                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  const bool homeOnStack = (currentActivity && currentActivity->isHomeActivity()) ||
+                           std::any_of(stackActivities.begin(), stackActivities.end(),
+                                       [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
   if (homeOnStack) {
     pushActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
   } else {
@@ -346,10 +344,9 @@ void ActivityManager::goToReader(std::string path) {
     releaseHomeCover(stacked.get());
   }
 
-  const bool homeOnStack =
-      (currentActivity && currentActivity->isHomeActivity()) ||
-      std::any_of(stackActivities.begin(), stackActivities.end(),
-                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  const bool homeOnStack = (currentActivity && currentActivity->isHomeActivity()) ||
+                           std::any_of(stackActivities.begin(), stackActivities.end(),
+                                       [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
   if (homeOnStack) {
     pushActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
     return;
@@ -366,7 +363,7 @@ void ActivityManager::goToReader(std::string path) {
     }
   }
   auto home = std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE);
-  home->onEnter();  // load recents/stats (requestUpdate is harmless — Reader is current next)
+  home->onEnter();                // load recents/stats (requestUpdate is harmless — Reader is current next)
   home->markSnappyResumeReady();  // PopToHome → FAST, not new-Home HALF/multipass
   stackActivities.push_back(std::move(home));
   LOG_DBG("ACT", "Seeded Home under reader (QR/cold open snappy Back path)");
@@ -392,9 +389,8 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
   // Phase 2: if Home is already under the stack (typical Read → Back), pop to it.
   // Skips allocating a new HomeActivity and re-running full onEnter book/thumb work.
-  const bool homeOnStack =
-      std::any_of(stackActivities.begin(), stackActivities.end(),
-                  [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
+  const bool homeOnStack = std::any_of(stackActivities.begin(), stackActivities.end(),
+                                       [](const std::unique_ptr<Activity>& a) { return a && a->isHomeActivity(); });
   if (homeOnStack) {
     if (pendingActivity) {
       pendingActivity.reset();

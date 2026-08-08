@@ -20,8 +20,8 @@
 #include "util/BookCacheUtils.h"
 #include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
-#include "util/UrlUtils.h"
 #include "util/UiGhostPolicy.h"
+#include "util/UrlUtils.h"
 
 namespace {
 constexpr int PAGE_ITEMS = 23;

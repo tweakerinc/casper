@@ -19,10 +19,10 @@ struct BookReadingStats {
   // Cached 0–100 book progress as millipercent (0–10000). UINT16_MAX = unknown.
   // Written on reader exit so Home never needs epub.load() for the progress column.
   uint16_t progressPercentMilli = 0xFFFF;
-  bool startDateManual = false;           // Permanent user override for the reading start date
-  bool finishedDateManual = false;        // Permanent user override for the finished date
-  ReadingStatsDate startDate;             // First qualifying reading date (or manual override)
-  ReadingStatsDate finishedDate;          // Manual or auto-finished date on X3
+  bool startDateManual = false;     // Permanent user override for the reading start date
+  bool finishedDateManual = false;  // Permanent user override for the finished date
+  ReadingStatsDate startDate;       // First qualifying reading date (or manual override)
+  ReadingStatsDate finishedDate;    // Manual or auto-finished date on X3
   std::array<uint32_t, READING_TIME_BUCKET_COUNT> timeOfDaySeconds{};
   std::array<uint32_t, READING_DAY_OF_WEEK_COUNT> dayOfWeekSeconds{};
 

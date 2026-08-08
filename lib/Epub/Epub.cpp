@@ -46,8 +46,7 @@ std::string primaryBookTitle(std::string title) {
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
   }
   const bool seriesLike = restLower.find("book ") != std::string::npos ||
-                          restLower.find(" book") != std::string::npos ||
-                          restLower.find("vol.") != std::string::npos ||
+                          restLower.find(" book") != std::string::npos || restLower.find("vol.") != std::string::npos ||
                           restLower.find("volume ") != std::string::npos ||
                           restLower.find("series") != std::string::npos ||
                           // Long suffix after colon is usually series branding, not subtitle prose.
@@ -127,7 +126,8 @@ std::string stripHtmlToPlainText(const std::string& html) {
   }
   // Trim ends.
   size_t start = 0;
-  while (start < collapsed.size() && (collapsed[start] == ' ' || collapsed[start] == '\n' || collapsed[start] == '\t')) {
+  while (start < collapsed.size() &&
+         (collapsed[start] == ' ' || collapsed[start] == '\n' || collapsed[start] == '\t')) {
     ++start;
   }
   size_t end = collapsed.size();
@@ -911,8 +911,7 @@ bool Epub::resolveCoverItemHrefFromOpf(std::string& outHref) const {
     return false;
   }
   // Parser normalizes hrefs with contentBasePath.
-  const_cast<Epub*>(this)->contentBasePath =
-      contentOpfFilePath.substr(0, contentOpfFilePath.find_last_of('/') + 1);
+  const_cast<Epub*>(this)->contentBasePath = contentOpfFilePath.substr(0, contentOpfFilePath.find_last_of('/') + 1);
 
   size_t contentOpfSize = 0;
   if (!getItemSize(contentOpfFilePath, &contentOpfSize)) {
@@ -1255,9 +1254,9 @@ std::string spineHrefBaseName(const std::string& href) {
 bool baseNameLooksCoverOnly(const std::string& base) {
   if (base.empty()) return false;
   // Exact short names publishers use for image-only / near-empty front matter.
-  if (base == "cover" || base == "cover-page" || base == "coverpage" || base == "book-cover" ||
-      base == "title" || base == "title-page" || base == "titlepage" || base == "half-title" ||
-      base == "halftitle" || base == "half-title-page" || base == "frontispiece" || base == "jacket") {
+  if (base == "cover" || base == "cover-page" || base == "coverpage" || base == "book-cover" || base == "title" ||
+      base == "title-page" || base == "titlepage" || base == "half-title" || base == "halftitle" ||
+      base == "half-title-page" || base == "frontispiece" || base == "jacket") {
     return true;
   }
   // cover01, cover-01, cover_image, etc. — keep short so "coverage" / "recover" stay out.

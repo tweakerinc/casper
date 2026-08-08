@@ -180,8 +180,7 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       }
 
       const int coverX = tileX + (tileWidth - coverWidth) / 2;
-      coverBufferStored =
-          storeCoverBuffer(coverX, imgY, coverWidth, RoundedRaffMetrics::values.homeCoverHeight);
+      coverBufferStored = storeCoverBuffer(coverX, imgY, coverWidth, RoundedRaffMetrics::values.homeCoverHeight);
       coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
     }
 
@@ -326,8 +325,8 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
       const std::string subtitleRaw = rowSubtitle(i);
       if (!subtitleRaw.empty()) {
         subtitle = renderer.truncatedText(kSubtitleFontId, subtitleRaw.c_str(), textAreaWidth, EpdFontFamily::REGULAR);
-        pillContentW = std::max(pillContentW, renderer.getTextWidth(kSubtitleFontId, subtitle.c_str(),
-                                                                    EpdFontFamily::REGULAR));
+        pillContentW =
+            std::max(pillContentW, renderer.getTextWidth(kSubtitleFontId, subtitle.c_str(), EpdFontFamily::REGULAR));
       }
     }
 

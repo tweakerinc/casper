@@ -1,10 +1,10 @@
 #include "BookStatsActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <I18n.h>
 
 #include "BookStatsView.h"
 #include "MappedInputManager.h"
+#include "util/UiGhostPolicy.h"
 
 BookStatsActivity::BookStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                      const std::string& bookCachePath, const BookReadingStats& stats,

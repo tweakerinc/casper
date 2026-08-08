@@ -97,9 +97,9 @@ void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t
 void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const uint8_t displayMode) const {
   // Left aligned: icon on left, percentage on right (or percent-only text at rect.x).
   using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode =
-      displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT ? displayMode
-                                                                   : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                           ? displayMode
+                           : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
   const bool showPct = mode != M::BATTERY_DISPLAY_ICON;
   const uint16_t percentage = powerManager.getBatteryPercentage();
@@ -127,9 +127,9 @@ void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const u
   // Right aligned: percentage on left of icon, icon flush right (or percent-only flush right).
   // rect is the icon slot; its right edge (rect.x + rect.width) is the flush-right anchor.
   using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode =
-      displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT ? displayMode
-                                                                   : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                           ? displayMode
+                           : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
   const bool showPct = mode != M::BATTERY_DISPLAY_ICON;
   const uint16_t percentage = powerManager.getBatteryPercentage();
@@ -191,8 +191,8 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   // words when the device is held inverted). Landscape still forces Portrait so
   // the strip stays on the physical button edge without a full landscape layout.
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
-  const bool landscape = orig_orientation == GfxRenderer::LandscapeClockwise ||
-                         orig_orientation == GfxRenderer::LandscapeCounterClockwise;
+  const bool landscape =
+      orig_orientation == GfxRenderer::LandscapeClockwise || orig_orientation == GfxRenderer::LandscapeCounterClockwise;
   const bool inverted = orig_orientation == GfxRenderer::PortraitInverted;
   if (landscape) {
     renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -340,8 +340,7 @@ int computeListRowHeightForLines(const GfxRenderer& renderer, const bool hasSubt
     contentH += kBaseTitleSubtitleGap + renderer.getLineHeight(SMALL_FONT_ID);
   }
   const int computed = contentH + kBaseRowPad;
-  const int baseline =
-      hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  const int baseline = hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   return std::max(baseline, computed);
 }
 
@@ -354,8 +353,7 @@ int BaseTheme::getListRowStep(bool hasSubtitle) const {
   // Approximate step without GfxRenderer (page-size math). drawList measures with
   // the live font for exact row height when painting.
   // Split-title mode does not inflate step — wrap is per-item when text needs it.
-  int rowHeight =
-      hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  int rowHeight = hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_LARGE) {
     rowHeight += 4;
   } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_XSMALL) {
@@ -464,15 +462,13 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight =
-        computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight = computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
 
     // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
-    const int blockH =
-        titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
+    const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
     int textY = itemY + std::max(0, (rowHeight - blockH) / 2);
     const int textX = rect.x + BaseMetrics::values.contentSidePadding;
     const auto focusStyle = focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
@@ -538,8 +534,7 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   if (title && title[0] != '\0') {
     const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
     // Center title between real status chrome (clock/battery) and the bottom rule.
-    const int chromeBottom =
-        rect.y + kTopChromeBatteryY + 6 + BaseMetrics::values.batteryHeight;
+    const int chromeBottom = rect.y + kTopChromeBatteryY + 6 + BaseMetrics::values.batteryHeight;
     const int titleY = chromeBottom + std::max(0, (ruleY - chromeBottom - lineH) / 2);
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_12_FONT_ID, titleY, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
@@ -906,8 +901,7 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
   }
 }
 
-Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, float topOffsetRatio,
-                          bool refresh) const {
+Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, float topOffsetRatio, bool refresh) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int marginX = metrics.popupMarginX;
   const int marginY = metrics.popupMarginY;
@@ -997,14 +991,11 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
   const bool batteryAllowed = batteryMasterOn || previewIgnoreBatteryMasterHide;
   // Preview can ignore master hide but still uses the reader's battery display mode.
-  const uint8_t batteryDisplay =
-      sb.batteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
-          ? sb.batteryDisplay
-          : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
-  const bool showBattIcon =
-      batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
-  const bool showBattPct =
-      batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_ICON;
+  const uint8_t batteryDisplay = sb.batteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                                     ? sb.batteryDisplay
+                                     : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+  const bool showBattIcon = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
+  const bool showBattPct = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_ICON;
 
   const int topTextY = metrics.topPadding + kTopChromeBatteryY;
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
@@ -1142,8 +1133,10 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       return 0;
     }
     int x = anchorX;
-    if (align == 2) x = anchorX - w;
-    else if (align == 1) x = anchorX - w / 2;
+    if (align == 2)
+      x = anchorX - w;
+    else if (align == 1)
+      x = anchorX - w / 2;
     renderer.drawText(chromeFont, x, y, text);
     return w;
   };
@@ -1207,8 +1200,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Lower middle — centered in remaining lane (title-aware truncation).
   if (sb.lowerMiddle != CrossPointSettings::CORNER_HIDE) {
     const int midY = textY - textYOffset;
-    const int usable =
-        screenW - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
+    const int usable = screenW - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
     const int sidePad = std::max(leftClusterWidth, rightClusterWidth) + 24;
     const int midMax = std::max(40, usable - 2 * sidePad);
     drawSlot(sb.lowerMiddle, centerX, midY, 1, midMax);
@@ -1253,8 +1245,7 @@ int BaseTheme::systemStatusSideReserve(const GfxRenderer& renderer) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int reserve = kTopChromeInsetX + metrics.contentSidePadding;
   // Battery with percent is the widest typical side content.
-  const int battW =
-      metrics.batteryWidth + batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, "100%");
+  const int battW = metrics.batteryWidth + batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, "100%");
   // Clock sample for 12h (wider) — "12:00 PM".
   const int clockW = renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
   const int sideContent = std::max(battW, clockW);
@@ -1287,8 +1278,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
   // Clear full chrome band so placement changes / digit count do not ghost.
   {
     const int clearH = std::max(metrics.batteryHeight + 10, metrics.statusBarVerticalMargin);
-    renderer.fillRect(orientedMarginLeft, baseTopY, screenW - orientedMarginLeft - orientedMarginRight, clearH,
-                      false);
+    renderer.fillRect(orientedMarginLeft, baseTopY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
   }
 
   char timeBuf[16];
@@ -1307,8 +1297,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
   const uint16_t battPctLive = powerManager.getBatteryPercentage();
   const bool showBatteryWarning =
       forceBatteryWarningPreview || (warnThr > 0 && static_cast<int>(battPctLive) <= warnThr);
-  const int warnPctShow =
-      forceBatteryWarningPreview ? (warnThr > 0 ? warnThr : 15) : static_cast<int>(battPctLive);
+  const int warnPctShow = forceBatteryWarningPreview ? (warnThr > 0 ? warnThr : 15) : static_cast<int>(battPctLive);
 
   auto drawClockAt = [&](int align) {
     if (timeText == nullptr || timeText[0] == '\0') return;
@@ -1317,18 +1306,19 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     const int lineHeight = renderer.getLineHeight(kClockFont);
     const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineHeight) / 2);
     int textX = centerX - textWidth / 2;
-    if (align == 0) textX = leftX;
-    else if (align == 2) textX = rightX - textWidth;
+    if (align == 0)
+      textX = leftX;
+    else if (align == 2)
+      textX = rightX - textWidth;
     renderer.drawText(kClockFont, textX, textY, timeText);
   };
 
   auto drawBatteryAt = [&](int align) {
     const int battW = metrics.batteryWidth;
     const int battH = metrics.batteryHeight;
-    const uint8_t mode =
-        SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
-            ? SETTINGS.systemBatteryDisplay
-            : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+    const uint8_t mode = SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                             ? SETTINGS.systemBatteryDisplay
+                             : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
     const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
     const bool showPct = mode != CrossPointSettings::BATTERY_DISPLAY_ICON;
     const int pctW = showPct ? renderer.getTextWidth(SMALL_FONT_ID, "100%") : 0;
@@ -1363,8 +1353,10 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     const std::string vis = renderer.truncatedText(kFont, warnBuf, maxW);
     const int tw = renderer.getTextWidth(kFont, vis.c_str());
     int textX = centerX - tw / 2;
-    if (align == 0) textX = leftX;
-    else if (align == 2) textX = rightX - tw;
+    if (align == 0)
+      textX = leftX;
+    else if (align == 2)
+      textX = rightX - tw;
     renderer.drawText(kFont, textX, textY, vis.c_str());
   };
 
@@ -1468,9 +1460,7 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
     if (firstVisible > optionCount - visibleCount) firstVisible = optionCount - visibleCount;
   }
 
-  const int listHeight = visibleCount > 0
-                             ? rowHeight * visibleCount + itemSpacing * std::max(0, visibleCount - 1)
-                             : 0;
+  const int listHeight = visibleCount > 0 ? rowHeight * visibleCount + itemSpacing * std::max(0, visibleCount - 1) : 0;
   const int dialogW = std::min((maxTextWidth + innerPadding * 2 + selectionHPadding * 2) * 12 / 10,
                                pageWidth - metrics.optionPopupDialogSideMargin * 2);
   const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + listHeight;

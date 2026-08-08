@@ -163,8 +163,7 @@ int UITheme::getStatusBarHeight() {
   // Layout reservation is hardware-agnostic: pass clockAvailable=true so the
   // reserved height does not depend on whether an RTC is present.
   // Bottom text lane scales with Manage Reader UI → Font Size.
-  const int textLane =
-      sb.textLaneVisible(true) ? SETTINGS.getStatusBarTextLaneHeight() : 0;
+  const int textLane = sb.textLaneVisible(true) ? SETTINGS.getStatusBarTextLaneHeight() : 0;
   return textLane + (sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0);
 }
 

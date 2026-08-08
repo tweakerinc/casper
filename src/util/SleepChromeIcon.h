@@ -205,9 +205,9 @@ inline int leftX(const GfxRenderer& renderer) {
   return (centerX + statusRight) / 2 - size / 2;
 }
 
-inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t* src, const int srcW,
-                                      const int cropX, const int cropY, const int cropW, const int cropH,
-                                      const int dstX, const int dstY, const int dstW, const int dstH) {
+inline void drawTransparentScaledCrop(const GfxRenderer& renderer, const uint8_t* src, const int srcW, const int cropX,
+                                      const int cropY, const int cropW, const int cropH, const int dstX, const int dstY,
+                                      const int dstW, const int dstH) {
   if (!src || cropW <= 0 || cropH <= 0 || dstW <= 0 || dstH <= 0) return;
   const int rowBytes = (srcW + 7) / 8;
   for (int dy = 0; dy < dstH; ++dy) {
@@ -231,8 +231,7 @@ inline void drawMoonFitted(const GfxRenderer& renderer, const uint8_t* src, cons
   const int dh = boxSize;
   const int dw = std::max(1, (kMoonCropW * boxSize) / kMoonCropH);
   const int ox = boxX + (boxSize - dw);  // flush right of the placement box
-  drawTransparentScaledCrop(renderer, src, kMoonSrcW, kMoonCropX, kMoonCropY, kMoonCropW, kMoonCropH, ox, boxY, dw,
-                            dh);
+  drawTransparentScaledCrop(renderer, src, kMoonSrcW, kMoonCropX, kMoonCropY, kMoonCropW, kMoonCropH, ox, boxY, dw, dh);
 }
 
 inline void fillDot(const GfxRenderer& renderer, const int cx, const int cy, const int r) {

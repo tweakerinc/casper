@@ -1,5 +1,4 @@
 #include "NetworkModeSelectionActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -7,6 +6,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 constexpr int MENU_ITEM_COUNT = 3;

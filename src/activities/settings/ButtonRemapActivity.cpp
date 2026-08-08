@@ -245,8 +245,7 @@ void ButtonRemapActivity::drawSlotArrows() const {
     int tipX = selectedIndex * slotW + slotW / 2;
     if (raw != nullptr && raw[0] != '\0') {
       const int maxLabelW = std::max(8, slotW - 8);
-      const std::string label =
-          renderer.truncatedText(kFooterFontId, raw, maxLabelW, EpdFontFamily::REGULAR);
+      const std::string label = renderer.truncatedText(kFooterFontId, raw, maxLabelW, EpdFontFamily::REGULAR);
       const int tw = renderer.getTextWidth(kFooterFontId, label.c_str(), EpdFontFamily::REGULAR);
       const int tx = selectedIndex * slotW + (slotW - tw) / 2;
       tipX = tx + tw / 2;
@@ -315,8 +314,7 @@ void ButtonRemapActivity::render(RenderLock&&) {
   const int labelBandTop = metrics.topPadding + metrics.headerHeight;  // text area below header rule
   const int labelY = labelBandTop + (labelBandH - chromeLineH) / 2;
   // Only truncate if even SMALL_FONT cannot fit (long translations).
-  const std::string hintShown =
-      renderer.truncatedText(hintFont, hint, maxHintW, EpdFontFamily::REGULAR);
+  const std::string hintShown = renderer.truncatedText(hintFont, hint, maxHintW, EpdFontFamily::REGULAR);
   renderer.drawCenteredText(hintFont, labelY, hintShown.c_str(), true, EpdFontFamily::REGULAR);
   const int bottomRuleY = labelBandTop + labelBandH;
   renderer.drawLine(0, bottomRuleY, pageWidth - 1, bottomRuleY, kRuleThickness, true);

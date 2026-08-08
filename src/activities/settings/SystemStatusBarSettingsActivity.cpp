@@ -55,8 +55,8 @@ const StrId clockFormatNames[CLOCK_FORMAT_ITEMS] = {StrId::STR_CLOCK_FORMAT_24H,
 
 // Order matches BATTERY_DISPLAY_MODE: Icon, Percent, Icon + Percent.
 constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
-const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
-    StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT};
+const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {StrId::STR_ICON, StrId::STR_PERCENT,
+                                                          StrId::STR_ICON_PLUS_PERCENT};
 
 // Battery Warning thresholds (matches BATTERY_WARNING enum).
 constexpr int BATTERY_WARNING_ITEMS = CrossPointSettings::BATTERY_WARNING_COUNT;
@@ -345,14 +345,12 @@ void SystemStatusBarSettingsActivity::handleSelection() {
 
   switch (item) {
     case ITEM_BATTERY_DISPLAY: {
-      const uint8_t cur =
-          SETTINGS.systemBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.systemBatteryDisplay : 0;
-      optionPopup.show(StrId::STR_BATTERY_DISPLAY, batteryDisplayNames, BATTERY_DISPLAY_ITEMS, cur,
-                       [this](int idx) {
-                         if (idx < 0 || idx >= BATTERY_DISPLAY_ITEMS) return;
-                         SETTINGS.systemBatteryDisplay = static_cast<uint8_t>(idx);
-                         SETTINGS.saveToFile();
-                       });
+      const uint8_t cur = SETTINGS.systemBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.systemBatteryDisplay : 0;
+      optionPopup.show(StrId::STR_BATTERY_DISPLAY, batteryDisplayNames, BATTERY_DISPLAY_ITEMS, cur, [this](int idx) {
+        if (idx < 0 || idx >= BATTERY_DISPLAY_ITEMS) return;
+        SETTINGS.systemBatteryDisplay = static_cast<uint8_t>(idx);
+        SETTINGS.saveToFile();
+      });
       return;
     }
     case ITEM_BATTERY_WARNING: {
@@ -361,8 +359,7 @@ void SystemStatusBarSettingsActivity::handleSelection() {
       for (int i = 0; i < BATTERY_WARNING_ITEMS; i++) {
         labels.emplace_back(batteryWarningValueLabel(static_cast<uint8_t>(i)));
       }
-      const uint8_t cur =
-          SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
+      const uint8_t cur = SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
       optionPopup.show(StrId::STR_BATTERY_WARNING, labels, cur, [this](int idx) {
         if (idx < 0 || idx >= BATTERY_WARNING_ITEMS) return;
         SETTINGS.batteryWarning = static_cast<uint8_t>(idx);
@@ -448,8 +445,7 @@ void SystemStatusBarSettingsActivity::render(RenderLock&&) {
             return std::string(I18N.get(batteryDisplayNames[mode]));
           }
           case ITEM_BATTERY_WARNING: {
-            const uint8_t mode =
-                SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
+            const uint8_t mode = SETTINGS.batteryWarning < BATTERY_WARNING_ITEMS ? SETTINGS.batteryWarning : 0;
             return std::string(batteryWarningValueLabel(mode));
           }
           case ITEM_CLOCK_FORMAT: {

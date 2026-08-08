@@ -14,6 +14,7 @@
 #include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/icons/bluetooth.h"
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
@@ -25,7 +26,6 @@
 #include "components/icons/image24.h"
 #include "components/icons/library.h"
 #include "components/icons/recent.h"
-#include "components/icons/bluetooth.h"
 #include "components/icons/settings2.h"
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
@@ -125,8 +125,7 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
     // Center title in the free band between real status chrome (clock/battery)
     // and the bottom rule — not batteryBarHeight (layout reserve, too tall on Lyra).
-    const int chromeBottom =
-        rect.y + BaseTheme::kTopChromeBatteryY + 6 + LyraMetrics::values.batteryHeight;
+    const int chromeBottom = rect.y + BaseTheme::kTopChromeBatteryY + 6 + LyraMetrics::values.batteryHeight;
     const int titleY = chromeBottom + std::max(0, (ruleY - chromeBottom - lineH) / 2);
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_12_FONT_ID, titleY, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
@@ -134,8 +133,7 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   }
 
   if (subtitle) {
-    const int maxSubtitleWidth =
-        std::max(40, rect.width / 3 - LyraMetrics::values.contentSidePadding);
+    const int maxSubtitleWidth = std::max(40, rect.width / 3 - LyraMetrics::values.contentSidePadding);
     auto truncatedSubtitle = renderer.truncatedText(SMALL_FONT_ID, subtitle, maxSubtitleWidth, EpdFontFamily::REGULAR);
     int truncatedSubtitleWidth = renderer.getTextWidth(SMALL_FONT_ID, truncatedSubtitle.c_str());
     const int subY = rect.y + std::max(2, LyraMetrics::values.batteryBarHeight / 2 - 4);
@@ -262,8 +260,7 @@ int lyraListRowHeightForLines(const GfxRenderer& renderer, const bool hasSubtitl
     contentH += kLyraTitleSubtitleGap + renderer.getLineHeight(SMALL_FONT_ID);
   }
   const int computed = contentH + kLyraRowPad;
-  const int baseline =
-      hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  const int baseline = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
   return std::max(baseline, computed);
 }
 
@@ -276,8 +273,7 @@ int lyraListRowHeight(const GfxRenderer& renderer, const bool hasSubtitle) {
 int LyraTheme::getListRowStep(bool hasSubtitle) const {
   // Approximate without GfxRenderer (navigation page size). Painting uses live measure.
   // Split-title mode does not inflate step — wrap is per-item when text needs it.
-  int rowHeight =
-      hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
   if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_LARGE) {
     rowHeight += 4;
   } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_XSMALL) {
@@ -552,8 +548,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
       const int coverX = tileX + hPaddingInSelection;
       const int coverY = tileY + hPaddingInSelection;
-      coverBufferStored =
-          storeCoverBuffer(coverX, coverY, coverWidth, LyraMetrics::values.homeCoverHeight);
+      coverBufferStored = storeCoverBuffer(coverX, coverY, coverWidth, LyraMetrics::values.homeCoverHeight);
       coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
     }
 
@@ -612,8 +607,7 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
   // any legacy callers that still pass one.
   const bool drawIcons = static_cast<bool>(rowIcon);
   for (int i = 0; i < buttonCount; ++i) {
-    const int tileY =
-        rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing);
+    const int tileY = rect.y + i * (LyraMetrics::values.menuRowHeight + LyraMetrics::values.menuSpacing);
     const bool selected = selectedIndex == i;
     std::string labelStr = buttonLabel(i);
     const char* label = labelStr.c_str();

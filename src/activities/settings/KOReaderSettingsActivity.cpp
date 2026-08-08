@@ -43,11 +43,7 @@ constexpr int kFixedThroughSync = 7;  // indices 0..6 always present
 // Display order (not storage enum order): Off, Smart Sync, Ask Every Time, Percent, Time.
 constexpr int SYNC_BEHAVIOR_OPTION_COUNT = static_cast<int>(KOReaderSyncBehavior::COUNT);
 const StrId syncBehaviorOptionNames[SYNC_BEHAVIOR_OPTION_COUNT] = {
-    StrId::STR_OFF,
-    StrId::STR_SMART_SYNC,
-    StrId::STR_ASK_EVERY_TIME,
-    StrId::STR_PERCENT,
-    StrId::STR_TIME,
+    StrId::STR_OFF, StrId::STR_SMART_SYNC, StrId::STR_ASK_EVERY_TIME, StrId::STR_PERCENT, StrId::STR_TIME,
 };
 
 KOReaderSyncBehavior currentBehavior() { return KOREADER_STORE.getSyncBehavior(); }
@@ -129,25 +125,24 @@ void KOReaderSettingsActivity::onEnter() {
 void KOReaderSettingsActivity::onExit() { Activity::onExit(); }
 
 void KOReaderSettingsActivity::openTimeIntervalPicker() {
-  startActivityForResult(
-      std::make_unique<IntervalSelectionActivity>(
-          renderer, mappedInput, "KoUploadTimeInterval", StrId::STR_UPLOAD_TIME_INTERVAL,
-          static_cast<int>(KOREADER_STORE.getAutoUploadIntervalMinutes()),
-          static_cast<int>(KOReaderCredentialStore::MIN_INTERVAL_MINUTES),
-          static_cast<int>(KOReaderCredentialStore::MAX_INTERVAL_MINUTES),
-          /*smallStep=*/5, /*largeStep=*/60, StrId::STR_UPLOAD_TIME_MINUTES_FORMAT,
-          /*readerActivity=*/false, /*ignoreInitialConfirmRelease=*/true, StrId::STR_NONE_OPT, StrId::STR_ALWAYS,
-          IntervalSelectionActivity::DisplayStyle::HoursMinutes),
-      [this](const ActivityResult& result) {
-        if (!result.isCancelled) {
-          const auto* iv = std::get_if<IntervalResult>(&result.data);
-          if (iv != nullptr) {
-            KOREADER_STORE.setAutoUploadIntervalMinutes(static_cast<uint16_t>(iv->value));
-            KOREADER_STORE.saveToFile();
-          }
-        }
-        requestUpdate();
-      });
+  startActivityForResult(std::make_unique<IntervalSelectionActivity>(
+                             renderer, mappedInput, "KoUploadTimeInterval", StrId::STR_UPLOAD_TIME_INTERVAL,
+                             static_cast<int>(KOREADER_STORE.getAutoUploadIntervalMinutes()),
+                             static_cast<int>(KOReaderCredentialStore::MIN_INTERVAL_MINUTES),
+                             static_cast<int>(KOReaderCredentialStore::MAX_INTERVAL_MINUTES),
+                             /*smallStep=*/5, /*largeStep=*/60, StrId::STR_UPLOAD_TIME_MINUTES_FORMAT,
+                             /*readerActivity=*/false, /*ignoreInitialConfirmRelease=*/true, StrId::STR_NONE_OPT,
+                             StrId::STR_ALWAYS, IntervalSelectionActivity::DisplayStyle::HoursMinutes),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             const auto* iv = std::get_if<IntervalResult>(&result.data);
+                             if (iv != nullptr) {
+                               KOREADER_STORE.setAutoUploadIntervalMinutes(static_cast<uint16_t>(iv->value));
+                               KOREADER_STORE.saveToFile();
+                             }
+                           }
+                           requestUpdate();
+                         });
 }
 
 void KOReaderSettingsActivity::openPercentThresholdPicker() {
@@ -199,8 +194,10 @@ void KOReaderSettingsActivity::loop() {
   const auto listTouch = handleListTouch(touchSel, count, contentTop, contentHeight, false);
   if (listTouch != ListTouchResult::None) {
     selectedIndex = static_cast<size_t>(touchSel);
-    if (listTouch == ListTouchResult::Activated) activateSelected();
-    else requestUpdate();
+    if (listTouch == ListTouchResult::Activated)
+      activateSelected();
+    else
+      requestUpdate();
     return;
   }
 

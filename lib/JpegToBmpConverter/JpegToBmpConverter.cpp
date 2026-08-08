@@ -232,8 +232,8 @@ struct BmpConvertCtx {
   // Accumulates one MCU row (up to MAX_MCU_HEIGHT source rows × srcWidth pixels)
   // Filled column-by-column as JPEGDEC callbacks arrive for the same MCU row
   std::unique_ptr<uint8_t[]> mcuBuf;
-  int mcuRowBaseY;   // blockY of MCU row currently being assembled (-1 = none)
-  int mcuRowMaxH;    // max blockH seen across columns in this MCU row
+  int mcuRowBaseY;        // blockY of MCU row currently being assembled (-1 = none)
+  int mcuRowMaxH;         // max blockH seen across columns in this MCU row
   int lastSrcYProcessed;  // last source Y fully emitted (-1 = none)
 
   // Y-axis area averaging accumulators (needsScaling only)
@@ -532,8 +532,7 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   // Mid-gray fill on covers makes any rare gap blend instead of a hard hairline.
   if (ctx->mcuRowBaseY != blockY) {
     const uint8_t fill = ctx->coverHighQuality ? 128 : 0;
-    memset(ctx->mcuBuf.get(), fill,
-           static_cast<size_t>(MAX_MCU_HEIGHT) * static_cast<size_t>(ctx->srcWidth));
+    memset(ctx->mcuBuf.get(), fill, static_cast<size_t>(MAX_MCU_HEIGHT) * static_cast<size_t>(ctx->srcWidth));
     ctx->mcuRowBaseY = blockY;
     ctx->mcuRowMaxH = 0;
   }
@@ -620,8 +619,7 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop,
-                                                     bool coverHighQuality) {
+                                                     int targetHeight, bool oneBit, bool crop, bool coverHighQuality) {
   // Home cover path (c22): 2-bit balanced Atkinson — far less visible dither than 1-bit.
   // Display uses grayscale multipass on home (same idea as sleep covers).
   if (coverHighQuality) {

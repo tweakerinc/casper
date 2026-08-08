@@ -35,9 +35,7 @@ constexpr int kPopupGapTop = 12;
 constexpr int kPopupGapAboveHints = 10;
 
 // Body/title wrap width: left pad + content + gap(=left pad) + scroll rail.
-int definitionContentWidth(const int popupW) {
-  return std::max(40, popupW - kPopupPadX * 2 - kScrollBarInset);
-}
+int definitionContentWidth(const int popupW) { return std::max(40, popupW - kPopupPadX * 2 - kScrollBarInset); }
 
 // StarDict type-code bytes that may prefix a definition when sametypesequence is absent.
 bool isStarDictTypeCode(const unsigned char c) {
@@ -177,10 +175,11 @@ bool isGenderLabel(const std::string& line) {
 bool isPosLabel(const std::string& line) {
   // Part-of-speech labels (bold). Gender is handled separately via isGenderLabel.
   static constexpr const char* kPos[] = {
-      "noun",       "verb",      "adjective", "adverb",     "pronoun",    "preposition", "conjunction",
-      "interjection", "determiner", "numeral", "particle",  "article",    "proper",      "prop",
-      "adj",        "adv",       "n",         "v",          "prep",       "conj",        "interj",
-      "phrase",     "idiom",     "prefix",    "suffix",     "abbreviation", "symbol",     "misc", "other",
+      "noun",        "verb",         "adjective",  "adverb",  "pronoun",  "preposition",
+      "conjunction", "interjection", "determiner", "numeral", "particle", "article",
+      "proper",      "prop",         "adj",        "adv",     "n",        "v",
+      "prep",        "conj",         "interj",     "phrase",  "idiom",    "prefix",
+      "suffix",      "abbreviation", "symbol",     "misc",    "other",
   };
   std::string s = line;
   while (!s.empty() && s[0] == ' ') s.erase(0, 1);
@@ -607,10 +606,9 @@ void DictionaryDefinitionActivity::layoutPopup() {
 
   // Free band between top status/chrome and bottom Back·Done hints — never let the
   // card grow into either strip (long defs like "head" used pageH-80 and overflowed).
-  const int topReserve = std::max(
-      kPopupGapTop,
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY +
-          std::max(metrics.batteryHeight + 4, metrics.statusBarVerticalMargin) + kPopupGapTop);
+  const int topReserve =
+      std::max(kPopupGapTop, metrics.topPadding + BaseTheme::kTopChromeBatteryY +
+                                 std::max(metrics.batteryHeight + 4, metrics.statusBarVerticalMargin) + kPopupGapTop);
   // Touch themes zero buttonHintsHeight; still leave a floor so the card is not full-bleed.
   const int hintsH = metrics.buttonHintsHeight > 0 ? metrics.buttonHintsHeight : 40;
   const int bottomReserve = hintsH + kPopupGapAboveHints;
@@ -681,8 +679,8 @@ void DictionaryDefinitionActivity::rebuildLines() {
     }
 
     // Sense lines are already indented ("  1. …"); wrap continuations further in.
-    const bool sense = looksLikeNumberedSense(para) ||
-                       (para.size() > 2 && para[0] == ' ' && looksLikeNumberedSense(para.substr(2)));
+    const bool sense =
+        looksLikeNumberedSense(para) || (para.size() > 2 && para[0] == ' ' && looksLikeNumberedSense(para.substr(2)));
     const int wrapW = sense ? std::max(40, contentW - 12) : contentW;
     auto wrapped = renderer.wrappedText(UI_10_FONT_ID, para.c_str(), wrapW, room);
     for (size_t i = 0; i < wrapped.size(); ++i) {
@@ -849,12 +847,10 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   if (!pronDisplay.empty()) {
     pronW = renderer.getTextWidth(bodyFont, pronDisplay.c_str(), EpdFontFamily::REGULAR);
   }
-  const int headMaxW =
-      !pronDisplay.empty()
-          ? std::max(48, contentInnerW - kHeadPronGap - std::min(pronW, contentInnerW / 2 + 20))
-          : contentInnerW;
-  const std::string titleVis =
-      renderer.truncatedText(headFont, headword.c_str(), headMaxW, EpdFontFamily::BOLD);
+  const int headMaxW = !pronDisplay.empty()
+                           ? std::max(48, contentInnerW - kHeadPronGap - std::min(pronW, contentInnerW / 2 + 20))
+                           : contentInnerW;
+  const std::string titleVis = renderer.truncatedText(headFont, headword.c_str(), headMaxW, EpdFontFamily::BOLD);
   const int titleW = renderer.getTextWidth(headFont, titleVis.c_str(), EpdFontFamily::BOLD);
   renderer.drawText(headFont, textLeft, titleY, titleVis.c_str(), true, EpdFontFamily::BOLD);
 
@@ -895,28 +891,23 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     // Truncate as a hard safety net so any unwrapped long line still stops before the rail.
     if (!line.empty() && line[0] == '@') {
       const char* packName = line.c_str() + 1;
-      const std::string packVis =
-          renderer.truncatedText(bodyFont, packName, bodyContentW, EpdFontFamily::BOLD);
+      const std::string packVis = renderer.truncatedText(bodyFont, packName, bodyContentW, EpdFontFamily::BOLD);
       const int packW = renderer.getTextWidth(bodyFont, packVis.c_str(), EpdFontFamily::BOLD);
       const int packX = popupX + std::max(kPopupPadX, (popupW - packW) / 2);
       renderer.drawText(bodyFont, packX, y, packVis.c_str(), true, EpdFontFamily::BOLD);
     } else if (!line.empty() && line[0] == '~') {
       // Gender label above its senses. UI fonts may lack a true italic face — ITALIC
       // falls back to regular (not bold), which still separates them from POS headers.
-      const std::string vis =
-          renderer.truncatedText(bodyFont, line.c_str() + 1, bodyContentW, EpdFontFamily::ITALIC);
+      const std::string vis = renderer.truncatedText(bodyFont, line.c_str() + 1, bodyContentW, EpdFontFamily::ITALIC);
       renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::ITALIC);
     } else if (isGenderLabel(line)) {
-      const std::string vis =
-          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::ITALIC);
+      const std::string vis = renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::ITALIC);
       renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::ITALIC);
     } else if (isPosLabel(line)) {
-      const std::string vis =
-          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::BOLD);
+      const std::string vis = renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::BOLD);
       renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::BOLD);
     } else {
-      const std::string vis =
-          renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::REGULAR);
+      const std::string vis = renderer.truncatedText(bodyFont, line.c_str(), bodyContentW, EpdFontFamily::REGULAR);
       renderer.drawText(bodyFont, textX, y, vis.c_str(), true, EpdFontFamily::REGULAR);
     }
     y += lineH;
@@ -938,8 +929,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     }
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE),
-                                            (scrollLine > 0 ? tr(STR_DIR_UP) : ""),
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), (scrollLine > 0 ? tr(STR_DIR_UP) : ""),
                                             (scrollLine + visibleLines < totalLines ? tr(STR_DIR_DOWN) : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   UiGhostPolicy::displayMenuFrame(renderer);

@@ -83,18 +83,18 @@ constexpr int kSlotContentOrderCount = static_cast<int>(sizeof(kSlotContentOrder
 
 // Labels for enum values (index = STATUS_BAR_CORNER_CONTENT).
 const StrId kContentLabelByEnum[CrossPointSettings::STATUS_BAR_CORNER_CONTENT_COUNT] = {
-    StrId::STR_HIDE,                    // 0
-    StrId::STR_BATTERY,                 // 1
-    StrId::STR_CHAPTER_PAGE_COUNTER,    // 2
-    StrId::STR_PROGRESS_PERCENTAGE,     // 3
-    StrId::STR_TIME_LEFT_BOOK_OPTION,   // 4
+    StrId::STR_HIDE,                      // 0
+    StrId::STR_BATTERY,                   // 1
+    StrId::STR_CHAPTER_PAGE_COUNTER,      // 2
+    StrId::STR_PROGRESS_PERCENTAGE,       // 3
+    StrId::STR_TIME_LEFT_BOOK_OPTION,     // 4
     StrId::STR_TIME_LEFT_CHAPTER_OPTION,  // 5
-    StrId::STR_CLOCK,                   // 6
-    StrId::STR_BOOK_TITLE,              // 7
-    StrId::STR_BOOK_PAGE_COUNTER,       // 8
-    StrId::STR_CHAPTER_COUNTER,         // 9
-    StrId::STR_CHAPTER_TITLE,           // 10
-    StrId::STR_XTC_STATUS_BAR,          // 11
+    StrId::STR_CLOCK,                     // 6
+    StrId::STR_BOOK_TITLE,                // 7
+    StrId::STR_BOOK_PAGE_COUNTER,         // 8
+    StrId::STR_CHAPTER_COUNTER,           // 9
+    StrId::STR_CHAPTER_TITLE,             // 10
+    StrId::STR_XTC_STATUS_BAR,            // 11
 };
 
 // Order matches STATUS_BAR_PROGRESS_BAR: Hide, Book, Chapter.
@@ -107,13 +107,13 @@ const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {
 
 // Order matches BATTERY_DISPLAY_MODE: Icon, Percent, Icon + Percent.
 constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
-const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {
-    StrId::STR_ICON, StrId::STR_PERCENT, StrId::STR_ICON_PLUS_PERCENT};
+const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {StrId::STR_ICON, StrId::STR_PERCENT,
+                                                          StrId::STR_ICON_PLUS_PERCENT};
 
 // Order matches STATUS_BAR_FONT_SIZE: 8 / 10 / 12 pt.
 constexpr int STATUS_BAR_FONT_ITEMS = CrossPointSettings::STATUS_BAR_FONT_SIZE_COUNT;
-const StrId statusBarFontNames[STATUS_BAR_FONT_ITEMS] = {
-    StrId::STR_STATUS_BAR_FONT_8, StrId::STR_STATUS_BAR_FONT_10, StrId::STR_STATUS_BAR_FONT_12};
+const StrId statusBarFontNames[STATUS_BAR_FONT_ITEMS] = {StrId::STR_STATUS_BAR_FONT_8, StrId::STR_STATUS_BAR_FONT_10,
+                                                         StrId::STR_STATUS_BAR_FONT_12};
 
 // Air between list and preview footer (label band for "Preview").
 const int kPreviewLabelBand = 22;
@@ -178,8 +178,8 @@ bool nestedAt(int listIndex) {
 }
 
 bool isSlotItem(int item) {
-  return item == ITEM_UPPER_LEFT || item == ITEM_UPPER_MIDDLE || item == ITEM_UPPER_RIGHT ||
-         item == ITEM_LOWER_LEFT || item == ITEM_LOWER_MIDDLE || item == ITEM_LOWER_RIGHT;
+  return item == ITEM_UPPER_LEFT || item == ITEM_UPPER_MIDDLE || item == ITEM_UPPER_RIGHT || item == ITEM_LOWER_LEFT ||
+         item == ITEM_LOWER_MIDDLE || item == ITEM_LOWER_RIGHT;
 }
 
 uint8_t& cornerFieldForItem(int item) {
@@ -281,8 +281,7 @@ void StatusBarSettingsActivity::loop() {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Compact title band (not full Settings headerHeight — that left too little list room on X3).
-  const int topChromeBottom =
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
+  const int topChromeBottom = metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
   const int titleLineH = renderer.getLineHeight(UI_12_FONT_ID);
   const int contentTop = topChromeBottom + titleLineH + 12;
   const int hintsTop = renderer.getScreenHeight() - metrics.buttonHintsHeight;
@@ -348,8 +347,7 @@ void StatusBarSettingsActivity::handleSelection() {
 
   switch (item) {
     case ITEM_FONT_SIZE: {
-      const uint8_t cur =
-          SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
+      const uint8_t cur = SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
       optionPopup.show(StrId::STR_STATUS_BAR_FONT_SIZE, statusBarFontNames, STATUS_BAR_FONT_ITEMS, cur,
                        [this](int idx) {
                          if (idx < 0 || idx >= STATUS_BAR_FONT_ITEMS) return;
@@ -359,14 +357,12 @@ void StatusBarSettingsActivity::handleSelection() {
       return;
     }
     case ITEM_BATTERY_DISPLAY: {
-      const uint8_t cur =
-          SETTINGS.readerBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.readerBatteryDisplay : 0;
-      optionPopup.show(StrId::STR_BATTERY_DISPLAY, batteryDisplayNames, BATTERY_DISPLAY_ITEMS, cur,
-                       [this](int idx) {
-                         if (idx < 0 || idx >= BATTERY_DISPLAY_ITEMS) return;
-                         SETTINGS.readerBatteryDisplay = static_cast<uint8_t>(idx);
-                         SETTINGS.saveToFile();
-                       });
+      const uint8_t cur = SETTINGS.readerBatteryDisplay < BATTERY_DISPLAY_ITEMS ? SETTINGS.readerBatteryDisplay : 0;
+      optionPopup.show(StrId::STR_BATTERY_DISPLAY, batteryDisplayNames, BATTERY_DISPLAY_ITEMS, cur, [this](int idx) {
+        if (idx < 0 || idx >= BATTERY_DISPLAY_ITEMS) return;
+        SETTINGS.readerBatteryDisplay = static_cast<uint8_t>(idx);
+        SETTINGS.saveToFile();
+      });
       return;
     }
     case ITEM_PROGRESS_BAR:
@@ -406,8 +402,7 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
 
   // Title only — do not use drawHeader (system chrome would ghost under the
   // six-slot preview when Upper Left is Hide). Compact band under top chrome.
-  const int topChromeBottom =
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
+  const int topChromeBottom = metrics.topPadding + BaseTheme::kTopChromeBatteryY + 6 + metrics.batteryHeight;
   const int titleLineH = renderer.getLineHeight(UI_12_FONT_ID);
   const int contentTop = topChromeBottom + titleLineH + 12;
   {
@@ -432,8 +427,7 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
       [](int index) -> std::string {
         switch (itemAt(index)) {
           case ITEM_FONT_SIZE: {
-            const uint8_t fs =
-                SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
+            const uint8_t fs = SETTINGS.statusBarFontSize < STATUS_BAR_FONT_ITEMS ? SETTINGS.statusBarFontSize : 0;
             return std::string(I18N.get(statusBarFontNames[fs]));
           }
           case ITEM_UPPER_LEFT:
@@ -454,9 +448,9 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
             return std::string(I18N.get(batteryDisplayNames[mode]));
           }
           case ITEM_PROGRESS_BAR:
-            return I18N.get(progressBarNames[SETTINGS.statusBarProgressBar < PROGRESS_BAR_ITEMS
-                                                 ? SETTINGS.statusBarProgressBar
-                                                 : 0]);
+            return I18N.get(
+                progressBarNames[SETTINGS.statusBarProgressBar < PROGRESS_BAR_ITEMS ? SETTINGS.statusBarProgressBar
+                                                                                    : 0]);
           case ITEM_PROGRESS_BAR_THICKNESS:
             return I18N.get(progressBarThicknessNames[SETTINGS.statusBarProgressBarThickness]);
           default:

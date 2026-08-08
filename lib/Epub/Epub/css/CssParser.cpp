@@ -900,8 +900,7 @@ std::string CssParser::resolveBackgroundImage(std::string_view tagName, std::str
       }
     });
     forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
-      if (auto it = backgroundBySelector_.find(CompositeKey{tagName, ".", cls});
-          it != backgroundBySelector_.end()) {
+      if (auto it = backgroundBySelector_.find(CompositeKey{tagName, ".", cls}); it != backgroundBySelector_.end()) {
         result = it->second;
       }
     });
@@ -1014,8 +1013,8 @@ bool CssParser::saveToCache() const {
   }
 
   // v10: sparse background-image map (selector → url path)
-  const auto bgCount = static_cast<uint16_t>(
-      std::min(backgroundBySelector_.size(), static_cast<size_t>(MAX_BACKGROUND_IMAGES)));
+  const auto bgCount =
+      static_cast<uint16_t>(std::min(backgroundBySelector_.size(), static_cast<size_t>(MAX_BACKGROUND_IMAGES)));
   file.write(reinterpret_cast<const uint8_t*>(&bgCount), sizeof(bgCount));
   uint16_t bgWritten = 0;
   for (const auto& pair : backgroundBySelector_) {
@@ -1082,12 +1081,12 @@ bool CssParser::loadFromCache() {
   constexpr size_t CSS_LENGTH_FIELD_COUNT = 13;  // 11 classic + fontSize + lineHeightLength
   constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
   constexpr size_t CSS_FIXED_STYLE_BYTES =
-      5 * sizeof(uint8_t) +                                      // textAlign..direction
-      (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) +              // lengths including fontSize + lineHeightLength
-      2 * sizeof(uint8_t) +                                      // display + verticalAlign
-      sizeof(uint8_t) + sizeof(float) +                          // lineHeightKind + unitless
-      3 * sizeof(uint8_t) +                                      // floatSide + clear + fontVariant
-      sizeof(uint32_t);                                          // definedBits
+      5 * sizeof(uint8_t) +                          // textAlign..direction
+      (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) +  // lengths including fontSize + lineHeightLength
+      2 * sizeof(uint8_t) +                          // display + verticalAlign
+      sizeof(uint8_t) + sizeof(float) +              // lineHeightKind + unitless
+      3 * sizeof(uint8_t) +                          // floatSide + clear + fontVariant
+      sizeof(uint32_t);                              // definedBits
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
@@ -1272,8 +1271,7 @@ bool CssParser::loadFromCache() {
     for (uint16_t b = 0; b < bgCount; ++b) {
       uint16_t selLen = 0;
       uint16_t urlLen = 0;
-      if (file.read(&selLen, sizeof(selLen)) != sizeof(selLen) || selLen == 0 ||
-          selLen > MAX_SELECTOR_LENGTH) {
+      if (file.read(&selLen, sizeof(selLen)) != sizeof(selLen) || selLen == 0 || selLen > MAX_SELECTOR_LENGTH) {
         rulesBySelector_.clear();
         backgroundBySelector_.clear();
         return false;

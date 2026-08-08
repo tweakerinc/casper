@@ -26,7 +26,7 @@ struct RenderConfig {
   // + white-out of the FB was unnecessary and has been a crash vector when the
   // heap is already fragmented after TextSettings reflow.
   bool writeToFramebuffer = true;
-  std::string cachePath;            // If non-empty, decoder will write pixel cache to this path
+  std::string cachePath;  // If non-empty, decoder will write pixel cache to this path
 };
 
 class ImageToFramebufferDecoder {

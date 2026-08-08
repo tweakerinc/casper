@@ -1,5 +1,4 @@
 #include "XtcReaderChapterSelectionActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -9,6 +8,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 int XtcReaderChapterSelectionActivity::getPageItems() const {
   constexpr int lineHeight = 30;

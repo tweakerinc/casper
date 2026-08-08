@@ -261,9 +261,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // Stream TLS download to SD only — do not call esp_ota_write while the TLS
   // session is open. Measured OOM floor on C3 was ~2–8KB free contiguous when
   // erase/write + wolfSSL shared the arena for multi-minute GitHub CDN downloads.
-  const auto dlErr = HttpDownloader::downloadToFile(
-      otaUrl, kOtaCachePath,
-      [&](size_t downloaded, size_t reportedTotal) {
+  const auto dlErr =
+      HttpDownloader::downloadToFile(otaUrl, kOtaCachePath, [&](size_t downloaded, size_t reportedTotal) {
         if (reportedTotal > 0 && reportedTotal != downloadDenom) {
           downloadDenom = reportedTotal;
           totalSize = downloadDenom * 2;

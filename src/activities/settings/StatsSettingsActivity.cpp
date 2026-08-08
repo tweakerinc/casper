@@ -143,21 +143,20 @@ void StatsSettingsActivity::handleSelection() {
       rebuildMenu();
       return;
     case ITEM_SESSION_TIME:
-      startActivityForResult(
-          std::make_unique<IntervalSelectionActivity>(
-              renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
-              static_cast<int>(SETTINGS.readingSessionIdleMinutes),
-              static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
-              static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
-              StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
-              SETTINGS.readingSessionIdleMinutes =
-                  static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-              SETTINGS.saveToFile();
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<IntervalSelectionActivity>(
+                                 renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
+                                 static_cast<int>(SETTINGS.readingSessionIdleMinutes),
+                                 static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
+                                 static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
+                                 StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled) {
+                                 SETTINGS.readingSessionIdleMinutes =
+                                     static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
+                                 SETTINGS.saveToFile();
+                               }
+                               requestUpdate();
+                             });
       return;
     case ITEM_AUTO_BACKUP:
       SETTINGS.autoBackupStats = SETTINGS.autoBackupStats != 0 ? 0 : 1;
@@ -183,8 +182,7 @@ void StatsSettingsActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_STATS));
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount, selectedIndex,
@@ -192,8 +190,7 @@ void StatsSettingsActivity::render(RenderLock&&) {
         const int item = itemAt(index);
         if (item < 0) return std::string();
         // Session Time / Auto Backup / Backup Now nest under Enable Stat Tracking.
-        const bool nested =
-            item == ITEM_SESSION_TIME || item == ITEM_AUTO_BACKUP || item == ITEM_BACKUP_NOW;
+        const bool nested = item == ITEM_SESSION_TIME || item == ITEM_AUTO_BACKUP || item == ITEM_BACKUP_NOW;
         return NestedMenuLabel::format(I18N.get(nameForItem(item)), nested);
       },
       nullptr, nullptr,
@@ -218,8 +215,7 @@ void StatsSettingsActivity::render(RenderLock&&) {
       true);
 
   const int item = itemAt(selectedIndex);
-  const char* confirmHint =
-      (item == ITEM_ENABLE || item == ITEM_AUTO_BACKUP) ? tr(STR_TOGGLE) : tr(STR_SELECT);
+  const char* confirmHint = (item == ITEM_ENABLE || item == ITEM_AUTO_BACKUP) ? tr(STR_TOGGLE) : tr(STR_SELECT);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

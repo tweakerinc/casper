@@ -1,13 +1,11 @@
 #include "EpubReaderMenuActivity.h"
-#include "util/UiGhostPolicy.h"
 
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 
 #include <algorithm>
 #include <cstring>
-
-#include <BoardConfig.h>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -15,6 +13,7 @@
 #include "components/icons/settings2.h"
 #include "fontIds.h"
 #include "util/NestedMenuLabel.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 

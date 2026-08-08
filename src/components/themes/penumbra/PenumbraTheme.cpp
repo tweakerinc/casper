@@ -95,9 +95,8 @@ constexpr int kPageDotGap = 22;      // center-to-center
 constexpr int kPageDotsStripH = 40;  // room so dots sit mid-way between content and menu
 
 const StrId kWeekdayIds[7] = {
-    StrId::STR_WEEKDAY_SUNDAY,    StrId::STR_WEEKDAY_MONDAY,   StrId::STR_WEEKDAY_TUESDAY,
-    StrId::STR_WEEKDAY_WEDNESDAY, StrId::STR_WEEKDAY_THURSDAY, StrId::STR_WEEKDAY_FRIDAY,
-    StrId::STR_WEEKDAY_SATURDAY,
+    StrId::STR_WEEKDAY_SUNDAY,   StrId::STR_WEEKDAY_MONDAY, StrId::STR_WEEKDAY_TUESDAY,  StrId::STR_WEEKDAY_WEDNESDAY,
+    StrId::STR_WEEKDAY_THURSDAY, StrId::STR_WEEKDAY_FRIDAY, StrId::STR_WEEKDAY_SATURDAY,
 };
 
 bool isLeapYear(const uint16_t year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
@@ -153,8 +152,7 @@ int localWeekdayIndex() {
   uint16_t year = 0;
   uint8_t month = 0, day = 0, hour = 0, minute = 0;
   uint8_t rtcWeekday = 0;
-  if (!halClock.isAvailable() ||
-      !halClock.getDateTime(year, month, day, hour, minute, &rtcWeekday)) {
+  if (!halClock.isAvailable() || !halClock.getDateTime(year, month, day, hour, minute, &rtcWeekday)) {
     return -1;
   }
   if (month < 1 || month > 12 || day < 1) return -1;
@@ -293,9 +291,9 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const bool hasChrome = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
                          SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
   b.contentTop =
-      hasChrome ? (BaseTheme::kTopChromeBatteryY +
-                   std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)
-                : 20;
+      hasChrome
+          ? (BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)
+          : 20;
   b.contentBottom = pageH - footerH;
   const int bandH = std::max(1, b.contentBottom - b.contentTop);
   b.midY = b.contentTop + bandH / 2;
@@ -413,8 +411,7 @@ void drawTitleAuthorInZone(const GfxRenderer& renderer, const ContentBand& band,
       book.author.empty() ? std::string() : StringUtils::formatAuthorDisplayName(book.author);
   const char* author = authorDisplay.empty() ? nullptr : authorDisplay.c_str();
 
-  const int titleH =
-      measureWrappedHeight(renderer, titleFont, textMaxW, title, titleMaxLines, EpdFontFamily::BOLD);
+  const int titleH = measureWrappedHeight(renderer, titleFont, textMaxW, title, titleMaxLines, EpdFontFamily::BOLD);
   const int authorH =
       author ? measureWrappedHeight(renderer, authorFont, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
              : 0;
@@ -460,13 +457,11 @@ int measureNowReadingBlockH(const GfxRenderer& renderer, const ContentBand& band
       book.author.empty() ? std::string() : StringUtils::formatAuthorDisplayName(book.author);
   const int titleH =
       measureWrappedHeight(renderer, titleFont, band.textMaxW, title, kTitleMaxLinesX4, EpdFontFamily::BOLD);
-  const int authorH =
-      authorDisplay.empty()
-          ? 0
-          : measureWrappedHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(), kAuthorMaxLines,
-                                 EpdFontFamily::REGULAR);
-  return labelH + kLabelToTitleGapX4 + titleH +
-         (authorH > 0 ? (kPairGapX4 + authorH) : 0);
+  const int authorH = authorDisplay.empty()
+                          ? 0
+                          : measureWrappedHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
+                                                 kAuthorMaxLines, EpdFontFamily::REGULAR);
+  return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (kPairGapX4 + authorH) : 0);
 }
 
 // Row: title (full width) · author+% on one line · gap · bar.
@@ -481,12 +476,10 @@ int recentsRowHeight(const GfxRenderer& renderer) {
 }
 
 // X3: up to 4 books + View All. X4: up to 5 books, no View All (mid = Recents, sides scroll).
-inline int penumbraRecentsListCap() {
-  return isX4Penumbra() ? 5 : 4;
-}
+inline int penumbraRecentsListCap() { return isX4Penumbra() ? 5 : 4; }
 
-int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band,
-                         const std::vector<RecentBook>& books, const bool includeViewAll = false) {
+int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band, const std::vector<RecentBook>& books,
+                         const bool includeViewAll = false) {
   (void)band;
   const bool x4 = isX4Penumbra();
   const int captionH = renderer.getLineHeight(kLabelFontId);
@@ -497,8 +490,7 @@ int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band,
   const int viewAllGap = kRecentsViewAllGap;
   const int maxN = penumbraRecentsListCap();
   // Empty books: still reserve full list height so clock-minute re-layout does not jump midY.
-  const int n =
-      books.empty() ? maxN : std::min(static_cast<int>(books.size()), maxN);
+  const int n = books.empty() ? maxN : std::min(static_cast<int>(books.size()), maxN);
   if (n <= 0) return captionH + capToList + titleLineH;
   const int listH = n * rowH + (n - 1) * rowGap;
   int h = captionH + capToList + listH;
@@ -530,11 +522,10 @@ int measureX3TitleAuthorBlockH(const GfxRenderer& renderer, const ContentBand& b
       book.author.empty() ? std::string() : StringUtils::formatAuthorDisplayName(book.author);
   const int titleH =
       measureWrappedHeight(renderer, kTitleFontId, band.textMaxW, title, kTitleMaxLines, EpdFontFamily::BOLD);
-  const int authorH =
-      authorDisplay.empty()
-          ? 0
-          : measureWrappedHeight(renderer, kAuthorFontId, band.textMaxW, authorDisplay.c_str(), kAuthorMaxLines,
-                                 EpdFontFamily::REGULAR);
+  const int authorH = authorDisplay.empty()
+                          ? 0
+                          : measureWrappedHeight(renderer, kAuthorFontId, band.textMaxW, authorDisplay.c_str(),
+                                                 kAuthorMaxLines, EpdFontFamily::REGULAR);
   // drawTitleAuthorInZone uses kClockToDayGap for the non-X4 author gap.
   return labelH + kLabelToTitleGap + titleH + (authorH > 0 ? (kClockToDayGap + authorH) : 0);
 }
@@ -556,8 +547,7 @@ int measureX3StatsStyleBlockH(const GfxRenderer& renderer) {
 // new panel paints on top of the previous one (overlap / "Stats box over Recents").
 // Only one under-panel is drawn per frame — no layered modes — but e-ink keeps
 // uncleared pixels until they are filled white.
-int measureX3LowerBlockH(const GfxRenderer& renderer, const ContentBand& band,
-                         const std::vector<RecentBook>& books) {
+int measureX3LowerBlockH(const GfxRenderer& renderer, const ContentBand& band, const std::vector<RecentBook>& books) {
   const int titleH = measureX3TitleAuthorBlockH(renderer, band, books);
   const int recentsH = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/true);
   const int statsH = measureX3StatsStyleBlockH(renderer);
@@ -567,8 +557,7 @@ int measureX3LowerBlockH(const GfxRenderer& renderer, const ContentBand& band,
 // X3: three equal air gaps — top→clock, date→hairline, hairline→lower panel —
 // so the hairline is not glued to Recents. Leaves dots strip free below the list
 // (View All sits in the Recents block). Hairline Y is fixed across under-panel modes.
-void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
-                               const std::vector<RecentBook>& books) {
+void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();
   const int clockH = measureClockBlockH(renderer);
   const int Lh = measureX3LowerBlockH(renderer, band, books);
@@ -578,8 +567,8 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band,
   if (free < 6) free = 6;
   const int G = free / 3;
 
-  band.upperTop = band.contentTop + G;           // clock group top
-  band.midY = band.upperTop + clockH + G;        // hairline (stable across modes)
+  band.upperTop = band.contentTop + G;     // clock group top
+  band.midY = band.upperTop + clockH + G;  // hairline (stable across modes)
   band.halfH = std::max(1, band.midY - band.contentTop);
   band.lowerTop = band.midY + kRuleThickness + G;  // lower caption / list start
   band.pinBlocks = true;
@@ -659,8 +648,7 @@ void drawCircleOutline(const GfxRenderer& renderer, const int cx, const int cy, 
 // pageIndex / count: device-specific (X3=4, X4=3). No-op when tracking is off.
 // Active = filled black disk; inactive = hollow circle (paper interior).
 // Vertically centered in the strip between under-panel content and the menu bar.
-void drawPenumbraPageDots(const GfxRenderer& renderer, const ContentBand& band, const int pageIndex,
-                          const int count) {
+void drawPenumbraPageDots(const GfxRenderer& renderer, const ContentBand& band, const int pageIndex, const int count) {
   const int stripH = penumbraPageDotsStripH();
   if (stripH <= 0 || count < 2) return;
 
@@ -774,8 +762,8 @@ float recentsCachedProgress(const int i) {
 // - X3: up to 4 books + View All under the list.
 // - X4: up to 5 books, no View All (sides scroll; mid = Recents).
 // - listFocusIndex is list-only; upper "Now Reading" is always books[0].
-void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
-                          const std::vector<RecentBook>& books, const int listFocusIndex) {
+void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, const std::vector<RecentBook>& books,
+                          const int listFocusIndex) {
   const bool x4 = isX4Penumbra();
   // View All only on X3 (full list is a front Recents button on X4).
   const bool showViewAll = !x4;
@@ -804,8 +792,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band,
   const int capped = std::min(static_cast<int>(books.size()), penumbraRecentsListCap());
   int n = capped;
   if (!x4 && !band.pinBlocks) {
-    const int spaceForRows =
-        std::max(0, zoneH - topInset - captionH - capToList - viewAllH - 2);
+    const int spaceForRows = std::max(0, zoneH - topInset - captionH - capToList - viewAllH - 2);
     int maxFit = 0;
     if (rowH > 0 && spaceForRows >= rowH) {
       maxFit = 1 + std::max(0, spaceForRows - rowH) / (rowH + kRowGap);
@@ -918,10 +905,9 @@ void drawStatsStylePanel(const GfxRenderer& renderer, const ContentBand& band, c
                          const bool showBookTitle = true) {
   const bool x4 = isX4Penumbra();
   const int rowGap = x4 ? kStatRowGapX4 : kStatRowGap;
-  const int titleH =
-      showBookTitle ? measureWrappedHeight(renderer, kStatsBookTitleFontId, band.textMaxW, bookTitle,
-                                           kStatsTitleMaxLines, EpdFontFamily::BOLD)
-                    : 0;
+  const int titleH = showBookTitle ? measureWrappedHeight(renderer, kStatsBookTitleFontId, band.textMaxW, bookTitle,
+                                                          kStatsTitleMaxLines, EpdFontFamily::BOLD)
+                                   : 0;
   const int captionH = renderer.getLineHeight(kLabelFontId);
   const int pairH = statPairHeight(renderer);
   const int gridH = pairH * 2 + rowGap;
@@ -1025,9 +1011,8 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
 
   const char* values[6] = {vProgress, vTime, vLeft, vSessions, vAvg, vPace};
   // Full labels on both devices; X4 uses a smaller label font (see kStatLabelFontIdX4).
-  const char* labels[6] = {
-      tr(STR_STATS_PROGRESS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_TIME_LEFT),
-      tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_AVG_SESSION_LBL), tr(STR_STATS_PAGES_PER_MIN)};
+  const char* labels[6] = {tr(STR_STATS_PROGRESS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_TIME_LEFT),
+                           tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_AVG_SESSION_LBL), tr(STR_STATS_PAGES_PER_MIN)};
   drawStatsStylePanel(renderer, band, bookTitle, tr(STR_STATS), values, labels, showBookTitle);
 }
 
@@ -1035,7 +1020,7 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
 //   Sessions | Reading Time | Pages/Min
 //   Avg. Session | Books Read | Streak (X3) or Pages Turned (X4, no RTC)
 void drawLifetimePanel(const GfxRenderer& renderer, const ContentBand& band, const char* bookTitle,
-                     const GlobalReadingStats* globalStats, const bool showBookTitle, const bool useStreak) {
+                       const GlobalReadingStats* globalStats, const bool showBookTitle, const bool useStreak) {
   const GlobalReadingStats empty{};
   const GlobalReadingStats& g = globalStats != nullptr ? *globalStats : empty;
 
@@ -1132,9 +1117,7 @@ void drawClockHalf(const GfxRenderer& renderer, const ContentBand& band) {
 
   const int clockBlockH = clockInkH + (dayBuf[0] ? (kClockToDayGap + dayH) : 0);
   // pinBlocks: equal-gap upperTop. Else center clock in the upper half.
-  const int groupTop =
-      band.pinBlocks ? band.upperTop
-                     : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
   drawHeroClockCentered(renderer, band.centerX, groupTop, timeBuf);
   if (dayBuf[0]) {
     const int dayW = renderer.getTextWidth(kDayFontId, dayBuf, EpdFontFamily::REGULAR);
@@ -1193,11 +1176,11 @@ Rect redrawUnderPanelImpl(GfxRenderer& renderer, const std::vector<RecentBook>& 
 }  // namespace
 
 void PenumbraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect /*rect*/,
-                                         const std::vector<RecentBook>& recentBooks, const int selectorIndex,
-                                         bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
-                                         StoreCoverBufferFn /*storeCoverBuffer*/, const BookReadingStats* stats,
-                                         float progressPercent, const GlobalReadingStats* globalStats,
-                                         const char* /*currentChapterTitle*/) const {
+                                        const std::vector<RecentBook>& recentBooks, const int selectorIndex,
+                                        bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
+                                        StoreCoverBufferFn /*storeCoverBuffer*/, const BookReadingStats* stats,
+                                        float progressPercent, const GlobalReadingStats* globalStats,
+                                        const char* /*currentChapterTitle*/) const {
   (void)bufferRestored;
 
   coverBufferStored = false;
@@ -1217,8 +1200,8 @@ void PenumbraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect /*rect*/,
 }
 
 Rect PenumbraThemeUi::redrawUnderPanel(GfxRenderer& renderer, const std::vector<RecentBook>& recentBooks,
-                                        const int selectorIndex, const BookReadingStats* stats,
-                                        const float progressPercent, const GlobalReadingStats* globalStats) {
+                                       const int selectorIndex, const BookReadingStats* stats,
+                                       const float progressPercent, const GlobalReadingStats* globalStats) {
   return redrawUnderPanelImpl(renderer, recentBooks, selectorIndex, stats, progressPercent, globalStats);
 }
 
@@ -1252,8 +1235,7 @@ void PenumbraThemeUi::invalidateRecentsProgressCache() {
 
 bool PenumbraThemeUi::formatHeroTimeNow(char* buf, size_t bufSize) { return formatHeroTime(buf, bufSize); }
 
-Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, const char* prevTime, char* outTime,
-                                       size_t outTimeSize) {
+Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, const char* prevTime, char* outTime, size_t outTimeSize) {
   ContentBand band = layoutContentBand(renderer);
   // X4 has no hero clock — upper half is title/author (redrawn with full paint).
   if (!gpio.deviceIsX3()) {
@@ -1272,8 +1254,7 @@ Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, const char* prevTi
   const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
   const int dayH = renderer.getLineHeight(kDayFontId);
   const int clockBlockH = clockInkH + kClockToDayGap + dayH;
-  const int groupTop =
-      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
 
   // Measure old/new clock string bounds (centered). Prefer a tight suffix clear
   // when only trailing digits change (e.g. 9:41 → 9:42) so most of the face stays put.

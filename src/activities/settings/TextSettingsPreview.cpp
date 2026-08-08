@@ -32,8 +32,7 @@ constexpr const char* kHyphenationPreviewText =
 constexpr const char* kPreviewPara1 =
     "The quick brown fox jumps over the lazy dog. "
     "Pack my box with five dozen liquor jugs so every line can stretch.";
-constexpr const char* kPreviewPara2 =
-    "How vexingly quick daft zebras jump across the bright open field today.";
+constexpr const char* kPreviewPara2 = "How vexingly quick daft zebras jump across the bright open field today.";
 
 constexpr int kRuleThickness = 1;
 

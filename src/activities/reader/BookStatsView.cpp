@@ -349,9 +349,8 @@ void drawPerBookStatsCard(GfxRenderer& renderer, const int x, const int y, const
 
   uint32_t resolvedEstimateSeconds = 0;
   const bool hasResolvedEstimate =
-      !stats.isCompleted &&
-      resolveEstimatedTimeLeft(stats, progressPercent, hasEstimatedTimeLeft, estimatedTimeLeftSeconds,
-                               resolvedEstimateSeconds);
+      !stats.isCompleted && resolveEstimatedTimeLeft(stats, progressPercent, hasEstimatedTimeLeft,
+                                                     estimatedTimeLeftSeconds, resolvedEstimateSeconds);
   if (hasResolvedEstimate) {
     formatCompactEstimate(resolvedEstimateSeconds, buf, sizeof(buf));
   } else {

@@ -639,8 +639,7 @@ bool Section::finalizeBuild() {
   const bool committed = commitBuildFile(SECTION_FILE_VERSION, 0, 0);
   // Keep CSS resident for the next chapter when heap is healthy (session pin).
   // Under pressure, drop the rule map so the next open reloads from SD.
-  if (build_->cssParser &&
-      (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
+  if (build_->cssParser && (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
     build_->cssParser->clear();
   }
   build_.reset();
@@ -685,8 +684,7 @@ void Section::suspendBuild() {
 
   if (build_->parser) build_->parser->abortParse();
   // Session-pin CSS unless heap is tight (same policy as finalizeBuild).
-  if (build_->cssParser &&
-      (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
+  if (build_->cssParser && (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
     build_->cssParser->clear();
   }
   if (!committed && file) {

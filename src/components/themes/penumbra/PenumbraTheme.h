@@ -1,10 +1,10 @@
 #pragma once
 
+#include <HalGPIO.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-
-#include <HalGPIO.h>
 
 #include "CrossPointSettings.h"
 #include "components/themes/minimal/MinimalTheme.h"
@@ -52,9 +52,7 @@ enum class UnderMode : uint8_t {
 };
 
 // First under-panel page for this device (X4 = Recents #1, X3 = Title/Author).
-inline UnderMode defaultUnderMode() {
-  return gpio.deviceIsX3() ? UnderMode::TitleAuthor : UnderMode::Recents;
-}
+inline UnderMode defaultUnderMode() { return gpio.deviceIsX3() ? UnderMode::TitleAuthor : UnderMode::Recents; }
 
 inline UnderMode& underMode() {
   // Lazy default: re-evaluated only once. Always force-clamp on paint / home enter.
@@ -147,8 +145,7 @@ inline bool cycleUnderMode(const int delta) {
 // White-fill + redraw the band below the center rule. listFocusIndex picks the
 // highlighted row in the Recents under-panel only (does NOT change upper title).
 Rect redrawUnderPanel(GfxRenderer& renderer, const std::vector<RecentBook>& recentBooks, int listFocusIndex,
-                      const BookReadingStats* stats, float progressPercent,
-                      const GlobalReadingStats* globalStats);
+                      const BookReadingStats* stats, float progressPercent, const GlobalReadingStats* globalStats);
 
 // Ensure Recents progress % is in RAM. SD load only for paths not already cached
 // (or when the list is empty). Path order changes reuse prior % by path match —

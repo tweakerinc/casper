@@ -18,7 +18,7 @@ constexpr ThemeMetrics makeValues() {
   v.homeRecentBooksCount = 1;
   v.homeContinueReadingInMenu = false;
   v.homeMenuTopOffset = 0;
-  v.buttonHintsHeight = 48;     // room for larger label text, no outline chrome
+  v.buttonHintsHeight = 48;  // room for larger label text, no outline chrome
   return v;
 }
 

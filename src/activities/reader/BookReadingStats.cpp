@@ -632,12 +632,12 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
   BookReadingStats currentOnly;
   const bool haveCurrent = loadStatsFileNamed(cachePath, currentName, currentOnly);
   if (!haveCurrent || looksLikeEmptyShell(currentOnly) || isRicherStats(stats, currentOnly)) {
-    const bool sameTotals =
-        haveCurrent && currentOnly.totalReadingSeconds == stats.totalReadingSeconds &&
-        currentOnly.sessionCount == stats.sessionCount && currentOnly.totalPagesTurned == stats.totalPagesTurned &&
-        currentOnly.isCompleted == stats.isCompleted &&
-        currentOnly.progressPercentMilli == stats.progressPercentMilli &&
-        currentOnly.estimatedTimeLeftSeconds == stats.estimatedTimeLeftSeconds;
+    const bool sameTotals = haveCurrent && currentOnly.totalReadingSeconds == stats.totalReadingSeconds &&
+                            currentOnly.sessionCount == stats.sessionCount &&
+                            currentOnly.totalPagesTurned == stats.totalPagesTurned &&
+                            currentOnly.isCompleted == stats.isCompleted &&
+                            currentOnly.progressPercentMilli == stats.progressPercentMilli &&
+                            currentOnly.estimatedTimeLeftSeconds == stats.estimatedTimeLeftSeconds;
     if (!sameTotals) {
       ensureCacheDir(cachePath);
       stats.save(cachePath);
@@ -769,8 +769,7 @@ void BookReadingStats::save(const std::string& cachePath) const {
   }
   // Keep memo warm for this book only — do not wipe other books (Home resume).
   memoUpdateByCachePath(cachePath, *this);
-  LOG_INF("STATS", "Saved %s progressMilli=%u (%.1f%%)", fullPath.c_str(),
-          static_cast<unsigned>(progressPercentMilli),
+  LOG_INF("STATS", "Saved %s progressMilli=%u (%.1f%%)", fullPath.c_str(), static_cast<unsigned>(progressPercentMilli),
           progressPercentMilli == 0xFFFF ? -1.0 : static_cast<double>(progressPercentMilli) / 100.0);
 }
 

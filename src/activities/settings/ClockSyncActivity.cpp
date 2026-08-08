@@ -1,5 +1,4 @@
 #include "ClockSyncActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -15,6 +14,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 void ClockSyncActivity::onEnter() {
   Activity::onEnter();

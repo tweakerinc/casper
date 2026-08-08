@@ -1,5 +1,4 @@
 #include "IntervalSelectionActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -11,6 +10,7 @@
 
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 int IntervalSelectionActivity::clampedValue(const int candidate) const {
   return std::clamp(candidate, minValue, maxValue);

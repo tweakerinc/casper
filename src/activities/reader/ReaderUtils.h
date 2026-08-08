@@ -73,9 +73,8 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
   // PageBack/PageForward already include Up/Down/Left/Right + Side Layout + Orient Front Buttons.
-  const bool prev =
-      tiltPrev || (usePress ? input.wasPressed(MappedInputManager::Button::PageBack)
-                            : input.wasReleased(MappedInputManager::Button::PageBack));
+  const bool prev = tiltPrev || (usePress ? input.wasPressed(MappedInputManager::Button::PageBack)
+                                          : input.wasReleased(MappedInputManager::Button::PageBack));
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
   const unsigned long held = input.getHeldTime();
   const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
@@ -83,10 +82,9 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                              held >= SETTINGS.getPowerButtonLongPressDuration();
   const bool powerTurn = shortPowerTurn || longPowerTurn;
-  const bool next =
-      tiltNext || powerTurn ||
-      (usePress ? input.wasPressed(MappedInputManager::Button::PageForward)
-                : input.wasReleased(MappedInputManager::Button::PageForward));
+  const bool next = tiltNext || powerTurn ||
+                    (usePress ? input.wasPressed(MappedInputManager::Button::PageForward)
+                              : input.wasReleased(MappedInputManager::Button::PageForward));
   return {prev, next, tiltPrev || tiltNext};
 }
 
@@ -95,10 +93,8 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 inline bool anyPageTurnControlHeld(const MappedInputManager& input) {
   return input.isPressed(MappedInputManager::Button::PageBack) ||
          input.isPressed(MappedInputManager::Button::PageForward) ||
-         input.isPressed(MappedInputManager::Button::Left) ||
-         input.isPressed(MappedInputManager::Button::Right) ||
-         input.isPressed(MappedInputManager::Button::Up) ||
-         input.isPressed(MappedInputManager::Button::Down) ||
+         input.isPressed(MappedInputManager::Button::Left) || input.isPressed(MappedInputManager::Button::Right) ||
+         input.isPressed(MappedInputManager::Button::Up) || input.isPressed(MappedInputManager::Button::Down) ||
          input.isPressed(MappedInputManager::Button::Power);
 }
 

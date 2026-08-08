@@ -260,9 +260,8 @@ class BaseTheme {
                      const bool fillMargin = true, const bool isPageBookmarked = false,
                      const bool pageCountEstimated = false, const char* timeLeftBookLabel = nullptr,
                      const char* timeLeftChapterLabel = nullptr, const bool drawTopBattery = true,
-                     const int bookPage = 0, const int bookPageCount = 0,
-                     const bool bookPageCountEstimated = false, const int chapterIndex = 0,
-                     const int chapterTotal = 0, std::string chapterTitle = {},
+                     const int bookPage = 0, const int bookPageCount = 0, const bool bookPageCountEstimated = false,
+                     const int chapterIndex = 0, const int chapterTotal = 0, std::string chapterTitle = {},
                      bool previewIgnoreBatteryMasterHide = false, const char* previewClockTime = nullptr) const;
   // Top-center clock for reader chrome (X3 RTC). No-op when clock hidden/unavailable.
   void drawTopStatusBarClock(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr) const;

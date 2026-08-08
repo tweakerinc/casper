@@ -1,5 +1,4 @@
 #include "ClipSelectionActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -14,6 +13,7 @@
 #include "clippings/ClipTextBuilder.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 

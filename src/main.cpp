@@ -1,6 +1,4 @@
 #include <Arduino.h>
-#include <esp_sleep.h>
-#include <esp_system.h>
 #include <BoardConfig.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
@@ -18,6 +16,8 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <builtinFonts/all.h>
+#include <esp_sleep.h>
+#include <esp_system.h>
 
 #include <cstring>
 
@@ -37,10 +37,10 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
-#include "util/SleepChromeIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SleepChromeIcon.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
 
@@ -142,32 +142,27 @@ EpdFont lexend10RegularFont(&lexenddeca_10_regular);
 EpdFont lexend10BoldFont(&lexenddeca_10_bold);
 EpdFont lexend10ItalicFont(&lexenddeca_10_italic);
 EpdFont lexend10BoldItalicFont(&lexenddeca_10_bolditalic);
-EpdFontFamily lexend10FontFamily(&lexend10RegularFont, &lexend10BoldFont, &lexend10ItalicFont,
-                                 &lexend10BoldItalicFont);
+EpdFontFamily lexend10FontFamily(&lexend10RegularFont, &lexend10BoldFont, &lexend10ItalicFont, &lexend10BoldItalicFont);
 EpdFont lexend12RegularFont(&lexenddeca_12_regular);
 EpdFont lexend12BoldFont(&lexenddeca_12_bold);
 EpdFont lexend12ItalicFont(&lexenddeca_12_italic);
 EpdFont lexend12BoldItalicFont(&lexenddeca_12_bolditalic);
-EpdFontFamily lexend12FontFamily(&lexend12RegularFont, &lexend12BoldFont, &lexend12ItalicFont,
-                                 &lexend12BoldItalicFont);
+EpdFontFamily lexend12FontFamily(&lexend12RegularFont, &lexend12BoldFont, &lexend12ItalicFont, &lexend12BoldItalicFont);
 EpdFont lexend14RegularFont(&lexenddeca_14_regular);
 EpdFont lexend14BoldFont(&lexenddeca_14_bold);
 EpdFont lexend14ItalicFont(&lexenddeca_14_italic);
 EpdFont lexend14BoldItalicFont(&lexenddeca_14_bolditalic);
-EpdFontFamily lexend14FontFamily(&lexend14RegularFont, &lexend14BoldFont, &lexend14ItalicFont,
-                                 &lexend14BoldItalicFont);
+EpdFontFamily lexend14FontFamily(&lexend14RegularFont, &lexend14BoldFont, &lexend14ItalicFont, &lexend14BoldItalicFont);
 EpdFont lexend16RegularFont(&lexenddeca_16_regular);
 EpdFont lexend16BoldFont(&lexenddeca_16_bold);
 EpdFont lexend16ItalicFont(&lexenddeca_16_italic);
 EpdFont lexend16BoldItalicFont(&lexenddeca_16_bolditalic);
-EpdFontFamily lexend16FontFamily(&lexend16RegularFont, &lexend16BoldFont, &lexend16ItalicFont,
-                                 &lexend16BoldItalicFont);
+EpdFontFamily lexend16FontFamily(&lexend16RegularFont, &lexend16BoldFont, &lexend16ItalicFont, &lexend16BoldItalicFont);
 EpdFont lexend18RegularFont(&lexenddeca_18_regular);
 EpdFont lexend18BoldFont(&lexenddeca_18_bold);
 EpdFont lexend18ItalicFont(&lexenddeca_18_italic);
 EpdFont lexend18BoldItalicFont(&lexenddeca_18_bolditalic);
-EpdFontFamily lexend18FontFamily(&lexend18RegularFont, &lexend18BoldFont, &lexend18ItalicFont,
-                                 &lexend18BoldItalicFont);
+EpdFontFamily lexend18FontFamily(&lexend18RegularFont, &lexend18BoldFont, &lexend18ItalicFont, &lexend18BoldItalicFont);
 
 // Penumbra Recents: 8 pt author (regular only), 10 pt title (regular + bold focus).
 EpdFont sourceserif8RegularFont(&sourceserif4_8_regular);
@@ -277,8 +272,7 @@ static void saveSleepFrameBuffer() {
   const size_t written = file.write(renderer.getFrameBuffer(), bufferSize);
   file.close();
   if (written != bufferSize) {
-    LOG_ERR("MAIN", "sleep_frame save: wrote %u/%u", static_cast<unsigned>(written),
-            static_cast<unsigned>(bufferSize));
+    LOG_ERR("MAIN", "sleep_frame save: wrote %u/%u", static_cast<unsigned>(written), static_cast<unsigned>(bufferSize));
     Storage.remove(SLEEP_FRAME_FILE);
     return;
   }
@@ -320,8 +314,7 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
   const bool isQuickResumeSleep =
       powerQuickResume ||
       (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen ==
-           CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
+       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
       (!fromTimeout && !powerQuickResume &&
        SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
   // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.
@@ -469,9 +462,8 @@ void setup() {
   // POWERON (MCU fully powered off in sleep). Flash/USB are never PowerButton.
   // Do not require showBootScreen=false — that flag is advisory; a failed state
   // save must not block resume-to-book or force the boot logo.
-  const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton &&
-                        APP_STATE.lastSleepFromReader && !APP_STATE.openEpubPath.empty() &&
-                        APP_STATE.readerActivityLoadCount < 2;
+  const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton && APP_STATE.lastSleepFromReader &&
+                        !APP_STATE.openEpubPath.empty() && APP_STATE.readerActivityLoadCount < 2;
 
   // Defer recents/KOReader/OPDS SD reads until after first ink on QR→book
   // (saves ~50–150ms and SD contention before the page is readable).
@@ -485,9 +477,8 @@ void setup() {
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   // Buffered rotating SD log for field performance captures (/.casper-logs/).
   SystemLog::begin();
-  SystemLog::logTiming("BOOT", "settings_loaded millis=%lu qrBook=%d wake=%d",
-                       static_cast<unsigned long>(millis()), qrToBook ? 1 : 0,
-                       static_cast<int>(wakeupReason));
+  SystemLog::logTiming("BOOT", "settings_loaded millis=%lu qrBook=%d wake=%d", static_cast<unsigned long>(millis()),
+                       qrToBook ? 1 : 0, static_cast<int>(wakeupReason));
 
   // Flash / USB / unknown cold boots: drop sticky reader-wake flags so a later
   // power press cannot reopen the last book (flash → USB sleep → power loop).
@@ -509,8 +500,7 @@ void setup() {
       // "won't wake" especially after sleeping from Settings / Home (QR default).
       if (!gpio.verifyPowerButtonWakeup(
               SETTINGS.getPowerButtonDuration(),
-              isSleepStylePowerAction(
-                  static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)))) {
+              isSleepStylePowerAction(static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)))) {
         powerManager.startDeepSleep(gpio);
       }
       break;
@@ -556,8 +546,8 @@ void setup() {
   // Fingerprint for the BT-memory-retention fix: with btInUse() true the
   // controller BSS is kept and free heap at boot is ~35-40 KB lower than when
   // Arduino released it (old builds sat near 83-98 KB free on X3 Home).
-  LOG_INF("MAIN", "btInUse=%d heap=%u maxAlloc=%u", btInUse() ? 1 : 0,
-          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  LOG_INF("MAIN", "btInUse=%d heap=%u maxAlloc=%u", btInUse() ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
 #endif
 
   // Resolve the single boot-presentation decision. Skipping the splash also
@@ -571,7 +561,7 @@ void setup() {
   // (Do not require ESP_RST_DEEPSLEEP only — that forced a full reboot-feel on
   // X4 unplugged wake.)
   const bool powerButtonWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
-  const BootResume resume = isSilentReboot   ? BootResume::Silent
+  const BootResume resume = isSilentReboot    ? BootResume::Silent
                             : powerButtonWake ? BootResume::QuickResume
                                               : BootResume::Splash;
 
@@ -747,9 +737,9 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-  gpio.setSharedConfirmPowerShortPressEmitsPower(
-      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
-      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+                                                 SETTINGS.shortPwrBtn ==
+                                                     CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
@@ -857,8 +847,7 @@ void loop() {
                            static_cast<unsigned>(ESP.getFreeHeap()));
   } else if (loopDuration >= 5000) {
     SystemLog::logCritical("LOOP", "loop_slow %lums act=%lums fre=%u", static_cast<unsigned long>(loopDuration),
-                           static_cast<unsigned long>(activityDuration),
-                           static_cast<unsigned>(ESP.getFreeHeap()));
+                           static_cast<unsigned long>(activityDuration), static_cast<unsigned>(ESP.getFreeHeap()));
   }
   if (loopDuration > maxLoopDuration) {
     maxLoopDuration = loopDuration;

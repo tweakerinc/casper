@@ -1,17 +1,15 @@
 #include "BookDescriptionActivity.h"
 
-#include <Logging.h>
-
-#include "BookActions.h"
-#include <HalDisplay.h>
-
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 
+#include "BookActions.h"
 #include "CrossPointSettings.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
@@ -285,8 +283,7 @@ void BookDescriptionActivity::layoutFromHtml(const std::string& raw) {
     size_t pos = 0;
     while (pos <= plain.size()) {
       const size_t nl = plain.find('\n', pos);
-      const std::string row =
-          plain.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+      const std::string row = plain.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
       if (row.empty()) {
         if (!lines.empty() && !lines.back().isParagraphGap) {
           lines.push_back(Line{{}, true});
@@ -411,11 +408,10 @@ void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
 
   const int titleLineH = renderer.getLineHeight(titleFontId);
   // Sit title under battery/clock row (same band drawHeader uses for chrome).
-  const int chromeBottom =
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY + metrics.batteryHeight + 10;
+  const int chromeBottom = metrics.topPadding + BaseTheme::kTopChromeBatteryY + metrics.batteryHeight + 10;
   const int titleY = std::max(metrics.topPadding + 4, chromeBottom);
-  const int titleBlockH = static_cast<int>(titleLines.size()) * titleLineH +
-                          std::max(0, static_cast<int>(titleLines.size()) - 1) * 1;
+  const int titleBlockH =
+      static_cast<int>(titleLines.size()) * titleLineH + std::max(0, static_cast<int>(titleLines.size()) - 1) * 1;
   // Extra gap so synopsis body is not jammed against the title.
   constexpr int kTitleBodyGap = 14;
   titleBlockBottom = titleY + titleBlockH + std::max(metrics.verticalSpacing, 6) + kTitleBodyGap;
@@ -426,8 +422,7 @@ void BookDescriptionActivity::drawTitleBlock(const int pageWidth) const {
   const int sidePad = metrics.contentSidePadding;
   const int titleMaxW = std::max(40, pageWidth - sidePad * 2);
   const int titleLineH = renderer.getLineHeight(titleFontId);
-  const int chromeBottom =
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY + metrics.batteryHeight + 10;
+  const int chromeBottom = metrics.topPadding + BaseTheme::kTopChromeBatteryY + metrics.batteryHeight + 10;
   int titleY = std::max(metrics.topPadding + 4, chromeBottom);
 
   for (const auto& line : titleLines) {

@@ -44,6 +44,9 @@ bool isFirmwareAssetName(const char* name) {
   }
 
   // Allow no extension or .bin only (reject .zip / .md / source tarballs).
+  // Note: names like Casper-v0.1.0 contain dots that are part of the version,
+  // not a file extension — only treat a trailing .ext as an extension when the
+  // suffix is not purely numeric.
   const char* dot = strrchr(name, '.');
   if (dot == nullptr) {
     return true;
@@ -56,7 +59,15 @@ bool isFirmwareAssetName(const char* name) {
       dot[4] == '\0') {
     return true;
   }
-  return false;
+  // Pure digit suffix (".0", ".1", ".18") → still a version segment, not an extension.
+  bool allDigits = true;
+  for (const char* p = dot + 1; *p != '\0'; ++p) {
+    if (*p < '0' || *p > '9') {
+      allDigits = false;
+      break;
+    }
+  }
+  return allDigits;
 }
 
 }  // namespace

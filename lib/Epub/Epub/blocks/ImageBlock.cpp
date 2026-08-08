@@ -437,8 +437,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // into grey planes only softens ink (Alice "A" flash black→grey) and costs
   // ~14 band re-walks. Leave the BW ink alone on greyscale multipass.
   const auto mode = renderer.getRenderMode();
-  if ((mode == GfxRenderer::GRAYSCALE_LSB || mode == GfxRenderer::GRAYSCALE_MSB) &&
-      isLetterGlyph(screenWidth)) {
+  if ((mode == GfxRenderer::GRAYSCALE_LSB || mode == GfxRenderer::GRAYSCALE_MSB) && isLetterGlyph(screenWidth)) {
     return;
   }
 
@@ -525,7 +524,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   config.performanceMode = false;
   config.useExactDimensions = true;  // Use pre-calculated dimensions to avoid rounding mismatches
   config.inkBias = isLetterGlyph(screenWidth);
-  config.cachePath = cachePath;      // Enable caching during decode
+  config.cachePath = cachePath;  // Enable caching during decode
 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {

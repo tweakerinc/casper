@@ -501,8 +501,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     bool center = classSuggestsCenter(classAttr);
     // TOC chapter targets are almost always the displayed chapter title.
     if (!center && !self->pendingAnchorId.empty() &&
-        std::find(self->tocAnchors.begin(), self->tocAnchors.end(), self->pendingAnchorId) !=
-            self->tocAnchors.end()) {
+        std::find(self->tocAnchors.begin(), self->tocAnchors.end(), self->pendingAnchorId) != self->tocAnchors.end()) {
       // Only treat as title when this element is a natural title host — not a
       // whole-chapter wrapper with tons of nested body text (span/div catch-all).
       if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS)) || strcmp(name, "p") == 0) {
@@ -546,8 +545,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // selector limits), still honor Gutenberg/Calibre class conventions.
   CssFloat wrapperFloat = CssFloat::None;
   if (self->embeddedStyle) {
-    if (cssStyle.hasFloatSide() &&
-        (cssStyle.floatSide == CssFloat::Left || cssStyle.floatSide == CssFloat::Right)) {
+    if (cssStyle.hasFloatSide() && (cssStyle.floatSide == CssFloat::Left || cssStyle.floatSide == CssFloat::Right)) {
       wrapperFloat = cssStyle.floatSide;
     } else if (!classAttr.empty()) {
       // Case-insensitive token search for common float figure classes.
@@ -574,8 +572,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       const int w = static_cast<int>(cssStyle.imageWidth.toPixels(em, static_cast<float>(self->viewportWidth)) + 0.5f);
       if (w > 0) inh.cssWidthPx = static_cast<int16_t>(std::min(w, static_cast<int>(self->viewportWidth)));
     }
-    LOG_DBG("RLC", "Float inherit push %s depth=%d cssW=%d",
-            inh.side == CssFloat::Left ? "left" : "right", inh.depth, static_cast<int>(inh.cssWidthPx));
+    LOG_DBG("RLC", "Float inherit push %s depth=%d cssW=%d", inh.side == CssFloat::Left ? "left" : "right", inh.depth,
+            static_cast<int>(inh.cssWidthPx));
   }
 
   // Push CSS width for non-img blocks so nested % / width:100% on <img> resolve against
@@ -591,8 +589,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       WidthContain& wc = self->widthContain_[self->widthContainCount_++];
       wc.depth = self->depth;
       wc.cssWidthPx = static_cast<int16_t>(std::min(w, static_cast<int>(self->viewportWidth)));
-      LOG_DBG("RLC", "Width contain push depth=%d cssW=%d (parent=%d)", wc.depth,
-              static_cast<int>(wc.cssWidthPx), parentW);
+      LOG_DBG("RLC", "Width contain push depth=%d cssW=%d (parent=%d)", wc.depth, static_cast<int>(wc.cssWidthPx),
+              parentW);
     }
   }
 
@@ -637,15 +635,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
     // Apply cell CSS (text-align, etc.) when Embedded Style is on; otherwise user align.
     const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
-    auto tableCellBlockStyle =
-        BlockStyle::fromCssStyle(cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment),
-                                 self->viewportWidth);
+    auto tableCellBlockStyle = BlockStyle::fromCssStyle(
+        cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment), self->viewportWidth);
     if (!tableCellBlockStyle.textAlignDefined) {
       tableCellBlockStyle.textAlignDefined = true;
-      tableCellBlockStyle.alignment =
-          (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-              ? CssTextAlign::Justify
-              : static_cast<CssTextAlign>(self->paragraphAlignment);
+      tableCellBlockStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                          ? CssTextAlign::Justify
+                                          : static_cast<CssTextAlign>(self->paragraphAlignment);
     }
     self->startNewTextBlock(tableCellBlockStyle);
 
@@ -718,8 +714,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (FontCacheManager* fcm = self->renderer.getFontCacheManager()) {
                   if (!fcm->isScanning()) fcm->clearCache();
                 }
-                LOG_DBG("EHP", "reclaim for ZIP inflate free=%u maxAlloc=%u",
-                        static_cast<unsigned>(ESP.getFreeHeap()),
+                LOG_DBG("EHP", "reclaim for ZIP inflate free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
                         static_cast<unsigned>(ESP.getMaxAllocHeap()));
               };
               reclaimForZipInflate();
@@ -756,8 +751,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                 } else {
                   LOG_ERR("EHP", "Failed to extract image free=%u maxAlloc=%u",
-                          static_cast<unsigned>(ESP.getFreeHeap()),
-                          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+                          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
                 }
               }
 
@@ -888,8 +882,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   int maxWidth = containerWidth;
                   int maxHeight = self->viewportHeight;
                   if (pendingFloat == CssFloat::None) {
-                    const int keep =
-                        std::max(40, self->renderer.getFontAscenderSize(self->fontId) * 2 + 8);
+                    const int keep = std::max(40, self->renderer.getFontAscenderSize(self->fontId) * 2 + 8);
                     if (maxHeight > keep + 100) maxHeight -= keep;
                   }
                   float scaleX = (dims.width > maxWidth) ? (float)maxWidth / dims.width : 1.0f;
@@ -1032,12 +1025,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       align = CssTextAlign::Center;
                     }
                   }
-                  const int leftPad =
-                      self->currentTextBlock ? self->currentTextBlock->getBlockStyle().leftInset() : 0;
+                  const int leftPad = self->currentTextBlock ? self->currentTextBlock->getBlockStyle().leftInset() : 0;
                   const int rightPad =
                       self->currentTextBlock ? self->currentTextBlock->getBlockStyle().rightInset() : 0;
-                  const int contentW =
-                      std::max(1, static_cast<int>(self->viewportWidth) - leftPad - rightPad);
+                  const int contentW = std::max(1, static_cast<int>(self->viewportWidth) - leftPad - rightPad);
                   if (align == CssTextAlign::Right) {
                     xPos = leftPad + std::max(0, contentW - displayWidth);
                   } else if (align == CssTextAlign::Left) {
@@ -1205,8 +1196,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // chapters are "<h1>[ 70 ]</h1><p>Colored lights…" with no book drop-cap.
   // Do NOT set pendingDropCap_ here — startNewTextBlock may still flush the previous
   // paragraph (e.g. "— THE STOLEN JOURNALS") via makePages; arm the *next* text block only.
-  if (strcmp(name, "p") == 0 && self->nextParagraphGetsDropCap_ && self->embeddedStyle &&
-      !self->openBlockquoteIsCt1_) {
+  if (strcmp(name, "p") == 0 && self->nextParagraphGetsDropCap_ && self->embeddedStyle && !self->openBlockquoteIsCt1_) {
     self->armDropCapOnNextTextBlock_ = true;
     self->nextParagraphGetsDropCap_ = false;
     LOG_DBG("RLC", "Drop-cap armed for next text block");
@@ -1370,8 +1360,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     // to the next line next to "25" (Butcher's Masquerade ch.64 note).
     if (self->embeddedStyle && cssStyle.hasMarginLeft() &&
         !(cssStyle.hasVerticalAlign() &&
-          (cssStyle.verticalAlign == CssVerticalAlign::Super ||
-           cssStyle.verticalAlign == CssVerticalAlign::Sub))) {
+          (cssStyle.verticalAlign == CssVerticalAlign::Super || cssStyle.verticalAlign == CssVerticalAlign::Sub))) {
       const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
       const float vw = static_cast<float>(self->viewportWidth);
       int spanLeft = static_cast<int>(std::lround(cssStyle.marginLeft.toPixels(emSize, vw)));
@@ -1382,8 +1371,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         if (self->partWordBufferIndex > 0) {
           self->flushPartWordBuffer();
         }
-        BlockStyle lineStyle =
-            self->currentTextBlock ? self->currentTextBlock->getBlockStyle()
+        BlockStyle lineStyle = self->currentTextBlock
+                                   ? self->currentTextBlock->getBlockStyle()
                                    : (self->blockStyleStack.empty() ? BlockStyle{} : self->blockStyleStack.back());
         if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
           self->startNewTextBlock(lineStyle);
@@ -1395,8 +1384,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             self->blockStyleStack.empty() ? 0 : static_cast<int>(self->blockStyleStack.back().marginRight);
         // Short phrases ("will prose-", "take no de-") need ~120px; leave a bit more.
         const int minText = std::max(120, static_cast<int>(vw * 0.22f));
-        const int roomForWave =
-            std::max(0, static_cast<int>(self->viewportWidth) - containerLeft - rightPad - minText);
+        const int roomForWave = std::max(0, static_cast<int>(self->viewportWidth) - containerLeft - rightPad - minText);
         // Alice peak is ~10em; map every span step into [0, roomForWave] proportionally.
         const int designPeak = std::max(1, static_cast<int>(std::lround(emSize * 10.0f)));
         int wave = spanLeft;
@@ -1673,13 +1661,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   // Pop float-inherit / width-contain entries for the element being closed.
   // startElement records inherit.depth = depth *before* depth++, so when we close
   // that element the current depth is inherit.depth + 1 (children already closed).
-  while (self->floatInheritCount_ > 0 &&
-         self->floatInherit_[self->floatInheritCount_ - 1].depth == self->depth - 1) {
+  while (self->floatInheritCount_ > 0 && self->floatInherit_[self->floatInheritCount_ - 1].depth == self->depth - 1) {
     LOG_DBG("RLC", "Float inherit pop depth=%d", self->depth - 1);
     --self->floatInheritCount_;
   }
-  while (self->widthContainCount_ > 0 &&
-         self->widthContain_[self->widthContainCount_ - 1].depth == self->depth - 1) {
+  while (self->widthContainCount_ > 0 && self->widthContain_[self->widthContainCount_ - 1].depth == self->depth - 1) {
     LOG_DBG("RLC", "Width contain pop depth=%d", self->depth - 1);
     --self->widthContainCount_;
   }
@@ -1827,8 +1813,7 @@ bool ChapterHtmlSlimParser::beginParse() {
                                  ? CssTextAlign::Justify
                                  : static_cast<CssTextAlign>(this->paragraphAlignment);
   rootBlockStyle.sizeStep = SIZE_STEP_BASE;
-  rootBlockStyle.lineHeightPx =
-      static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+  rootBlockStyle.lineHeightPx = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
   blockStyleStack.clear();
   blockStyleStack.reserve(8);
   blockStyleStack.push_back(rootBlockStyle);
@@ -1992,7 +1977,8 @@ int ChapterHtmlSlimParser::leftFloatShiftAtY(const int lineTop, const int lineHe
 
 void ChapterHtmlSlimParser::floatClearPast() {
   if (pageFloatActive()) {
-    currentPageNextY = static_cast<int16_t>(std::max(static_cast<int>(currentPageNextY), static_cast<int>(pageFloatBottom_)));
+    currentPageNextY =
+        static_cast<int16_t>(std::max(static_cast<int>(currentPageNextY), static_cast<int>(pageFloatBottom_)));
   }
   clearPageFloat();
 }
@@ -2019,8 +2005,7 @@ void ChapterHtmlSlimParser::placeFloatImage(const std::shared_ptr<ImageBlock>& i
   // wrap exactly TWO body lines, then full-width — not Alice-only; any narrow
   // left float (≤28% viewport / ≤120px) gets the same tradepub treatment.
   const bool looksLikeDropCap =
-      (side == CssFloat::Left) &&
-      (displayWidth <= std::max(120, static_cast<int>(viewportWidth) * 28 / 100));
+      (side == CssFloat::Left) && (displayWidth <= std::max(120, static_cast<int>(viewportWidth) * 28 / 100));
   const int bodyLine = std::max(1, renderer.getLineHeight(fontId, lineCompression));
   int drawW = displayWidth;
   int drawH = displayHeight;
@@ -2175,8 +2160,7 @@ void ChapterHtmlSlimParser::placeEpubImageSrc(const std::string& src, const CssS
   }
 
   if (placeSide == CssFloat::None) {
-    if (currentPage && !currentPage->elements.empty() &&
-        (currentPageNextY + displayHeight > viewportHeight)) {
+    if (currentPage && !currentPage->elements.empty() && (currentPageNextY + displayHeight > viewportHeight)) {
       completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
       completedPageCount++;
       currentPage.reset(new Page());
@@ -2200,8 +2184,7 @@ void ChapterHtmlSlimParser::placeEpubImageSrc(const std::string& src, const CssS
     placeFloatImage(imageBlock, displayWidth, displayHeight, placeSide, 0, 0);
   } else {
     const int xPos = (static_cast<int>(viewportWidth) - displayWidth) / 2;
-    auto pageImage =
-        std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, currentPageNextY));
+    auto pageImage = std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, currentPageNextY));
     if (!pageImage) return;
     currentPage->elements.push_back(pageImage);
     currentPageNextY = static_cast<int16_t>(currentPageNextY + displayHeight);
@@ -2244,11 +2227,11 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   if (bestW < 4) bestW = 0;
 
   static constexpr int kPreferredCaps[] = {
-      326065580,     // SOURCESERIF4_18
-      1231166843,    // SOURCESERIF4_16
-      -2078415541,   // LEXENDDECA_18
-      -940581834,    // LEXENDDECA_16
-      -1077864260,   // SOURCESERIF4_14
+      326065580,    // SOURCESERIF4_18
+      1231166843,   // SOURCESERIF4_16
+      -2078415541,  // LEXENDDECA_18
+      -940581834,   // LEXENDDECA_16
+      -1077864260,  // SOURCESERIF4_14
   };
   const auto& fontMap = renderer.getFontMap();
   auto considerCap = [&](const int cand) {
@@ -2274,8 +2257,8 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   // (looked like a tiny T below the first line). DROP_CAP draw path top-aligns
   // the 2× glyph to the line-box top so no negative hang into chrome.
   constexpr bool use2x = true;
-  const auto capStyleBits = static_cast<EpdFontFamily::Style>(
-      static_cast<uint8_t>(EpdFontFamily::BOLD) | static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+  const auto capStyleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(EpdFontFamily::BOLD) |
+                                                              static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
   const int paintGlyphH = glyphH * 2;
   // Exactly two wrap lines beside the letter (third line full width).
   const int capH = targetCapH;
@@ -2490,8 +2473,8 @@ void ChapterHtmlSlimParser::makePages() {
   }
   // Indented epigraphs (.ct1 margin-left ~25%): justify with few words/line makes
   // huge word gaps (serial screenshot). Prefer left for readable epigraph body.
-  if (blockStyle.leftInset() > static_cast<int>(viewportWidth) / 6 &&
-      blockStyle.alignment == CssTextAlign::Justify && !looksLikeDashAttribution) {
+  if (blockStyle.leftInset() > static_cast<int>(viewportWidth) / 6 && blockStyle.alignment == CssTextAlign::Justify &&
+      !looksLikeDashAttribution) {
     blockStyle.alignment = CssTextAlign::Left;
     blockStyle.textAlignDefined = true;
   }
@@ -2540,8 +2523,7 @@ void ChapterHtmlSlimParser::makePages() {
   if (usable < 16) usable = 16;
 
   // Only enable float-aware breaks when we have a sane line height and zones.
-  const int floatLineH =
-      (blockStyle.floatZoneCount > 0 && lineHeight > 0 && lineHeight < 200) ? lineHeight : 0;
+  const int floatLineH = (blockStyle.floatZoneCount > 0 && lineHeight > 0 && lineHeight < 200) ? lineHeight : 0;
   currentTextBlock->layoutAndExtractLines(renderer, measureFontId, static_cast<uint16_t>(usable), lineCb,
                                           /*includeLastLine=*/true, /*maxLines=*/0,
                                           /*blockStartY=*/currentPageNextY, /*lineHeight=*/floatLineH);

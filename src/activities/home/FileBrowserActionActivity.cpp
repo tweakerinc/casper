@@ -1,17 +1,15 @@
 #include "FileBrowserActionActivity.h"
-#include "util/UiGhostPolicy.h"
 
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Xtc.h>
 
 #include <algorithm>
-
-#include <Epub.h>
-#include <FsHelpers.h>
-#include <Xtc.h>
 
 #include "BookActions.h"
 #include "BookDescriptionActivity.h"
@@ -22,6 +20,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Match Bare footer / larger chrome: UI_12 reads better than UI_10 on the action list.
@@ -206,8 +205,8 @@ void FileBrowserActionActivity::activateSelected() {
 
     case FileBrowserAction::DeleteStats:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
               if (BookActions::deleteBookStats(bookPath)) {
@@ -222,8 +221,8 @@ void FileBrowserActionActivity::activateSelected() {
 
     case FileBrowserAction::DeleteCache:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
               if (BookActions::clearBookCache(bookPath)) {

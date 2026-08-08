@@ -14,9 +14,7 @@
 // plate after gen (that forces scale-down and invents hairlines).
 namespace HomeCoverMetrics {
 // Epub gen width for a given height key.
-constexpr int thumbWidthForHeight(const int height) {
-  return height > 0 ? (height * 3 + 1) / 4 : 1;
-}
+constexpr int thumbWidthForHeight(const int height) { return height > 0 ? (height * 3 + 1) / 4 : 1; }
 
 // Bare-native (do not enlarge — Bare quality depends on 1:1).
 constexpr int bareImageWidth = 420;
@@ -53,8 +51,7 @@ inline int focusMaxCoverWidth(const int pageW) {
 // Depends only on page size, not which under-box content is drawn.
 inline int statsFamilyHeroThumbHeight(const int pageW, const int pageH) {
   const int hFromW = thumbHeightForCoverWidth(focusMaxCoverWidth(pageW));
-  const int maxBandH =
-      std::max(200, pageH - kStatsFamilyChromeFooter - kStatsFamilyUnderBoxReserve);
+  const int maxBandH = std::max(200, pageH - kStatsFamilyChromeFooter - kStatsFamilyUnderBoxReserve);
   return std::max(200, std::min(hFromW, maxBandH));
 }
 

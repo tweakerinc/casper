@@ -425,8 +425,7 @@ void BluetoothSettingsActivity::renderMenu() {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BLUETOOTH));
 
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int listHeight =
-      renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int listHeight = renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
   // highlightValue=true: black selection chip sits on ON/OFF (toggle), not the label.
   GUI.drawList(
@@ -457,8 +456,7 @@ void BluetoothSettingsActivity::renderScan() {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BT_SCAN));
 
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int listHeight =
-      renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int listHeight = renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
 #if FREEINK_CAP_BLE_HID_HOST
   const int count = static_cast<int>(BleHid.deviceCount());
@@ -495,8 +493,7 @@ void BluetoothSettingsActivity::renderPaired() {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_BT_PAIRED));
 
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int listHeight =
-      renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int listHeight = renderer.getScreenHeight() - listTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
 #if FREEINK_CAP_BLE_HID_HOST
   const int count = static_cast<int>(BleHid.pairedCount());

@@ -5,10 +5,9 @@
 // 8x8 Bayer ordered dither (values 0..63). Larger matrix than 4x4 reduces
 // visible cross-hatch on e-ink photos and line art after 4-level quantize.
 inline const uint8_t bayer8x8[8][8] = {
-    {0, 32, 8, 40, 2, 34, 10, 42},  {48, 16, 56, 24, 50, 18, 58, 26},
-    {12, 44, 4, 36, 14, 46, 6, 38},  {60, 28, 52, 20, 62, 30, 54, 22},
-    {3, 35, 11, 43, 1, 33, 9, 41},   {51, 19, 59, 27, 49, 17, 57, 25},
-    {15, 47, 7, 39, 13, 45, 5, 37},  {63, 31, 55, 23, 61, 29, 53, 21},
+    {0, 32, 8, 40, 2, 34, 10, 42},    {48, 16, 56, 24, 50, 18, 58, 26}, {12, 44, 4, 36, 14, 46, 6, 38},
+    {60, 28, 52, 20, 62, 30, 54, 22}, {3, 35, 11, 43, 1, 33, 9, 41},    {51, 19, 59, 27, 49, 17, 57, 25},
+    {15, 47, 7, 39, 13, 45, 5, 37},   {63, 31, 55, 23, 61, 29, 53, 21},
 };
 
 // Legacy 4x4 kept for any caller that still wants the lighter kernel.
@@ -69,7 +68,7 @@ inline uint8_t quantizeGray4LevelNeutral(int adjusted) {
   if (adjusted < 22) return 0;   // deep ink only
   if (adjusted < 78) return 1;   // dark gray
   if (adjusted < 155) return 2;  // light gray (wider — more structure on plates)
-  return 3;                     // paper / highlights
+  return 3;                      // paper / highlights
 }
 
 // Apply 8x8 Bayer dither and quantize to 4 levels (0-3).

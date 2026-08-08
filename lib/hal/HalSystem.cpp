@@ -136,9 +136,9 @@ std::string getPanicInfo(bool full) {
       uint8_t month = 0, day = 0, hour = 0, minute = 0;
       if (halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, minute)) {
         char ts[48];
-        snprintf(ts, sizeof(ts), "\nReport written (RTC): %04u-%02u-%02u %02u:%02u",
-                 static_cast<unsigned>(year), static_cast<unsigned>(month), static_cast<unsigned>(day),
-                 static_cast<unsigned>(hour), static_cast<unsigned>(minute));
+        snprintf(ts, sizeof(ts), "\nReport written (RTC): %04u-%02u-%02u %02u:%02u", static_cast<unsigned>(year),
+                 static_cast<unsigned>(month), static_cast<unsigned>(day), static_cast<unsigned>(hour),
+                 static_cast<unsigned>(minute));
         info += ts;
       } else {
         info += "\nReport written (RTC): unavailable";

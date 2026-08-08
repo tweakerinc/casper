@@ -1,5 +1,4 @@
 #include "OpdsSettingsActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -12,6 +11,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Editable fields: Name, URL, Username, Password.

@@ -85,8 +85,8 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     const uint32_t t0 = millis();
     // Book's Style ⇒ parse CSS; forced alignments skip publisher stylesheets.
     loaded = epub->load(true, SETTINGS.paragraphAlignment != CrossPointSettings::BOOK_STYLE);
-    LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(),
-            static_cast<unsigned long>(millis() - t0), uncached ? "miss" : "hit");
+    LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(), static_cast<unsigned long>(millis() - t0),
+            uncached ? "miss" : "hit");
     if (QrTimingLog::active()) {
       QrTimingLog::line("epub->load %lums book.bin=%s", static_cast<unsigned long>(millis() - t0),
                         uncached ? "MISS" : "HIT");
@@ -188,8 +188,7 @@ void ReaderActivity::onEnter() {
   sdFontSystem.ensureLoaded(renderer);
   LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));
   if (QrTimingLog::active()) {
-    QrTimingLog::line("after ensureLoaded fonts (+%lums step)",
-                      static_cast<unsigned long>(millis() - tEnter));
+    QrTimingLog::line("after ensureLoaded fonts (+%lums step)", static_cast<unsigned long>(millis() - tEnter));
   }
   SystemLog::logTimed("READER", millis() - tEnter, "ensureLoaded fonts");
 

@@ -18,8 +18,8 @@ void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, cons
 
   // Same rule as BaseTheme: keep Portrait 180 labels readable with the page.
   const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
-  const bool landscape = origOrientation == GfxRenderer::LandscapeClockwise ||
-                         origOrientation == GfxRenderer::LandscapeCounterClockwise;
+  const bool landscape =
+      origOrientation == GfxRenderer::LandscapeClockwise || origOrientation == GfxRenderer::LandscapeCounterClockwise;
   const bool inverted = origOrientation == GfxRenderer::PortraitInverted;
   if (landscape) {
     renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -53,8 +53,7 @@ void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, cons
     // Keep label i on physical key i: mirror column when drawing inverted.
     const int col = inverted ? (kSlots - 1 - i) : i;
     const int maxLabelW = slotW - 8;
-    const std::string label =
-        renderer.truncatedText(kFooterFontId, labels[i], maxLabelW, EpdFontFamily::REGULAR);
+    const std::string label = renderer.truncatedText(kFooterFontId, labels[i], maxLabelW, EpdFontFamily::REGULAR);
     const int tw = renderer.getTextWidth(kFooterFontId, label.c_str(), EpdFontFamily::REGULAR);
     const int tx = col * slotW + (slotW - tw) / 2;
     renderer.drawText(kFooterFontId, tx, textY, label.c_str(), true, EpdFontFamily::REGULAR);

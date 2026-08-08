@@ -61,7 +61,8 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() > 10000 ||
       (hasFocus && (words.size() != focusBoundary.size() || words.size() != focusSuffixX.size())) ||
       (hasGuide && words.size() != guideDotXOffset.size())) {
-    LOG_ERR("TXB", "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u, dots=%u)",
+    LOG_ERR("TXB",
+            "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u, dots=%u)",
             static_cast<uint32_t>(words.size()), static_cast<uint32_t>(wordXpos.size()),
             static_cast<uint32_t>(wordStyles.size()), static_cast<uint32_t>(focusBoundary.size()),
             static_cast<uint32_t>(focusSuffixX.size()), static_cast<uint32_t>(guideDotXOffset.size()));

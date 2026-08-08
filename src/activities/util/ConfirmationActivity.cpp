@@ -1,10 +1,10 @@
 #include "ConfirmationActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <I18n.h>
 
 #include "HalDisplay.h"
 #include "components/UITheme.h"
+#include "util/UiGhostPolicy.h"
 
 ConfirmationActivity::ConfirmationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            const std::string& heading, const std::string& body)

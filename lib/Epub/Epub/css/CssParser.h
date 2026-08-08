@@ -67,8 +67,7 @@ class CssParser {
    * Returns a package-relative path, or empty if none. Sparse — only rules that
    * declare background-image are stored (decorative layouts, Alice rabbithole).
    */
-  [[nodiscard]] std::string resolveBackgroundImage(std::string_view tagName,
-                                                   std::string_view classAttr) const;
+  [[nodiscard]] std::string resolveBackgroundImage(std::string_view tagName, std::string_view classAttr) const;
 
   /**
    * Parse an inline style attribute string.
@@ -176,8 +175,7 @@ class CssParser {
   /** font-size: numeric length or keyword mapped to em (for deferred sizeStep resolution). */
   static bool tryInterpretFontSize(std::string_view val, CssLength& out);
   /** line-height: unitless factor, length, or "normal" (false = leave undefined). */
-  static bool tryInterpretLineHeight(std::string_view val, CssLineHeightKind& kind, float& unitless,
-                                     CssLength& length);
+  static bool tryInterpretLineHeight(std::string_view val, CssLineHeightKind& kind, float& unitless, CssLength& length);
   static CssFloat interpretFloat(std::string_view val);
   static CssClear interpretClear(std::string_view val);
   static CssFontVariant interpretFontVariant(std::string_view val);

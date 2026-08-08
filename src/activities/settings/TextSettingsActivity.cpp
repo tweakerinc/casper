@@ -1,5 +1,4 @@
 #include "TextSettingsActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -17,6 +16,7 @@
 #include "TextSettingsPreview.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Tab labels for Font | Size | Layout | Style (Download Fonts is a Font-list row).
@@ -44,9 +44,9 @@ constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId
 // Storage: JUSTIFIED=0, LEFT=1, CENTER=2, RIGHT=3, BOOK_STYLE=4.
 constexpr StrId ALIGNMENT_DISPLAY_IDS[] = {StrId::STR_BOOK_S_STYLE, StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT,
                                            StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
-constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {
-    CrossPointSettings::BOOK_STYLE, CrossPointSettings::JUSTIFIED, CrossPointSettings::LEFT_ALIGN,
-    CrossPointSettings::CENTER_ALIGN, CrossPointSettings::RIGHT_ALIGN};
+constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {CrossPointSettings::BOOK_STYLE, CrossPointSettings::JUSTIFIED,
+                                                    CrossPointSettings::LEFT_ALIGN, CrossPointSettings::CENTER_ALIGN,
+                                                    CrossPointSettings::RIGHT_ALIGN};
 static_assert(std::size(ALIGNMENT_DISPLAY_IDS) == std::size(ALIGNMENT_DISPLAY_TO_SETTING));
 
 int alignmentDisplayIndex(const uint8_t setting) {
@@ -112,13 +112,11 @@ void TextSettingsActivity::onEnter() {
 
 void TextSettingsActivity::armAwaitOpenButtonRelease(const bool force) {
   using B = MappedInputManager::Button;
-  const bool held = mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) ||
-                    mappedInput.isPressed(B::Left) || mappedInput.isPressed(B::Right) ||
-                    mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
-                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) ||
-                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
-                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) ||
-                    mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+  const bool held =
+      mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) || mappedInput.isPressed(B::Left) ||
+      mappedInput.isPressed(B::Right) || mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
+      mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+      mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
   awaitOpenButtonRelease_ = force || held;
 }
 
@@ -201,8 +199,7 @@ bool TextSettingsActivity::handleTouch() {
   const int ringSize = listCount + 1;
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
-    selectedIndex() =
-        selectedIndex() == 0 ? 1 : ButtonNavigator::nextPageIndex(selectedIndex(), ringSize, pageItems);
+    selectedIndex() = selectedIndex() == 0 ? 1 : ButtonNavigator::nextPageIndex(selectedIndex(), ringSize, pageItems);
     requestUpdate();
     return true;
   }
@@ -218,13 +215,11 @@ bool TextSettingsActivity::handleTouch() {
 void TextSettingsActivity::loop() {
   if (awaitOpenButtonRelease_) {
     using B = MappedInputManager::Button;
-    const bool held = mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) ||
-                      mappedInput.isPressed(B::Left) || mappedInput.isPressed(B::Right) ||
-                      mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
-                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) ||
-                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
-                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) ||
-                      mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+    const bool held =
+        mappedInput.isPressed(B::Back) || mappedInput.isPressed(B::Confirm) || mappedInput.isPressed(B::Left) ||
+        mappedInput.isPressed(B::Right) || mappedInput.isPressed(B::Up) || mappedInput.isPressed(B::Down) ||
+        mappedInput.isFrontButtonPressed(HalGPIO::BTN_BACK) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+        mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
     if (held) {
       return;
     }
@@ -372,8 +367,7 @@ void TextSettingsActivity::render(RenderLock&&) {
   // Inset list so selection highlight stays inside the border.
   constexpr int kBoxInset = 2;
   const Rect listRect{settingsBox.x + kBoxInset, settingsBox.y + kBoxInset,
-                      std::max(0, settingsBox.width - kBoxInset * 2),
-                      std::max(0, settingsBox.height - kBoxInset * 2)};
+                      std::max(0, settingsBox.width - kBoxInset * 2), std::max(0, settingsBox.height - kBoxInset * 2)};
   const int selectedItem = selectedIndex() - 1;
   const char* confirmLabel = tr(STR_SELECT);
 
@@ -386,10 +380,7 @@ void TextSettingsActivity::render(RenderLock&&) {
           [this](int index) -> std::string {
             return fonts_[index].isDownloadAction ? std::string(">") : std::string();
           },
-          true, nullptr,
-          [this](int index) {
-            return !fonts_[index].isDownloadAction && index == currentFamilyIndex_;
-          });
+          true, nullptr, [this](int index) { return !fonts_[index].isDownloadAction && index == currentFamilyIndex_; });
       if (onTabBar) confirmLabel = tr(STR_SIZE);
       break;
 
@@ -419,7 +410,7 @@ void TextSettingsActivity::render(RenderLock&&) {
     case Tab::Style: {
       constexpr int STYLE_ROWS = static_cast<int>(StyleRow::Count);
       static constexpr StrId ROW_NAME_IDS[STYLE_ROWS] = {StrId::STR_BIONIC_READING, StrId::STR_GUIDE_READING,
-                                                          StrId::STR_HYPHENATION, StrId::STR_TEXT_AA};
+                                                         StrId::STR_HYPHENATION, StrId::STR_TEXT_AA};
       GUI.drawList(
           renderer, listRect, STYLE_ROWS, selectedItem,
           [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
@@ -432,11 +423,10 @@ void TextSettingsActivity::render(RenderLock&&) {
       break;
   }
 
-  const char* familyName =
-      (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()) &&
-       !fonts_[currentFamilyIndex_].isDownloadAction)
-          ? fonts_[currentFamilyIndex_].name.c_str()
-          : "";
+  const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()) &&
+                            !fonts_[currentFamilyIndex_].isDownloadAction)
+                               ? fonts_[currentFamilyIndex_].name.c_str()
+                               : "";
   const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
@@ -532,14 +522,13 @@ void TextSettingsActivity::activateRow(int row) {
     case Tab::Family:
       if (row < 0 || row >= static_cast<int>(fonts_.size())) break;
       if (fonts_[row].isDownloadAction) {
-        startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 sdFontSystem.refreshIfDirty();
-                                 rebuildFontList();
-                                 currentFamilyIndex_ =
-                                     findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-                                 requestUpdate();
-                               });
+        startActivityForResult(
+            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+              sdFontSystem.refreshIfDirty();
+              rebuildFontList();
+              currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
+              requestUpdate();
+            });
         break;
       }
       if (row != currentFamilyIndex_) {

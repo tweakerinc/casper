@@ -76,8 +76,7 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
 // --- PrewarmScope implementation ---
 
-FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager, const bool clearOnEnter,
-                                             const bool clearOnExit)
+FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager, const bool clearOnEnter, const bool clearOnExit)
     : manager_(&manager), clearOnExit_(clearOnExit) {
   manager_->scanMode_ = ScanMode::Scanning;
   if (clearOnEnter) {
@@ -122,7 +121,6 @@ FontCacheManager::PrewarmScope::PrewarmScope(PrewarmScope&& other) noexcept
   other.active_ = false;
 }
 
-FontCacheManager::PrewarmScope FontCacheManager::createPrewarmScope(const bool clearOnEnter,
-                                                                   const bool clearOnExit) {
+FontCacheManager::PrewarmScope FontCacheManager::createPrewarmScope(const bool clearOnEnter, const bool clearOnExit) {
   return PrewarmScope(*this, clearOnEnter, clearOnExit);
 }

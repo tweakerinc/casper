@@ -488,8 +488,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     // eating maxAlloc (~39 KB after fonts) and causing permanent image extract fail.
     InflateStream inflate;
     if (!inflate.init(true)) {
-      LOG_ERR("ZIP", "Failed to init inflate stream free=%u maxAlloc=%u",
-              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      LOG_ERR("ZIP", "Failed to init inflate stream free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
       return false;
     }
 

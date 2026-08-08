@@ -282,8 +282,8 @@ void emitPngDstRow(PngContext* ctx, int dstY, const uint8_t* grayRow) {
   for (int dstX = 0; dstX < dstWidth; dstX++) {
     const int outX = outXBase + dstX;
     const uint8_t gray = grayRow[dstX];
-    const uint8_t dithered = useDithering ? applyBayerDither4Level(gray, outX, outY, inkBias)
-                                          : quantizeGray4LevelNoDither(gray, inkBias);
+    const uint8_t dithered =
+        useDithering ? applyBayerDither4Level(gray, outX, outY, inkBias) : quantizeGray4LevelNoDither(gray, inkBias);
     if (onScreen && outX >= 0 && outX < screenWidth) {
       pw.writePixel(outX, dithered);
     }
@@ -829,8 +829,8 @@ bool decodePngViaTinfl(const std::string& imagePath, GfxRenderer& renderer, cons
     fileBuf.reset();
     streamInfl = makeUniqueNoThrow<InflateStream>();
     if (!streamInfl || !streamInfl->init(/*streaming=*/true)) {
-      LOG_ERR("PNG", "tinfl: InflateStream init failed free=%u maxAlloc=%u",
-              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      LOG_ERR("PNG", "tinfl: InflateStream init failed free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
       return false;
     }
     streamInfl->setZlibWrapped();
@@ -850,8 +850,7 @@ bool decodePngViaTinfl(const std::string& imagePath, GfxRenderer& renderer, cons
 
   LOG_DBG("PNG", "tinfl decode %ux%u -> %dx%d type=%u depth=%u oneshot=%d free=%u maxAlloc=%u",
           static_cast<unsigned>(srcW), static_cast<unsigned>(srcH), ctx.dstWidth, ctx.dstHeight, colorType, bitDepth,
-          usedOneShot ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()),
-          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+          usedOneShot ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   const uint8_t* palRgbPtr = hasPal ? palRgb.get() : nullptr;
   const uint8_t* palAPtr = hasTrns ? palA.get() : nullptr;
@@ -936,8 +935,7 @@ void PngToFramebufferConverter::beginSectionWarm() {
     --g_pngSectionWarmRefs;
     return;
   }
-  LOG_DBG("PNG", "section warm begin refs=%d heap=%u", g_pngSectionWarmRefs,
-          static_cast<unsigned>(ESP.getFreeHeap()));
+  LOG_DBG("PNG", "section warm begin refs=%d heap=%u", g_pngSectionWarmRefs, static_cast<unsigned>(ESP.getFreeHeap()));
 }
 
 void PngToFramebufferConverter::endSectionWarm() {
@@ -945,8 +943,7 @@ void PngToFramebufferConverter::endSectionWarm() {
   if (g_pngSectionWarmRefs == 0) {
     delete g_sharedPng;
     g_sharedPng = nullptr;
-    LOG_DBG("PNG", "section warm end (decoder released) heap=%u",
-            static_cast<unsigned>(ESP.getFreeHeap()));
+    LOG_DBG("PNG", "section warm end (decoder released) heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
   }
 }
 
@@ -956,8 +953,8 @@ void PngToFramebufferConverter::releaseWarmIfHeapTight(const size_t minMaxAllocB
   g_pngSectionWarmRefs = 0;
   delete g_sharedPng;
   g_sharedPng = nullptr;
-  LOG_DBG("PNG", "section warm force-released (maxAlloc=%u need=%u)",
-          static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(minMaxAllocBytes));
+  LOG_DBG("PNG", "section warm force-released (maxAlloc=%u need=%u)", static_cast<unsigned>(ESP.getMaxAllocHeap()),
+          static_cast<unsigned>(minMaxAllocBytes));
 }
 
 bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
@@ -979,8 +976,8 @@ bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath
 
 bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
                                                     const RenderConfig& config) {
-  LOG_DBG("PNG", "Decoding PNG: %s heap=%u maxAlloc=%u", imagePath.c_str(),
-          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  LOG_DBG("PNG", "Decoding PNG: %s heap=%u maxAlloc=%u", imagePath.c_str(), static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   // Only wipe font cache when PNGdec's ~50KB block will not fit otherwise.
   // Unconditional clear forced SD advance-table reloads on every image page
@@ -1035,8 +1032,8 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   // Prefer whole-file RAM decode (no SD seeks during inflate).
   std::unique_ptr<uint8_t[]> fileBuf;
-  const bool canHoldFile = (fileSize + MIN_FREE_HEAP_FOR_FILE_BUF < ESP.getFreeHeap()) &&
-                           (fileSize + 4096 < ESP.getMaxAllocHeap());
+  const bool canHoldFile =
+      (fileSize + MIN_FREE_HEAP_FOR_FILE_BUF < ESP.getFreeHeap()) && (fileSize + 4096 < ESP.getMaxAllocHeap());
   if (canHoldFile) {
     fileBuf = makeUniqueNoThrow<uint8_t[]>(fileSize);
     if (fileBuf) {

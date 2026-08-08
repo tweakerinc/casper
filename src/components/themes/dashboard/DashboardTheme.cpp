@@ -53,8 +53,7 @@ int dashboardLayoutVariant() {
 }
 
 bool isDashboardRecentsTheme() {
-  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) ==
-         CrossPointSettings::UI_THEME::DASHBOARD_RECENTS;
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::DASHBOARD_RECENTS;
 }
 
 constexpr int kContentInsetX4 = 20;
@@ -164,9 +163,9 @@ int recentsShelfHeight(const GfxRenderer& renderer) {
   const int gaps = kRecentsShelfGap * (kRecentsShelfVisible - 1);
   const int slotW = std::max(36, (innerW - gaps) / kRecentsShelfVisible);
   // ~2:3 book aspect (width:height).
-  const int coverH = std::max(48, (slotW * DashboardMetrics::homeCoverImageHeight +
-                                   DashboardMetrics::homeCoverImageWidth / 2) /
-                                      DashboardMetrics::homeCoverImageWidth);
+  const int coverH =
+      std::max(48, (slotW * DashboardMetrics::homeCoverImageHeight + DashboardMetrics::homeCoverImageWidth / 2) /
+                       DashboardMetrics::homeCoverImageWidth);
   // Cap so the hero still has room on short screens.
   const int cap = std::max(70, renderer.getScreenHeight() / 5);
   const int artH = std::min(coverH, cap);
@@ -180,12 +179,8 @@ int recentsShelfHeight(const GfxRenderer& renderer) {
 int pickSingleLineTitleFont(const GfxRenderer& renderer, const char* title, const int maxWidth) {
   // Prefer biggest readable face; step down only when the full title will not fit.
   static constexpr int kCandidates[] = {
-      SOURCESERIF4_18_FONT_ID,
-      SOURCESERIF4_16_FONT_ID,
-      SOURCESERIF4_14_FONT_ID,
-      SOURCESERIF4_12_FONT_ID,
-      UI_12_FONT_ID,
-      UI_10_FONT_ID,
+      SOURCESERIF4_18_FONT_ID, SOURCESERIF4_16_FONT_ID, SOURCESERIF4_14_FONT_ID,
+      SOURCESERIF4_12_FONT_ID, UI_12_FONT_ID,           UI_10_FONT_ID,
   };
   // Embolden draws a second pass at x+1 — leave 1px so long titles do not clip.
   const int fitW = std::max(1, maxWidth - 1);
@@ -200,14 +195,12 @@ int pickSingleLineTitleFont(const GfxRenderer& renderer, const char* title, cons
 
 // Tallest title face — fixed layout reserve so cover/meta/lifetime never reflow
 // when a short title picks 18 vs a long title that falls back to 12.
-int maxTitleLineHeight(const GfxRenderer& renderer) {
-  return renderer.getLineHeight(SOURCESERIF4_18_FONT_ID);
-}
+int maxTitleLineHeight(const GfxRenderer& renderer) { return renderer.getLineHeight(SOURCESERIF4_18_FONT_ID); }
 
 // Centered bold title within a content frame. Reading faces are 2-bit AA and look
 // thin on pure-BW home; a 1px horizontal second pass adds stroke weight.
-void drawCenteredBoldTitleInFrame(const GfxRenderer& renderer, const ContentFrame& frame, const int fontId,
-                                  const int y, const char* text, const bool black) {
+void drawCenteredBoldTitleInFrame(const GfxRenderer& renderer, const ContentFrame& frame, const int fontId, const int y,
+                                  const char* text, const bool black) {
   constexpr auto kStyle = EpdFontFamily::BOLD;
   const int textW = renderer.getTextWidth(fontId, text, kStyle);
   // Leave 1px for the embolden pass so long titles do not clip the right edge.
@@ -292,9 +285,8 @@ void homeContentBand(const GfxRenderer& renderer, int& bandTop, int& bandBottom)
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Compact chrome: battery icon + % / clock sit near the top; do NOT use the
   // full Lyra batteryBarHeight (40) which leaves a large empty band under the clock.
-  const int chromeBottom =
-      metrics.topPadding + BaseTheme::kTopChromeBatteryY +
-      std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
+  const int chromeBottom = metrics.topPadding + BaseTheme::kTopChromeBatteryY +
+                           std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
   bandTop = chromeBottom + 2;
 
   // Extra margin above the button labels (was 0 — felt glued to the strip).
@@ -381,13 +373,10 @@ Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect, const int
 // Shelf-sized frames prefer the compact shelf thumb (cheap blit); hero prefers
 // the oversized cover-fill source. Cap Storage.exists probes — each is an SD hit.
 std::string coverPathForRect(const RecentBook& book, const Rect& imageRect) {
-  auto tryExists = [](const std::string& path) -> bool {
-    return !path.empty() && Storage.exists(path.c_str());
-  };
+  auto tryExists = [](const std::string& path) -> bool { return !path.empty() && Storage.exists(path.c_str()); };
 
   // Shelf frames are ~100–180px tall; hero is ~300–450. Threshold separates the two.
-  const bool preferShelf =
-      imageRect.height > 0 && imageRect.height <= DashboardMetrics::homeShelfThumbHeight + 48;
+  const bool preferShelf = imageRect.height > 0 && imageRect.height <= DashboardMetrics::homeShelfThumbHeight + 48;
 
   // Concrete path already stored (no [HEIGHT] template) — use if it exists.
   if (!book.coverBmpPath.empty() && book.coverBmpPath.find("[HEIGHT]") == std::string::npos) {
@@ -490,8 +479,8 @@ void drawMissingBookCover(const GfxRenderer& renderer, const Rect& coverRect, co
 
   constexpr int iconSize = 32;
   if (plate.width >= iconSize + 8 && plate.height >= iconSize + 8) {
-    renderer.drawIcon(CoverIcon, plate.x + (plate.width - iconSize) / 2,
-                      plate.y + std::min(36, plate.height / 6), iconSize);
+    renderer.drawIcon(CoverIcon, plate.x + (plate.width - iconSize) / 2, plate.y + std::min(36, plate.height / 6),
+                      iconSize);
   }
 
   // Only draw a title inside the plate when there is room; tiny width → lone "…".
@@ -687,8 +676,7 @@ void drawStatsRow(const GfxRenderer& renderer, const int rightX, const int y, co
 // expand under the numbers (fixed 105/120 was too tight for Source Serif labels).
 int bookStatsColumnWidth(const GfxRenderer& renderer) {
   int maxW = isWideScreen(renderer) ? kStatsColumnWidthWide : kStatsColumnWidth;
-  auto consider = [&](const int fontId, const char* text,
-                      const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  auto consider = [&](const int fontId, const char* text, const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
     if (text == nullptr || text[0] == '\0') return;
     maxW = std::max(maxW, renderer.getTextWidth(fontId, text, style));
   };
@@ -1003,8 +991,7 @@ int drawMetaStatsUnderCover(const GfxRenderer& renderer, const int bandTopY, con
     char leftBuf[48];
     char rightBuf[48];
     if (b.sessionCount > 0) {
-      snprintf(leftBuf, sizeof(leftBuf), "%u %s", static_cast<unsigned>(b.sessionCount),
-               tr(STR_STATS_SESSIONS_LBL));
+      snprintf(leftBuf, sizeof(leftBuf), "%u %s", static_cast<unsigned>(b.sessionCount), tr(STR_STATS_SESSIONS_LBL));
     } else if (g.totalSessions > 0) {
       snprintf(leftBuf, sizeof(leftBuf), "%lu %s", static_cast<unsigned long>(g.totalSessions),
                tr(STR_STATS_SESSIONS_LBL));
@@ -1033,7 +1020,7 @@ int drawMetaStatsUnderCover(const GfxRenderer& renderer, const int bandTopY, con
 // Values use UI_10 (one step under the book-column UI_12). Long labels are
 // truncated by draw path if a column is too narrow.
 void drawDashboardLifetimeStatCell(const GfxRenderer& renderer, const int x, const int w, const int y, const int h,
-                                 const char* value, const char* label, const bool black) {
+                                   const char* value, const char* label, const bool black) {
   constexpr int kValueFont = UI_10_FONT_ID;
   constexpr int kLabelFont = SMALL_FONT_ID;
   constexpr int kPadX = 2;
@@ -1059,7 +1046,7 @@ void drawDashboardLifetimeStatCell(const GfxRenderer& renderer, const int x, con
 //   X4: Sessions, Time, Pages/Min / Avg Session, Completed, Pages Turned
 //       (no streak — requires RTC calendar days).
 void drawLifetimeStatsCard(const GfxRenderer& renderer, const Rect& cardRect, const GlobalReadingStats* globalStats,
-                         const bool black = true) {
+                           const bool black = true) {
   if (cardRect.width < 80 || cardRect.height < 60) return;
 
   const GlobalReadingStats empty{};
@@ -1071,8 +1058,7 @@ void drawLifetimeStatsCard(const GfxRenderer& renderer, const Rect& cardRect, co
   constexpr int kRowCount = 2;
   // Squish header: minimal air around Life Stats title.
   const int titleFontH = renderer.getLineHeight(UI_10_FONT_ID);
-  const int titleH = std::min(std::max(kLifetimeTitleH, titleFontH + 2),
-                              std::max(titleFontH + 2, cardRect.height / 5));
+  const int titleH = std::min(std::max(kLifetimeTitleH, titleFontH + 2), std::max(titleFontH + 2, cardRect.height / 5));
   const int titleTextY = cardRect.y + (titleH - titleFontH) / 2;
 
   // Card chrome — match book cover: rounded corners + slightly thicker stroke.
@@ -1170,7 +1156,7 @@ void drawLifetimeStatsCard(const GfxRenderer& renderer, const Rect& cardRect, co
 // Lifetime card: fixed compact height at pack bottom. Leftover height stays with the hero.
 // Returns the card top Y (or -1 if not drawn).
 int drawLifetimeStatsUnderMeta(const GfxRenderer& renderer, const Rect& contentRect, const int heroBottomY,
-                           const GlobalReadingStats* globalStats, const bool black = true) {
+                               const GlobalReadingStats* globalStats, const bool black = true) {
   const ContentFrame frame = contentFrame(renderer);
   const int lifeH = minLifetimeCardHeight(renderer);
   const int packBottom = contentRect.y + contentRect.height - kLifetimeStatsBottomPad;
@@ -1187,11 +1173,6 @@ int drawLifetimeStatsUnderMeta(const GfxRenderer& renderer, const Rect& contentR
   drawLifetimeStatsCard(renderer, cardRect, globalStats, black);
   return finalTop;
 }
-
-
-
-
-
 
 // Cheap selection mark: solid underline only (no outer ring / extra rounded stroke).
 void drawShelfSelectionUnderline(const GfxRenderer& renderer, const Rect& coverRect, const bool black) {
@@ -1241,8 +1222,7 @@ void drawBookCoverShelfLite(const GfxRenderer& renderer, const Rect& coverRect, 
 // Stats shelf: fixed recent order, hard-capped at kRecentsShelfVisible (4).
 // Left/Right moves underline selection; hero mirrors the selected book.
 void drawRecentBooksShelf(const GfxRenderer& renderer, const Rect& pack, const int shelfTopY,
-                          const std::vector<RecentBook>& recentBooks, const int focusIndex,
-                          const bool black = true) {
+                          const std::vector<RecentBook>& recentBooks, const int focusIndex, const bool black = true) {
   if (recentBooks.empty()) return;
 
   const ContentFrame frame = contentFrame(renderer);
@@ -1271,13 +1251,12 @@ void drawRecentBooksShelf(const GfxRenderer& renderer, const Rect& pack, const i
   const int totalGap = kRecentsShelfGap * std::max(0, shelfCount - 1);
   const int slotW = std::max(30, (innerW - totalGap) / std::max(1, shelfCount));
   int coverH = innerH;
-  int coverW = std::max(1, (coverH * DashboardMetrics::homeCoverImageWidth +
-                            DashboardMetrics::homeCoverImageHeight / 2) /
-                               DashboardMetrics::homeCoverImageHeight);
+  int coverW =
+      std::max(1, (coverH * DashboardMetrics::homeCoverImageWidth + DashboardMetrics::homeCoverImageHeight / 2) /
+                      DashboardMetrics::homeCoverImageHeight);
   if (coverW > slotW) {
     coverW = slotW;
-    coverH = std::max(1, (coverW * DashboardMetrics::homeCoverImageHeight +
-                          DashboardMetrics::homeCoverImageWidth / 2) /
+    coverH = std::max(1, (coverW * DashboardMetrics::homeCoverImageHeight + DashboardMetrics::homeCoverImageWidth / 2) /
                              DashboardMetrics::homeCoverImageWidth);
     if (coverH > innerH) coverH = innerH;
   }
@@ -1288,8 +1267,7 @@ void drawRecentBooksShelf(const GfxRenderer& renderer, const Rect& pack, const i
 
   for (int i = 0; i < shelfCount; ++i) {
     const Rect r{x, y, coverW, coverH};
-    drawBookCoverShelfLite(renderer, r, recentBooks[static_cast<size_t>(i)],
-                           black ? Color::White : Color::Black);
+    drawBookCoverShelfLite(renderer, r, recentBooks[static_cast<size_t>(i)], black ? Color::White : Color::Black);
     if (i == focus) {
       drawShelfSelectionUnderline(renderer, r, black);
     }
@@ -1443,8 +1421,7 @@ void DashboardTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const
   if (recentBooks.empty()) {
     placeholder.title = tr(STR_NO_RECENT_BOOKS);
   }
-  const int focus =
-      recentBooks.empty() ? 0 : std::clamp(selectorIndex, 0, static_cast<int>(recentBooks.size()) - 1);
+  const int focus = recentBooks.empty() ? 0 : std::clamp(selectorIndex, 0, static_cast<int>(recentBooks.size()) - 1);
   const RecentBook& book = recentBooks.empty() ? placeholder : recentBooks[static_cast<size_t>(focus)];
   drawDashboardHomeComposition(renderer, book, /*hasBook=*/!recentBooks.empty(), coverRendered, coverBufferStored,
                                bufferRestored, storeCoverBuffer, stats, progressPercent, globalStats, &recentBooks,

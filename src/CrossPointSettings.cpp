@@ -99,8 +99,7 @@ bool CrossPointSettings::saveButtonMapSidecar() const {
     if (i > 0) {
       if (n < static_cast<int>(sizeof(line)) - 1) line[n++] = ',';
     }
-    n += snprintf(line + n, sizeof(line) - static_cast<size_t>(n), "%u",
-                  static_cast<unsigned>(hwButtonFunction[i]));
+    n += snprintf(line + n, sizeof(line) - static_cast<size_t>(n), "%u", static_cast<unsigned>(hwButtonFunction[i]));
     if (n < 0 || n >= static_cast<int>(sizeof(line))) return false;
   }
   if (n < static_cast<int>(sizeof(line)) - 1) line[n++] = '\n';
@@ -550,15 +549,14 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     uiTheme = storedTheme;
   }
   if (!doc["hideBatteryPercentage"].isNull()) {
-    hideBatteryPercentage =
-        clamp(doc["hideBatteryPercentage"] | static_cast<uint8_t>(HIDE_NEVER), HIDE_BATTERY_PERCENTAGE_COUNT,
-              static_cast<uint8_t>(HIDE_NEVER));
+    hideBatteryPercentage = clamp(doc["hideBatteryPercentage"] | static_cast<uint8_t>(HIDE_NEVER),
+                                  HIDE_BATTERY_PERCENTAGE_COUNT, static_cast<uint8_t>(HIDE_NEVER));
   }
   // Sleep Screen was converted to DynamicEnum for alphabetical UI order; without this
   // load path CUSTOM (and every non-default mode) was lost on boot.
   if (!doc["sleepScreen"].isNull()) {
-    sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(LIGHT),
-                        static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT), static_cast<uint8_t>(LIGHT));
+    sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(LIGHT), static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT),
+                        static_cast<uint8_t>(LIGHT));
     // Legacy enum value only: Sleep Screen no longer offers Quick Resume in the picker.
     // Remap the obsolete value → Light wallpaper. Do NOT rewrite power-button settings —
     // Timeout QR / Short Power are independent and must stay as the user left them.
@@ -887,8 +885,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       bool sawBatt = false;
       auto dedupe = [&](uint8_t& s) {
         if (s == SYS_SLOT_BATTERY) {
-          if (sawBatt) s = SYS_SLOT_HIDE;
-          else sawBatt = true;
+          if (sawBatt)
+            s = SYS_SLOT_HIDE;
+          else
+            sawBatt = true;
         }
       };
       dedupe(systemStatusBarLeft);
@@ -899,8 +899,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       bool sawClock = false;
       auto dedupe = [&](uint8_t& s) {
         if (s == SYS_SLOT_CLOCK) {
-          if (sawClock) s = SYS_SLOT_HIDE;
-          else sawClock = true;
+          if (sawClock)
+            s = SYS_SLOT_HIDE;
+          else
+            sawClock = true;
         }
       };
       dedupe(systemStatusBarLeft);
@@ -972,8 +974,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     if (!doc["statusBarUpperMiddle"].isNull()) {
       statusBarUpperMiddle = clampCorner(doc["statusBarUpperMiddle"] | (uint8_t)CORNER_HIDE);
     } else {
-      statusBarUpperMiddle =
-          (statusBarClock != STATUS_BAR_CLOCK_HIDE) ? static_cast<uint8_t>(CORNER_CLOCK) : static_cast<uint8_t>(CORNER_HIDE);
+      statusBarUpperMiddle = (statusBarClock != STATUS_BAR_CLOCK_HIDE) ? static_cast<uint8_t>(CORNER_CLOCK)
+                                                                       : static_cast<uint8_t>(CORNER_HIDE);
     }
     if (!doc["statusBarLowerMiddle"].isNull()) {
       statusBarLowerMiddle = clampCorner(doc["statusBarLowerMiddle"] | (uint8_t)CORNER_HIDE);
@@ -989,8 +991,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
     // Drop duplicate clock/title if already used in a corner (exclusive).
     auto clearDup = [this](uint8_t content, uint8_t& keepSlot) {
-      uint8_t* slots[] = {&statusBarUpperLeft,   &statusBarUpperMiddle, &statusBarUpperRight,
-                          &statusBarLowerLeft,   &statusBarLowerMiddle, &statusBarLowerRight};
+      uint8_t* slots[] = {&statusBarUpperLeft, &statusBarUpperMiddle, &statusBarUpperRight,
+                          &statusBarLowerLeft, &statusBarLowerMiddle, &statusBarLowerRight};
       for (uint8_t* s : slots) {
         if (s != &keepSlot && *s == content) *s = CORNER_HIDE;
       }
@@ -1060,22 +1062,19 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   // Short/long power use DynamicEnum (no valuePtr) — load storage values here.
   if (!doc["shortPwrBtn"].isNull()) {
-    shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)PWR_QUICK_RESUME, SHORT_PWRBTN_COUNT,
-                        (uint8_t)PWR_QUICK_RESUME);
+    shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)PWR_QUICK_RESUME, SHORT_PWRBTN_COUNT, (uint8_t)PWR_QUICK_RESUME);
   }
   if (!doc["longPwrBtn"].isNull()) {
     longPwrBtn = clamp(doc["longPwrBtn"] | (uint8_t)FORCE_REFRESH, SHORT_PWRBTN_COUNT, (uint8_t)FORCE_REFRESH);
   }
   // Long-Press Menu / Back DynamicEnum — load storage enum (not display index).
   if (!doc["longPressMenuFunction"].isNull()) {
-    longPressMenuFunction =
-        clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DICTIONARY, LONG_PRESS_MENU_FUNCTION_COUNT,
-              (uint8_t)LP_MENU_DICTIONARY);
+    longPressMenuFunction = clamp(doc["longPressMenuFunction"] | (uint8_t)LP_MENU_DICTIONARY,
+                                  LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DICTIONARY);
   }
   if (!doc["longPressBackFunction"].isNull()) {
-    longPressBackFunction =
-        clamp(doc["longPressBackFunction"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT,
-              (uint8_t)LP_MENU_DISABLED);
+    longPressBackFunction = clamp(doc["longPressBackFunction"] | (uint8_t)LP_MENU_DISABLED,
+                                  LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
   // Side long-press: retired value 3 (Clipping Tool) → Off.
   if (longPressButtonBehavior >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT ||
@@ -1179,8 +1178,8 @@ void CrossPointSettings::syncXtcStatusBarModeFromSlots() {
 void CrossPointSettings::assignStatusBarCorner(uint8_t& cornerField, uint8_t content) {
   if (content >= STATUS_BAR_CORNER_CONTENT_COUNT) content = CORNER_HIDE;
   if (content != CORNER_HIDE) {
-    uint8_t* slots[] = {&statusBarUpperLeft,   &statusBarUpperMiddle, &statusBarUpperRight,
-                        &statusBarLowerLeft,   &statusBarLowerMiddle, &statusBarLowerRight};
+    uint8_t* slots[] = {&statusBarUpperLeft, &statusBarUpperMiddle, &statusBarUpperRight,
+                        &statusBarLowerLeft, &statusBarLowerMiddle, &statusBarLowerRight};
     for (uint8_t* s : slots) {
       if (s != &cornerField && *s == content) *s = CORNER_HIDE;
     }

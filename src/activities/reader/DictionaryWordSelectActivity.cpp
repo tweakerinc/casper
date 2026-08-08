@@ -85,8 +85,7 @@ void DictionaryWordSelectActivity::extractWords() {
   // page was laid out for status-bar chrome, not the taller dictionary hints;
   // without this limit, last-line tokens highlight behind Back/Lookup buttons.
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int maxWordBottom =
-      renderer.getScreenHeight() - metrics.buttonHintsHeight - kHintWordClearance;
+  const int maxWordBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - kHintWordClearance;
   // lineHeight is set in onEnter() before extractWords().
   const int lh = std::max(1, lineHeight);
 
@@ -366,19 +365,19 @@ void DictionaryWordSelectActivity::performLookup() {
     popup = Popup::None;
     snapshotIdx = -1;
     requestUpdateAndWait();
-    startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
-                                                                          std::move(combined)),
-                           [this](const ActivityResult& result) {
-                             popup = Popup::None;
-                             snapshotIdx = -1;
-                             // Done (or tap): leave dictionary mode entirely → reader.
-                             // Back: keep word-select so the user can look up another word.
-                             if (!result.isCancelled) {
-                               finish();
-                               return;
-                             }
-                             requestUpdate();
-                           });
+    startActivityForResult(
+        std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword), std::move(combined)),
+        [this](const ActivityResult& result) {
+          popup = Popup::None;
+          snapshotIdx = -1;
+          // Done (or tap): leave dictionary mode entirely → reader.
+          // Back: keep word-select so the user can look up another word.
+          if (!result.isCancelled) {
+            finish();
+            return;
+          }
+          requestUpdate();
+        });
     return;
   }
   popup = anyOpened ? Popup::NotFound : Popup::Error;
@@ -574,8 +573,7 @@ void DictionaryWordSelectActivity::drawHints() const {
 // Reader top chrome (battery/clock) is gone in this activity — use that band
 // for a quiet mode title so users know they left the reader.
 void DictionaryWordSelectActivity::drawModeTitle() const {
-  const char* title =
-      (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
+  const char* title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
   // UI_10 bold: a step up from SMALL_FONT so the mode label is easy to spot
   // without colliding with body text (page still has top chrome headroom).
   constexpr int kTitleFont = UI_10_FONT_ID;

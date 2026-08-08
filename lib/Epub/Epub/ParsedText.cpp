@@ -322,9 +322,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       // and slow the already-failing parse further.
       static uint16_t s_ptxOomLogs = 0;
       if (s_ptxOomLogs < 8) {
-        LOG_ERR("PTX", "OOM: skip word-vector grow need=%u free=%u maxAlloc=%u",
-                static_cast<unsigned>(newCapacity), static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(maxAlloc));
+        LOG_ERR("PTX", "OOM: skip word-vector grow need=%u free=%u maxAlloc=%u", static_cast<unsigned>(newCapacity),
+                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(maxAlloc));
       } else if (s_ptxOomLogs == 8) {
         LOG_ERR("PTX", "OOM: further word-vector skip logs suppressed");
       }
@@ -572,8 +571,7 @@ int ParsedText::widthForLine(const int lineIndex, const int pageWidth) const {
   }
   // Use line mid-Y so a zone that ends exactly on a line boundary never steals
   // the following full-width line (Alice "A": lines 0–1 wrap, line 2 flush).
-  const int lineMid =
-      static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
+  const int lineMid = static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
   int exclusion = 0;
   for (int i = 0; i < blockStyle.floatZoneCount; ++i) {
     const FloatZone& z = blockStyle.floatZones[i];
@@ -589,8 +587,7 @@ int ParsedText::leftFloatShiftForLine(const int lineIndex) const {
   if (floatLayoutLineH_ <= 0 || blockStyle.floatZoneCount <= 0) {
     return 0;
   }
-  const int lineMid =
-      static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
+  const int lineMid = static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
   int shift = 0;
   for (int i = 0; i < blockStyle.floatZoneCount; ++i) {
     const FloatZone& z = blockStyle.floatZones[i];
@@ -1085,12 +1082,11 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     } else if (wordIdx > 0 && !continuesVec[lastBreakAt + wordIdx]) {
       actualGapCount++;
       if (guideReadingEnabled) {
-        totalNaturalGaps +=
-            renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]), GUIDE_DOT_CODEPOINT,
-                                     lineWordStyles[wordIdx - 1]) +
-            renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
-            renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(lineWords[wordIdx]),
-                                     EpdFontFamily::REGULAR);
+        totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]), GUIDE_DOT_CODEPOINT,
+                                                     lineWordStyles[wordIdx - 1]) +
+                            renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
+                            renderer.getSpaceAdvance(fontId, GUIDE_DOT_CODEPOINT, firstCodepoint(lineWords[wordIdx]),
+                                                     EpdFontFamily::REGULAR);
       } else {
         totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]),
                                                      firstCodepoint(lineWords[wordIdx]), lineWordStyles[wordIdx - 1]);
@@ -1417,8 +1413,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       if (static_cast<int>(xpos[i + 1]) <= static_cast<int>(xpos[i]) + leftW + 1) {
         continue;
       }
-      const int gapLeft =
-          renderer.getSpaceAdvance(fontId, lastCodepoint(words[i]), GUIDE_DOT_CODEPOINT, styles[i]);
+      const int gapLeft = renderer.getSpaceAdvance(fontId, lastCodepoint(words[i]), GUIDE_DOT_CODEPOINT, styles[i]);
       const int offset = leftW + gapLeft;
       if (offset > 0 && offset < 65535) {
         dots[i] = static_cast<uint16_t>(offset);

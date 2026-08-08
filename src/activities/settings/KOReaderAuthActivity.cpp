@@ -1,5 +1,4 @@
 #include "KOReaderAuthActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -12,6 +11,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGhostPolicy.h"
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {

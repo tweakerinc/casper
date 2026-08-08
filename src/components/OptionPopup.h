@@ -210,16 +210,15 @@ class OptionPopup {
       }
       return false;
     };
-    const bool prev = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_LEFT)
-                                        : anyPressed(ButtonNavigator::getFrontPreviousButtons());
-    const bool next = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_RIGHT)
-                                        : anyPressed(ButtonNavigator::getFrontNextButtons());
+    const bool prev =
+        lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_LEFT) : anyPressed(ButtonNavigator::getFrontPreviousButtons());
+    const bool next =
+        lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_RIGHT) : anyPressed(ButtonNavigator::getFrontNextButtons());
     // Select / dismiss on *press* (classic OptionPopup). Open-gesture drain
     // above blocks the host's opening Confirm from also selecting here; dismiss
     // drain below blocks release-driven hosts from acting on the same click.
-    const bool confirm =
-        lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_CONFIRM)
-                          : input.wasPressed(MappedInputManager::Button::Confirm);
+    const bool confirm = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_CONFIRM)
+                                           : input.wasPressed(MappedInputManager::Button::Confirm);
     const bool back =
         lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_BACK) : input.wasPressed(MappedInputManager::Button::Back);
 
@@ -299,9 +298,8 @@ class OptionPopup {
       if (firstVisible > optionCount - visibleCount) firstVisible = optionCount - visibleCount;
     }
 
-    const int listHeight = visibleCount > 0
-                               ? rowHeight * visibleCount + itemSpacing * std::max(0, visibleCount - 1)
-                               : 0;
+    const int listHeight =
+        visibleCount > 0 ? rowHeight * visibleCount + itemSpacing * std::max(0, visibleCount - 1) : 0;
     const int dialogW = std::min((maxTextWidth + innerPadding * 2 + selectionHPadding * 2) * 12 / 10,
                                  pageWidth - metrics.optionPopupDialogSideMargin * 2);
     const int contentHeight = titleLineHeight + metrics.optionPopupTitleGap + listHeight;

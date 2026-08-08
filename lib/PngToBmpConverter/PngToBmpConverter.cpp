@@ -806,8 +806,8 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
         } else {
           for (int x = 0; x < outWidth; x++) {
             const int raw = (rowCount[x] > 0) ? (rowAccum[x] / rowCount[x]) : 0;
-            const uint8_t gray = coverThumb ? static_cast<uint8_t>(adjustPixelCoverThumb(raw))
-                                            : static_cast<uint8_t>(adjustPixel(raw));
+            const uint8_t gray =
+                coverThumb ? static_cast<uint8_t>(adjustPixelCoverThumb(raw)) : static_cast<uint8_t>(adjustPixel(raw));
             uint8_t twoBit;
             if (atkinsonDitherer) {
               twoBit = atkinsonDitherer->processPixel(gray, x);

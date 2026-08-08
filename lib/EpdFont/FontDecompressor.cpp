@@ -196,9 +196,8 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
       // Free page prewarm buffers and retry once (Home cover-gen + UI text can race).
       freePageBuffer();
       if (!ensureCapacity(hotGroup, hotGroupCapacity, group.uncompressedSize)) {
-        LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u free=%u maxAlloc=%u",
-                group.uncompressedSize, groupIndex, static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+        LOG_ERR("FDC", "Failed to allocate %u bytes for hot group %u free=%u maxAlloc=%u", group.uncompressedSize,
+                groupIndex, static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
         stats.getBitmapTimeUs += micros() - tStart;
         return nullptr;
       }

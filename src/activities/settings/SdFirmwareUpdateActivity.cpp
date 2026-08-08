@@ -1,5 +1,4 @@
 #include "SdFirmwareUpdateActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -14,6 +13,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/FirmwareFlasher.h"
+#include "util/UiGhostPolicy.h"
 
 void SdFirmwareUpdateActivity::onEnter() {
   Activity::onEnter();

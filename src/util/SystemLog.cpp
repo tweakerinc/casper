@@ -131,8 +131,7 @@ void rotateIfNeeded(const size_t upcoming) {
   openForAppend();
   // Tiny header on the new file.
   char hdr[96];
-  snprintf(hdr, sizeof(hdr), "==== casper system log file %05u (continued) ====\n",
-           static_cast<unsigned>(gFileIndex));
+  snprintf(hdr, sizeof(hdr), "==== casper system log file %05u (continued) ====\n", static_cast<unsigned>(gFileIndex));
   HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
   if (f) {
     f.print(hdr);
@@ -245,10 +244,9 @@ void begin() {
   snprintf(hdr, sizeof(hdr),
            "\n==== SYSTEM LOG SESSION ====\n"
            "t0=%lu device=%s level=%u aa=%u anti_ghost=%d theme=%u(%s) ver=%s file=%s\n",
-           static_cast<unsigned long>(gSessionT0), gpio.deviceIsX3() ? "X3" : "X4",
-           static_cast<unsigned>(gLevel), static_cast<unsigned>(SETTINGS.textAntiAliasing),
-           SETTINGS.getRefreshFrequency(), static_cast<unsigned>(SETTINGS.uiTheme),
-           themeNameForId(SETTINGS.uiTheme),
+           static_cast<unsigned long>(gSessionT0), gpio.deviceIsX3() ? "X3" : "X4", static_cast<unsigned>(gLevel),
+           static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
+           static_cast<unsigned>(SETTINGS.uiTheme), themeNameForId(SETTINGS.uiTheme),
 #ifdef CROSSPOINT_VERSION
            CROSSPOINT_VERSION,
 #else
@@ -370,8 +368,8 @@ void armHangWatch(const char* reason) {
   } else {
     snprintf(gHangWatchReason, sizeof(gHangWatchReason), "watch");
   }
-  log("ALIVE", "arm watch=%s for=%lums fre=%u", gHangWatchReason,
-      static_cast<unsigned long>(kHangWatchDurationMs), static_cast<unsigned>(ESP.getFreeHeap()));
+  log("ALIVE", "arm watch=%s for=%lums fre=%u", gHangWatchReason, static_cast<unsigned long>(kHangWatchDurationMs),
+      static_cast<unsigned>(ESP.getFreeHeap()));
   flush();
 }
 
@@ -388,9 +386,9 @@ void logCritical(const char* tag, const char* fmt, ...) {
 
 void logThemeChange(const uint8_t fromId, const uint8_t toId, const uint32_t reloadMs) {
   if (!timingEnabled()) return;
-  log("THEME", "change %u(%s) -> %u(%s) reload=%lums fre=%u", static_cast<unsigned>(fromId),
-      themeNameForId(fromId), static_cast<unsigned>(toId), themeNameForId(toId),
-      static_cast<unsigned long>(reloadMs), static_cast<unsigned>(ESP.getFreeHeap()));
+  log("THEME", "change %u(%s) -> %u(%s) reload=%lums fre=%u", static_cast<unsigned>(fromId), themeNameForId(fromId),
+      static_cast<unsigned>(toId), themeNameForId(toId), static_cast<unsigned long>(reloadMs),
+      static_cast<unsigned>(ESP.getFreeHeap()));
   // Flush so a slow-theme session that reboots mid-test still captures the switch.
   flush();
 }

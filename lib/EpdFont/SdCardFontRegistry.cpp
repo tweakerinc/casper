@@ -35,8 +35,7 @@ const SdCardFontFileInfo* SdCardFontFamilyInfo::findClosestReaderSize(const uint
   // Enum: 0..4 = 10 / 12 / 14 / 16 / 18 pt.
   static constexpr uint8_t kReaderTargets[] = {10, 12, 14, 16, 18};
   const auto hasSizeForStyle = [&](uint8_t s) { return std::find(sizes.begin(), sizes.end(), s) != sizes.end(); };
-  if (hasSizeForStyle(10) && hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) &&
-      hasSizeForStyle(18)) {
+  if (hasSizeForStyle(10) && hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) && hasSizeForStyle(18)) {
     const uint8_t idx = fontSizeEnum < 5 ? fontSizeEnum : 4;
     return findFile(kReaderTargets[idx], style);
   }

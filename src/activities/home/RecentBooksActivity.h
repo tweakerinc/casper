@@ -30,9 +30,8 @@ class RecentBooksActivity final : public Activity {
   std::vector<RecentBook> recentBooks;
   std::vector<FinishedBooks::FinishedBookEntry> readBooks;
 
-  // In Recents mode, list row 0 is "Show Read Books" when the read folder has books
-  // or we always show the row (always — empty read list still navigable).
-  static constexpr bool kShowReadRow = true;
+  // Recents row 0 = "Show Read Books" only when move-to-read is on and /read has ≥1 book.
+  bool showReadBooksRow() const;
 
   void loadRecentBooks();
   void loadReadBooks();

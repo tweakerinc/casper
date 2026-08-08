@@ -12,6 +12,7 @@
 #include <limits>
 #include <vector>
 
+#include "Epub/converters/PngToFramebufferConverter.h"
 #include "hyphenation/Hyphenator.h"
 
 constexpr int MAX_COST = std::numeric_limits<int>::max();
@@ -308,12 +309,26 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     }
 
     // Rough lower bound: 5 parallel vectors + string SSO overhead headroom.
+    // Prefer freeing a held PNG warm decoder before giving up — Alice ch3 logged
+    // thousands of skips while PNGdec still held ~50 KB maxAlloc.
     constexpr size_t kHeapFloor = 12U * 1024U;
-    const size_t maxAlloc = ESP.getMaxAllocHeap();
+    size_t maxAlloc = ESP.getMaxAllocHeap();
     if (maxAlloc < kHeapFloor) {
-      LOG_ERR("PTX", "OOM: skip word-vector grow need=%u free=%u maxAlloc=%u",
-              static_cast<unsigned>(newCapacity), static_cast<unsigned>(ESP.getFreeHeap()),
-              static_cast<unsigned>(maxAlloc));
+      PngToFramebufferConverter::releaseWarmIfHeapTight(kHeapFloor);
+      maxAlloc = ESP.getMaxAllocHeap();
+    }
+    if (maxAlloc < kHeapFloor) {
+      // Rate-limit: a single poem/paragraph can emit thousands of identical lines
+      // and slow the already-failing parse further.
+      static uint16_t s_ptxOomLogs = 0;
+      if (s_ptxOomLogs < 8) {
+        LOG_ERR("PTX", "OOM: skip word-vector grow need=%u free=%u maxAlloc=%u",
+                static_cast<unsigned>(newCapacity), static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(maxAlloc));
+      } else if (s_ptxOomLogs == 8) {
+        LOG_ERR("PTX", "OOM: further word-vector skip logs suppressed");
+      }
+      if (s_ptxOomLogs < 60000) ++s_ptxOomLogs;
       return false;
     }
 
@@ -540,24 +555,130 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   if (!isFirstLine || !isNaturalAlign) {
     return 0;
   }
+  // Explicit CSS / poem text-indent always wins (Witchhunt: cssTextIndent when defined).
   if (blockStyle.textIndentDefined) {
-    if (blockStyle.textIndent < 0 || !extraParagraphSpacing) {
-      return blockStyle.textIndent;
-    }
-    return 0;
+    return blockStyle.textIndent;
   }
-  if (!extraParagraphSpacing) {
-    return renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
-  }
-  return 0;
+  // No CSS indent: auto first-line indent for body prose.
+  // Extra Paragraph Spacing is additive (half-line gap between paras) — it must
+  // not strip indents. Older "spacing OR indent" exclusivity looked sparse and
+  // erased the book's first-line rhythm when spacing was on.
+  return renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
 }
 // Consumes data to minimize memory usage
+int ParsedText::widthForLine(const int lineIndex, const int pageWidth) const {
+  if (floatLayoutLineH_ <= 0 || blockStyle.floatZoneCount <= 0) {
+    return pageWidth;
+  }
+  // Use line mid-Y so a zone that ends exactly on a line boundary never steals
+  // the following full-width line (Alice "A": lines 0–1 wrap, line 2 flush).
+  const int lineMid =
+      static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
+  int exclusion = 0;
+  for (int i = 0; i < blockStyle.floatZoneCount; ++i) {
+    const FloatZone& z = blockStyle.floatZones[i];
+    if (lineMid >= z.top && lineMid < z.bottom) {
+      exclusion += z.width;
+    }
+  }
+  const int w = pageWidth - exclusion;
+  return w < 16 ? 16 : w;
+}
+
+int ParsedText::leftFloatShiftForLine(const int lineIndex) const {
+  if (floatLayoutLineH_ <= 0 || blockStyle.floatZoneCount <= 0) {
+    return 0;
+  }
+  const int lineMid =
+      static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
+  int shift = 0;
+  for (int i = 0; i < blockStyle.floatZoneCount; ++i) {
+    const FloatZone& z = blockStyle.floatZones[i];
+    if (!z.isRight && lineMid >= z.top && lineMid < z.bottom) {
+      shift += z.width;
+    }
+  }
+  return shift;
+}
+
+std::vector<size_t> ParsedText::computeFloatAwareLineBreaks(const GfxRenderer& renderer, const int fontId,
+                                                            const int pageWidth, std::vector<uint16_t>& wordWidths,
+                                                            std::vector<bool>& continuesVec,
+                                                            std::vector<bool>& noSpaceBeforeVec) {
+  // Same control flow as computeHyphenatedLineBreaks (proven no-spin), but each
+  // line's measure comes from widthForLine() so float zones narrow then expand.
+  const int firstLineIndent = resolveFirstLineIndent(true, renderer, fontId);
+  std::vector<size_t> lineBreakIndices;
+  size_t currentIndex = 0;
+  int lineIndex = 0;
+  // Hard cap: pathological zone/line-height combos must never hang the reader.
+  constexpr int kMaxLines = 4096;
+
+  while (currentIndex < wordWidths.size() && lineIndex < kMaxLines) {
+    const size_t lineStart = currentIndex;
+    int lineWidth = 0;
+    int effective = widthForLine(lineIndex, pageWidth);
+    if (lineIndex == 0) {
+      effective -= firstLineIndent;
+    }
+    if (effective < 16) effective = 16;
+
+    while (currentIndex < wordWidths.size()) {
+      const bool isFirstWord = (currentIndex == lineStart);
+      int spacing = 0;
+      if (!isFirstWord && noSpaceBeforeVec[currentIndex]) {
+        spacing = 0;
+      } else if (!isFirstWord && !continuesVec[currentIndex]) {
+        spacing = renderer.getSpaceAdvance(fontId, lastCodepoint(words[currentIndex - 1]),
+                                           firstCodepoint(words[currentIndex]), wordStyles[currentIndex - 1]);
+      } else if (!isFirstWord && continuesVec[currentIndex]) {
+        spacing = renderer.getKerning(fontId, lastCodepoint(words[currentIndex - 1]),
+                                      firstCodepoint(words[currentIndex]), wordStyles[currentIndex - 1]);
+      }
+      const int candidateWidth = spacing + static_cast<int>(wordWidths[currentIndex]);
+
+      if (lineWidth + candidateWidth <= effective) {
+        lineWidth += candidateWidth;
+        ++currentIndex;
+        continue;
+      }
+
+      const int availableWidth = effective - lineWidth - spacing;
+      const bool allowFallbackBreaks = isFirstWord;
+      if (availableWidth > 0 &&
+          hyphenateWordAtIndex(currentIndex, availableWidth, renderer, fontId, wordWidths, allowFallbackBreaks)) {
+        lineWidth += spacing + static_cast<int>(wordWidths[currentIndex]);
+        ++currentIndex;
+        break;
+      }
+
+      // Could not split: force at least one word per line (no infinite loop).
+      if (currentIndex == lineStart) {
+        lineWidth += candidateWidth;
+        ++currentIndex;
+      }
+      break;
+    }
+
+    if (currentIndex <= lineStart) {
+      ++currentIndex;  // absolute progress
+    }
+    lineBreakIndices.push_back(currentIndex);
+    ++lineIndex;
+  }
+  return lineBreakIndices;
+}
+
 void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
-                                       const bool includeLastLine) {
+                                       const bool includeLastLine, const int maxLines, const int16_t blockStartY,
+                                       const int lineHeight) {
   if (words.empty()) {
     return;
   }
+
+  floatLayoutStartY_ = blockStartY;
+  floatLayoutLineH_ = (blockStyle.floatZoneCount > 0 && lineHeight > 0) ? lineHeight : 0;
 
   // Per-paragraph RTL auto-detection: only when CSS/HTML didn't explicitly set direction.
   // Explicit dir="ltr" must be respected and not overridden by content heuristic.
@@ -597,17 +718,26 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
-  if (hyphenationEnabled) {
+  if (floatLayoutLineH_ > 0) {
+    // Float zones: greedy per-line width (one pass, no O(n) re-layout).
+    lineBreakIndices =
+        computeFloatAwareLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
+  } else if (hyphenationEnabled) {
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
     lineBreakIndices =
         computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
-  const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
+  size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
+  if (maxLines > 0 && lineCount > static_cast<size_t>(maxLines)) {
+    lineCount = static_cast<size_t>(maxLines);
+  }
 
   for (size_t i = 0; i < lineCount; ++i) {
-    extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
+    // Pass per-line width into extractLine via pageWidth so justify uses the same measure.
+    const int linePageWidth = widthForLine(static_cast<int>(i), pageWidth);
+    extractLine(i, linePageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
                 fontId);
   }
 
@@ -620,6 +750,8 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     wordNoSpaceBefore.erase(wordNoSpaceBefore.begin(), wordNoSpaceBefore.begin() + consumed);
     wordIsFocusSuffix.erase(wordIsFocusSuffix.begin(), wordIsFocusSuffix.begin() + consumed);
   }
+
+  floatLayoutLineH_ = 0;  // don't leak float mode into a later call
 }
 
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {

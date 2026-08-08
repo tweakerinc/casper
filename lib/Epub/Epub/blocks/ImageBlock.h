@@ -14,10 +14,24 @@ class ImageBlock final : public Block {
   const std::string& getImagePath() const { return imagePath; }
   int16_t getWidth() const { return width; }
   int16_t getHeight() const { return height; }
+  // Drop-cap letter floats may shrink the draw box to an exact 2-line zone.
+  void setDisplaySize(const int16_t w, const int16_t h) {
+    width = w;
+    height = h;
+  }
+  // Same size class as layout looksLikeDropCap (narrow left letter floats).
+  // These stay 1-bit BW — greyscale multipass only washes them out.
+  bool isLetterGlyph(int contentWidthPx) const;
 
   bool imageExists() const;
   bool hasValidCache() const;
   bool needsDecode() const;
+  // Decode PNG/JPEG → .pxc while section-parse heap is still open (Alice letters).
+  // Paint then only streams the cache and never needs the ~56 KB PNGdec object.
+  bool ensureDecodedCache(GfxRenderer& renderer);
+  // Best-effort precache when heap allows (layout or first-ink). Returns true if
+  // cache is ready afterward (including already-cached).
+  bool tryPrecache(GfxRenderer& renderer);
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
   static void clearSessionRenderFailures();
 

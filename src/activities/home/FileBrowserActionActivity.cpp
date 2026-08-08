@@ -341,6 +341,7 @@ void FileBrowserActionActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
   // Custom list so we can use UI_12 (shared drawList is hardcoded to UI_10).
+  // Focus: bold only — matches BaseTheme::drawList (no black selection chips).
   const int lineH = renderer.getLineHeight(kMenuFontId);
   const int rowH = lineH + kMenuRowPadY * 2;
   const int sidePad = metrics.contentSidePadding;
@@ -351,18 +352,13 @@ void FileBrowserActionActivity::render(RenderLock&&) {
   for (int i = pageStart; i < listCount && i < pageStart + pageItems; ++i) {
     const int rowY = contentTop + (i - pageStart) * rowH;
     const bool selected = (i == selectedIndex);
+    const auto focusStyle = selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     const std::string label = I18N.get(items[static_cast<size_t>(i)].labelId);
     const int maxLabelW = std::max(20, pageWidth - sidePad * 2 - 16);
-    const std::string drawn = renderer.truncatedText(kMenuFontId, label.c_str(), maxLabelW, EpdFontFamily::REGULAR);
-    const int tw = renderer.getTextWidth(kMenuFontId, drawn.c_str(), EpdFontFamily::REGULAR);
-    const int pillW = std::min(pageWidth - sidePad * 2, tw + 16);
-    const int pillX = sidePad;
-    if (selected) {
-      renderer.fillRoundedRect(pillX, rowY, pillW, rowH, 6, Color::Black);
-    }
-    // Center label in the black pill (pad was pushing text toward the bottom).
+    // Size against BOLD so the focused row never clips when weight changes.
+    const std::string drawn = renderer.truncatedText(kMenuFontId, label.c_str(), maxLabelW, EpdFontFamily::BOLD);
     const int textY = rowY + std::max(0, (rowH - lineH) / 2);
-    renderer.drawText(kMenuFontId, pillX + 8, textY, drawn.c_str(), !selected, EpdFontFamily::REGULAR);
+    renderer.drawText(kMenuFontId, sidePad + 8, textY, drawn.c_str(), /*black=*/true, focusStyle);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

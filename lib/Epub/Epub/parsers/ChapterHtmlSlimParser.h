@@ -18,6 +18,7 @@
 #include "Epub/css/StyleResolve.h"
 
 class Page;
+class PageLine;
 class GfxRenderer;
 class Epub;
 
@@ -88,17 +89,23 @@ class ChapterHtmlSlimParser {
   // Rivulet: relative size ladder + line-height resolution (filled in startParse).
   StyleResolveContext styleResolve_;
 
-  // Rivulet PR4: float exclusion zones (images + drop caps). Cap 2 concurrent floats.
-  struct FloatBox {
+  // Page-local active float (image or drop-cap). Cleared past zone bottom or on page emit.
+  // Zones are also copied onto BlockStyle for the wrapping paragraph's layout pass.
+  int16_t pageFloatTop_ = 0;
+  int16_t pageFloatBottom_ = 0;  // 0 = inactive
+  int16_t pageFloatWidth_ = 0;
+  bool pageFloatIsRight_ = false;
+
+  // Gutenberg/Alice pattern: float lives on the wrapper (.figleft/.figright), not on <img>.
+  // Stack open containers so the next image inherits float side + optional CSS width.
+  struct FloatInherit {
+    int depth = 0;
     CssFloat side = CssFloat::None;
-    int16_t w = 0;
-    int16_t h = 0;
-    int16_t remainingH = 0;  // exclusion height still active below current page Y
-    bool isDropCap = false;
+    int16_t cssWidthPx = 0;  // 0 = unspecified
   };
-  static constexpr int kMaxFloats = 2;
-  FloatBox floatBoxes_[kMaxFloats] = {};
-  int floatCount_ = 0;
+  static constexpr int kMaxFloatInherit = 4;
+  FloatInherit floatInherit_[kMaxFloatInherit] = {};
+  int floatInheritCount_ = 0;
 
   // Drop-cap: next <p> after visible h1 or .ct1 (God Emperor / common tradepub pattern).
   // armDropCapOnNextTextBlock_ is set on <p> open; pendingDropCap_ is set only when the
@@ -109,6 +116,9 @@ class ChapterHtmlSlimParser {
   bool pendingDropCap_ = false;
   bool openBlockquoteIsCt1_ = false;
   bool openH1WasVisible_ = false;
+  // Drop-cap PageLine may need Y re-anchor to first body line (top-align).
+  std::shared_ptr<PageLine> deferredDropCapLine_;
+  int16_t dropCapYAdjust_ = 0;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
@@ -151,15 +161,18 @@ class ChapterHtmlSlimParser {
     return resolveRelativeFontId(styleResolve_, style.sizeStep);
   }
   [[nodiscard]] int lineAdvancePx(const BlockStyle& style) const;
-  // Float helpers (PR4)
-  [[nodiscard]] int floatLeftExtra() const;
-  [[nodiscard]] int floatRightExtra() const;
-  void floatConsumeLineAdvance(int advancePx);
-  void floatClearPast();  // advance Y past all active float bottoms (CSS clear)
-  bool floatPush(CssFloat side, int16_t w, int16_t h, bool isDropCap);
+  // Float-zone helpers (clean-room: page zone + BlockStyle.floatZones + widthForLine)
+  [[nodiscard]] bool pageFloatActive() const { return pageFloatBottom_ > 0; }
+  void clearPageFloat();
+  void setPageFloat(int16_t top, int16_t bottom, int16_t width, bool isRight);
+  void injectPageFloatIntoBlock(BlockStyle& bs) const;
+  [[nodiscard]] int leftFloatShiftAtY(int lineTop, int lineHeight) const;
+  void floatClearPast();  // advance Y past active float bottom (CSS clear)
   void emitDropCapIfPending();
   void placeFloatImage(const std::shared_ptr<ImageBlock>& imageBlock, int displayWidth, int displayHeight,
                        CssFloat side, int16_t marginTop, int16_t marginBottom);
+  // Place an EPUB package image by relative src (e.g. CSS background-image URL).
+  void placeEpubImageSrc(const std::string& src, const CssStyle& cssStyle, CssFloat forceFloat);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);

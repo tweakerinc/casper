@@ -58,6 +58,12 @@ void appendShapedRtlTokens(const char* text, std::string& shapedOut) {
 }
 }  // namespace
 
+void GfxRenderer::clearFontAccumulation() const {
+  for (auto& entry : sdCardFonts_) {
+    if (entry.second) entry.second->clearCache();
+  }
+}
+
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
   if (fontData->groups != nullptr) {
     auto* fd = fontCacheManager_ ? fontCacheManager_->getDecompressor() : nullptr;
@@ -303,6 +309,60 @@ enum class TextRotation { None, Rotated90CW };
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
+// Render a glyph at 2× scale (nearest-neighbor). Used for DROP_CAP first letters
+// when the largest loaded face is still short of CSS 3em (~3 body lines).
+static void renderCharScaled2x(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
+                               const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
+                               const bool pixelState, const EpdFontFamily::Style style) {
+  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+  if (!glyph) return;
+
+  const EpdFontData* fontData = fontFamily.getData(style);
+  const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
+  if (!bitmap) return;
+
+  const int srcW = glyph->width;
+  const int srcH = glyph->height;
+  const int baseX = cursorX + glyph->left * 2;
+  const int baseY = cursorY - glyph->top * 2;
+
+  if (fontData->is2Bit) {
+    for (int srcY = 0; srcY < srcH; srcY++) {
+      for (int srcX = 0; srcX < srcW; srcX++) {
+        const int pos = srcY * srcW + srcX;
+        const uint8_t byte = bitmap[pos >> 2];
+        const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+        const uint8_t bmpVal = static_cast<uint8_t>(3 - raw);
+        if (renderMode == GfxRenderer::BW && bmpVal >= 3) continue;
+        if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal != 1 && bmpVal != 2) continue;
+        if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal != 1) continue;
+        const bool state = (renderMode == GfxRenderer::BW) ? pixelState : false;
+        const int dx = baseX + srcX * 2;
+        const int dy = baseY + srcY * 2;
+        renderer.drawPixel(dx, dy, state);
+        renderer.drawPixel(dx + 1, dy, state);
+        renderer.drawPixel(dx, dy + 1, state);
+        renderer.drawPixel(dx + 1, dy + 1, state);
+      }
+    }
+  } else {
+    for (int srcY = 0; srcY < srcH; srcY++) {
+      for (int srcX = 0; srcX < srcW; srcX++) {
+        const int pos = srcY * srcW + srcX;
+        const uint8_t byte = bitmap[pos >> 3];
+        const uint8_t bit = 7 - (pos & 7);
+        if (((byte >> bit) & 1) == 0) continue;
+        const int dx = baseX + srcX * 2;
+        const int dy = baseY + srcY * 2;
+        renderer.drawPixel(dx, dy, pixelState);
+        renderer.drawPixel(dx + 1, dy, pixelState);
+        renderer.drawPixel(dx, dy + 1, pixelState);
+        renderer.drawPixel(dx + 1, dy + 1, pixelState);
+      }
+    }
+  }
+}
+
 // Render a glyph at 50% scale. Used for SUP/SUB style bits.
 //
 // Each destination pixel represents a 2x2 source block. Drawing when that block
@@ -627,15 +687,26 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
 
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+    const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
     if (isSupSub) {
       // Halve the advance so the cursor advances by the same amount the scaled glyph
       // actually occupies, keeping spacing correct without needing a separate smaller font.
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    } else if (isDropCap) {
+      // Double advance to match 2× nearest-neighbor paint (CSS 3em first-letter).
+      prevAdvanceFP = prevAdvanceFP * 2;
     }
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
       renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+    } else if (isDropCap) {
+      // Top-align 2× glyph to the line-box top (`y`), not the normal baseline.
+      // renderCharScaled2x places ink top at (baseline - 2*glyphTop); set
+      // baseline = y + 2*top so the top of the T sits on the first body line.
+      const int gTop = glyph ? glyph->top : getFontAscenderSize(resolvedFontId);
+      const int dropBaseline = y + 2 * std::max(1, gTop);
+      renderCharScaled2x(*this, renderMode, font, cp, lastBaseX, dropBaseline, black, style);
     } else {
       renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     }
@@ -2044,6 +2115,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     int32_t widthFP = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+    const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     const auto fontIt = fontMap.find(resolvedFontId);
     if (fontIt == fontMap.end()) {
@@ -2061,7 +2133,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
         const EpdGlyph* glyph = font.getGlyph(cp, style);
         advFP = glyph ? glyph->advanceX : 0;
       }
-      widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
+      if (isSupSub) {
+        widthFP += (advFP + 1) / 2;
+      } else if (isDropCap) {
+        widthFP += advFP * 2;
+      } else {
+        widthFP += advFP;
+      }
     }
     return fp4::toPixel(widthFP);
   }
@@ -2098,6 +2176,8 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    } else if ((style & EpdFontFamily::DROP_CAP) != 0) {
+      prevAdvanceFP = prevAdvanceFP * 2;
     }
     prevCp = cp;
   }

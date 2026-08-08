@@ -93,7 +93,9 @@ struct PixelCache {
       LOG_ERR("IMG", "OOM cache band: %u bytes", (unsigned)bufSize);
       return false;
     }
-    memset(buffer, 0, bufSize);
+    // 2bpp white = bit pattern 11 per pixel → 0xFF per byte. Zero-fill made
+    // unfinished/partial caches paint solid black (Alice Tenniel PNGs).
+    memset(buffer, 0xFF, bufSize);
     zeroRow = buffer + (size_t)bandRows * bytesPerRow;
 
     if (!Storage.openFileForWrite("IMG", cachePath, file)) {
@@ -159,7 +161,10 @@ struct PixelCache {
     file.close();
     LOG_DBG("IMG", "Cache written: %s (%dx%d, %d bytes)", cachePathStr.c_str(), width, height,
             4 + bytesPerRow * height);
-    ok = false;  // file handed off; nothing left to clean up
+    ok = false;  // file handed off
+    // Free the band immediately so the dtor is a no-op free — avoids a stale
+    // buffer pointer surviving any later heap corruption in the same call stack.
+    releaseBand();
     return true;
   }
 
@@ -170,6 +175,7 @@ struct PixelCache {
       Storage.remove(cachePathStr.c_str());
     }
     ok = false;
+    releaseBand();
   }
 
   ~PixelCache() {
@@ -179,9 +185,15 @@ struct PixelCache {
       // Drop the partial cache so we leave no corrupt file behind.
       abort();
     }
+    releaseBand();
+  }
+
+ private:
+  void releaseBand() {
     if (buffer) {
       free(buffer);
       buffer = nullptr;
+      zeroRow = nullptr;
     }
   }
 };

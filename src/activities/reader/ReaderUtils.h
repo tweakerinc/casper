@@ -207,31 +207,28 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
   return SETTINGS.touchReaderControls && input.hasTouch() && input.wasMenuGesture();
 }
 
-// Page-turn refresh with YACP-style periodic maintenance (device-correct waveform):
+// Page-turn refresh with YACP-style periodic maintenance (Anti-Ghosting):
 //   - Ordinary turns: FAST
-//   - Every N pages (Anti-Ghosting setting):
+//   - Every N pages (interval due):
 //       X3: soft B/W reinforce (OEM AA-pre-BW mid via displayGrayscaleBase(FAST))
-//           — no black flash; gently pulls residual black out of white
-//       X4: HALF scrub (SSD1677 0xD7 single-pass clean) — no soft bank exists
-//   - FORCE_SCRUB (0) / popups / images / manual: always HALF (hard clean)
-//   - Interval "Never": FAST only (required cleanups still scrub)
+//           — gentle pull, no black flash (YACP)
+//       X4: HALF scrub (SSD1677 has no soft bank)
+//   - FORCE_SCRUB (0) / manual force-refresh: always HALF (visible hard clean)
+//   - Interval "Never": FAST only (FORCE_SCRUB / manual still scrub)
 //
-// Note: greyscale-base is intentional *only* for this X3 reader maintenance path.
-// Do not spam it on every menu FAST — that was the UI white-mud regression.
-// BW UI uses UiGhostPolicy (plain FAST + periodic HALF). Reader interval hits
-// have a correct DTM1 baseline from continuous paging, matching YACP soft reinforce.
-//
-// Async: starts FAST/HALF non-blocking when possible; X3 soft reinforce is blocking.
+// Soft greyscale-base is for *reader interval only* — do not use on UI menus.
+// Async: starts FAST/HALF non-blocking when possible; X3 soft is blocking.
 // Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
   const int freq = SETTINGS.getRefreshFrequency();  // -1 = Never
   const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
   const bool forceScrub = (pagesUntilFullRefresh == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
-  const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1;
+  // Countdown hits 1 on the page that should maintain; also treat 0 as due.
+  const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1 && pagesUntilFullRefresh >= 0;
 
   if (maintenanceDue || forceScrub) {
-    // X3 ordinary interval: soft reinforce (no black flash). Forced scrub and
-    // all X4 maintenance use HALF (stock hard clean).
+    // Soft interval on X3 only when not a forced hard scrub. Long-press power /
+    // FORCE_SCRUB always HALF so the user sees a real flash clean.
     const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub;
     if (useX3SoftReinforce) {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
@@ -241,13 +238,14 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
     pagesUntilFullRefresh = disabled ? CrossPointSettings::REFRESH_COUNTDOWN_DISABLED : freq;
+    if (pagesUntilFullRefresh < 1 && !disabled) pagesUntilFullRefresh = 1;
   } else {
     if (async) {
       renderer.displayBufferAsync(HalDisplay::FAST_REFRESH);
     } else {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
-    if (!disabled) {
+    if (!disabled && pagesUntilFullRefresh > 1) {
       pagesUntilFullRefresh--;
     }
   }

@@ -164,6 +164,9 @@ void EpubReaderMenuActivity::cycleActiveTab(const int direction) {
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
+  // FAST white plate over the page (same as long-press book menu). Do not honor
+  // a leftover hard-scrub arm — HALF on open felt multi-second / frozen.
+  UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
 
@@ -480,5 +483,5 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  UiGhostPolicy::displayMenuFrame(renderer);
+  UiGhostPolicy::displayFastFull(renderer);
 }

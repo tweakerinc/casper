@@ -11,11 +11,13 @@
 //
 // Balance
 // -------
-// Hard HALF (X3 resync flash) is for *transitions only*: open/close menu,
-// enter/leave Settings, Force Refresh, full home shell. Cursor / list scrolling
-// must stay FAST forever — a mid-scroll HALF every N steps feels like "random
-// black flashes while navigating." Residual on pure UI is acceptable; users
-// can Force Refresh.
+// Home is the cleanup hub: full-shell Home paints use hard HALF so residual
+// from Menu / Settings / Library / Reader is scrubbed. People live on Home
+// and in the book; they do not need every sub-screen to flash.
+//
+// Menu, Settings, Library, Recents, popups: always FAST full frames (and FAST
+// list scroll forever). Mid-scroll HALF felt like random black flashes.
+// Residual on those screens is acceptable until the next Home scrub.
 
 namespace UiGhostPolicy {
 
@@ -28,26 +30,35 @@ inline bool& hardScrubArmed() {
 
 inline void noteHalf() { detail::hardScrubArmed() = false; }
 
-// Next full-frame paint must hard-scrub (Force Refresh, home return, menu open,
-// Settings enter). Cleared after the scrub runs.
+// Arm hard HALF for the next full-frame paint (Home resume, Force Refresh).
 inline void requestHardScrub() { detail::hardScrubArmed() = true; }
+
+// Drop a pending scrub so a menu/library frame can FAST over residual.
+inline void clearHardScrub() { detail::hardScrubArmed() = false; }
 
 inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
 
-// Hard clean — X3 HALF + HalDisplay resync. Visible flash; use sparingly.
+// Hard clean — X3 HALF + HalDisplay resync. Home full shells + Force Refresh.
 inline void displayHalf(const GfxRenderer& renderer) {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   noteHalf();
 }
 
-// Full-frame UI (settings list, popup shell): FAST unless a transition armed scrub.
-// Never auto-HALF after N list steps — that caused mid-menu flash storms.
+// Full-frame UI (settings / library / popup): FAST unless a scrub was armed
+// (should be rare — menus clear scrub on enter). List nav stays FAST-only.
 inline void displayMenuFrame(const GfxRenderer& renderer) {
   if (detail::hardScrubArmed()) {
     displayHalf(renderer);
   } else {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   }
+}
+
+// Always snappy FAST full frame (menu / Settings / Library open). Clears any
+// leftover scrub arm so a prior Home scrub does not flash these screens.
+inline void displayFastFull(const GfxRenderer& renderer) {
+  clearHardScrub();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 // Menu *cursor* / band only: always snappy FAST. Never HALF.
@@ -69,7 +80,7 @@ inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int wi
   }
 }
 
-// Full-frame resume/shell helper (same as menu frame).
+// Soft full frame (honors scrub arm if set).
 inline void displaySoftFull(const GfxRenderer& renderer) { displayMenuFrame(renderer); }
 
 // Partial clock / strip: snappy only.

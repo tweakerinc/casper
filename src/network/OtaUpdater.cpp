@@ -335,6 +335,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "Flash failed: %s heap=%u maxAlloc=%u", firmware_flash::resultName(flashRes), ESP.getFreeHeap(),
             ESP.getMaxAllocHeap());
     if (flashRes == firmware_flash::Result::OOM) return OOM_ERROR;
+    if (flashRes == firmware_flash::Result::BAD_CHIP) {
+      LOG_ERR("OTA", "Firmware install aborted: wrong device (chip_id mismatch)");
+      return INTERNAL_UPDATE_ERROR;
+    }
     return INTERNAL_UPDATE_ERROR;
   }
 

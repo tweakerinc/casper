@@ -41,6 +41,9 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 
+// Sparse background-image map cap (decorative layouts only; Alice has 1)
+constexpr size_t MAX_BACKGROUND_IMAGES = 48;
+
 // Minimum free heap required to apply CSS during rendering
 // If below this threshold, we skip CSS to avoid display artifacts.
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
@@ -424,6 +427,42 @@ CssFontVariant CssParser::interpretFontVariant(std::string_view val) {
   return smallCaps ? CssFontVariant::SmallCaps : CssFontVariant::Normal;
 }
 
+std::string CssParser::extractBackgroundImageUrl(std::string_view declValue) {
+  declValue = trimCssWhitespace(declValue);
+  declValue = stripTrailingImportant(declValue);
+  if (declValue.empty() || iequalsAscii(declValue, "none")) return {};
+
+  // Prefer url("...") / url('...') / url(...)
+  const size_t urlPos = declValue.find("url");
+  if (urlPos == std::string_view::npos) return {};
+  size_t i = urlPos + 3;
+  while (i < declValue.size() && isCssWhitespace(declValue[i])) ++i;
+  if (i >= declValue.size() || declValue[i] != '(') return {};
+  ++i;
+  while (i < declValue.size() && isCssWhitespace(declValue[i])) ++i;
+  if (i >= declValue.size()) return {};
+
+  char quote = 0;
+  if (declValue[i] == '"' || declValue[i] == '\'') {
+    quote = declValue[i++];
+  }
+  const size_t start = i;
+  while (i < declValue.size()) {
+    if (quote) {
+      if (declValue[i] == quote) break;
+    } else if (declValue[i] == ')' || isCssWhitespace(declValue[i])) {
+      break;
+    }
+    ++i;
+  }
+  if (i <= start) return {};
+  std::string path(declValue.substr(start, i - start));
+  // Strip optional fragment
+  const size_t hash = path.find('#');
+  if (hash != std::string::npos) path.resize(hash);
+  return path;
+}
+
 // Declaration parsing
 
 void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style) {
@@ -574,14 +613,15 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 
 // Rule processing
 
-void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style) {
-  // Skip rules that don't define any supported properties to save RAM.
-  if (!style.defined.anySet()) {
+void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style,
+                                          std::string_view backgroundImageUrl) {
+  // Skip rules that don't define any supported properties (and no background-image) to save RAM.
+  if (!style.defined.anySet() && backgroundImageUrl.empty()) {
     return;
   }
 
   // Check if we've reached the rule limit before processing
-  if (rulesBySelector_.size() >= MAX_RULES) {
+  if (style.defined.anySet() && rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
     return;
   }
@@ -616,20 +656,24 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~* ";
         if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) return;
 
-        // Skip if this would exceed the rule limit
-        if (rulesBySelector_.size() >= MAX_RULES) {
-          LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
-          limitReached = true;
-          return;
+        // Store or merge style when the rule has layout/text properties.
+        if (style.defined.anySet()) {
+          if (rulesBySelector_.size() >= MAX_RULES) {
+            LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
+            limitReached = true;
+            return;
+          }
+          auto it = rulesBySelector_.find(sel);
+          if (it != rulesBySelector_.end()) {
+            it->second.applyOver(style);
+          } else {
+            rulesBySelector_.emplace(std::string(sel), style);
+          }
         }
 
-        // Store or merge with existing. Hash/equal are case-insensitive, so two
-        // selectors that differ only in ASCII case collide on insert and merge.
-        auto it = rulesBySelector_.find(sel);
-        if (it != rulesBySelector_.end()) {
-          it->second.applyOver(style);
-        } else {
-          rulesBySelector_.emplace(std::string(sel), style);
+        // Sparse background-image map (not part of CssStyle — keeps rule POD small).
+        if (!backgroundImageUrl.empty() && backgroundBySelector_.size() < MAX_BACKGROUND_IMAGES) {
+          backgroundBySelector_[std::string(sel)] = std::string(backgroundImageUrl);
         }
       });
 }
@@ -658,6 +702,23 @@ bool CssParser::loadFromStream(HalFile& source) {
   int bodyDepth = 0;
   bool skippingRule = false;
   CssStyle currentStyle;
+  std::string currentBackgroundUrl;
+
+  auto absorbDeclaration = [&](std::string_view decl) {
+    parseDeclarationIntoStyle(decl, currentStyle);
+    // Capture background-image / shorthand background url(...) for sparse map.
+    const size_t colonPos = decl.find(':');
+    if (colonPos != std::string_view::npos && colonPos > 0) {
+      const std::string_view name = trimCssWhitespace(decl.substr(0, colonPos));
+      const std::string_view value = trimCssWhitespace(decl.substr(colonPos + 1));
+      if (iequalsAscii(name, "background-image") || iequalsAscii(name, "background")) {
+        std::string url = extractBackgroundImageUrl(value);
+        if (!url.empty()) {
+          currentBackgroundUrl = std::move(url);
+        }
+      }
+    }
+  };
 
   auto handleChar = [&](const char c) {
     if (inAtRule) {
@@ -684,6 +745,7 @@ bool CssParser::loadFromStream(HalFile& source) {
       if (c == '{') {
         bodyDepth = 1;
         currentStyle = CssStyle{};
+        currentBackgroundUrl.clear();
         declBuffer.clear();
         if (selector.size() > MAX_SELECTOR_LENGTH * 4) {
           skippingRule = true;
@@ -703,13 +765,14 @@ bool CssParser::loadFromStream(HalFile& source) {
       --bodyDepth;
       if (bodyDepth == 0) {
         if (!skippingRule && !declBuffer.empty()) {
-          parseDeclarationIntoStyle(declBuffer, currentStyle);
+          absorbDeclaration(declBuffer);
         }
         if (!skippingRule) {
-          processRuleBlockWithStyle(selector, currentStyle);
+          processRuleBlockWithStyle(selector, currentStyle, currentBackgroundUrl);
         }
         selector.clear();
         declBuffer.clear();
+        currentBackgroundUrl.clear();
         skippingRule = false;
         return;
       }
@@ -721,7 +784,7 @@ bool CssParser::loadFromStream(HalFile& source) {
     if (!skippingRule) {
       if (c == ';') {
         if (!declBuffer.empty()) {
-          parseDeclarationIntoStyle(declBuffer, currentStyle);
+          absorbDeclaration(declBuffer);
           declBuffer.clear();
         }
       } else {
@@ -819,6 +882,30 @@ CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view clas
     }
   });
 
+  return result;
+}
+
+std::string CssParser::resolveBackgroundImage(std::string_view tagName, std::string_view classAttr) const {
+  if (backgroundBySelector_.empty()) return {};
+
+  std::string result;
+  // Same cascade order as resolveStyle: tag < .class < tag.class
+  if (auto it = backgroundBySelector_.find(tagName); it != backgroundBySelector_.end()) {
+    result = it->second;
+  }
+  if (!classAttr.empty()) {
+    forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
+      if (auto it = backgroundBySelector_.find(CompositeKey{".", cls}); it != backgroundBySelector_.end()) {
+        result = it->second;
+      }
+    });
+    forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
+      if (auto it = backgroundBySelector_.find(CompositeKey{tagName, ".", cls});
+          it != backgroundBySelector_.end()) {
+        result = it->second;
+      }
+    });
+  }
   return result;
 }
 
@@ -926,7 +1013,23 @@ bool CssParser::saveToCache() const {
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
-  LOG_DBG("CSS", "Saved %u rules to cache", ruleCount);
+  // v10: sparse background-image map (selector → url path)
+  const auto bgCount = static_cast<uint16_t>(
+      std::min(backgroundBySelector_.size(), static_cast<size_t>(MAX_BACKGROUND_IMAGES)));
+  file.write(reinterpret_cast<const uint8_t*>(&bgCount), sizeof(bgCount));
+  uint16_t bgWritten = 0;
+  for (const auto& pair : backgroundBySelector_) {
+    if (bgWritten >= bgCount) break;
+    const auto selLen = static_cast<uint16_t>(pair.first.size());
+    const auto urlLen = static_cast<uint16_t>(pair.second.size());
+    file.write(reinterpret_cast<const uint8_t*>(&selLen), sizeof(selLen));
+    file.write(reinterpret_cast<const uint8_t*>(pair.first.data()), selLen);
+    file.write(reinterpret_cast<const uint8_t*>(&urlLen), sizeof(urlLen));
+    file.write(reinterpret_cast<const uint8_t*>(pair.second.data()), urlLen);
+    ++bgWritten;
+  }
+
+  LOG_DBG("CSS", "Saved %u rules + %u backgrounds to cache", ruleCount, bgWritten);
   return true;
 }
 
@@ -1152,6 +1255,53 @@ bool CssParser::loadFromCache() {
     rulesBySelector_[selector] = style;
   }
 
-  LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);
+  // v10: sparse background-image map
+  uint16_t bgCount = 0;
+  if (file.available() >= static_cast<int>(sizeof(bgCount))) {
+    if (file.read(&bgCount, sizeof(bgCount)) != sizeof(bgCount)) {
+      rulesBySelector_.clear();
+      backgroundBySelector_.clear();
+      return false;
+    }
+    if (bgCount > MAX_BACKGROUND_IMAGES) {
+      LOG_DBG("CSS", "Invalid background count in cache: %u", bgCount);
+      rulesBySelector_.clear();
+      backgroundBySelector_.clear();
+      return false;
+    }
+    for (uint16_t b = 0; b < bgCount; ++b) {
+      uint16_t selLen = 0;
+      uint16_t urlLen = 0;
+      if (file.read(&selLen, sizeof(selLen)) != sizeof(selLen) || selLen == 0 ||
+          selLen > MAX_SELECTOR_LENGTH) {
+        rulesBySelector_.clear();
+        backgroundBySelector_.clear();
+        return false;
+      }
+      std::string sel;
+      sel.resize(selLen);
+      if (file.read(&sel[0], selLen) != selLen) {
+        rulesBySelector_.clear();
+        backgroundBySelector_.clear();
+        return false;
+      }
+      if (file.read(&urlLen, sizeof(urlLen)) != sizeof(urlLen) || urlLen == 0 || urlLen > 512) {
+        rulesBySelector_.clear();
+        backgroundBySelector_.clear();
+        return false;
+      }
+      std::string url;
+      url.resize(urlLen);
+      if (file.read(&url[0], urlLen) != urlLen) {
+        rulesBySelector_.clear();
+        backgroundBySelector_.clear();
+        return false;
+      }
+      backgroundBySelector_[std::move(sel)] = std::move(url);
+    }
+  }
+
+  LOG_DBG("CSS", "Loaded %u rules + %u backgrounds from cache", ruleCount,
+          static_cast<unsigned>(backgroundBySelector_.size()));
   return true;
 }

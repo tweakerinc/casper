@@ -251,6 +251,12 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
 
     renderer.displayGrayBuffer();
     renderer.setRenderMode(GfxRenderer::BW);
+
+    // Greyscale passes clear the main FB; restore a BW snapshot so sleep_frame.bin
+    // matches the glass for seamless wake re-seed (no boot logo flash).
+    bitmap.rewindToData();
+    renderer.clearScreen();
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
   }
 }
 

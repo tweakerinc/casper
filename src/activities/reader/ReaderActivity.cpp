@@ -32,6 +32,10 @@ void ReaderActivity::setOpenHints(const bool preferFastFirstRefresh, const bool 
   s_openWallStartMs = millis();
 }
 
+bool ReaderActivity::hasOpenHints() {
+  return s_preferFastFirstRefresh || s_deferFirstPageTextAa || s_openWallStartMs != 0;
+}
+
 bool ReaderActivity::takeOpenHints(bool& preferFastFirstRefresh, bool& deferFirstPageTextAa,
                                    uint32_t& openWallStartMs) {
   preferFastFirstRefresh = s_preferFastFirstRefresh;
@@ -67,8 +71,9 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // First open: building the spine/TOC index (book.bin) takes a couple of seconds. Show
   // Loading (same chrome as Home) so it isn't a silent wait. Cached open → no popup.
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
-  if (uncached) {
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  if (uncached && !hasOpenHints()) {
+    // Same Y as Home Read chrome — never a second pill at the theme top offset.
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
   }
   bool loaded;
   {
@@ -78,7 +83,8 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     std::optional<GfxRenderer::FrameBufferLoan> loan;
     if (uncached) loan.emplace(renderer);
     const uint32_t t0 = millis();
-    loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
+    // Book's Style ⇒ parse CSS; forced alignments skip publisher stylesheets.
+    loaded = epub->load(true, SETTINGS.paragraphAlignment != CrossPointSettings::BOOK_STYLE);
     LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(),
             static_cast<unsigned long>(millis() - t0), uncached ? "miss" : "hit");
     if (QrTimingLog::active()) {
@@ -173,9 +179,12 @@ void ReaderActivity::onEnter() {
   const uint32_t tEnter = millis();
   if (QrTimingLog::active()) QrTimingLog::line("ReaderActivity::onEnter start");
   SystemLog::logTiming("READER", "open start");
-  // Feedback during font ensure + container load (Home Loading may already be on panel;
-  // re-paint if a prior frame cleared it, or if open skipped Home's popup).
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
+  // Home Read already paints a centered Loading and refreshes the panel. Drawing
+  // another Loading here (or one at a different Y) produces the dual-chrome bug
+  // (top + middle). Only paint when we did not come through that path.
+  if (!hasOpenHints()) {
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
+  }
   sdFontSystem.ensureLoaded(renderer);
   LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));
   if (QrTimingLog::active()) {

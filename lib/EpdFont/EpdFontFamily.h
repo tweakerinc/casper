@@ -16,6 +16,7 @@ class EpdFontFamily {
     STRIKETHROUGH = 8,  // drawn as a line through midline by TextBlock::render()
     SUP = 16,           // superscript: glyph scaled 50%, raised ~40% of ascender
     SUB = 32,           // subscript: glyph scaled 50%, lowered ~25% of ascender
+    DROP_CAP = 64,      // 2× glyph scale for tradepub 3em first-letter (God Emperor / Alice)
   };
   static constexpr uint8_t TEXT_DECORATION_MASK = static_cast<uint8_t>(UNDERLINE | STRIKETHROUGH);
 

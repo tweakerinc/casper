@@ -105,6 +105,42 @@ inline SettingInfo buildSleepScreenSetting() {
       .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
 }
 
+// Short / Long power-button action picker.
+// Storage enum SHORT_PWRBTN is append-only (settings.json indices stay valid).
+// Display order (product): Ignore, Sleep, Quick Resume, Refresh Screen, Page Turn, Footnotes.
+inline SettingInfo buildPwrBtnSetting(StrId nameId, uint8_t CrossPointSettings::* field, const char* key) {
+  using A = CrossPointSettings::SHORT_PWRBTN;
+  static constexpr A kOrder[] = {
+      A::IGNORE, A::SLEEP, A::PWR_QUICK_RESUME, A::FORCE_REFRESH, A::PAGE_TURN, A::FOOTNOTES,
+  };
+  static constexpr StrId kLabels[] = {
+      StrId::STR_IGNORE,        StrId::STR_SLEEP,     StrId::STR_QUICK_RESUME,
+      StrId::STR_FORCE_REFRESH, StrId::STR_PAGE_TURN, StrId::STR_FOOTNOTES,
+  };
+  static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
+  static_assert(kCount == CrossPointSettings::SHORT_PWRBTN_COUNT);
+  static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kCount);
+
+  std::vector<StrId> labels;
+  labels.reserve(kCount);
+  for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
+
+  return SettingInfo::DynamicEnum(
+      nameId, std::move(labels),
+      [field] {
+        const auto mode = static_cast<A>(SETTINGS.*field);
+        for (uint8_t i = 0; i < kCount; ++i) {
+          if (kOrder[i] == mode) return i;
+        }
+        return static_cast<uint8_t>(0);  // Ignore
+      },
+      [field](uint8_t displayIdx) {
+        if (displayIdx >= kCount) displayIdx = 0;
+        SETTINGS.*field = static_cast<uint8_t>(kOrder[displayIdx]);
+      },
+      key, StrId::STR_CAT_CONTROLS);
+}
+
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
@@ -280,13 +316,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             CrossPointSettings::SCREEN_MARGIN_STEP},
                            "screenMargin", StrId::STR_CAT_READER)
             .withTextSettings(),
+        // Alignment picker order is Book's Style first in Manage Fonts; storage enum
+        // order stays JUSTIFY…BOOK_STYLE. Embedded Style is not listed — Book's Style
+        // turns embedded CSS on; any forced alignment turns it off.
         SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
                           {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                            StrId::STR_BOOK_S_STYLE},
                           "paragraphAlignment", StrId::STR_CAT_READER)
-            .withTextSettings(),
-        SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
-                            StrId::STR_CAT_READER)
             .withTextSettings(),
         // CrossInk naming: Bionic Reading (bold prefixes) + Guide Dots (· between words).
         // JSON key focusReadingEnabled kept for older settings files.
@@ -331,16 +367,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             "splitBookTitleLines", StrId::STR_CAT_DISPLAY)
             .withNestedUnderParent(),  // under Menu Font Size
         // --- Controls (order matches product UI) ---
-        SettingInfo::Enum(
-            StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
-            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
-             StrId::STR_QUICK_RESUME},
-            "shortPwrBtn", StrId::STR_CAT_CONTROLS),
-        SettingInfo::Enum(
-            StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPwrBtn,
-            {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES,
-             StrId::STR_QUICK_RESUME},
-            "longPwrBtn", StrId::STR_CAT_CONTROLS),
+        // Display order via DynamicEnum; stored SHORT_PWRBTN values unchanged.
+        buildPwrBtnSetting(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn, "shortPwrBtn"),
+        buildPwrBtnSetting(StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPwrBtn, "longPwrBtn"),
         // Long-press side buttons (chapter skip / flip orientation) — directly under Long-Press Power.
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,

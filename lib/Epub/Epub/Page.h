@@ -100,12 +100,26 @@ class Page {
                        [](const std::shared_ptr<PageElement>& el) { return el->getTag() == TAG_PageImage; });
   }
 
+  // True when the page has at least one non-letter image (full figures / plates).
+  // Drop-cap letter floats alone do not count — those stay BW-only.
+  bool hasNonGlyphImages(const int contentWidthPx) const {
+    return std::any_of(elements.begin(), elements.end(), [contentWidthPx](const std::shared_ptr<PageElement>& el) {
+      if (el->getTag() != TAG_PageImage) return false;
+      const auto& ib = static_cast<const PageImage&>(*el).getImageBlock();
+      return !ib.isLetterGlyph(contentWidthPx);
+    });
+  }
+
   bool hasImagesNeedingDecode() const {
     return std::any_of(elements.begin(), elements.end(), [](const std::shared_ptr<PageElement>& element) {
       return element->getTag() == TAG_PageImage &&
              static_cast<const PageImage&>(*element).getImageBlock().needsDecode();
     });
   }
+
+  // Decode any uncached images into .pxc before first ink (heap-gated). Returns
+  // how many images still needed decode when called.
+  int precacheImages(GfxRenderer& renderer) const;
 
   // Get bounding box of all images on the page (union of image rects)
   // Returns false if no images. Coordinates are relative to page origin.

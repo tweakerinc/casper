@@ -37,6 +37,9 @@ class ReaderActivity final : public Activity {
   // preferFastFirstRefresh: home greys already settled → first page FAST instead of HALF.
   // deferFirstPageTextAa: first ink is BW only; AA catch-up render follows.
   static void setOpenHints(bool preferFastFirstRefresh, bool deferFirstPageTextAa);
+  // True after Home (or another caller) set open hints until takeOpenHints clears them.
+  // Used to avoid a second Loading chrome on top of Home's.
+  static bool hasOpenHints();
   // Returns true if hints were pending (always clears). openWallStartMs is millis() at setOpenHints.
   static bool takeOpenHints(bool& preferFastFirstRefresh, bool& deferFirstPageTextAa, uint32_t& openWallStartMs);
   static uint32_t openWallStartMs() { return s_openWallStartMs; }

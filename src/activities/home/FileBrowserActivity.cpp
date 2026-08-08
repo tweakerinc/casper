@@ -105,8 +105,9 @@ void FileBrowserActivity::onEnter() {
   }
 
   selectorIndex = 0;
-  // Clean plate on open; folder browsing stays FAST (no periodic HALF mid-scroll).
-  UiGhostPolicy::requestHardScrub();
+  // FAST open (same as Menu / Settings). Home HALF scrub cleans residual later;
+  // folder browsing stays FAST (no periodic HALF mid-scroll).
+  UiGhostPolicy::clearHardScrub();
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
@@ -567,7 +568,7 @@ void FileBrowserActivity::render(RenderLock&&) {
     }
   }
 
-  UiGhostPolicy::displayMenuFrame(renderer);
+  UiGhostPolicy::displayFastFull(renderer);
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

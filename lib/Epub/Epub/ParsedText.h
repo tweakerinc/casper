@@ -33,11 +33,23 @@ class ParsedText {
   std::vector<bool> reorderedFocusSuffixScratch;
   std::vector<uint16_t> visualOrderScratch;
 
+  // When floatLayoutLineH_ > 0, zones narrow lines that overlap the exclusion box.
+  int16_t floatLayoutStartY_ = 0;
+  int floatLayoutLineH_ = 0;
+
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  // Available text width for lineIndex (0-based). Fast path: returns pageWidth when no zones.
+  int widthForLine(int lineIndex, int pageWidth) const;
+  // Horizontal shift for a left float on this line (0 if none / right float).
+  int leftFloatShiftForLine(int lineIndex) const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
   std::vector<size_t> computeHyphenatedLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
+                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                                  std::vector<bool>& noSpaceBeforeVec);
+  // Greedy breaks with per-line width (float zones). Used when floatLayoutLineH_ > 0.
+  std::vector<size_t> computeFloatAwareLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                                   std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                                   std::vector<bool>& noSpaceBeforeVec);
   bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
@@ -67,11 +79,19 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // First token for layout heuristics (epigraph attributions). Empty if none.
+  const std::string& firstWord() const {
+    static const std::string kEmpty;
+    return words.empty() ? kEmpty : words[0];
+  }
   // Rivulet drop-cap: peel first non-soft-hyphen UTF-8 codepoint from the first word.
   // Remainder stays as first word with wordContinues so no extra space before the rest.
   // Returns empty string if nothing to peel.
   std::string peelDropCapLetter();
+  // maxLines: 0 = all lines; >0 extracts at most that many.
+  // blockStartY + lineHeight enable float-zone narrowing (0 lineHeight = fast path, ignore zones).
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
-                             bool includeLastLine = true);
+                             bool includeLastLine = true, int maxLines = 0, int16_t blockStartY = 0,
+                             int lineHeight = 0);
 };

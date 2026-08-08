@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "CrossPointSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
@@ -54,18 +55,23 @@ void RecentBooksActivity::loadReadBooks() {
   FinishedBooks::listFinishedBooks(readBooks);
 }
 
+bool RecentBooksActivity::showReadBooksRow() const {
+  // Only when user opted into move-to-read folder and that folder is non-empty.
+  return SETTINGS.moveFinishedToReadFolder != 0 && !readBooks.empty();
+}
+
 int RecentBooksActivity::listRowCount() const {
   if (viewMode == ViewMode::ReadBooks) {
     return static_cast<int>(readBooks.size());
   }
-  return (kShowReadRow ? 1 : 0) + static_cast<int>(recentBooks.size());
+  return (showReadBooksRow() ? 1 : 0) + static_cast<int>(recentBooks.size());
 }
 
 int RecentBooksActivity::bookIndexForSelector(const size_t sel) const {
   if (viewMode == ViewMode::ReadBooks) {
     return static_cast<int>(sel);
   }
-  if (kShowReadRow) {
+  if (showReadBooksRow()) {
     if (sel == 0) return -1;  // "Show Read Books" row
     return static_cast<int>(sel - 1);
   }
@@ -87,6 +93,8 @@ void RecentBooksActivity::onEnter() {
   // Opened via Bare long-press Library (Confirm still held): wait for full release
   // so the release edge does not open the first book.
   awaitOpenButtonRelease = anyOpenOrNavButtonHeld(mappedInput);
+  // FAST open (same as Library / Settings). Home HALF cleans residual later.
+  UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
 
@@ -309,24 +317,25 @@ void RecentBooksActivity::render(RenderLock&&) {
                  [this](int index) { return readBooks[static_cast<size_t>(index)].title; },
                  [](int) { return std::string{}; }, nullptr);
   } else {
-    // Row 0 = Show Read Books; following rows = recent titles.
+    // Optional row 0 = Show Read Books; following rows = recent titles.
+    const bool showRead = showReadBooksRow();
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<size_t>(rows), selectorIndex,
-        [this](int index) -> std::string {
-          if (kShowReadRow && index == 0) {
+        [this, showRead](int index) -> std::string {
+          if (showRead && index == 0) {
             return tr(STR_SHOW_READ_BOOKS);
           }
-          const int bi = kShowReadRow ? index - 1 : index;
+          const int bi = showRead ? index - 1 : index;
           if (bi >= 0 && bi < static_cast<int>(recentBooks.size())) {
             return recentBooks[static_cast<size_t>(bi)].title;
           }
           return {};
         },
-        [this](int index) -> std::string {
-          if (kShowReadRow && index == 0) {
+        [this, showRead](int index) -> std::string {
+          if (showRead && index == 0) {
             return {};
           }
-          const int bi = kShowReadRow ? index - 1 : index;
+          const int bi = showRead ? index - 1 : index;
           if (bi >= 0 && bi < static_cast<int>(recentBooks.size())) {
             return recentBooks[static_cast<size_t>(bi)].author;
           }
@@ -339,5 +348,5 @@ void RecentBooksActivity::render(RenderLock&&) {
   // In Read view, Back returns to Recents (hint still says Home via mapLabels — OK for hardware).
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  UiGhostPolicy::displayMenuFrame(renderer);
+  UiGhostPolicy::displayFastFull(renderer);
 }

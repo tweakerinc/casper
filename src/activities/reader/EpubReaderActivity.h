@@ -42,6 +42,10 @@ class EpubReaderActivity final : public Activity {
   // next spine instead of clamping back to the same last page (looks like "next
   // reformatted the page" / stuck page).
   bool pendingForwardPastEnd = false;
+  // Chapter hop requested while render held the lock (0 = none, +1/-1). Applied
+  // under RenderLock from loop() or pageTurn when the lock is free — never block
+  // main on a hung grey multipass.
+  int8_t pendingChapterHop = 0;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   // Absorbs bounce so one physical press cannot advance multiple pages.
@@ -81,6 +85,26 @@ class EpubReaderActivity final : public Activity {
   int glyphCacheSpine = -1;
   int glyphCachePage = -1;
   unsigned long lastRenderCompleteMs = 0;
+
+  // Next-spine pre-index (Background B): page-budget runway of later spines so
+  // chapter turns hit a finished section cache with full Embedded Style.
+  // Original Casper design — not a copy of another firmware.
+  enum class NeighborBuildState : uint8_t { Idle, Probe, Building, Settled };
+  std::unique_ptr<Section> neighborSection_;
+  int neighborSpineIndex_ = -1;
+  int neighborBaseSpine_ = -1;       // reading spine when window was anchored
+  int neighborPagesBuilt_ = 0;       // pages already laid out in later spines
+  NeighborBuildState neighborState_ = NeighborBuildState::Idle;
+  unsigned long neighborHeapGateMs_ = 0;
+  // WH imageProcessingActive_: while images are decoding for paint, do not start
+  // neighbor layout (font/PNG heap fight → PTX OOM / freezes).
+  bool imageProcessingActive_ = false;
+  static constexpr int NEIGHBOR_LOOKAHEAD_PAGES = 40;
+  static constexpr size_t NEIGHBOR_CSS_MIN_FREE_HEAP = 56 * 1024;
+  static constexpr size_t NEIGHBOR_CSS_MIN_MAX_ALLOC = 24 * 1024;
+  // Only start neighbor builds when HTML is already on SD (inflate under lock freezes UI).
+  void resetNeighborBuild();
+  void stepNeighborSectionBuild();
   bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
   std::vector<BookmarkEntry> cachedBookmarks;
   // Tracks whether this book is currently removed from Recent Books by the
@@ -127,7 +151,15 @@ class EpubReaderActivity final : public Activity {
   // with text AA scheduled as a follow-up render so the page is readable sooner.
   bool openPreferFastFirstRefresh = false;
   bool openDeferTextAa = false;
+  // Next paint should run deferred text greys (not skip them again).
+  bool forceGreysThisFrame = false;
   bool pendingDeferredOpenAa = false;
+  // Image-plate greys: at most one idle catch-up per page. Re-arming after a
+  // successful (or failed) attempt caused black full-frame flashes every few
+  // seconds on Alice illustration pages.
+  bool imageGreysSettledForPage = false;
+  int imageGreysSettledSpine = -1;
+  int imageGreysSettledPage = -1;
   // Set when INDEXING/Loading chrome was drawn this open — first page must scrub
   // (HALF) or residual popup greys wash out the text until a page turn.
   bool openNeedsScrubAfterChrome = false;
@@ -145,7 +177,10 @@ class EpubReaderActivity final : public Activity {
   // being shown) and per loop() tick (background build of a large chapter). Kept small so a
   // background build chunk never noticeably delays input or a pending render.
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
-  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
+  // Keep small: each page under RenderLock must not starve Home/buttons (logs: activity_slow ~2.6s).
+  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 1;
+  // Wall-clock cap for one background build step while holding RenderLock.
+  static constexpr unsigned long BACKGROUND_BUILD_LOCK_BUDGET_MS = 60;
 
   // MEMFIX-PORT: background-build heap floor; portable
   // Skip background build ticks below this free-heap floor. The parse path grows
@@ -222,6 +257,10 @@ class EpubReaderActivity final : public Activity {
   // (used after a settings change re-paginates a chapter). Returns true if currentPage moved.
   // No-op while the section is still building or when the pagination is unchanged (plain resume).
   bool applyDeferredReposition();
+  // Layout-affecting fields from Manage Fonts / Text Settings (cache key + margin).
+  uint32_t layoutFingerprint() const;
+  // After Text Settings: if layout changed, drop section.bin and rebuild with Loading.
+  void reflowAfterTextSettings(uint32_t fingerprintBefore);
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
@@ -281,12 +320,19 @@ class EpubReaderActivity final : public Activity {
   // it from page 0. Reverts to normal power behavior the moment the build finishes,
   // and while the build is heap-paused (no work is happening, so spinning at full
   // speed would only burn battery; the paused gate still retries every loop pass).
-  bool skipLoopDelay() override { return section && section->isBuilding() && !buildHeapPaused; }
+  bool skipLoopDelay() override {
+    // Full speed while current or neighbor spine is actively building.
+    if (section && section->isBuilding() && !buildHeapPaused) return true;
+    if (neighborSection_ && neighborSection_->isBuilding() && !buildHeapPaused) return true;
+    return false;
+  }
   bool isReaderActivity() const override { return true; }
   bool handleForcedRefresh() override {
     {
       RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
+      // FORCE_SCRUB (0) → hard HALF on X3/X4. pagesUntilFullRefresh=1 used the
+      // X3 soft reinforce path (no visible flash) and felt broken.
+      pagesUntilFullRefresh = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
       forcedRefreshPending = true;
     }
     requestUpdate();

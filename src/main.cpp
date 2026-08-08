@@ -213,7 +213,7 @@ constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 enum class BootResume : uint8_t {
   Splash,       // cold boot, flash, panic, or plain reboot
   Silent,       // heap-defrag ESP.restart() (RTC flag; lost on power loss)
-  QuickResume,  // wake from a quick-resume deep sleep (SD flag; survives power loss)
+  QuickResume,  // power-button wake from deep sleep (QR moon or wallpaper; SD flag)
 };
 
 // Latched true once enterDeepSleep() commits to sleeping, before it tears down
@@ -259,10 +259,22 @@ void waitForPowerRelease() {
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
 static void saveSleepFrameBuffer() {
+  Storage.ensureDirectoryExists("/.crosspoint");
   HalFile file;
-  if (!Storage.openFileForWrite("SLP", SLEEP_FRAME_FILE, file)) return;
-  file.write(renderer.getFrameBuffer(), renderer.getBufferSize());
+  if (!Storage.openFileForWrite("SLP", SLEEP_FRAME_FILE, file)) {
+    LOG_ERR("MAIN", "sleep_frame save: open failed");
+    return;
+  }
+  const size_t bufferSize = renderer.getBufferSize();
+  const size_t written = file.write(renderer.getFrameBuffer(), bufferSize);
   file.close();
+  if (written != bufferSize) {
+    LOG_ERR("MAIN", "sleep_frame save: wrote %u/%u", static_cast<unsigned>(written),
+            static_cast<unsigned>(bufferSize));
+    Storage.remove(SLEEP_FRAME_FILE);
+    return;
+  }
+  LOG_DBG("MAIN", "sleep_frame saved %u bytes", static_cast<unsigned>(bufferSize));
 }
 
 static bool loadSleepFrameBuffer() {
@@ -272,6 +284,8 @@ static bool loadSleepFrameBuffer() {
   const size_t bytesRead = file.read(display.getFrameBuffer(), bufferSize);
   file.close();
   if (bytesRead != bufferSize) {
+    LOG_ERR("MAIN", "sleep_frame load: read %u/%u", static_cast<unsigned>(bytesRead),
+            static_cast<unsigned>(bufferSize));
     Storage.remove(SLEEP_FRAME_FILE);
     return false;
   }
@@ -292,7 +306,9 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  // QR paths: power action, idle timeout toggle, or legacy Sleep Screen == QR.
+  // QR paint vs wallpaper: power action, idle timeout toggle, or legacy Sleep Screen == QR.
+  // Wake path is always seamless for intentional deep sleep (no boot logo) — wallpaper
+  // and last-frame both re-seed from sleep_frame and resume reader/home like QR.
   const bool isQuickResumeSleep =
       powerQuickResume ||
       (fromTimeout &&
@@ -300,7 +316,8 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
            CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
       (!fromTimeout && !powerQuickResume &&
        SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
-  APP_STATE.showBootScreen = !isQuickResumeSleep;
+  // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.
+  APP_STATE.showBootScreen = false;
 
   APP_STATE.saveToFile();
   // Persist settings before power-off so remaps (and other in-RAM settings)
@@ -316,11 +333,9 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout, isQuickResumeSleep);
 
-  // Snapshot after the moon is on the FB so X3 wake re-seed matches the glass
-  // (needed for no-flash differential). Moon is ink-only in the top chrome band.
-  if (isQuickResumeSleep) {
-    saveSleepFrameBuffer();
-  }
+  // Snapshot sleep image (moon-on-page or wallpaper) so wake re-seed matches the glass
+  // for no-flash differential. Greyscale wallpapers leave a BW approx in the main FB.
+  saveSleepFrameBuffer();
 
   // X3: optional automatic daily stats backup (RTC date → stats_YYYY-MM-DD.bin).
   // Same-day sleeps overwrite that day's file; keeps a rolling week via prune.
@@ -439,12 +454,14 @@ void setup() {
   // Wake cause before QR planning — flash/USB must not look like sleep-from-reader.
   const auto wakeupReason = gpio.getWakeupReason();
 
-  // Detect Quick Resume → book early so we can skip non-critical boot work.
+  // Detect sleep-wake → book early so we can skip non-critical boot work.
   // PowerButton covers: deep-sleep GPIO wake (X3 / X4+USB) and X4 battery latch
   // POWERON (MCU fully powered off in sleep). Flash/USB are never PowerButton.
+  // Do not require showBootScreen=false — that flag is advisory; a failed state
+  // save must not block resume-to-book or force the boot logo.
   const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton &&
-                        !APP_STATE.showBootScreen && APP_STATE.lastSleepFromReader &&
-                        !APP_STATE.openEpubPath.empty() && APP_STATE.readerActivityLoadCount < 2;
+                        APP_STATE.lastSleepFromReader && !APP_STATE.openEpubPath.empty() &&
+                        APP_STATE.readerActivityLoadCount < 2;
 
   // Defer recents/KOReader/OPDS SD reads until after first ink on QR→book
   // (saves ~50–150ms and SD contention before the page is readable).
@@ -538,14 +555,15 @@ void setup() {
   // HalDisplay::begin), so the first paint is FAST_REFRESH (~500ms) over the
   // retained frame and input dispatches against a visible UI.
   //
-  // QuickResume for PowerButton wakes (deep sleep OR X4 battery POWERON latch).
-  // Flash / unknown cold boot → Splash. (Do not require ESP_RST_DEEPSLEEP only —
-  // that forced a full reboot-feel on X4 unplugged wake.)
-  const bool forceColdHome = wakeupReason != HalGPIO::WakeupReason::PowerButton;
-  const BootResume resume = isSilentReboot              ? BootResume::Silent
-                            : forceColdHome             ? BootResume::Splash
-                            : !APP_STATE.showBootScreen ? BootResume::QuickResume
-                                                        : BootResume::Splash;
+  // Power-button wake is ALWAYS seamless (wallpaper or QR moon) — never show
+  // BootActivity. The panel already holds the sleep image; we only re-seed the
+  // controller and resume reader/home. Flash / USB / unknown cold boot → Splash.
+  // (Do not require ESP_RST_DEEPSLEEP only — that forced a full reboot-feel on
+  // X4 unplugged wake.)
+  const bool powerButtonWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const BootResume resume = isSilentReboot   ? BootResume::Silent
+                            : powerButtonWake ? BootResume::QuickResume
+                                              : BootResume::Splash;
 
   if (resume == BootResume::QuickResume) {
     // SD: /.casper-logs/qr_timing.log — pull after a QR wake and paste the latest block.
@@ -568,10 +586,12 @@ void setup() {
       // panel keeps showing the pre-reboot popup until that first paint lands.
       break;
     case BootResume::QuickResume: {
-      // One-shot flag: re-arm splash for next non-QR boot (saved after first ink on QR→book).
+      // One-shot flag: re-arm cold-boot splash (saved after first ink on QR→book).
       APP_STATE.showBootScreen = true;
-      // Resume the screen we slept from: reader only if last sleep was in a book.
+      // Resume reader only if last sleep was in a book; else Home (Settings never auto-resumes).
       const bool qrOpenBook = qrToBook && !mappedInputManager.isPressed(MappedInputManager::Button::Back);
+      SystemLog::logTiming("QR", "power wake openBook=%d lastReader=%d pathEmpty=%d", qrOpenBook ? 1 : 0,
+                           APP_STATE.lastSleepFromReader ? 1 : 0, APP_STATE.openEpubPath.empty() ? 1 : 0);
       if (QrTimingLog::active()) {
         QrTimingLog::line("qr_plan openBook=%d pathEmpty=%d lastReader=%d loadCount=%u", qrOpenBook ? 1 : 0,
                           APP_STATE.openEpubPath.empty() ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0,
@@ -582,10 +602,10 @@ void setup() {
         // Re-seed controller "previous" plane from the restored FB (X3 DTM1 / X4 RED).
         renderer.cleanupGrayscaleWithFrameBuffer();
         if (qrOpenBook) {
-          // Leave sleep image on glass; first page FAST replaces it (no spinner flash).
+          // Leave sleep image (wallpaper or moon-on-page) on glass; first page FAST replaces it.
           if (QrTimingLog::active()) QrTimingLog::line("sleep frame kept (no spinner; open book next)");
         } else {
-          // Landing on Home: moon → loading icon.
+          // Landing on Home: optional chrome loading icon over retained sleep image.
           SleepChromeIcon::replaceAtTopChrome(renderer, LoadingIcon, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
           // Plain FAST only — do not use displayGrayscaleBase here (AA-pre-BW mid
           // is grayscale preconditioning and leaves white muddy if no greys follow).
@@ -593,8 +613,10 @@ void setup() {
           if (QrTimingLog::active()) QrTimingLog::line("after sleep-frame loading-icon panel update");
         }
       } else {
-        if (QrTimingLog::active()) QrTimingLog::line("sleep_frame MISSING — fall back to splash");
-        activityManager.goToBoot();
+        // Never show BootActivity here — glass already holds wallpaper/moon through
+        // deep sleep. Missing sleep_frame only skips controller re-seed.
+        SystemLog::logTiming("QR", "sleep_frame MISSING — keep glass, skip splash");
+        if (QrTimingLog::active()) QrTimingLog::line("sleep_frame MISSING — keep glass (no splash)");
       }
       // QR→book: defer APP_STATE.save (showBootScreen) until after first ink — SD write
       // was ~200ms on the critical path. Non-book QR still saves now (home is less latency-critical).
@@ -605,6 +627,7 @@ void setup() {
       break;
     }
     case BootResume::Splash:
+      // Cold boot / flash / unknown only — never power-button sleep wake.
       activityManager.goToBoot();
       break;
   }

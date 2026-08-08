@@ -390,7 +390,8 @@ void Epub::parseCssFiles() const {
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
   // Minimum heap required before attempting CSS parsing
-  constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  // 48KB: God Emperor often sits ~60KB free after book.bin; 64KB was skipping style.css.
+  constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 48 * 1024;
 
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");

@@ -113,11 +113,13 @@ uint8_t sizeStepFromCssFontSize(const CssStyle& css, const StyleResolveContext& 
   }
 
   const float scale = px / ctx.baseEmPx;
-  // Bins from design: <0.85 → -2, <0.95 → -1, <1.08 → 0, <1.25 → +1, else +2
+  // Discrete ladder bins. Alice .tale1–.tale47 use 99%→53% for the mouse-tail taper:
+  // keep smaller steps so the tail visibly shrinks (not only the last third).
+  // <0.70 → -2, <0.88 → -1, <1.08 → 0, <1.25 → +1, else +2
   int delta = 0;
-  if (scale < 0.85f) {
+  if (scale < 0.70f) {
     delta = -2;
-  } else if (scale < 0.95f) {
+  } else if (scale < 0.88f) {
     delta = -1;
   } else if (scale < 1.08f) {
     delta = 0;

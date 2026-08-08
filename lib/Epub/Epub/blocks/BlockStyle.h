@@ -7,19 +7,31 @@
 #include "Epub/css/StyleResolve.h"
 
 /**
+ * Rectangular exclusion beside paragraph text (left/right float image or drop-cap).
+ * Parse/layout only — not written into the page cache (finished PageLine x/y are).
+ * Coordinates are page-absolute Y so multiple lines can test overlap.
+ */
+struct FloatZone {
+  int16_t top = 0;     // inclusive page Y of zone top
+  int16_t bottom = 0;  // exclusive page Y of zone bottom
+  int16_t width = 0;   // horizontal exclusion (image/cap width + gap)
+  bool isRight = false;
+};
+
+/**
  * BlockStyle - Block-level styling properties
  */
 struct BlockStyle {
-  // Upper bound (in em) for any single side's horizontal margin or padding.
-  // Some EPUBs apply huge em-based insets to chapter-opener classes; without a
-  // cap, effectiveWidth collapses to 1-2 words per line and justification dumps
-  // the remaining space into a single gap.
-  static constexpr float MAX_HORIZONTAL_INSET_EM = 2.0f;
+  // Soft em ceiling used only when viewport width is unknown. Prefer the
+  // viewport-fraction cap in cappedHorizontalInset(). Poem/mouse-tail spans use a
+  // higher path (55%) in ChapterHtmlSlimParser — do not crush those here.
+  static constexpr float MAX_HORIZONTAL_INSET_EM = 12.0f;
+  static constexpr int kMaxFloatZones = 2;
   // Vertical margins often use % of *viewport width* in our CssLength resolver
   // (e.g. .ct1 { margin: 10% 0 8% 25% } → ~50px top on X3). Uncapped, epigraph
   // attribution lines ("— THE STOLEN JOURNALS") get pushed to the next page.
   // Keep this tight so quote + attribution stay on one page on X3.
-  static constexpr float MAX_VERTICAL_MARGIN_EM = 0.75f;
+  static constexpr float MAX_VERTICAL_MARGIN_EM = 0.55f;
 
   CssTextAlign alignment = CssTextAlign::Justify;
 
@@ -50,6 +62,11 @@ struct BlockStyle {
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
   bool fromBrElement = false;
+
+  // Active float exclusions for this paragraph's layout (drop-cap / figleft / figright).
+  // Not combined across parents — attached once by the parser for the wrapping block.
+  FloatZone floatZones[kMaxFloatZones] = {};
+  int8_t floatZoneCount = 0;
 
   // Combined insets (margin + padding)
   [[nodiscard]] int16_t leftInset() const { return marginLeft + paddingLeft; }
@@ -123,32 +140,50 @@ struct BlockStyle {
     // fromBrElement is consumed by startNewTextBlock when an empty <br> block
     // is merged with the following paragraph; never propagate it further.
     result.fromBrElement = false;
+    // Float zones are paragraph-local; never inherit from parent cascade.
+    result.floatZoneCount = 0;
     return result;
   }
 
   // Create a BlockStyle from CSS style properties, resolving CssLength values to pixels
   // emSize is the current font line height, used for em/rem unit conversion
   // paragraphAlignment is the user's paragraphAlignment setting preference
+  // Cap one horizontal inset against the viewport so a readable column remains.
+  // Percent and em insets are both real book layout (poems, mouse-tail, fig floats).
+  // Old 2em hard cap flattened Alice's mouse-tail poem to a straight left edge.
+  static int16_t cappedHorizontalInset(const CssLength& len, const float emSize, const float vw) {
+    const int16_t px = len.toPixelsInt16(emSize, vw);
+    if (px <= 0) return 0;
+    if (vw > 0) {
+      // Block-level insets (epigraph .ct1 ~25%, poems): leave room for glyphs.
+      // Justify + >30% left was gappy on X3; poem *span* indents use a separate
+      // 55% path so Alice's mouse-tail wave is not flattened.
+      const auto maxByViewport = static_cast<int16_t>(vw * 0.35f);
+      return std::min(px, maxByViewport);
+    }
+    const auto maxEm = static_cast<int16_t>(emSize * MAX_HORIZONTAL_INSET_EM);
+    return std::min(px, maxEm);
+  }
+
   static BlockStyle fromCssStyle(const CssStyle& cssStyle, const float emSize, const CssTextAlign paragraphAlignment,
                                  const uint16_t viewportWidth = 0) {
     BlockStyle blockStyle;
     const float vw = viewportWidth;
-    const auto maxHorizontalInsetPx = static_cast<int16_t>(emSize * MAX_HORIZONTAL_INSET_EM);
     const auto maxVerticalMarginPx = static_cast<int16_t>(emSize * MAX_VERTICAL_MARGIN_EM);
     // Resolve all CssLength values to pixels using the current font's em size and viewport width
     blockStyle.marginTop =
         std::min(cssStyle.marginTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.marginBottom =
         std::min(cssStyle.marginBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
-    blockStyle.marginLeft = std::min(cssStyle.marginLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
-    blockStyle.marginRight = std::min(cssStyle.marginRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+    blockStyle.marginLeft = cappedHorizontalInset(cssStyle.marginLeft, emSize, vw);
+    blockStyle.marginRight = cappedHorizontalInset(cssStyle.marginRight, emSize, vw);
 
     blockStyle.paddingTop =
         std::min(cssStyle.paddingTop.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
     blockStyle.paddingBottom =
         std::min(cssStyle.paddingBottom.toPixelsInt16(emSize, vw), maxVerticalMarginPx);
-    blockStyle.paddingLeft = std::min(cssStyle.paddingLeft.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
-    blockStyle.paddingRight = std::min(cssStyle.paddingRight.toPixelsInt16(emSize, vw), maxHorizontalInsetPx);
+    blockStyle.paddingLeft = cappedHorizontalInset(cssStyle.paddingLeft, emSize, vw);
+    blockStyle.paddingRight = cappedHorizontalInset(cssStyle.paddingRight, emSize, vw);
 
     // For textIndent: if it's a percentage we can't resolve (no viewport width),
     // leave textIndentDefined=false so the space-width fallback in resolveFirstLineIndent() is used

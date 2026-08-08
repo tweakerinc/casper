@@ -132,6 +132,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
   const bool useDithering = ctx->config->useDithering;
+  const bool inkBias = ctx->config->inkBias;
   bool caching = ctx->caching;
   const int32_t fineScaleFPX = ctx->fineScaleFPX;
   const int32_t invScaleFPX = ctx->invScaleFPX;
@@ -152,22 +153,31 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   int dstXStart = (int)((int64_t)blockX * fineScaleFPX >> FP_SHIFT);
   int dstXEnd = (srcXEnd >= ctx->scaledSrcWidth) ? ctx->dstWidth : (int)((int64_t)srcXEnd * fineScaleFPX >> FP_SHIFT);
 
-  // Pre-clamp destination ranges to screen bounds (eliminates per-pixel screen checks)
-  int clampYMax = ctx->dstHeight;
-  if (ctx->screenHeight - cfgY < clampYMax) clampYMax = ctx->screenHeight - cfgY;
-  if (dstYStart < -cfgY) dstYStart = -cfgY;
-  if (dstYEnd > clampYMax) dstYEnd = clampYMax;
+  // When painting live, clamp to screen. Cache-only layout precache must cover
+  // the full destination so .pxc is complete even if taller than the panel.
+  const bool wantFb = ctx->config->writeToFramebuffer;
+  if (wantFb) {
+    int clampYMax = ctx->dstHeight;
+    if (ctx->screenHeight - cfgY < clampYMax) clampYMax = ctx->screenHeight - cfgY;
+    if (dstYStart < -cfgY) dstYStart = -cfgY;
+    if (dstYEnd > clampYMax) dstYEnd = clampYMax;
 
-  int clampXMax = ctx->dstWidth;
-  if (ctx->screenWidth - cfgX < clampXMax) clampXMax = ctx->screenWidth - cfgX;
-  if (dstXStart < -cfgX) dstXStart = -cfgX;
-  if (dstXEnd > clampXMax) dstXEnd = clampXMax;
+    int clampXMax = ctx->dstWidth;
+    if (ctx->screenWidth - cfgX < clampXMax) clampXMax = ctx->screenWidth - cfgX;
+    if (dstXStart < -cfgX) dstXStart = -cfgX;
+    if (dstXEnd > clampXMax) dstXEnd = clampXMax;
+  } else {
+    if (dstYStart < 0) dstYStart = 0;
+    if (dstYEnd > ctx->dstHeight) dstYEnd = ctx->dstHeight;
+    if (dstXStart < 0) dstXStart = 0;
+    if (dstXEnd > ctx->dstWidth) dstXEnd = ctx->dstWidth;
+  }
 
   if (dstYStart >= dstYEnd || dstXStart >= dstXEnd) return 1;
 
   // Pre-compute orientation and render-mode state once per callback invocation
   DirectPixelWriter pw;
-  pw.init(renderer);
+  if (wantFb) pw.init(renderer);
 
   // The cache streams to disk one MCU-row band at a time. Flushing rows below
   // this block (raster order guarantees they are final) repositions the band;
@@ -190,7 +200,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (fineScaleFPX == FP_ONE && fineScaleFPY == FP_ONE) {
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      pw.beginRow(outY);
+      if (wantFb) pw.beginRow(outY);
       if (caching) cw.beginRow(outY, cacheOriginY);
       const uint8_t* row = &pixels[(dstY - blockY) * stride];
       for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
@@ -198,12 +208,11 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         uint8_t gray = row[dstX - blockX];
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
         } else {
-          dithered = gray / 85;
-          if (dithered > 3) dithered = 3;
+          dithered = quantizeGray4LevelNoDither(gray, inkBias);
         }
-        pw.writePixel(outX, dithered);
+        if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -224,7 +233,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      pw.beginRow(outY);
+      if (wantFb) pw.beginRow(outY);
       if (caching) cw.beginRow(outY, cacheOriginY);
       const int32_t srcFyFP = dstY * invScaleFPY;
       const int32_t fy = srcFyFP & FP_MASK;
@@ -257,12 +266,11 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
         } else {
-          dithered = gray / 85;
-          if (dithered > 3) dithered = 3;
+          dithered = quantizeGray4LevelNoDither(gray, inkBias);
         }
-        pw.writePixel(outX, dithered);
+        if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -280,12 +288,11 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
         } else {
-          dithered = gray / 85;
-          if (dithered > 3) dithered = 3;
+          dithered = quantizeGray4LevelNoDither(gray, inkBias);
         }
-        pw.writePixel(outX, dithered);
+        if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -306,45 +313,80 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY);
+          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
         } else {
-          dithered = gray / 85;
-          if (dithered > 3) dithered = 3;
+          dithered = quantizeGray4LevelNoDither(gray, inkBias);
         }
-        pw.writePixel(outX, dithered);
+        if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
     return 1;
   }
 
-  // === Nearest-neighbor (downscale: fineScale < 1.0) ===
+  // === Area-average downscale (fineScale < 1.0) ===
+  // FreeInk-style box filter adapted to JPEGDEC MCU streaming: each output
+  // pixel averages every source sample in its footprint that falls inside this
+  // MCU block. Preserves tonal mass (Alice woodcuts, photo midtones) that
+  // nearest-neighbor discards when coarse JPEG_SCALE_* leaves a fractional
+  // remainder. Cross-MCU bins are partial averages — still far better than a
+  // single point sample, and needs no extra heap.
   for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
     const int outY = cfgY + dstY;
-    pw.beginRow(outY);
+    if (wantFb) pw.beginRow(outY);
     if (caching) cw.beginRow(outY, cacheOriginY);
-    const int32_t srcFyFP = dstY * invScaleFPY;
-    int ly = (srcFyFP >> FP_SHIFT) - blockY;
-    if (ly < 0) ly = 0;
-    if (ly >= blockH) ly = blockH - 1;
-    const uint8_t* row = &pixels[ly * stride];
+
+    // Source Y footprint for this output row (absolute coords).
+    int srcY0 = (int)((int64_t)dstY * invScaleFPY >> FP_SHIFT);
+    int srcY1 = (int)((int64_t)(dstY + 1) * invScaleFPY >> FP_SHIFT);
+    if (srcY1 <= srcY0) srcY1 = srcY0 + 1;
+    // Intersection with this MCU block.
+    int ly0 = srcY0 - blockY;
+    int ly1 = srcY1 - blockY;
+    if (ly0 < 0) ly0 = 0;
+    if (ly1 > blockH) ly1 = blockH;
+    if (ly0 >= ly1) {
+      // Degenerate: fall back to nearest row in block.
+      ly0 = (int)((int64_t)dstY * invScaleFPY >> FP_SHIFT) - blockY;
+      if (ly0 < 0) ly0 = 0;
+      if (ly0 >= blockH) ly0 = blockH - 1;
+      ly1 = ly0 + 1;
+    }
 
     for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
       const int outX = cfgX + dstX;
-      const int32_t srcFxFP = dstX * invScaleFPX;
-      int lx = (srcFxFP >> FP_SHIFT) - blockX;
-      if (lx < 0) lx = 0;
-      if (lx >= validW) lx = validW - 1;
-      uint8_t gray = row[lx];
+      int srcX0 = (int)((int64_t)dstX * invScaleFPX >> FP_SHIFT);
+      int srcX1 = (int)((int64_t)(dstX + 1) * invScaleFPX >> FP_SHIFT);
+      if (srcX1 <= srcX0) srcX1 = srcX0 + 1;
+      int lx0 = srcX0 - blockX;
+      int lx1 = srcX1 - blockX;
+      if (lx0 < 0) lx0 = 0;
+      if (lx1 > validW) lx1 = validW;
+      if (lx0 >= lx1) {
+        lx0 = (int)((int64_t)dstX * invScaleFPX >> FP_SHIFT) - blockX;
+        if (lx0 < 0) lx0 = 0;
+        if (lx0 >= validW) lx0 = validW - 1;
+        lx1 = lx0 + 1;
+      }
+
+      uint32_t sum = 0;
+      uint32_t count = 0;
+      for (int ly = ly0; ly < ly1; ++ly) {
+        const uint8_t* row = &pixels[ly * stride];
+        for (int lx = lx0; lx < lx1; ++lx) {
+          sum += row[lx];
+          ++count;
+        }
+      }
+      const uint8_t gray = count ? static_cast<uint8_t>(sum / count) : 0;
 
       uint8_t dithered;
       if (useDithering) {
-        dithered = applyBayerDither4Level(gray, outX, outY);
+        dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
       } else {
-        dithered = gray / 85;
-        if (dithered > 3) dithered = 3;
+        dithered = quantizeGray4LevelNoDither(gray, inkBias);
       }
-      pw.writePixel(outX, dithered);
+      if (wantFb) pw.writePixel(outX, dithered);
       if (caching) cw.writePixel(outX, dithered);
     }
   }

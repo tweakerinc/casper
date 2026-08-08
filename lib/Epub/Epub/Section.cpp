@@ -5,6 +5,7 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include "Epub/converters/PngToFramebufferConverter.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
@@ -25,7 +26,31 @@ namespace {
 // v37: Rivulet PR4 — float wrap + drop-cap first letter (geometry differs from v34 block place).
 // v38: drop-cap paintFontIdOverride + tighter vertical margin caps (epigraph pagination).
 // v39: drop-cap arm after previous paragraph flush (was peeling journals em-dash).
-constexpr uint8_t SECTION_FILE_VERSION = 39;
+// v42: float class fallback (figleft/figright), float stack x, wrap top-align
+// v43: drop-cap top-align + flush indent + per-line float width remeasure
+// v44: static PNG decode + tighter drop-cap float gap
+// v45: drop-cap wrap floors to whole lines (no indented line under letter)
+// v46: clean-room FloatZone + widthForLine (replaces remainingH float boxes)
+// v47: 3em drop-cap sizing/hang + epigraph attribution keep-with-previous
+// v48: epigraph right-attr + left-align indent body (no sparse justify)
+// v49: drop-cap top-align with first body line (no hang into status bar)
+// v50: drop-cap Y from glyph top (2× no longer one-line too low)
+// v51: drop-cap exactly 2 wrap lines (top of L1 → bottom of L2)
+// v52: always 2× drop-cap, top-align paint to first line
+// v53: drop-cap slight down-nudge to match body cap-height
+// v54: Alice mouse-tail poem — full progressive margin-left (no 30% crush) + br indent reset
+// v55: figleft drop-cap floats wrap exactly 2 body lines (no 3rd-line indent / underlap)
+// v56: short-block right-align only for dash attributions (not "CHAPTER I")
+// v57: heap-gated PNG section warm + attribution/top-margin layout (Alice text loss fix)
+// v58: WH poem stanza indent (span margin→textIndent) + no short-line Y reclaim on mouse-tail
+// v59: always honor CSS textIndent (mouse-tail was zeroed when extra-paragraph-spacing on)
+// v60: mouse-tail progressive indent via marginLeft (not textIndent) — no wrap zigzag
+// v61: scale mouse-tail wave into remaining width (no right-column stack at peak)
+// v62: Extra Paragraph Spacing additive (keeps auto first-line indent; no exclusivity)
+// v63: class/TOC title centering when CSS text-align lost to unsupported selectors
+// v64: Book's Style owns embedded CSS (alignment drives stylesheet use)
+// v65: ignore tiny/super margin-left on spans (ordinal "th" no longer new line)
+constexpr uint8_t SECTION_FILE_VERSION = 65;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -356,8 +381,12 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
-    if (ctx->cssParser && !ctx->cssParser->loadFromCache()) {
-      LOG_ERR("SCT", "Failed to load CSS from cache");
+    // Session-pin: keep the rule map across chapters when already loaded (avoids
+    // reloading CSS from SD on every spine). Only load when empty.
+    if (ctx->cssParser && ctx->cssParser->empty()) {
+      if (!ctx->cssParser->loadFromCache()) {
+        LOG_ERR("SCT", "Failed to load CSS from cache");
+      }
     }
   }
 
@@ -390,6 +419,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       popupFn, ctxPtr->cssParser);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
+    // OOM path: free CSS so the next attempt has more room.
     if (ctx->cssParser) ctx->cssParser->clear();
     file.close();
     Storage.remove(binTmpPath().c_str());
@@ -399,6 +429,9 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   build_ = std::move(ctx);
+
+  // Hold PNGdec across multi-image chapters (Alice Tenniel) — alloc once, free at end.
+  PngToFramebufferConverter::beginSectionWarm();
 
   if (!build_->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin parse");
@@ -419,6 +452,9 @@ bool Section::buildSomeMore(const int maxPages) {
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
   for (;;) {
+    // If maxAlloc collapsed mid-chapter, free the ~50 KB PNGdec hold so word
+    // vectors / ZIP extract / font tables can allocate again.
+    PngToFramebufferConverter::releaseWarmIfHeapTight(20 * 1024);
     const auto status = build_->parser->parseStep();
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
       LOG_ERR("SCT", "Parse error during incremental build");
@@ -598,8 +634,14 @@ bool Section::finalizeBuild() {
   }
 
   const bool committed = commitBuildFile(SECTION_FILE_VERSION, 0, 0);
-  if (build_->cssParser) build_->cssParser->clear();
+  // Keep CSS resident for the next chapter when heap is healthy (session pin).
+  // Under pressure, drop the rule map so the next open reloads from SD.
+  if (build_->cssParser &&
+      (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
+    build_->cssParser->clear();
+  }
   build_.reset();
+  PngToFramebufferConverter::endSectionWarm();
   if (!committed) {
     // commitBuildFile removed filePath before the failed swap, so nothing valid remains.
     partial_ = false;
@@ -639,7 +681,11 @@ void Section::suspendBuild() {
   }
 
   if (build_->parser) build_->parser->abortParse();
-  if (build_->cssParser) build_->cssParser->clear();
+  // Session-pin CSS unless heap is tight (same policy as finalizeBuild).
+  if (build_->cssParser &&
+      (ESP.getFreeHeap() < 40 * 1024 || ESP.getMaxAllocHeap() < 18 * 1024)) {
+    build_->cssParser->clear();
+  }
   if (!committed && file) {
     // Explicit close() required before remove (member variable, O_RDWR handle).
     file.close();
@@ -649,6 +695,7 @@ void Section::suspendBuild() {
     Storage.remove(build_->tmpHtmlPath.c_str());
   }
   build_.reset();
+  PngToFramebufferConverter::endSectionWarm();
   buildComplete_ = false;
   pageCount = partial_ ? partialPageCount_ : 0;
   builtPageCount_ = 0;
@@ -657,7 +704,9 @@ void Section::suspendBuild() {
 void Section::abandonBuild() {
   if (!build_) return;
   if (build_->parser) build_->parser->abortParse();
+  // Failed builds: always drop CSS so a retry reloads a clean rule map.
   if (build_->cssParser) build_->cssParser->clear();
+  PngToFramebufferConverter::endSectionWarm();
   if (file) {
     // Explicit close() required before remove (member variable, O_RDWR handle).
     file.close();

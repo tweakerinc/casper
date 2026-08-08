@@ -30,9 +30,10 @@ class TextSettingsActivity final : public Activity {
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
-  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
-  // CrossInk order: Bionic Reading, Guide Dots, then layout/style toggles.
-  enum class StyleRow { BionicReading, GuideDots, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  // Order: Alignment, Extra Paragraph Spacing, Line Spacing, Screen Margin.
+  enum class LayoutRow { Alignment, ParaSpacing, LineSpacing, ScreenMargin, Count };
+  // Embedded Style is not listed — it follows Book's Style alignment.
+  enum class StyleRow { BionicReading, GuideDots, Hyphenation, AntiAliasing, Count };
 
   void applyFamily(int listIndex);
   void applySize(int listIndex);

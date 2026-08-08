@@ -305,6 +305,10 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperStatsThemeDisabledMigrated"] = casperStatsThemeDisabledMigrated;
   doc["casperX4SpectralDefaultMigrated"] = casperX4SpectralDefaultMigrated;
   doc["casperMenuFont10ptMigrated"] = casperMenuFont10ptMigrated;
+  doc["casperBooksStyleOwnsEmbeddedMigrated"] = casperBooksStyleOwnsEmbeddedMigrated;
+  // Embedded Style is no longer in SettingsList (owned by Alignment); still persist
+  // for older firmware and web tools.
+  doc["embeddedStyle"] = embeddedStyle;
 
   // System top chrome slots (also in SettingsList when present).
   doc["systemStatusBarLeft"] = systemStatusBarLeft;
@@ -316,7 +320,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["systemLogLevel"] = systemLogLevel;
   // XTC overlay placement — on-device Customize Reader UI only (not SettingsList).
   doc["xtcStatusBarMode"] = xtcStatusBarMode;
-  // Long power button (also in SettingsList when present).
+  // Short/long power buttons use DynamicEnum (no valuePtr) — persist storage values.
+  doc["shortPwrBtn"] = shortPwrBtn;
   doc["longPwrBtn"] = longPwrBtn;
   // Time-left mode is in SettingsList when STR_TIME_LEFT is wired; also persist manually
   // so older SettingsList builds without the enum still keep the value.
@@ -754,6 +759,26 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperSpeedDefaultsMigrated = 1;
   }
 
+  // Book's Style owns Embedded Style (Style-tab toggle removed). Sync embedded
+  // from alignment once: Book's Style → on; forced Left/Justify/Center/Right → off.
+  // Does not rewrite alignment or other typography prefs.
+  const uint8_t booksOwnsEmbedded = doc["casperBooksStyleOwnsEmbeddedMigrated"] | (uint8_t)0;
+  if (booksOwnsEmbedded == 0) {
+    embeddedStyle = (paragraphAlignment == BOOK_STYLE) ? 1 : 0;
+    casperBooksStyleOwnsEmbeddedMigrated = 1;
+    needsResave = true;
+    LOG_DBG("CPS", "casperBooksStyleOwnsEmbeddedMigrated: embeddedStyle=%u (align=%u)",
+            static_cast<unsigned>(embeddedStyle), static_cast<unsigned>(paragraphAlignment));
+  } else {
+    casperBooksStyleOwnsEmbeddedMigrated = 1;
+    // Keep invariant if user JSON drifted (e.g. web UI still toggles embedded alone).
+    const uint8_t wantEmbedded = (paragraphAlignment == BOOK_STYLE) ? 1 : 0;
+    if (embeddedStyle != wantEmbedded) {
+      embeddedStyle = wantEmbedded;
+      needsResave = true;
+    }
+  }
+
   // Anti-Ghosting: mark flag only. Do not rewrite 10→15 if the user left it on 10.
   // New installs get the struct/default refresh frequency without a migration rewrite.
   const uint8_t ag15Migrated = doc["casperAntiGhost15Migrated"] | (uint8_t)0;
@@ -1013,7 +1038,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   }
   syncXtcStatusBarModeFromSlots();
 
-  // longPwrBtn may also load via SettingsList; clamp if only present in doc.
+  // Short/long power use DynamicEnum (no valuePtr) — load storage values here.
+  if (!doc["shortPwrBtn"].isNull()) {
+    shortPwrBtn = clamp(doc["shortPwrBtn"] | (uint8_t)PWR_QUICK_RESUME, SHORT_PWRBTN_COUNT,
+                        (uint8_t)PWR_QUICK_RESUME);
+  }
   if (!doc["longPwrBtn"].isNull()) {
     longPwrBtn = clamp(doc["longPwrBtn"] | (uint8_t)FORCE_REFRESH, SHORT_PWRBTN_COUNT, (uint8_t)FORCE_REFRESH);
   }
@@ -1206,7 +1235,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
   spec.hyphenationEnabled = hyphenationEnabled != 0;
-  spec.embeddedStyle = embeddedStyle != 0;
+  // Always derive from alignment so section builds never disagree with the UI.
+  spec.embeddedStyle = (paragraphAlignment == BOOK_STYLE);
   spec.imageRendering = imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.guideReadingEnabled = guideReadingEnabled != 0;

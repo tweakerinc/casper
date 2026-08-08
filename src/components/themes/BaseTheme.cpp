@@ -1425,8 +1425,9 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   const auto pageHeight = renderer.getScreenHeight();
 
   const int optionFontId = metrics.optionPopupUseSmallFont ? UI_10_FONT_ID : UI_12_FONT_ID;
-  const EpdFontFamily::Style optionStyle =
-      metrics.optionPopupOptionFontBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+  // Focus is bold-only (same as drawList). Always size dialog against BOLD so the
+  // selected row never widens past the frame.
+  (void)metrics.optionPopupOptionFontBold;
 
   const int itemSpacing = metrics.optionPopupItemSpacing;
   const int innerPadding = metrics.optionPopupInnerPadding;
@@ -1440,7 +1441,7 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
 
   int maxTextWidth = renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD);
   for (const auto& opt : options) {
-    int w = renderer.getTextWidth(optionFontId, opt.c_str(), optionStyle);
+    int w = renderer.getTextWidth(optionFontId, opt.c_str(), EpdFontFamily::BOLD);
     if (w > maxTextWidth) maxTextWidth = w;
   }
 
@@ -1511,36 +1512,22 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   const bool showScroll = optionCount > visibleCount;
   constexpr int kScrollReserve = 10;
   const int itemRectW = dialogW - innerPadding * 2 - (showScroll ? kScrollReserve : 0);
-  const int selectionRadius = metrics.optionPopupSelectionRadius;
+  // Selection chips left residual on FAST e-ink; bold weight is the shared focus cue.
+  (void)metrics.optionPopupSelectionRadius;
+  (void)metrics.optionPopupSelectionLight;
+  (void)metrics.optionPopupDrawAllRows;
 
   for (int vis = 0; vis < visibleCount; vis++) {
     const int i = firstVisible + vis;
     const int itemY = y + vis * rowStep;
     const bool selected = (i == selectedIndex);
     const char* labelText = options[i].c_str();
-
-    if (metrics.optionPopupDrawAllRows || selected) {
-      Color rowColor;
-      if (selected) {
-        rowColor = metrics.optionPopupSelectionLight ? Color::LightGray : Color::Black;
-      } else {
-        rowColor = Color::White;
-      }
-      if (selectionRadius > 0) {
-        renderer.fillRoundedRect(itemRectX, itemY, itemRectW, rowHeight, selectionRadius, rowColor);
-      } else {
-        renderer.fillRect(itemRectX, itemY, itemRectW, rowHeight, rowColor == Color::Black);
-      }
-    }
+    const auto optionStyle = selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 
     const int textW = renderer.getTextWidth(optionFontId, labelText, optionStyle);
     const int textY = itemY + (rowHeight - optionLineHeight) / 2;
     const int textX = itemRectX + (itemRectW - textW) / 2;
-    // Unselected items: text is dark (invert=true means draw on white bg).
-    // Selected on dark bg: text must be white (invert=false).
-    // Selected on light bg: text stays dark (invert=true).
-    const bool invertText = selected ? metrics.optionPopupSelectionLight : true;
-    renderer.drawText(optionFontId, textX, textY, labelText, invertText, optionStyle);
+    renderer.drawText(optionFontId, textX, textY, labelText, /*black=*/true, optionStyle);
   }
 
   if (showScroll) {

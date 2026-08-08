@@ -254,7 +254,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr int REFRESH_COUNTDOWN_DISABLED = -1;
   static constexpr int REFRESH_COUNTDOWN_FORCE_SCRUB = 0;
 
-  // Short/long power button actions (append-only — SettingsList enumValues must match).
+  // Short/long power button actions (append-only storage indices for settings.json).
+  // UI order is remapped in SettingsList::buildPwrBtnSetting (Ignore, Sleep, Quick
+  // Resume, Refresh Screen, Page Turn, Footnotes) — do not reorder these values.
   // Note: cannot be named QUICK_RESUME — that enumerator already exists on SLEEP_SCREEN_MODE
   // (legacy value 6) and unscoped enums share the class scope.
   enum SHORT_PWRBTN {
@@ -541,15 +543,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
-  // Book CSS: on by default so publisher layout (centered titles, etc.) matches expectation.
-  // Users can turn off for slightly faster open / simpler layout.
+  // Book CSS: follows Alignment. Book's Style ⇒ on; Left/Justify/Center/Right ⇒ off.
+  // No separate Style-tab toggle (merged into Alignment / Book's Style).
   uint8_t embeddedStyle = 1;
   // Bionic Reading (UI label; JSON key remains focusReadingEnabled for migration).
   // Bolds the first portion of each word — CrossInk calls this Bionic Reading;
-  // upstream CrossPoint called it Focus Reading.
+  // upstream CrossPoint called it Focus Reading. Default off.
   uint8_t focusReadingEnabled = 0;
-  // Guide Dots (CrossInk): middle-dot between words to guide the eye.
+  // Guide Dots (CrossInk): middle-dot between words to guide the eye. Default off.
   uint8_t guideReadingEnabled = 0;
+  // One-time: Book's Style owns Embedded Style; style-tab toggle removed; ship defaults.
+  uint8_t casperBooksStyleOwnsEmbeddedMigrated = 0;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
   // Legacy single dictionary folder under /dictionaries (empty = none). Kept for

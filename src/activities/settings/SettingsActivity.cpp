@@ -241,15 +241,16 @@ void SettingsActivity::onEnter() {
   // start scrolling immediately. Wait until every nav key is up.
   armAwaitOpenButtonRelease();
 
-  // One hard scrub on enter; list navigation stays FAST-only (no mid-scroll HALF).
-  UiGhostPolicy::requestHardScrub();
+  // FAST plate (same as long-press book menu). HALF on enter was multi-second
+  // on X3 and felt like Settings was frozen. List nav stays FAST-only.
+  UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
 
 void SettingsActivity::onResume() {
   Activity::onResume();
-  // Child screens can leave residual; one scrub on return, then FAST for list nav.
-  UiGhostPolicy::requestHardScrub();
+  // FAST return from child (Button Remap, etc.) — no transition HALF flash.
+  UiGhostPolicy::clearHardScrub();
   // Returning from a child (esp. Button Remap): Back was pressed under a locked
   // layout, then the new map applied — same physical key may now be Left/Up.
   // Without a quiet frame, Settings tab-nav would fire on that residual edge

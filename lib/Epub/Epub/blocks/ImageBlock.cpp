@@ -1,17 +1,20 @@
 #include "ImageBlock.h"
 
+#include <Arduino.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngToFramebufferConverter.h"
 
 // Cache file format:
 // - uint16_t width
@@ -20,6 +23,16 @@
 
 ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath, int16_t width, int16_t height)
     : imagePath(imagePath), srcPath(srcPath), width(width), height(height) {}
+
+bool ImageBlock::isLetterGlyph(const int contentWidthPx) const {
+  if (width <= 0 || height <= 0) return false;
+  // Match ChapterHtmlSlimParser placeFloatImage drop-cap heuristic: left letter
+  // floats are ≤28% of content width (floor 120px). Also require a short box so
+  // tall narrow plates still get greys.
+  const int maxW = std::max(120, contentWidthPx > 0 ? (contentWidthPx * 28) / 100 : 120);
+  const int maxH = std::max(120, maxW);
+  return width <= maxW && height <= maxH;
+}
 
 void* ImageBlock::extractCtx = nullptr;
 ImageBlock::ExtractFn ImageBlock::extractFn = nullptr;
@@ -34,12 +47,13 @@ bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str());
 namespace {
 
 std::string getCachePath(const std::string& imagePath) {
-  // Replace extension with .pxc (pixel cache)
+  // .pxc6: plate lift + paper-leaning quantize (Bare-cover-like midtones);
+  // letter glyphs still ink-biased. Invalidates darker pxc4/pxc5 plate caches.
   size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
-    return imagePath.substr(0, dotPos) + ".pxc";
+    return imagePath.substr(0, dotPos) + ".pxc6";
   }
-  return imagePath + ".pxc";
+  return imagePath + ".pxc6";
 }
 
 bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int expectedHeight, uint16_t& cachedWidth,
@@ -308,6 +322,84 @@ bool ImageBlock::hasValidCache() const {
 
 bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
 
+bool ImageBlock::ensureDecodedCache(GfxRenderer& renderer) {
+  if (width <= 0 || height <= 0) return false;
+  if (hasValidCache()) return true;
+  if (imageFailedThisSession(imagePath)) return false;
+
+  // Ensure source file exists on SD.
+  HalFile probe;
+  bool haveFile = false;
+  if (Storage.openFileForRead("IMG", imagePath, probe)) {
+    haveFile = probe.size() > 0;
+    probe.close();
+  }
+  if (!haveFile) {
+    if (srcPath.empty() || !extractFn) return false;
+    if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) return false;
+  }
+
+  // Only clear fonts if the decoder clearly will not fit — keep SD advances warm
+  // for the following text layout (clearCache → multi-second SDCF reloads).
+  if (ESP.getMaxAllocHeap() < 48 * 1024) {
+    if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+      if (!fcm->isScanning()) fcm->clearCache();
+    }
+  }
+  releasePxcSlot();
+
+  const std::string cachePath = getCachePath(imagePath);
+  RenderConfig config;
+  config.x = 0;
+  config.y = 0;
+  config.maxWidth = width;
+  config.maxHeight = height;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.performanceMode = false;
+  config.useExactDimensions = true;
+  // Drop-caps only — full plates stay neutral (see DitherUtils).
+  config.inkBias = isLetterGlyph(renderer.getScreenWidth());
+  // Cache only: never stamp the live FB mid-parse (was a heap-corruption /
+  // crash source under deep SAX stack after TextSettings reflow).
+  config.writeToFramebuffer = false;
+  config.cachePath = cachePath;
+
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
+  if (!decoder) return false;
+
+  LOG_DBG("IMG", "Layout precache try: %s free=%u maxAlloc=%u", imagePath.c_str(),
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  const bool ok = decoder->decodeToFramebuffer(imagePath, renderer, config);
+  if (!ok) {
+    Storage.remove(cachePath.c_str());
+    LOG_ERR("IMG", "Layout precache failed: %s free=%u maxAlloc=%u", imagePath.c_str(),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return false;
+  }
+  LOG_DBG("IMG", "Layout precache OK: %s -> %s", imagePath.c_str(), cachePath.c_str());
+  return hasValidCache();
+}
+
+bool ImageBlock::tryPrecache(GfxRenderer& renderer) {
+  if (hasValidCache()) return true;
+  if (imageFailedThisSession(imagePath)) return false;
+  // Free held PNGdec warm (~50KB) so letter glyphs / small figures can decode.
+  PngToFramebufferConverter::releaseWarmIfHeapTight(36 * 1024);
+  // Skip giant full-page art when heap is tight — tinfl/PNGdec will retry at paint.
+  const size_t approxPixels =
+      static_cast<size_t>(std::max(0, (int)width)) * static_cast<size_t>(std::max(0, (int)height));
+  if (approxPixels > 200000 && ESP.getMaxAllocHeap() < 40 * 1024) return false;
+  // Small letter floats (~70x72) succeed with tinfl under lower floors; only
+  // hard-skip when even a modest contiguous block is gone.
+  if (approxPixels > 40000 && (ESP.getMaxAllocHeap() < 28 * 1024 || ESP.getFreeHeap() < 36 * 1024)) {
+    return false;
+  }
+  if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) return false;
+  return ensureDecodedCache(renderer);
+}
+
 void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
@@ -328,14 +420,32 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   FontCacheManager* fcm = renderer.getFontCacheManager();
   if (fcm && fcm->isScanning()) return;
 
-  LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
+  // Heap-failure empties (Alice rat/girl JPG) should retry once maxAlloc recovers
+  // instead of staying a permanent empty box for the whole reader session.
+  if (failedImageCount > 0 && ESP.getMaxAllocHeap() > 40 * 1024 && ESP.getFreeHeap() > 48 * 1024) {
+    failedImageCount = 0;
+  }
 
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
 
-  // Bounds check render position using logical screen dimensions
-  if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
-    LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
+  // Letter glyphs already painted sharp black in the BW pass. Re-drawing them
+  // into grey planes only softens ink (Alice "A" flash black→grey) and costs
+  // ~14 band re-walks. Leave the BW ink alone on greyscale multipass.
+  const auto mode = renderer.getRenderMode();
+  if ((mode == GfxRenderer::GRAYSCALE_LSB || mode == GfxRenderer::GRAYSCALE_MSB) &&
+      isLetterGlyph(screenWidth)) {
+    return;
+  }
+
+  LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
+
+  // Soft clip: layout coords + margins can place a float a pixel past the
+  // logical edge (Alice letter images, bottom-of-page figures). Hard-rejecting
+  // made the whole image vanish. Allow any overlap with the screen; decoders
+  // already clamp per-pixel output to the panel.
+  if (width <= 0 || height <= 0 || x + width <= 0 || y + height <= 0 || x >= screenWidth || y >= screenHeight) {
+    LOG_ERR("IMG", "Image fully off-screen: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
     return;
   }
@@ -355,36 +465,46 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;
   }
 
+  // BW ink only paints black pixels — the destination must start white or the
+  // image region stays solid black (what Alice looked like for most Tenniel art).
+  renderer.fillRect(x, y, width, height, /*state=*/false);
+
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
   if (renderFromCache(renderer, cachePath, x, y, width, height)) {
     return;  // Successfully rendered from cache
   }
 
-  // The build only header-probed the image for dimensions; pull the actual
-  // file out of the book now, on first visit to the page.
-  if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
-    LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
-    if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
-      LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+  // Ensure a non-empty file on disk. Always prefer re-extract when missing/empty
+  // so a failed eager-extract during layout is not a permanent empty box.
+  auto ensureExtracted = [&]() -> bool {
+    HalFile probe;
+    if (Storage.openFileForRead("IMG", imagePath, probe)) {
+      const size_t sz = probe.size();
+      probe.close();
+      if (sz > 0) return true;
+      Storage.remove(imagePath.c_str());
     }
-  }
-
-  // No cache - need to decode the image
-  // Check if image file exists
-  HalFile file;
-  if (!Storage.openFileForRead("IMG", imagePath, file)) {
-    LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
-    rememberImageFailure(imagePath);
-    renderPlaceholder(renderer, x, y);
-    return;
-  }
-  size_t fileSize = file.size();
-  file.close();
-
-  if (fileSize == 0) {
-    LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
-    rememberImageFailure(imagePath);
+    if (srcPath.empty() || !extractFn) return false;
+    LOG_DBG("IMG", "Extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
+    if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
+      LOG_ERR("IMG", "Extraction failed: %s", srcPath.c_str());
+      return false;
+    }
+    // SD sync: reopen until non-empty or give up.
+    for (int attempt = 0; attempt < 4; ++attempt) {
+      if (attempt > 0) delay(40);
+      HalFile f;
+      if (Storage.openFileForRead("IMG", imagePath, f)) {
+        const size_t sz = f.size();
+        f.close();
+        if (sz > 0) return true;
+      }
+    }
+    return false;
+  };
+  if (!ensureExtracted()) {
+    LOG_ERR("IMG", "Image unavailable: %s (src=%s)", imagePath.c_str(), srcPath.c_str());
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -400,6 +520,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   config.useDithering = true;
   config.performanceMode = false;
   config.useExactDimensions = true;  // Use pre-calculated dimensions to avoid rounding mismatches
+  config.inkBias = isLetterGlyph(screenWidth);
   config.cachePath = cachePath;      // Enable caching during decode
 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
@@ -414,7 +535,12 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
-    LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    // Drop a partial .pxc so the next attempt does not paint garbage.
+    Storage.remove(cachePath.c_str());
+    LOG_ERR("IMG", "Failed to decode image: %s (heap=%u maxAlloc=%u)", imagePath.c_str(),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    // Remember failure for this session so tiled greyscale (~14 passes) does not
+    // re-try PNGdec alloc every band and freeze page turns under low maxAlloc.
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;

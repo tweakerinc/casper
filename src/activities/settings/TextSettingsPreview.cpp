@@ -31,8 +31,8 @@ constexpr const char* kHyphenationPreviewText =
 
 // Two short paragraphs for the normal layout preview.
 // Drawn separately so Extra Paragraph Spacing is obvious:
-//   ON  → no first-line indent + half-line blank between paras (reader behavior)
-//   OFF → first-line indent (3× space) + no blank between paras
+//   ON  → first-line indent (3× space) + half-line blank between paras
+//   OFF → first-line indent only (no extra blank between paras)
 // Each para is long enough to wrap (alignment / justify still visible).
 constexpr const char* kPreviewPara1 =
     "The quick brown fox jumps over the lazy dog. "

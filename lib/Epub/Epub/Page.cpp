@@ -129,6 +129,22 @@ void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffs
                              [](const PageElement& element) { return element.getTag() == TAG_PageImage; });
 }
 
+int Page::precacheImages(GfxRenderer& renderer) const {
+  int needed = 0;
+  int done = 0;
+  for (const auto& el : elements) {
+    if (el->getTag() != TAG_PageImage) continue;
+    ImageBlock& ib = const_cast<ImageBlock&>(static_cast<const PageImage&>(*el).getImageBlock());
+    if (!ib.needsDecode()) continue;
+    ++needed;
+    if (ib.tryPrecache(renderer)) ++done;
+  }
+  if (needed > 0) {
+    LOG_DBG("IMG", "Page precache %d/%d images ready", done, needed);
+  }
+  return needed;
+}
+
 void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, const int xOffset,
                                        const int yOffset) const {
   for (const auto& element : elements) {

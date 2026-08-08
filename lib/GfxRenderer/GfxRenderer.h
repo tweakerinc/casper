@@ -141,6 +141,10 @@ class GfxRenderer {
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
   void ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
                              uint8_t styleMask = 0x0F) const;
+  // WH Background B/C: free SD-font mini bitmaps before a layout slice so metric
+  // layout does not thrash the overflow loader (multi-second SDCF storms).
+  // Preserves advance tables (clearCache semantics).
+  void clearFontAccumulation() const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
   void setOrientation(const Orientation o) { orientation = o; }

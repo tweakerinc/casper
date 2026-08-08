@@ -34,7 +34,8 @@ class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes.
   // v9 (Rivulet PR1a): font-size, line-height, float, clear, font-variant wire fields.
-  static constexpr uint8_t CSS_CACHE_VERSION = 9;
+  // v10: sparse background-image URL map (Alice rabbithole, decorative table art).
+  static constexpr uint8_t CSS_CACHE_VERSION = 10;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -62,6 +63,14 @@ class CssParser {
   [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr) const;
 
   /**
+   * Resolve CSS background-image url(...) for an element (tag / class cascade).
+   * Returns a package-relative path, or empty if none. Sparse — only rules that
+   * declare background-image are stored (decorative layouts, Alice rabbithole).
+   */
+  [[nodiscard]] std::string resolveBackgroundImage(std::string_view tagName,
+                                                   std::string_view classAttr) const;
+
+  /**
    * Parse an inline style attribute string.
    * @param styleValue The value of a style="" attribute
    * @return Parsed style properties
@@ -71,7 +80,7 @@ class CssParser {
   /**
    * Check if any rules have been loaded
    */
-  [[nodiscard]] bool empty() const { return rulesBySelector_.empty(); }
+  [[nodiscard]] bool empty() const { return rulesBySelector_.empty() && backgroundBySelector_.empty(); }
 
   /**
    * Get count of loaded rule sets
@@ -81,7 +90,10 @@ class CssParser {
   /**
    * Clear all loaded rules
    */
-  void clear() { rulesBySelector_.clear(); }
+  void clear() {
+    rulesBySelector_.clear();
+    backgroundBySelector_.clear();
+  }
 
   /**
    * Check if CSS rules cache file exists
@@ -140,13 +152,18 @@ class CssParser {
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
+  // Sparse: only selectors that declare background-image (RAM-cheap; not in CssStyle).
+  std::unordered_map<std::string, std::string, SvHash, SvEqual> backgroundBySelector_;
 
   std::string cachePath;
 
   // Internal parsing helpers
-  void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
+  void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style,
+                                 std::string_view backgroundImageUrl = {});
   static CssStyle parseDeclarations(std::string_view declBlock);
   static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
+  /** Extract url(...) from background-image / background; empty if none. */
+  static std::string extractBackgroundImageUrl(std::string_view declValue);
 
   // Individual property value parsers
   static CssTextAlign interpretAlignment(std::string_view val);

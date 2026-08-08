@@ -44,7 +44,8 @@ void NetworkSettingsActivity::onEnter() {
   Activity::onEnter();
   selectedIndex = 0;
   itemCount = static_cast<int>(ITEM_COUNT);
-  UiGhostPolicy::requestHardScrub();
+  // FAST like Settings / Library — Home HALF scrub cleans residual later.
+  UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
 

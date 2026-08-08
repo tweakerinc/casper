@@ -120,28 +120,34 @@ const char* displayControllerName(BoardConfig::DisplayController c) {
 }
 
 // Pick board profile + UltraChip sibling when the bus probe confirms it.
-// Logs VER/FLG so serial boot can tell old UC8253 glass from new UC8279 glass.
+// freeink-sdk (CP 1.5+): live bus probe is ground truth — never trust NVS
+// hw_calib/screenType alone (full-flash of another unit can write the wrong
+// panel type and soft-brick / drain battery with the wrong driver).
+// Field: new X3 UC8279d often returns VER=FF FF FF FF FF FLG=13; older Casper
+// freeink treated that as classic UC8253. Current freeink confirms via RMTP 0xA5.
 void selectBoardAndPanelController(bool isX3) {
-  if (isX3) {
-    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3);  // default UC8253
-    uint8_t ver[5] = {};
-    uint8_t flg = 0;
-    const freeink::X3DisplayVerdict v = freeink::detectX3DisplayController(ver, &flg);
-    LOG_INF("HW", "X3 panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", ver[0], ver[1], ver[2],
-            ver[3], ver[4], flg, static_cast<unsigned>(v));
-    if (v == freeink::X3DisplayVerdict::Uc8279Confirmed) {
-      BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
-      LOG_INF("HW", "promoted UC8253 -> UC8279 (new-batch panel)");
-    } else {
-      LOG_INF("HW", "panel controller UC8253 (classic / probe not UC8279)");
-    }
-  } else {
-    BoardConfig::selectDevice(BoardConfig::Board::XteinkX4);  // default SSD1677
-    if (freeink::applyXteinkDisplayController()) {
-      LOG_INF("HW", "promoted SSD1677 -> UC8179 (new-batch panel)");
-    } else {
-      LOG_INF("HW", "panel controller SSD1677 (classic / probe not UC8179)");
-    }
+  BoardConfig::selectDevice(isX3 ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
+
+  uint8_t ver[5] = {};
+  uint8_t flg = 0;
+  const freeink::DisplayControllerVerdict v = freeink::detectXteinkDisplayController(ver, &flg);
+  LOG_INF("HW", "%s panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", isX3 ? "X3" : "X4", ver[0],
+          ver[1], ver[2], ver[3], ver[4], flg, static_cast<unsigned>(v));
+
+  // applyXteinkDisplayController re-probes and promotes ACTIVE.displayController
+  // (UC8253→UC8279, SSD1677→UC8179 or UC8279 800x480 by LUT_VER).
+  const bool promoted = freeink::applyXteinkDisplayController();
+
+  // X3 facade keys the UC8279d driver off the sibling board profile.
+  if (isX3 && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279) {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+    LOG_INF("HW", "promoted UC8253 -> UC8279 (new-batch X3 panel)");
+  } else if (!isX3 && promoted) {
+    LOG_INF("HW", "promoted SSD1677 -> %s (new-batch X4 panel, LUT_VER=%02X)",
+            displayControllerName(BoardConfig::ACTIVE.displayController), ver[2]);
+  } else if (!promoted) {
+    LOG_INF("HW", "panel controller %s (classic / probe not UltraChip)",
+            displayControllerName(BoardConfig::ACTIVE.displayController));
   }
 }
 

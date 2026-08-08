@@ -23,6 +23,7 @@ enum class Result {
   BAD_SEGMENTS,  // segment table malformed or runs past EOF
   BAD_CHECKSUM,  // ESP image XOR checksum mismatch
   BAD_SHA,       // SHA256 trailer mismatch (hash_appended images)
+  BAD_CHIP,      // image chip_id doesn't match the running MCU family (C3 vs S3)
   BAD_SIZE,      // body+pad+sha length doesn't match file size
   NO_PARTITION,
   OOM,
@@ -59,5 +60,10 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
 Result validateImageFile(const char* sdPath, size_t partitionSize);
 
 const char* resultName(Result r);
+
+// chip_id at esp_image_header_t offset 12 of the running slot (or 0xFFFF if
+// unreadable). Candidate firmware must match or flash/OTA is aborted — prevents
+// soft-bricking C3 units with Sticky/S3 images and vice versa (CP 1.5 #2880).
+uint16_t runningPartitionChipId();
 
 }  // namespace firmware_flash

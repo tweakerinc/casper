@@ -40,8 +40,28 @@ int findCurrentFontSizeIndex(uint8_t fontSize, size_t listSize) {
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
-constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
-                                   StrId::STR_BOOK_S_STYLE};
+// Display order for the Alignment picker (not storage enum order).
+// Storage: JUSTIFIED=0, LEFT=1, CENTER=2, RIGHT=3, BOOK_STYLE=4.
+constexpr StrId ALIGNMENT_DISPLAY_IDS[] = {StrId::STR_BOOK_S_STYLE, StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT,
+                                           StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
+constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {
+    CrossPointSettings::BOOK_STYLE, CrossPointSettings::JUSTIFIED, CrossPointSettings::LEFT_ALIGN,
+    CrossPointSettings::CENTER_ALIGN, CrossPointSettings::RIGHT_ALIGN};
+static_assert(std::size(ALIGNMENT_DISPLAY_IDS) == std::size(ALIGNMENT_DISPLAY_TO_SETTING));
+
+int alignmentDisplayIndex(const uint8_t setting) {
+  for (int i = 0; i < static_cast<int>(std::size(ALIGNMENT_DISPLAY_TO_SETTING)); ++i) {
+    if (ALIGNMENT_DISPLAY_TO_SETTING[i] == setting) return i;
+  }
+  return 0;  // Book's Style
+}
+
+// Book's Style = publisher CSS (embedded on). Any forced alignment = plain body (embedded off).
+void applyAlignmentAndEmbedded(const uint8_t paragraphAlignment) {
+  SETTINGS.paragraphAlignment = paragraphAlignment;
+  SETTINGS.embeddedStyle = (paragraphAlignment == CrossPointSettings::BOOK_STYLE) ? 1 : 0;
+}
+
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
 constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
 constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
@@ -53,6 +73,9 @@ TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputMan
 
 void TextSettingsActivity::onEnter() {
   Activity::onEnter();
+
+  // Keep Embedded Style locked to Alignment (Book's Style ⇔ CSS on).
+  applyAlignmentAndEmbedded(SETTINGS.paragraphAlignment);
 
   metrics_ = UITheme::getInstance().getMetrics();
   // Match Settings: tab bar sits directly under the header so the shared
@@ -223,7 +246,15 @@ void TextSettingsActivity::loop() {
     return;
   }
 
-  if (optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) return;  // picker owns input while open
+  // OptionPopup owns Confirm/Back until select/dismiss release is fully drained.
+  // isActive() stays true through that drain so we never fall through to finish().
+  if (optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) {
+    if (!optionPopup_.isActive()) {
+      // Extra safety if drain ended this frame.
+      armAwaitOpenButtonRelease(/*force=*/true);
+    }
+    return;
+  }
 
   // Finish on release, not press. When this screen is opened from the reader
   // menu, a press-to-finish leaves a Back release for the reader — and the
@@ -371,8 +402,8 @@ void TextSettingsActivity::render(RenderLock&&) {
 
     case Tab::Layout: {
       constexpr int LAYOUT_ROWS = static_cast<int>(LayoutRow::Count);
-      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING,
-                                                          StrId::STR_ALIGNMENT, StrId::STR_SCREEN_MARGIN};
+      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_ALIGNMENT, StrId::STR_EXTRA_SPACING,
+                                                          StrId::STR_LINE_SPACING, StrId::STR_SCREEN_MARGIN};
       GUI.drawList(
           renderer, listRect, LAYOUT_ROWS, selectedItem,
           [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
@@ -386,9 +417,8 @@ void TextSettingsActivity::render(RenderLock&&) {
 
     case Tab::Style: {
       constexpr int STYLE_ROWS = static_cast<int>(StyleRow::Count);
-      static constexpr StrId ROW_NAME_IDS[STYLE_ROWS] = {
-          StrId::STR_BIONIC_READING, StrId::STR_GUIDE_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
-          StrId::STR_TEXT_AA};
+      static constexpr StrId ROW_NAME_IDS[STYLE_ROWS] = {StrId::STR_BIONIC_READING, StrId::STR_GUIDE_READING,
+                                                          StrId::STR_HYPHENATION, StrId::STR_TEXT_AA};
       GUI.drawList(
           renderer, listRect, STYLE_ROWS, selectedItem,
           [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
@@ -510,6 +540,14 @@ void TextSettingsActivity::applySize(int listIndex) {
 
 void TextSettingsActivity::confirmLayoutRow(int row) {
   switch (static_cast<LayoutRow>(row)) {
+    case LayoutRow::Alignment:
+      optionPopup_.show(StrId::STR_ALIGNMENT, ALIGNMENT_DISPLAY_IDS, static_cast<int>(std::size(ALIGNMENT_DISPLAY_IDS)),
+                        alignmentDisplayIndex(SETTINGS.paragraphAlignment), [](int idx) {
+                          if (idx < 0 || idx >= static_cast<int>(std::size(ALIGNMENT_DISPLAY_TO_SETTING))) return;
+                          applyAlignmentAndEmbedded(ALIGNMENT_DISPLAY_TO_SETTING[idx]);
+                        });
+      requestUpdate();
+      break;
     case LayoutRow::ParaSpacing:
       SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;
       requestUpdate();
@@ -517,12 +555,6 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
                         SETTINGS.lineSpacing, [](int idx) { SETTINGS.lineSpacing = static_cast<uint8_t>(idx); });
-      requestUpdate();
-      break;
-    case LayoutRow::Alignment:
-      optionPopup_.show(StrId::STR_ALIGNMENT, ALIGNMENT_IDS, static_cast<int>(std::size(ALIGNMENT_IDS)),
-                        SETTINGS.paragraphAlignment,
-                        [](int idx) { SETTINGS.paragraphAlignment = static_cast<uint8_t>(idx); });
       requestUpdate();
       break;
     case LayoutRow::ScreenMargin: {
@@ -543,15 +575,15 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
 
 std::string TextSettingsActivity::layoutValueText(int row) const {
   switch (static_cast<LayoutRow>(row)) {
-    case LayoutRow::LineSpacing: {
-      const uint8_t v = SETTINGS.lineSpacing;
-      return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
+    case LayoutRow::Alignment: {
+      const int di = alignmentDisplayIndex(SETTINGS.paragraphAlignment);
+      return I18N.get(ALIGNMENT_DISPLAY_IDS[di]);
     }
     case LayoutRow::ParaSpacing:
       return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case LayoutRow::Alignment: {
-      const uint8_t v = SETTINGS.paragraphAlignment;
-      return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);
+    case LayoutRow::LineSpacing: {
+      const uint8_t v = SETTINGS.lineSpacing;
+      return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
@@ -572,9 +604,6 @@ void TextSettingsActivity::confirmStyleRow(int row) {
     case StyleRow::Hyphenation:
       SETTINGS.hyphenationEnabled = !SETTINGS.hyphenationEnabled;
       break;
-    case StyleRow::EmbeddedStyle:
-      SETTINGS.embeddedStyle = !SETTINGS.embeddedStyle;
-      break;
     case StyleRow::AntiAliasing:
       SETTINGS.textAntiAliasing = !SETTINGS.textAntiAliasing;
       break;
@@ -593,8 +622,6 @@ std::string TextSettingsActivity::styleValueText(int row) const {
       return SETTINGS.guideReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case StyleRow::Hyphenation:
       return SETTINGS.hyphenationEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case StyleRow::EmbeddedStyle:
-      return SETTINGS.embeddedStyle ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case StyleRow::AntiAliasing:
       return SETTINGS.textAntiAliasing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
 
@@ -603,11 +630,11 @@ std::string TextSettingsActivity::styleValueText(int row) const {
   }
 }
 
-// Embedded Style / AA do not change the sample pane; Bionic, Guide Dots, Hyphenation do.
+// Text AA does not change the sample pane; Bionic / Guide Dots / Hyphenation do.
 bool TextSettingsActivity::focusedRowHasNoPreview() const {
   if (selectedIndex() == 0 || tab_ != Tab::Style) return false;
   const StyleRow row = static_cast<StyleRow>(selectedIndex() - 1);
-  return row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
+  return row == StyleRow::AntiAliasing;
 }
 
 void TextSettingsActivity::switchTab(int direction, bool focusTabBar) {

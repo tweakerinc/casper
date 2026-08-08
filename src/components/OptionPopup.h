@@ -24,8 +24,7 @@ class OptionPopup {
     }
     selectedIndex = currentIndex;
     onSelectCallback = std::move(onSelect);
-    layoutValid = false;
-    active = true;
+    beginShow();
   }
 
   void show(const char* titleStr, const char* const* options, int optionCount, int currentIndex,
@@ -37,8 +36,7 @@ class OptionPopup {
     }
     selectedIndex = currentIndex;
     onSelectCallback = std::move(onSelect);
-    layoutValid = false;
-    active = true;
+    beginShow();
   }
 
   void show(StrId titleId, const std::vector<std::string>& options, int currentIndex,
@@ -47,8 +45,7 @@ class OptionPopup {
     ownedStrings = options;
     selectedIndex = currentIndex;
     onSelectCallback = std::move(onSelect);
-    layoutValid = false;
-    active = true;
+    beginShow();
   }
 
   void show(const char* titleStr, const std::vector<std::string>& options, int currentIndex,
@@ -57,8 +54,7 @@ class OptionPopup {
     ownedStrings = options;
     selectedIndex = currentIndex;
     onSelectCallback = std::move(onSelect);
-    layoutValid = false;
-    active = true;
+    beginShow();
   }
 
   // Normal menus: logical remapped buttons (Back/Confirm/Up/Down/Left/Right).
@@ -86,7 +82,8 @@ class OptionPopup {
     GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selectedIndex);
   }
 
-  bool isActive() const { return active; }
+  // Visible, or still owning open/dismiss click edges so the host does not act.
+  bool isActive() const { return active || drainingDismiss_ || awaitOpenRelease_; }
 
  private:
   struct Layout {
@@ -94,8 +91,73 @@ class OptionPopup {
     std::vector<Rect> options;
   };
 
+  void beginShow() {
+    layoutValid = false;
+    drainingDismiss_ = false;
+    // Hosts open this popup on Confirm *press* (Settings → Short Power) or
+    // *release* (Manage Fonts). Always wait out the open gesture before any
+    // select/dismiss so the same click cannot open-and-close in one motion.
+    awaitOpenRelease_ = true;
+    active = true;
+  }
+
+  // Wait until nav/confirm/back are up, then consume residual edges.
+  // Used both after show() (open gesture) and after select/back (dismiss).
+  bool drainButtonGesture(MappedInputManager& input, const bool lockedFrontChrome, bool& flag) {
+    using B = MappedInputManager::Button;
+    bool held = false;
+    if (lockedFrontChrome) {
+      held = gpio.isPressed(HalGPIO::BTN_CONFIRM) || gpio.isPressed(HalGPIO::BTN_BACK) ||
+             gpio.isPressed(HalGPIO::BTN_LEFT) || gpio.isPressed(HalGPIO::BTN_RIGHT);
+    } else {
+      held = input.isPressed(B::Confirm) || input.isPressed(B::Back) || input.isPressed(B::Up) ||
+             input.isPressed(B::Down) || input.isPressed(B::Left) || input.isPressed(B::Right) ||
+             input.isFrontButtonPressed(HalGPIO::BTN_BACK) || input.isFrontButtonPressed(HalGPIO::BTN_CONFIRM) ||
+             input.isFrontButtonPressed(HalGPIO::BTN_LEFT) || input.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
+    }
+    if (held) return true;
+
+    if (lockedFrontChrome) {
+      (void)gpio.wasPressed(HalGPIO::BTN_CONFIRM);
+      (void)gpio.wasReleased(HalGPIO::BTN_CONFIRM);
+      (void)gpio.wasPressed(HalGPIO::BTN_BACK);
+      (void)gpio.wasReleased(HalGPIO::BTN_BACK);
+      (void)gpio.wasPressed(HalGPIO::BTN_LEFT);
+      (void)gpio.wasReleased(HalGPIO::BTN_LEFT);
+      (void)gpio.wasPressed(HalGPIO::BTN_RIGHT);
+      (void)gpio.wasReleased(HalGPIO::BTN_RIGHT);
+    } else {
+      (void)input.wasPressed(B::Confirm);
+      (void)input.wasReleased(B::Confirm);
+      (void)input.wasPressed(B::Back);
+      (void)input.wasReleased(B::Back);
+      (void)input.wasPressed(B::Up);
+      (void)input.wasReleased(B::Up);
+      (void)input.wasPressed(B::Down);
+      (void)input.wasReleased(B::Down);
+      (void)input.wasPressed(B::Left);
+      (void)input.wasReleased(B::Left);
+      (void)input.wasPressed(B::Right);
+      (void)input.wasReleased(B::Right);
+      (void)input.getReleasedFrontButton();
+      (void)input.getPressedFrontButton();
+    }
+    flag = false;
+    return true;
+  }
+
+  void beginDismissDrain() { drainingDismiss_ = true; }
+
   bool handleInputCommon(MappedInputManager& input, const std::function<void()>& requestUpdate,
                          const bool lockedFrontChrome) {
+    if (drainingDismiss_) {
+      return drainButtonGesture(input, lockedFrontChrome, drainingDismiss_);
+    }
+    if (awaitOpenRelease_) {
+      // Popup is visible; ignore select until the open click fully finishes.
+      (void)drainButtonGesture(input, lockedFrontChrome, awaitOpenRelease_);
+      return true;
+    }
     if (!active) return false;
 
     const int count = static_cast<int>(ownedStrings.size());
@@ -122,6 +184,7 @@ class OptionPopup {
           selectedIndex = i;
           active = false;
           if (onSelectCallback) onSelectCallback(selectedIndex);
+          // Touch has no press/release split with keyboard — no button drain.
           requestUpdate();
           return true;
         }
@@ -151,6 +214,9 @@ class OptionPopup {
                                         : anyPressed(ButtonNavigator::getFrontPreviousButtons());
     const bool next = lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_RIGHT)
                                         : anyPressed(ButtonNavigator::getFrontNextButtons());
+    // Select / dismiss on *press* (classic OptionPopup). Open-gesture drain
+    // above blocks the host's opening Confirm from also selecting here; dismiss
+    // drain below blocks release-driven hosts from acting on the same click.
     const bool confirm =
         lockedFrontChrome ? gpio.wasPressed(HalGPIO::BTN_CONFIRM)
                           : input.wasPressed(MappedInputManager::Button::Confirm);
@@ -172,11 +238,13 @@ class OptionPopup {
     if (confirm) {
       active = false;
       if (onSelectCallback) onSelectCallback(selectedIndex);
+      beginDismissDrain();
       requestUpdate();
       return true;
     }
     if (back) {
       active = false;
+      beginDismissDrain();
       requestUpdate();
       return true;
     }
@@ -192,8 +260,8 @@ class OptionPopup {
     const auto pageWidth = renderer.getScreenWidth();
     const auto pageHeight = renderer.getScreenHeight();
     const int optionFontId = metrics.optionPopupUseSmallFont ? UI_10_FONT_ID : UI_12_FONT_ID;
-    const EpdFontFamily::Style optionStyle =
-        metrics.optionPopupOptionFontBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    // Match BaseTheme::drawOptionPopup: focus is bold-only; size against BOLD.
+    (void)metrics.optionPopupOptionFontBold;
 
     const int itemSpacing = metrics.optionPopupItemSpacing;
     const int innerPadding = metrics.optionPopupInnerPadding;
@@ -207,7 +275,7 @@ class OptionPopup {
 
     int maxTextWidth = renderer.getTextWidth(UI_12_FONT_ID, title.c_str(), EpdFontFamily::BOLD);
     for (const auto& opt : ownedStrings) {
-      const int width = renderer.getTextWidth(optionFontId, opt.c_str(), optionStyle);
+      const int width = renderer.getTextWidth(optionFontId, opt.c_str(), EpdFontFamily::BOLD);
       if (width > maxTextWidth) maxTextWidth = width;
     }
 
@@ -267,6 +335,10 @@ class OptionPopup {
   }
 
   bool active = false;
+  // True after show() until the open Confirm/Back fully releases (Settings press-open).
+  bool awaitOpenRelease_ = false;
+  // True after Confirm/Back dismiss until residual release edges are consumed.
+  bool drainingDismiss_ = false;
   std::string title;
   std::vector<std::string> ownedStrings;
   int selectedIndex = 0;

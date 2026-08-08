@@ -258,10 +258,10 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "Inverted" - Portrait, upside down
   - "Landscape CCW" - Landscape, rotated counter-clockwise
 
-- **Extra Paragraph Spacing**: Set how to handle paragraph breaks:
+- **Extra Paragraph Spacing**: Add a half-line blank between paragraphs in Reading Mode.
   
-  - "ON" - Vertical space will be added between paragraphs in Reading Mode
-  - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
+  - "ON" - Extra vertical space between paragraphs (first-line indentation is kept)
+  - "OFF" - No extra gap; first-line indentation still applies for body prose
 
 - **Dictionary**: Select the StarDict dictionary used for word lookups while reading, or "None" to disable lookups. *(Only shown when at least one dictionary folder exists under `/dictionaries/` on the SD card — see [docs/dictionary.md](docs/dictionary.md) for setup and usage.)*
 

@@ -1,5 +1,6 @@
 #include "ZipFile.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <InflateStream.h>
 #include <Logging.h>
@@ -482,6 +483,16 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
+    // Inflate first (~43 KB streaming arena) before the I/O chunk buffers so the
+    // largest free block is available for tinfl. Allocating 2×chunkSize first was
+    // eating maxAlloc (~39 KB after fonts) and causing permanent image extract fail.
+    InflateStream inflate;
+    if (!inflate.init(true)) {
+      LOG_ERR("ZIP", "Failed to init inflate stream free=%u maxAlloc=%u",
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      return false;
+    }
+
     auto* fileReadBuffer = static_cast<uint8_t*>(malloc(chunkSize));
     if (!fileReadBuffer) {
       LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
@@ -501,13 +512,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     ctx.readBuf = fileReadBuffer;
     ctx.readBufSize = chunkSize;
 
-    InflateStream inflate;
-    if (!inflate.init(true)) {
-      LOG_ERR("ZIP", "Failed to init inflate stream");
-      free(outputBuffer);
-      free(fileReadBuffer);
-      return false;
-    }
     inflate.setFill(zipFillCallback, &ctx);
 
     bool success = false;

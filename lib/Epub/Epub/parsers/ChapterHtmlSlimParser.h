@@ -107,7 +107,20 @@ class ChapterHtmlSlimParser {
   FloatInherit floatInherit_[kMaxFloatInherit] = {};
   int floatInheritCount_ = 0;
 
-  // Drop-cap: next <p> after visible h1 or .ct1 (God Emperor / common tradepub pattern).
+  // Nested block CSS width (div width:11.2em > div width:28.1% > img width:100%).
+  // Without this, img width:100% resolves against the full viewport and DCC scene
+  // dividers (1920×853 JPEG with a ~40px ink stripe) become full-page thick bars.
+  struct WidthContain {
+    int depth = 0;
+    int16_t cssWidthPx = 0;
+  };
+  static constexpr int kMaxWidthContain = 6;
+  WidthContain widthContain_[kMaxWidthContain] = {};
+  int widthContainCount_ = 0;
+
+  // Drop-cap: next <p> after an explicit host (.ct1 / dropcap / first-letter classes —
+  // God Emperor epigraph pattern). Do NOT arm after bare visible <h1>: tradepub chapter
+  // markers like DCC "[ 70 ]" are real h1s but the body is not drop-capped in the book.
   // armDropCapOnNextTextBlock_ is set on <p> open; pendingDropCap_ is set only when the
   // new ParsedText for that <p> is created — never while makePages still runs on the
   // previous paragraph (which was peeling "—" from THE STOLEN JOURNALS by mistake).
@@ -115,7 +128,6 @@ class ChapterHtmlSlimParser {
   bool armDropCapOnNextTextBlock_ = false;
   bool pendingDropCap_ = false;
   bool openBlockquoteIsCt1_ = false;
-  bool openH1WasVisible_ = false;
   // Drop-cap PageLine may need Y re-anchor to first body line (top-align).
   std::shared_ptr<PageLine> deferredDropCapLine_;
   int16_t dropCapYAdjust_ = 0;

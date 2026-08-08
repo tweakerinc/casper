@@ -15,6 +15,8 @@ class SleepActivity final : public Activity {
   void renderCustomSleepScreen() const;
   void renderCoverSleepScreen() const;
   void renderBitmapSleepScreen(const Bitmap& bitmap) const;
+  // PNG from /.sleep, /sleep, or /sleep.png — convert to a temp BMP then reuse BMP paint.
+  bool renderPngSleepScreen(const std::string& pngPath) const;
   void renderLastScreenSleepScreen() const;
   void renderBlankSleepScreen() const;
 

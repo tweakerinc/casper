@@ -12,31 +12,36 @@ namespace {
 
 // Builtin reader ladders (must match src/fontIds.h). Kept here so lib/Epub does not
 // depend on the app layer; bump if font IDs change.
-constexpr int kBitter[] = {
-    1963441729,   // 12
-    -1705318616,  // 14
-    1467653849,   // 16
-    -582927980,   // 18
+// Order: 10 / 12 / 14 / 16 / 18 pt (matches FONT_SIZE enum after casperReaderFontSizePtMigrated).
+constexpr int kLexendDeca[] = {
+    -1602494176,  // 10
+    -789173636,   // 12
+    300363550,    // 14
+    -940581834,   // 16
+    -2078415541,  // 18
 };
 constexpr int kSourceSerif[] = {
+    1970618696,   // 10
     386902914,    // 12
     -1077864260,  // 14
     1231166843,   // 16
     326065580,    // 18
 };
+static constexpr int kReaderLadderLen = 5;
 
 int familyIndex(const int* ladder, int fontId) {
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < kReaderLadderLen; ++i) {
     if (ladder[i] == fontId) return i;
   }
   return -1;
 }
 
 void fillFromLadder(StyleResolveContext& ctx, const int* ladder, int baseIdx) {
-  // Map sizeStep 0..4 → absolute ladder index clamped to [0,3]
+  // Map sizeStep 0..4 → absolute ladder index clamped to [0, kReaderLadderLen-1]
   // delta = step - SIZE_STEP_BASE ∈ [-2,+2]
+  const int maxIdx = kReaderLadderLen - 1;
   for (int step = 0; step <= SIZE_STEP_MAX; ++step) {
-    const int absIdx = std::clamp(baseIdx + (step - static_cast<int>(SIZE_STEP_BASE)), 0, 3);
+    const int absIdx = std::clamp(baseIdx + (step - static_cast<int>(SIZE_STEP_BASE)), 0, maxIdx);
     ctx.fontIdByStep[step] = ladder[absIdx];
   }
   ctx.singleSizeFamily = false;
@@ -64,9 +69,9 @@ void initStyleResolveContext(StyleResolveContext& ctx, const int baseFontId, con
   ctx.embeddedStyle = embeddedStyle;
   ctx.baseEmPx = casperEmPx(renderer, baseFontId);
 
-  const int bitterIdx = familyIndex(kBitter, baseFontId);
-  if (bitterIdx >= 0) {
-    fillFromLadder(ctx, kBitter, bitterIdx);
+  const int lexendIdx = familyIndex(kLexendDeca, baseFontId);
+  if (lexendIdx >= 0) {
+    fillFromLadder(ctx, kLexendDeca, lexendIdx);
     return;
   }
   const int ssIdx = familyIndex(kSourceSerif, baseFontId);

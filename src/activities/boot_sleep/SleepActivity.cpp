@@ -6,8 +6,12 @@
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <PngToBmpConverter.h>
 #include <Txt.h>
 #include <Xtc.h>
+
+#include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -17,6 +21,15 @@
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
 #include "util/SleepChromeIcon.h"
+
+namespace {
+// Temp 2-bit BMP written when painting a PNG sleep image (reuses BMP greyscale path).
+constexpr const char* kSleepPngTempBmp = "/.crosspoint/sleep_from_png.bmp";
+
+bool isSleepImageName(const std::string& filename) {
+  return FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
+}
+}  // namespace
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
@@ -58,29 +71,15 @@ void SleepActivity::onEnter() {
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
-  // Check if we have a /.sleep (preferred) or /sleep directory
+  // Wallpapers: /.sleep only, with /sleep as fallback if /.sleep is missing.
+  // (No root /sleep.bmp|/sleep.png — keep everything in the folder.)
   const char* sleepDir = nullptr;
   auto dir = Storage.open("/.sleep");
-
-  // Look for sleep.bmp on the root of the sd card to determine if we should
-  // render a custom sleep screen instead of the default.
-  // This takes priority over the /sleep folder.
-  HalFile file;
-  if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
-    Bitmap bitmap(file, true);
-    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-      LOG_DBG("SLP", "Loading: /sleep.bmp");
-      renderBitmapSleepScreen(bitmap);
-      file.close();
-      if (dir) dir.close();
-      return;
-    }
-    file.close();
-  }
 
   if (dir && dir.isDirectory()) {
     sleepDir = "/.sleep";
   } else {
+    if (dir) dir.close();
     dir = Storage.open("/sleep");
     if (dir && dir.isDirectory()) {
       sleepDir = "/sleep";
@@ -90,7 +89,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   if (sleepDir) {
     std::vector<std::string> files;
     char name[500];
-    // collect all valid BMP files
+    // Collect BMP + PNG from the sleep folder (same pool, random pick).
     for (auto dirFile = dir.openNextFile(); dirFile; dirFile = dir.openNextFile()) {
       if (dirFile.isDirectory()) {
         dirFile.close();
@@ -103,17 +102,20 @@ void SleepActivity::renderCustomSleepScreen() const {
         continue;
       }
 
-      if (!FsHelpers::hasBmpExtension(filename)) {
-        LOG_DBG("SLP", "Skipping non-.bmp file name: %s", name);
+      if (!isSleepImageName(filename)) {
+        LOG_DBG("SLP", "Skipping non-image sleep file: %s", name);
         dirFile.close();
         continue;
       }
-      Bitmap bitmap(dirFile);
-      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        LOG_DBG("SLP", "Skipping invalid BMP file: %s", name);
-        dirFile.close();
-        continue;
+      if (FsHelpers::hasBmpExtension(filename)) {
+        Bitmap bitmap(dirFile);
+        if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+          LOG_DBG("SLP", "Skipping invalid BMP file: %s", name);
+          dirFile.close();
+          continue;
+        }
       }
+      // PNG validated at decode time (header parse alone needs a full open path).
       files.emplace_back(filename);
       dirFile.close();
     }
@@ -131,24 +133,90 @@ void SleepActivity::renderCustomSleepScreen() const {
       APP_STATE.pushRecentSleep(randomFileIndex);
       APP_STATE.saveToFile();
       const auto filename = std::string(sleepDir) + "/" + files[randomFileIndex];
-      HalFile randFile;
-      if (Storage.openFileForRead("SLP", filename, randFile)) {
-        LOG_DBG("SLP", "Randomly loading: %s/%s", sleepDir, files[randomFileIndex].c_str());
-        delay(100);
-        Bitmap bitmap(randFile, true);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          renderBitmapSleepScreen(bitmap);
-          randFile.close();
+      LOG_DBG("SLP", "Randomly loading: %s", filename.c_str());
+      delay(100);
+      if (FsHelpers::hasPngExtension(files[randomFileIndex])) {
+        if (renderPngSleepScreen(filename)) {
           dir.close();
           return;
         }
-        randFile.close();
+      } else {
+        HalFile randFile;
+        if (Storage.openFileForRead("SLP", filename, randFile)) {
+          Bitmap bitmap(randFile, true);
+          if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+            renderBitmapSleepScreen(bitmap);
+            randFile.close();
+            dir.close();
+            return;
+          }
+          randFile.close();
+        }
       }
     }
   }
   if (dir) dir.close();
 
   renderDefaultSleepScreen();
+}
+
+bool SleepActivity::renderPngSleepScreen(const std::string& pngPath) const {
+  // Convert PNG → temp BMP on SD, then reuse the greyscale multipass BMP path
+  // (same crop/filter/HALF settings as sleep.bmp). Sleep has the whole heap free.
+  constexpr size_t kMinFree = 48 * 1024;
+  if (ESP.getFreeHeap() < kMinFree) {
+    LOG_ERR("SLP", "Not enough heap for PNG sleep image free=%u: %s",
+            static_cast<unsigned>(ESP.getFreeHeap()), pngPath.c_str());
+    return false;
+  }
+
+  Storage.mkdir("/.crosspoint");
+  if (Storage.exists(kSleepPngTempBmp)) {
+    Storage.remove(kSleepPngTempBmp);
+  }
+
+  HalFile pngIn;
+  if (!Storage.openFileForRead("SLP", pngPath, pngIn)) {
+    LOG_ERR("SLP", "Failed to open PNG sleep image: %s", pngPath.c_str());
+    return false;
+  }
+  HalFile bmpOut;
+  if (!Storage.openFileForWrite("SLP", kSleepPngTempBmp, bmpOut)) {
+    pngIn.close();
+    LOG_ERR("SLP", "Failed to create temp sleep BMP");
+    return false;
+  }
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const bool ok =
+      PngToBmpConverter::pngFileToBmpStreamWithSize(pngIn, bmpOut, pageWidth, pageHeight);
+  bmpOut.flush();
+  bmpOut.close();
+  pngIn.close();
+  if (!ok) {
+    Storage.remove(kSleepPngTempBmp);
+    LOG_ERR("SLP", "PNG→BMP conversion failed: %s", pngPath.c_str());
+    return false;
+  }
+
+  HalFile bmpIn;
+  if (!Storage.openFileForRead("SLP", kSleepPngTempBmp, bmpIn)) {
+    Storage.remove(kSleepPngTempBmp);
+    return false;
+  }
+  Bitmap bitmap(bmpIn, true);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+    bmpIn.close();
+    Storage.remove(kSleepPngTempBmp);
+    LOG_ERR("SLP", "Temp sleep BMP invalid after PNG convert");
+    return false;
+  }
+  LOG_DBG("SLP", "PNG sleep via temp BMP: %s", pngPath.c_str());
+  renderBitmapSleepScreen(bitmap);
+  bmpIn.close();
+  // Keep temp for wake re-seed paths that re-open the last painted BMP; remove next convert.
+  return true;
 }
 
 // Sleep screens paint with a single HALF refresh (stock parity): the OEM X4

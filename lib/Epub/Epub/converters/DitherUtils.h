@@ -36,13 +36,14 @@ inline uint8_t darkenForEinkInk(const uint8_t gray) {
   return static_cast<uint8_t>(out);
 }
 
-// Mild paper lift for full plates / photos (Bare-cover-like midtones).
-// Scanned woodcuts sit around mean ~120; without lift the BW plane paints most
-// of the figure solid black before greys refine. Cheap integer gain+bias only —
-// no histogram / no extra buffers.
+// Paper lift for full plates / photos (Bare-cover-like midtones).
+// Scanned art and full-page JPEGs (e.g. DCC inter-chapter plates ~1200×1727)
+// sit around mean ~120; without lift the BW plane paints most of the figure
+// solid black and greys only partially recover — "hard to see" on e-ink.
+// Cheap integer gain+bias only — no histogram / no extra buffers.
 inline uint8_t liftForEinkPlate(const uint8_t gray) {
-  // ≈ gain 1.20 + bias 18 → mean 120 becomes ~162 (more paper / light gray).
-  int g = (static_cast<int>(gray) * 154 + 18 * 128) / 128;
+  // ≈ gain 1.30 + bias 28 → mean 120 becomes ~184 (more paper / light gray).
+  int g = (static_cast<int>(gray) * 166 + 28 * 128) / 128;
   if (g < 0) g = 0;
   if (g > 255) g = 255;
   return static_cast<uint8_t>(g);
@@ -65,9 +66,9 @@ inline uint8_t quantizeGray4LevelInk(int adjusted) {
 inline uint8_t quantizeGray4LevelNeutral(int adjusted) {
   if (adjusted < 0) adjusted = 0;
   if (adjusted > 255) adjusted = 255;
-  if (adjusted < 26) return 0;   // deep ink only
-  if (adjusted < 86) return 1;   // dark gray
-  if (adjusted < 148) return 2;  // light gray
+  if (adjusted < 22) return 0;   // deep ink only
+  if (adjusted < 78) return 1;   // dark gray
+  if (adjusted < 155) return 2;  // light gray (wider — more structure on plates)
   return 3;                     // paper / highlights
 }
 

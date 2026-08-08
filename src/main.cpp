@@ -134,32 +134,40 @@ static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN
   }
 }
 
-// Reader + UI: Source Serif 4 (default) and Bitter. Lexend/Literata via SD download only.
+// Reader + UI: Source Serif 4 (default) and Lexend Deca (OFL sans). Sizes 8–18.
 #ifndef OMIT_FONTS
-EpdFont bitter12RegularFont(&bitter_12_regular);
-EpdFont bitter12BoldFont(&bitter_12_bold);
-EpdFont bitter12ItalicFont(&bitter_12_italic);
-EpdFont bitter12BoldItalicFont(&bitter_12_bolditalic);
-EpdFontFamily bitter12FontFamily(&bitter12RegularFont, &bitter12BoldFont, &bitter12ItalicFont,
-                                 &bitter12BoldItalicFont);
-EpdFont bitter14RegularFont(&bitter_14_regular);
-EpdFont bitter14BoldFont(&bitter_14_bold);
-EpdFont bitter14ItalicFont(&bitter_14_italic);
-EpdFont bitter14BoldItalicFont(&bitter_14_bolditalic);
-EpdFontFamily bitter14FontFamily(&bitter14RegularFont, &bitter14BoldFont, &bitter14ItalicFont,
-                                 &bitter14BoldItalicFont);
-EpdFont bitter16RegularFont(&bitter_16_regular);
-EpdFont bitter16BoldFont(&bitter_16_bold);
-EpdFont bitter16ItalicFont(&bitter_16_italic);
-EpdFont bitter16BoldItalicFont(&bitter_16_bolditalic);
-EpdFontFamily bitter16FontFamily(&bitter16RegularFont, &bitter16BoldFont, &bitter16ItalicFont,
-                                 &bitter16BoldItalicFont);
-EpdFont bitter18RegularFont(&bitter_18_regular);
-EpdFont bitter18BoldFont(&bitter_18_bold);
-EpdFont bitter18ItalicFont(&bitter_18_italic);
-EpdFont bitter18BoldItalicFont(&bitter_18_bolditalic);
-EpdFontFamily bitter18FontFamily(&bitter18RegularFont, &bitter18BoldFont, &bitter18ItalicFont,
-                                 &bitter18BoldItalicFont);
+EpdFont lexend8RegularFont(&lexenddeca_8_regular);
+EpdFontFamily lexend8FontFamily(&lexend8RegularFont);
+EpdFont lexend10RegularFont(&lexenddeca_10_regular);
+EpdFont lexend10BoldFont(&lexenddeca_10_bold);
+EpdFont lexend10ItalicFont(&lexenddeca_10_italic);
+EpdFont lexend10BoldItalicFont(&lexenddeca_10_bolditalic);
+EpdFontFamily lexend10FontFamily(&lexend10RegularFont, &lexend10BoldFont, &lexend10ItalicFont,
+                                 &lexend10BoldItalicFont);
+EpdFont lexend12RegularFont(&lexenddeca_12_regular);
+EpdFont lexend12BoldFont(&lexenddeca_12_bold);
+EpdFont lexend12ItalicFont(&lexenddeca_12_italic);
+EpdFont lexend12BoldItalicFont(&lexenddeca_12_bolditalic);
+EpdFontFamily lexend12FontFamily(&lexend12RegularFont, &lexend12BoldFont, &lexend12ItalicFont,
+                                 &lexend12BoldItalicFont);
+EpdFont lexend14RegularFont(&lexenddeca_14_regular);
+EpdFont lexend14BoldFont(&lexenddeca_14_bold);
+EpdFont lexend14ItalicFont(&lexenddeca_14_italic);
+EpdFont lexend14BoldItalicFont(&lexenddeca_14_bolditalic);
+EpdFontFamily lexend14FontFamily(&lexend14RegularFont, &lexend14BoldFont, &lexend14ItalicFont,
+                                 &lexend14BoldItalicFont);
+EpdFont lexend16RegularFont(&lexenddeca_16_regular);
+EpdFont lexend16BoldFont(&lexenddeca_16_bold);
+EpdFont lexend16ItalicFont(&lexenddeca_16_italic);
+EpdFont lexend16BoldItalicFont(&lexenddeca_16_bolditalic);
+EpdFontFamily lexend16FontFamily(&lexend16RegularFont, &lexend16BoldFont, &lexend16ItalicFont,
+                                 &lexend16BoldItalicFont);
+EpdFont lexend18RegularFont(&lexenddeca_18_regular);
+EpdFont lexend18BoldFont(&lexenddeca_18_bold);
+EpdFont lexend18ItalicFont(&lexenddeca_18_italic);
+EpdFont lexend18BoldItalicFont(&lexenddeca_18_bolditalic);
+EpdFontFamily lexend18FontFamily(&lexend18RegularFont, &lexend18BoldFont, &lexend18ItalicFont,
+                                 &lexend18BoldItalicFont);
 
 // Penumbra Recents: 8 pt author (regular only), 10 pt title (regular + bold focus).
 EpdFont sourceserif8RegularFont(&sourceserif4_8_regular);
@@ -377,10 +385,12 @@ void setupDisplayAndFonts(bool seamless = false) {
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
 #ifndef OMIT_FONTS
-  renderer.insertFont(BITTER_12_FONT_ID, bitter12FontFamily);
-  renderer.insertFont(BITTER_14_FONT_ID, bitter14FontFamily);
-  renderer.insertFont(BITTER_16_FONT_ID, bitter16FontFamily);
-  renderer.insertFont(BITTER_18_FONT_ID, bitter18FontFamily);
+  renderer.insertFont(LEXENDDECA_8_FONT_ID, lexend8FontFamily);
+  renderer.insertFont(LEXENDDECA_10_FONT_ID, lexend10FontFamily);
+  renderer.insertFont(LEXENDDECA_12_FONT_ID, lexend12FontFamily);
+  renderer.insertFont(LEXENDDECA_14_FONT_ID, lexend14FontFamily);
+  renderer.insertFont(LEXENDDECA_16_FONT_ID, lexend16FontFamily);
+  renderer.insertFont(LEXENDDECA_18_FONT_ID, lexend18FontFamily);
   // UI_10/UI_12 alias Source Serif 12/14 — insert full families once.
   renderer.insertFont(SOURCESERIF4_8_FONT_ID, sourceserif8FontFamily);
   renderer.insertFont(SOURCESERIF4_10_FONT_ID, sourceserif10FontFamily);

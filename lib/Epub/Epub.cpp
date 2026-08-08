@@ -18,6 +18,43 @@
 
 namespace {
 
+// Calibre / Kindle often pack series into one dc:title:
+//   "The Butcher's Masquerade: Dungeon Crawler Carl Book 5"
+// Recents and home lists are more readable as the primary title only. Match the
+// shorter names users saw on 0.1.7 (filename / short OPF), without losing books
+// that intentionally use a colon in the real title (require series-like suffix).
+std::string primaryBookTitle(std::string title) {
+  // Trim ends.
+  while (!title.empty() && (title.back() == ' ' || title.back() == '\t')) title.pop_back();
+  size_t start = 0;
+  while (start < title.size() && (title[start] == ' ' || title[start] == '\t')) ++start;
+  if (start > 0) title = title.substr(start);
+
+  const size_t colon = title.find(':');
+  if (colon == std::string::npos || colon < 3) return title;
+
+  std::string primary = title.substr(0, colon);
+  while (!primary.empty() && (primary.back() == ' ' || primary.back() == '\t')) primary.pop_back();
+  if (primary.size() < 3) return title;
+
+  std::string rest = title.substr(colon + 1);
+  while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) rest.erase(rest.begin());
+  if (rest.size() < 4) return title;
+
+  std::string restLower = rest;
+  for (char& c : restLower) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  const bool seriesLike = restLower.find("book ") != std::string::npos ||
+                          restLower.find(" book") != std::string::npos ||
+                          restLower.find("vol.") != std::string::npos ||
+                          restLower.find("volume ") != std::string::npos ||
+                          restLower.find("series") != std::string::npos ||
+                          // Long suffix after colon is usually series branding, not subtitle prose.
+                          rest.size() >= 16;
+  return seriesLike ? primary : title;
+}
+
 // Calibre often stores HTML in dc:description. Strip tags + a few entities for e-ink.
 std::string stripHtmlToPlainText(const std::string& html) {
   std::string out;
@@ -212,7 +249,8 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
 
   // Grab data from opfParser into epub. Normalize titles to NFC so NFD (combining
   // mark) text renders correctly — the device fonts have no mark positioning.
-  bookMetadata.title = utf8ComposeNfc(opfParser.title);
+  // primaryBookTitle drops Calibre series packing ("Title: Series Book N").
+  bookMetadata.title = primaryBookTitle(utf8ComposeNfc(opfParser.title));
   bookMetadata.author = opfParser.author;
   bookMetadata.language = opfParser.language;
   bookMetadata.coverItemHref = opfParser.coverItemHref;

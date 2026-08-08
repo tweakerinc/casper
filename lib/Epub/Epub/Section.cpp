@@ -50,7 +50,10 @@ namespace {
 // v63: class/TOC title centering when CSS text-align lost to unsupported selectors
 // v64: Book's Style owns embedded CSS (alignment drives stylesheet use)
 // v65: ignore tiny/super margin-left on spans (ordinal "th" no longer new line)
-constexpr uint8_t SECTION_FILE_VERSION = 65;
+// v66: drop-cap only after explicit .ct1/dropcap hosts (not every visible h1 — DCC ch70)
+// v67: nested CSS width contain for images (DCC scene rules not full-page thick bars)
+// v68: cap ultra-wide rule image height (~1.5em) — white-padded dividers not tall slabs
+constexpr uint8_t SECTION_FILE_VERSION = 68;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

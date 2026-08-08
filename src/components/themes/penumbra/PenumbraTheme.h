@@ -150,9 +150,17 @@ Rect redrawUnderPanel(GfxRenderer& renderer, const std::vector<RecentBook>& rece
                       const BookReadingStats* stats, float progressPercent,
                       const GlobalReadingStats* globalStats);
 
-// Prefetch Recents progress % (SD) during full home paint so the first under-panel
-// swap does not pay loadForBook on every row.
+// Ensure Recents progress % is in RAM. SD load only for paths not already cached
+// (or when the list is empty). Path order changes reuse prior % by path match —
+// does not re-read all N books from SD. Call after loadRecentBooks on resume.
 void warmRecentsProgressCache(const std::vector<RecentBook>& books);
+
+// Update one book's micro-bar % after reader exit (or mark finished). No SD I/O.
+// Prefer this over force-reloading every recent book.
+void updateRecentsProgressForPath(const char* bookPath, float progressPercent);
+
+// Drop the RAM progress cache (clear cache / heavy book actions). Next warm reloads SD.
+void invalidateRecentsProgressCache();
 
 // White-fill only the clock digit band (not weekday/hairline) and redraw time.
 // prevTime: last drawn string ("H:MM") so the dirty rect can be the union of old/new

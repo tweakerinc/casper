@@ -6,7 +6,8 @@
 #include <vector>
 
 inline constexpr size_t CLIPPING_CHAPTER_TITLE_MAX = 48;
-inline constexpr size_t CLIPPING_TEXT_MAX = 512;
+// Full-page clip at 10–12 pt can exceed 512 characters; keep room for ~1 dense page.
+inline constexpr size_t CLIPPING_TEXT_MAX = 2048;
 inline constexpr uint16_t CLIPPING_MAX_PER_BOOK = 256;
 inline constexpr uint16_t CLIPPING_MAX_PAGE_MATCHES = 16;
 

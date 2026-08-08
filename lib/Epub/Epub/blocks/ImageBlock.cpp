@@ -26,6 +26,10 @@ ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath,
 
 bool ImageBlock::isLetterGlyph(const int contentWidthPx) const {
   if (width <= 0 || height <= 0) return false;
+  // Scene dividers / rules are wide and short (DCC image_rsrc8GP after height cap).
+  // Never treat them as drop-cap letters — greys skip + failed-session placeholder
+  // made the line vanish after dictionary / menu return.
+  if (width > height * 2) return false;
   // Match ChapterHtmlSlimParser placeFloatImage drop-cap heuristic: left letter
   // floats are ≤28% of content width (floor 120px). Also require a short box so
   // tall narrow plates still get greys.
@@ -47,13 +51,13 @@ bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str());
 namespace {
 
 std::string getCachePath(const std::string& imagePath) {
-  // .pxc6: plate lift + paper-leaning quantize (Bare-cover-like midtones);
-  // letter glyphs still ink-biased. Invalidates darker pxc4/pxc5 plate caches.
+  // .pxc7: stronger plate lift for full-page JPEGs (DCC inter-chapter art).
+  // Invalidates darker pxc6 plate caches.
   size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
-    return imagePath.substr(0, dotPos) + ".pxc6";
+    return imagePath.substr(0, dotPos) + ".pxc7";
   }
-  return imagePath + ".pxc6";
+  return imagePath + ".pxc7";
 }
 
 bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int expectedHeight, uint16_t& cachedWidth,

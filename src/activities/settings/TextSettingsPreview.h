@@ -32,11 +32,25 @@ struct PreviewLayout {
   PreviewKey key;
 };
 
-// Preview chrome: double-line header (like Settings tabs) with bold "Preview" plus
-// font/size, then an unboxed body that lays out sample text at full reader width
-// (screen width − 2× screen margin) so line length matches the book page.
-// notInPreviewNote: optional note at top of the body (e.g. STR_NOT_IN_PREVIEW).
-void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int top, int height, const char* familyName,
-                   const char* sizeName, const char* notInPreviewNote = nullptr);
+// Geometry from the last BW preview paint — enough to re-draw sample text for AA greys.
+struct PreviewPaint {
+  int fontId = 0;
+  int textLeft = 0;
+  int sampleTop = 0;
+  int bodyBottom = 0;
+  int lineH = 0;
+  int lineAdvance = 0;
+  int paragraphGap = 0;
+  bool hasSample = false;
+};
+
+// Preview chrome: double-line header with bold "Preview" + font/size, then unboxed
+// body at full reader width (screen − 2× margin). Returns paint info for optional
+// greyscale multipass of the sample text (Text AA / Font Darkness).
+PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int top, int height,
+                           const char* familyName, const char* sizeName);
+
+// Re-draw only the sample body (no chrome). Used for GRAYSCALE_LSB / MSB passes.
+void renderPreviewSampleText(const GfxRenderer& renderer, const PreviewLayout& layout, const PreviewPaint& paint);
 
 }  // namespace textsettings

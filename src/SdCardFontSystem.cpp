@@ -10,7 +10,7 @@ namespace {
 
 static uint8_t fontSizeEnumFromSettings() {
   uint8_t e = SETTINGS.fontSize;
-  if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = 1;  // default to MEDIUM
+  if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = CrossPointSettings::SIZE_14;
   return e;
 }
 

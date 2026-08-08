@@ -501,21 +501,18 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
 
           const uint8_t byte = bitmap[pixelPosition >> 2];
           const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
-          // the direct bit from the font is 0 -> white, 1 -> light gray, 2 -> dark gray, 3 -> black
-          // we swap this to better match the way images and screen think about colors:
-          // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
-          const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
+          // Font raw: 0 white / 1 light / 2 dark / 3 black. Invert for draw pipeline:
+          // 0 black / 1 dark grey / 2 light grey / 3 white.
+          const uint8_t bmpVal = static_cast<uint8_t>(3 - ((byte >> bit_index) & 0x3));
 
           if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-            // Black (also paints over the grays in BW mode)
+            // Non-white → solid ink on the BW plane.
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-            // Light gray (also mark the MSB if it's going to be a dark gray too)
-            // Dedicated X3 gray LUTs now provide proper 4-level gray on both devices
-            // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
+            // Both AA fringes on MSB (historical default "Dark" look).
             renderer.drawPixel(screenX, screenY, false);
           } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-            // Dark gray
+            // Dark fringe only on LSB.
             renderer.drawPixel(screenX, screenY, false);
           }
         }

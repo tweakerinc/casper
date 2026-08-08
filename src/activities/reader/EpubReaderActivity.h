@@ -165,6 +165,10 @@ class EpubReaderActivity final : public Activity {
   bool openNeedsScrubAfterChrome = false;
   uint32_t openWallStartMs = 0;
   bool openFirstInkLogged = false;
+  // Leave path: "Saving..." on glass before SD/teardown so Back→Home is not a
+  // frozen book page. Set once; leaveReaderToHome may show it before onExit.
+  bool exitSavingChromeShown_ = false;
+  void showExitSavingChrome();
 
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
@@ -281,8 +285,9 @@ class EpubReaderActivity final : public Activity {
   // Prefer leave-sync when applicable; otherwise onGoHome().
   void leaveReaderToHome();
   float getCurrentBookProgressPercent() const;
-  // Write progress % into the book's stats file for Home Recents bars (X4-safe).
-  void persistHomeProgressPercent();
+  // Stamp progress % into readingStats (+ Penumbra RAM). writeToDisk=false when
+  // the caller will save once after merging session analytics (exit path).
+  void persistHomeProgressPercent(bool writeToDisk = true);
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);

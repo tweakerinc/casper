@@ -391,9 +391,9 @@ void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Compact serif title: prefer a single line; wrap to two only when needed.
   // (18pt was oversized for long titles and ate synopsis space.)
-  titleFontId = BITTER_14_FONT_ID;
+  titleFontId = LEXENDDECA_14_FONT_ID;
   if (renderer.getLineHeight(titleFontId) <= 0) {
-    titleFontId = BITTER_12_FONT_ID;
+    titleFontId = LEXENDDECA_12_FONT_ID;
   }
   if (renderer.getLineHeight(titleFontId) <= 0) {
     titleFontId = UI_12_FONT_ID;

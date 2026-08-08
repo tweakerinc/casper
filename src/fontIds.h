@@ -1,12 +1,16 @@
 // Font family IDs: SHA256-of-headers sum (lib/EpdFont/scripts/build-font-ids.sh style).
-// Built-in UI chrome + Penumbra: Source Serif 4 only. Bitter is the alternate reader face.
+// Built-in UI chrome + Penumbra: Source Serif 4. Alternate reader face: Lexend Deca (OFL).
+// Sizes: both families ship 8/10/12/14/16/18 (UI smallest is 8 pt).
 #pragma once
 
-#define BITTER_12_FONT_ID (1963441729)
-#define BITTER_14_FONT_ID (-1705318616)
-#define BITTER_16_FONT_ID (1467653849)
-#define BITTER_18_FONT_ID (-582927980)
-// 8 pt regular — Recents author, battery %, button hints (was Noto Sans 8).
+// Lexend Deca (sans, OFL) — alternate built-in reader family.
+#define LEXENDDECA_8_FONT_ID (-537075679)
+#define LEXENDDECA_10_FONT_ID (-1602494176)
+#define LEXENDDECA_12_FONT_ID (-789173636)
+#define LEXENDDECA_14_FONT_ID (300363550)
+#define LEXENDDECA_16_FONT_ID (-940581834)
+#define LEXENDDECA_18_FONT_ID (-2078415541)
+// 8 pt regular — Recents author, battery %, button hints.
 #define SOURCESERIF4_8_FONT_ID (-2097557390)
 // 10 pt regular + bold — Recents titles.
 #define SOURCESERIF4_10_FONT_ID (1970618696)
@@ -24,10 +28,12 @@
 #define SMALL_FONT_ID (SOURCESERIF4_8_FONT_ID)
 
 // Font ID 0 is reserved as the "not found" sentinel.
-static_assert(BITTER_12_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BITTER_14_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BITTER_16_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BITTER_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_8_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_10_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_12_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_14_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_16_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LEXENDDECA_18_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_8_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_10_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_12_FONT_ID != 0, "Font ID collision with sentinel");

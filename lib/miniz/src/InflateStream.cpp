@@ -24,21 +24,27 @@ bool InflateStream::init(const bool streaming) {
   // During a framebuffer loan the lent 48KB is up for grabs: state (~11KB) +
   // window (32KB) fit inside it, so a chapter-build inflate costs the heap
   // nothing. Absent (or already claimed): plain heap, freed in deinit().
+  // Streaming heap path uses ONE contiguous malloc so a ~43KB maxAlloc works;
+  // two separate mallocs fail when the largest block is ~40KB (common after
+  // font/CSS fragmentation) even though free heap is larger.
   const size_t needed = STATE_ALIGNED + (streaming ? WINDOW_SIZE : 0);
   arenaBase = buildscratch::claim(needed);
+  arenaHeapOwned_ = false;
   if (arenaBase) {
     state = reinterpret_cast<tinfl_decompressor*>(arenaBase);
     window = streaming ? arenaBase + STATE_ALIGNED : nullptr;
+  } else if (streaming) {
+    auto* block = static_cast<uint8_t*>(malloc(needed));
+    if (!block) return false;
+    arenaBase = block;
+    arenaHeapOwned_ = true;
+    state = reinterpret_cast<tinfl_decompressor*>(block);
+    window = block + STATE_ALIGNED;
   } else {
     // Raw malloc (not makeUniqueNoThrow): the header keeps tinfl_decompressor
-    // an incomplete type so consumers never include miniz; both blocks are
-    // freed in deinit()/the destructor.
+    // an incomplete type so consumers never include miniz.
     state = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
     if (!state) return false;
-    if (streaming) {
-      window = static_cast<uint8_t*>(malloc(WINDOW_SIZE));
-      if (!window) return false;  // state kept; deinit()/next init reclaims it
-    }
   }
 
   tinfl_init(state);
@@ -58,8 +64,13 @@ bool InflateStream::init(const bool streaming) {
 
 void InflateStream::deinit() {
   if (arenaBase) {
-    buildscratch::release(arenaBase);
+    if (arenaHeapOwned_) {
+      free(arenaBase);
+    } else {
+      buildscratch::release(arenaBase);
+    }
     arenaBase = nullptr;
+    arenaHeapOwned_ = false;
   } else {
     free(state);
     free(window);

@@ -428,9 +428,12 @@ std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
 
 // Session memo for loadForBook — Home/recents used to re-scan the same 4–5 books
 // several times per paint (each scan was multi-version SD probes).
+// cachePath is the Casper primary folder so save() can update one slot without
+// wiping the whole memo (or re-hashing every path).
 struct LoadForBookMemo {
   static constexpr size_t kCap = 8;
   std::string path[kCap];
+  std::string cachePath[kCap];
   BookReadingStats stats[kCap];
   bool valid[kCap] = {};
   size_t next = 0;
@@ -439,17 +442,30 @@ LoadForBookMemo g_loadForBookMemo;
 
 void memoStore(const std::string& bookPath, const BookReadingStats& stats) {
   if (bookPath.empty()) return;
+  const std::string primary = BookReadingStats::cachePathForBook(bookPath);
   for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
     if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
       g_loadForBookMemo.stats[i] = stats;
+      g_loadForBookMemo.cachePath[i] = primary;
       return;
     }
   }
   const size_t i = g_loadForBookMemo.next % LoadForBookMemo::kCap;
   g_loadForBookMemo.path[i] = bookPath;
+  g_loadForBookMemo.cachePath[i] = primary;
   g_loadForBookMemo.stats[i] = stats;
   g_loadForBookMemo.valid[i] = true;
   ++g_loadForBookMemo.next;
+}
+
+// After a successful disk write: refresh memo for that cache folder only.
+void memoUpdateByCachePath(const std::string& cachePath, const BookReadingStats& stats) {
+  if (cachePath.empty()) return;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.cachePath[i] == cachePath) {
+      g_loadForBookMemo.stats[i] = stats;
+    }
+  }
 }
 
 bool memoLookup(const std::string& bookPath, BookReadingStats& out) {
@@ -708,9 +724,6 @@ void BookReadingStats::formatDuration(uint32_t seconds, char* buf, size_t len) {
 }
 
 void BookReadingStats::save(const std::string& cachePath) const {
-  // Drop memo entries so the next loadForBook sees the write (memo is by book path;
-  // wipe all when we only know the cache folder).
-  memoInvalidate({});
   if (cachePath.empty()) {
     LOG_ERR("STATS", "save: empty cache path");
     return;
@@ -754,6 +767,8 @@ void BookReadingStats::save(const std::string& cachePath) const {
     LOG_ERR("STATS", "Short write %s (%u/%d)", fullPath.c_str(), static_cast<unsigned>(written), STATS_FILE_SIZE);
     return;
   }
+  // Keep memo warm for this book only — do not wipe other books (Home resume).
+  memoUpdateByCachePath(cachePath, *this);
   LOG_INF("STATS", "Saved %s progressMilli=%u (%.1f%%)", fullPath.c_str(),
           static_cast<unsigned>(progressPercentMilli),
           progressPercentMilli == 0xFFFF ? -1.0 : static_cast<double>(progressPercentMilli) / 100.0);
@@ -809,5 +824,6 @@ bool BookReadingStats::removeForBook(const std::string& bookPath) {
       ok = false;
     }
   }
+  memoInvalidate(bookPath);
   return ok;
 }

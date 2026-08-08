@@ -1,5 +1,6 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -577,6 +578,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             inh.side == CssFloat::Left ? "left" : "right", inh.depth, static_cast<int>(inh.cssWidthPx));
   }
 
+  // Push CSS width for non-img blocks so nested % / width:100% on <img> resolve against
+  // the book wrapper (DCC .class_sb width:11.2em > .class_saw 28.1% > img 100%).
+  if (strcmp(name, "img") != 0 && cssStyle.hasImageWidth() && self->widthContainCount_ < kMaxWidthContain) {
+    const float em = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
+    int parentW = self->viewportWidth;
+    if (self->widthContainCount_ > 0 && self->widthContain_[self->widthContainCount_ - 1].cssWidthPx > 0) {
+      parentW = self->widthContain_[self->widthContainCount_ - 1].cssWidthPx;
+    }
+    const int w = static_cast<int>(cssStyle.imageWidth.toPixels(em, static_cast<float>(parentW)) + 0.5f);
+    if (w > 0) {
+      WidthContain& wc = self->widthContain_[self->widthContainCount_++];
+      wc.depth = self->depth;
+      wc.cssWidthPx = static_cast<int16_t>(std::min(w, static_cast<int>(self->viewportWidth)));
+      LOG_DBG("RLC", "Width contain push depth=%d cssW=%d (parent=%d)", wc.depth,
+              static_cast<int>(wc.cssWidthPx), parentW);
+    }
+  }
+
   // Tables are layout vehicles in many EPUBs (Alice rabbithole, caption|image pairs).
   // Stream cell content as normal blocks — never inject "Tab Row N, Cell M:" chrome.
   if (strcmp(name, "table") == 0) {
@@ -688,6 +707,23 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // ImageBlock's lazy extractor). This is what keeps first-open of an
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
+              // Streaming ZIP inflate needs ~11KB tinfl state + 32KB window when
+              // BuildScratch is not lent. After a chapter jump maxAlloc often sits
+              // ~20KB under font-cache fragmentation → "Failed to init inflate" and
+              // an empty full-page plate. Reclaim once before the probe.
+              auto reclaimForZipInflate = [&]() {
+                constexpr size_t kZipStreamNeed = 48 * 1024;
+                if (ESP.getMaxAllocHeap() >= kZipStreamNeed) return;
+                PngToFramebufferConverter::releaseWarmIfHeapTight(kZipStreamNeed);
+                if (FontCacheManager* fcm = self->renderer.getFontCacheManager()) {
+                  if (!fcm->isScanning()) fcm->clearCache();
+                }
+                LOG_DBG("EHP", "reclaim for ZIP inflate free=%u maxAlloc=%u",
+                        static_cast<unsigned>(ESP.getFreeHeap()),
+                        static_cast<unsigned>(ESP.getMaxAllocHeap()));
+              };
+              reclaimForZipInflate();
+
               ImageDimsProbe headerProbe;
               self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
               bool gotDimensions = headerProbe.getDimensions(dims);
@@ -700,6 +736,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   self->imagePopupFired = true;
                   self->popupFn();
                 }
+                reclaimForZipInflate();
                 HalFile cachedImageFile;
                 bool extractSuccess = false;
                 if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
@@ -718,7 +755,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
                   }
                 } else {
-                  LOG_ERR("EHP", "Failed to extract image");
+                  LOG_ERR("EHP", "Failed to extract image free=%u maxAlloc=%u",
+                          static_cast<unsigned>(ESP.getFreeHeap()),
+                          static_cast<unsigned>(ESP.getMaxAllocHeap()));
                 }
               }
 
@@ -739,11 +778,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // If the image is inside a block with horizontal margins/padding (e.g.
                 // <div style="margin: 1em 40%">), percentage widths like width:100%
                 // should resolve against the container width, not the full viewport.
+                // Nested width:11.2em wrappers (DCC scene rules) further constrain.
                 int containerWidth = self->viewportWidth;
                 if (self->currentTextBlock) {
                   const int inset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
                   if (inset > 0 && inset < self->viewportWidth) {
                     containerWidth = self->viewportWidth - inset;
+                  }
+                }
+                if (self->widthContainCount_ > 0) {
+                  const int16_t cw = self->widthContain_[self->widthContainCount_ - 1].cssWidthPx;
+                  if (cw > 0 && cw < containerWidth) {
+                    containerWidth = cw;
                   }
                 }
                 // Floated figures: CSS float on <img>, or inherited from wrapper
@@ -854,6 +900,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   displayWidth = (int)(dims.width * scale);
                   displayHeight = (int)(dims.height * scale);
                   LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
+                }
+
+                // Scene dividers (DCC image_rsrc8GP etc.): ultra-wide canvas with a thin
+                // ink stripe and huge white padding. Sizing height from full aspect leaves
+                // massive empty bands above/below the line. Cap non-float landscape rules
+                // to ~1.5 body lines so they read as a small rule, not a grey slab.
+                if (pendingFloat == CssFloat::None && dims.width > 0 && dims.height > 0 &&
+                    dims.width >= dims.height * 2 && displayHeight > 0) {
+                  const int bodyEm = std::max(8, self->renderer.getFontAscenderSize(self->fontId));
+                  const int maxRuleH = std::max(8, bodyEm + bodyEm / 2);
+                  if (displayHeight > maxRuleH) {
+                    LOG_DBG("EHP", "Rule-like image height %d -> %d (src %dx%d w=%d)", displayHeight, maxRuleH,
+                            dims.width, dims.height, displayWidth);
+                    displayHeight = maxRuleH;
+                  }
                 }
 
                 // Flush any pending text block so it appears before the image
@@ -1138,8 +1199,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
-  // Body paragraph after visible h1 / .ct1 gets a synthetic drop-cap (no ::first-letter engine).
-  // Skip paragraphs *inside* the .ct1 blockquote (epigraph), only the first p after it.
+  // Body paragraph after an explicit drop-cap host (.ct1 / dropcap / …) gets a synthetic
+  // first-letter float (no ::first-letter engine). Skip paragraphs *inside* the host
+  // blockquote (epigraph); only the first <p> after it. Bare <h1> does not arm — DCC
+  // chapters are "<h1>[ 70 ]</h1><p>Colored lights…" with no book drop-cap.
   // Do NOT set pendingDropCap_ here — startNewTextBlock may still flush the previous
   // paragraph (e.g. "— THE STOLEN JOURNALS") via makePages; arm the *next* text block only.
   if (strcmp(name, "p") == 0 && self->nextParagraphGetsDropCap_ && self->embeddedStyle &&
@@ -1147,12 +1210,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->armDropCapOnNextTextBlock_ = true;
     self->nextParagraphGetsDropCap_ = false;
     LOG_DBG("RLC", "Drop-cap armed for next text block");
-  }
-
-  if (strcmp(name, "h1") == 0) {
-    // display:none chapter markers (class oculto) must not arm drop-cap
-    self->openH1WasVisible_ =
-        !(cssStyle.hasDisplay() && cssStyle.display == CssDisplay::None);
   }
 
   // CSS clear: push past active floats before this block
@@ -1613,7 +1670,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
-  // Pop float-inherit entries for the element being closed.
+  // Pop float-inherit / width-contain entries for the element being closed.
   // startElement records inherit.depth = depth *before* depth++, so when we close
   // that element the current depth is inherit.depth + 1 (children already closed).
   while (self->floatInheritCount_ > 0 &&
@@ -1621,15 +1678,16 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     LOG_DBG("RLC", "Float inherit pop depth=%d", self->depth - 1);
     --self->floatInheritCount_;
   }
+  while (self->widthContainCount_ > 0 &&
+         self->widthContain_[self->widthContainCount_ - 1].depth == self->depth - 1) {
+    LOG_DBG("RLC", "Width contain pop depth=%d", self->depth - 1);
+    --self->widthContainCount_;
+  }
 
-  // Rivulet drop-cap host: after visible </h1> or </blockquote.ct1>, next <p> gets first-letter float.
+  // Rivulet drop-cap host: after </blockquote.ct1> / .dropcap / .first-letter host only.
+  // (Not after bare </h1> — that falsely drop-capped every DCC chapter open.)
   if (self->embeddedStyle) {
-    if (strcmp(name, "h1") == 0) {
-      if (self->openH1WasVisible_) {
-        self->nextParagraphGetsDropCap_ = true;
-      }
-      self->openH1WasVisible_ = false;
-    } else if ((strcmp(name, "blockquote") == 0 || strcmp(name, "div") == 0) && self->openBlockquoteIsCt1_) {
+    if ((strcmp(name, "blockquote") == 0 || strcmp(name, "div") == 0) && self->openBlockquoteIsCt1_) {
       self->nextParagraphGetsDropCap_ = true;
       self->openBlockquoteIsCt1_ = false;
     }
@@ -2186,11 +2244,11 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   if (bestW < 4) bestW = 0;
 
   static constexpr int kPreferredCaps[] = {
-      326065580,    // SOURCESERIF4_18
-      1231166843,   // SOURCESERIF4_16
-      -582927980,   // BITTER_18
-      1467653849,   // BITTER_16
-      -1077864260,  // SOURCESERIF4_14
+      326065580,     // SOURCESERIF4_18
+      1231166843,    // SOURCESERIF4_16
+      -2078415541,   // LEXENDDECA_18
+      -940581834,    // LEXENDDECA_16
+      -1077864260,   // SOURCESERIF4_14
   };
   const auto& fontMap = renderer.getFontMap();
   auto considerCap = [&](const int cand) {

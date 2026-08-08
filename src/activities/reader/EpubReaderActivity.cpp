@@ -48,6 +48,7 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "WordRef.h"
+#include "components/themes/penumbra/PenumbraTheme.h"
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
@@ -504,7 +505,9 @@ bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub,
                             const bool automaticPageTurnActive, ReaderViewportLayout& layout, int& readerFontId,
                             int& startPage, std::vector<WordRef>& words, std::string* bookTitle, std::string* author,
                             std::string* chapterTitle, const char* logTag, const int maxPages = 3,
-                            const size_t maxWordsCap = 240, const uint32_t headroomBytes = 16U * 1024U) {
+                            // Match ClipSelectionActivity::MAX_READING_ORDER_WORDS so harvest
+                            // is not the tighter gate on small-font full-page clips.
+                            const size_t maxWordsCap = 768, const uint32_t headroomBytes = 16U * 1024U) {
   layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
   readerFontId = SETTINGS.getReaderFontId();
   const int lineHeight = renderer.getLineHeight(readerFontId);
@@ -515,7 +518,7 @@ bool harvestSelectableWords(GfxRenderer& renderer, Section& section, Epub& epub,
   }
   const int pagesToLoad = std::min(maxPages, section.pageCount - startPage);
   std::array<uint16_t, 3> pageWordCounts{};
-  const size_t requested = maxWordsCap > 0 ? maxWordsCap : 240;
+  const size_t requested = maxWordsCap > 0 ? maxWordsCap : 768;
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t maxAlloc = ESP.getMaxAllocHeap();
   constexpr size_t kBytesPerWordRef = sizeof(WordRef) + 8;
@@ -810,6 +813,9 @@ void EpubReaderActivity::parkHeavyWorkForChild() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->clearCache();
   }
+  // Transient OOMs while a child held the heap must not stick for the session —
+  // thin scene rules looked like they "disappeared" after dictionary return.
+  ImageBlock::clearSessionRenderFailures();
   glyphCacheSpine = -1;
   glyphCachePage = -1;
   idlePrewarmSpine = -1;
@@ -866,12 +872,31 @@ void EpubReaderActivity::stepNeighborSectionBuild() {
     }
   }
 
+  const ReaderRenderSpec spec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+
+  // Idle/probe CSS heap floors BEFORE RenderLock + loadSectionFile. A spine with
+  // HTML on SD but no matching .bin used to re-open the missing path every loop
+  // under the lock while waiting for heap — "sections/N.bin File does not exist"
+  // every ~300ms and a frozen-feeling UI (DCC spine 81 after chapter jump).
+  if (neighborState_ == NeighborBuildState::Idle && spec.embeddedStyle) {
+    const unsigned long now = millis();
+    if (neighborHeapGateMs_ != 0 && now - neighborHeapGateMs_ < 2000UL) {
+      return;
+    }
+    if (ESP.getFreeHeap() < NEIGHBOR_CSS_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < NEIGHBOR_CSS_MIN_MAX_ALLOC) {
+      neighborHeapGateMs_ = now;
+      LOG_DBG("ERS", "Neighbor park (free=%u maxAlloc=%u need free=%u max=%u)",
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
+              static_cast<unsigned>(NEIGHBOR_CSS_MIN_FREE_HEAP),
+              static_cast<unsigned>(NEIGHBOR_CSS_MIN_MAX_ALLOC));
+      return;
+    }
+  }
+
   RenderLock lock;
   // cppcheck-suppress knownConditionTrueFalse
   if (!section || section->isBuilding()) return;
   if (!buildTickHeapGate()) return;
-
-  const ReaderRenderSpec spec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
 
   if (neighborState_ == NeighborBuildState::Settled) {
     neighborSpineIndex_++;
@@ -921,33 +946,28 @@ void EpubReaderActivity::stepNeighborSectionBuild() {
 
   // HTML inflate under RenderLock freezes UI for seconds (activity_slow). Only start
   // neighbor layout when that spine's HTML is already cached from a prior visit.
+  //
+  // Critical: do NOT walk further spines after a miss. Each uncached probe is an SD
+  // open ("sections/N.bin File does not exist") under RenderLock (~300–500ms). When
+  // runway is short (partial chapter) and later spines are cold, Settled→++ used to
+  // scan the entire rest of the book and starve page-turn / Back sampling.
   if (!neighborSection_->hasHtmlCache()) {
+    LOG_DBG("ERS", "Neighbor spine=%d no html/bin; stop lookahead (runway=%d)", neighborSpineIndex_,
+            neighborPagesBuilt_);
     neighborSection_.reset();
-    neighborState_ = NeighborBuildState::Settled;  // skip until user opens this spine once
-    LOG_DBG("ERS", "Neighbor spine=%d skip start (no html cache)", neighborSpineIndex_);
+    neighborSpineIndex_ = spineCount;  // end probe until chapter changes
+    neighborState_ = NeighborBuildState::Idle;
     return;
-  }
-
-  if (spec.embeddedStyle) {
-    const unsigned long now = millis();
-    if (neighborHeapGateMs_ != 0 && now - neighborHeapGateMs_ < 800UL) {
-      neighborSection_.reset();
-      return;
-    }
-    neighborHeapGateMs_ = now;
-    if (ESP.getFreeHeap() < NEIGHBOR_CSS_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < NEIGHBOR_CSS_MIN_MAX_ALLOC) {
-      // Wait for heap — never write a no-CSS cache the foreground would discard.
-      neighborSection_.reset();
-      return;
-    }
   }
 
   if (!neighborSection_->startBuild(spec)) {
-    LOG_DBG("ERS", "Neighbor spine=%d startBuild failed; skip", neighborSpineIndex_);
+    LOG_DBG("ERS", "Neighbor spine=%d startBuild failed; stop lookahead", neighborSpineIndex_);
     neighborSection_.reset();
-    neighborState_ = NeighborBuildState::Settled;
+    neighborSpineIndex_ = spineCount;
+    neighborState_ = NeighborBuildState::Idle;
     return;
   }
+  neighborHeapGateMs_ = 0;
   neighborState_ = NeighborBuildState::Building;
   LOG_DBG("ERS", "Neighbor spine=%d build started (style=%d free=%u)", neighborSpineIndex_,
           spec.embeddedStyle ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()));
@@ -959,7 +979,20 @@ void EpubReaderActivity::startActivityForResult(std::unique_ptr<Activity>&& acti
   Activity::startActivityForResult(std::move(activity), std::move(resultHandler));
 }
 
+void EpubReaderActivity::showExitSavingChrome() {
+  if (exitSavingChromeShown_) return;
+  exitSavingChromeShown_ = true;
+  // Full refresh so the user sees feedback before progress/stats/font teardown.
+  // Home HALF will scrub residual when PopToHome finishes.
+  GUI.drawPopup(renderer, tr(STR_SAVING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/true);
+  LOG_DBG("ERS", "exit Saving chrome on panel");
+}
+
 void EpubReaderActivity::onExit() {
+  // Always show Saving before heavy leave work (progress SD, suspend, font clear).
+  // leaveReaderToHome may already have painted this for instant Back feedback.
+  showExitSavingChrome();
+
   // Ensure recents/app-state still update if user leaves before first paint finished.
   // (No-op when open path already ran this after first ink.)
   runDeferredOpenSideWork();
@@ -1006,9 +1039,13 @@ void EpubReaderActivity::onExit() {
   if (statsPauseStartMs != 0UL) {
     resumeReadingStatsClock();
   }
-  // Always write book progress % for home (independent of tracking / reader bar setting).
-  persistHomeProgressPercent();
-  if (SETTINGS.readingStatsTrackingEnabled() && epub && readingSessionStartMs != 0) {
+  // Home progress % always applied in RAM. When tracking is on for this session we
+  // fold session totals into the same save (one stats_v6 flush). When tracking is
+  // off, write stats_v6 only if % changed (progress-only home bars).
+  const bool trackingSession =
+      SETTINGS.readingStatsTrackingEnabled() && epub && readingSessionStartMs != 0;
+  persistHomeProgressPercent(/*writeToDisk=*/!trackingSession);
+  if (trackingSession) {
     const unsigned long nowMs = millis();
     uint32_t elapsedSecs =
         nowMs >= readingSessionStartMs ? static_cast<uint32_t>((nowMs - readingSessionStartMs) / 1000UL) : 0u;
@@ -1086,8 +1123,7 @@ void EpubReaderActivity::onExit() {
         readingStats.estimatedTimeLeftSeconds = 0;
       }
     }
-    // Progress % already written above for home. Tracking path still owns session
-    // analytics, ETA, and completed-book flags.
+    // Progress % already in RAM. Single stats_v6 write: % + session/ETA/completed.
     if (epub->getSpineItemsCount() > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
       readingStats.estimatedTimeLeftSeconds = 0;
       if (!readingStats.isCompleted) {
@@ -1108,7 +1144,11 @@ void EpubReaderActivity::onExit() {
       readingStats.setProgressPercent(100.0f);
       readingStats.estimatedTimeLeftSeconds = 0;
     }
+    // Penumbra bar may have been updated before completed stamp — refresh %.
+    PenumbraThemeUi::updateRecentsProgressForPath(epub->getPath().c_str(), readingStats.getProgressPercent());
     readingStats.save(epub->getCachePath());
+    LOG_INF("ERS", "Home progress+session saved (single flush) %.1f%%",
+            static_cast<double>(readingStats.getProgressPercent()));
     globalReadingStats.save();
     readingSessionStartMs = 0;
   }
@@ -2324,7 +2364,7 @@ float EpubReaderActivity::getCurrentBookProgressPercent() const {
   return epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
 }
 
-void EpubReaderActivity::persistHomeProgressPercent() {
+void EpubReaderActivity::persistHomeProgressPercent(const bool writeToDisk) {
   if (!epub) return;
   const float oldPct = readingStats.getProgressPercent();
   if (epub->getSpineItemsCount() > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
@@ -2343,6 +2383,11 @@ void EpubReaderActivity::persistHomeProgressPercent() {
     readingStats.setProgressPercent(100.0f);
   }
   const float savedPct = readingStats.getProgressPercent();
+  // Keep Penumbra Recents micro-bars in sync without re-reading every recent's stats file.
+  PenumbraThemeUi::updateRecentsProgressForPath(epub->getPath().c_str(), savedPct);
+  if (!writeToDisk) {
+    return;  // Caller will readingStats.save() once with session fields merged.
+  }
   // Skip redundant SD write when % unchanged (serial: double save on every exit).
   if (oldPct >= 0.0f && savedPct >= 0.0f && std::fabs(oldPct - savedPct) < 0.05f &&
       !readingStats.isCompleted) {
@@ -2489,6 +2534,8 @@ void EpubReaderActivity::leaveReaderToHome() {
   if (tryStartAutoKoUpload()) {
     return;
   }
+  // Instant chrome before PopToHome is processed (onExit may run a tick later).
+  showExitSavingChrome();
   // Prefer PopToHome over a fresh HomeActivity. Drain residual Back edges so
   // Home does not immediately open Menu on the same physical release.
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
@@ -2876,49 +2923,54 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           // Parser may still call showBuildPopup during image probes if chrome
           // was skipped (anchorAlreadyMapped) or first draw failed.
           buildPopupPending = anchorAlreadyMapped;
-          bool started;
+          bool started = false;
           {
-            // Lend the framebuffer's 48 KB to startBuild only (the spine HTML
-            // inflation peak). Popup already painted before the loan when needed.
+            // Hold the 48 KB framebuffer loan for startBuild AND the first-page
+            // buildSomeMore loop. Streaming ZIP inflate needs ~43 KB (tinfl state
+            // + 32 KB window); after font/CSS fragmentation maxAlloc often sits
+            // ~35–40 KB so heap init fails. The loan was previously limited to
+            // startBuild (HTML peak only) — when HTML was already cached the loan
+            // ended before image dim probes in parseStep, leaving empty plates
+            // (DCC c6HG / image_rsrc8GR.jpg). Popup is painted before the loan;
+            // do not draw under it.
             GfxRenderer::FrameBufferLoan loan(renderer);
             started = section->startBuild(renderSpec, [this] { showBuildPopup(); });
+            if (started) {
+              buildPopupPending = false;
+              while (!section->isBuildComplete()) {
+                // Refresh percent target as the estimate improves (byte-based EMA).
+                if (pendingPercentJump) {
+                  const int est = static_cast<int>(section->estimatedTotalPages());
+                  if (est > 0) {
+                    target = static_cast<int>(pendingSpineProgress * static_cast<float>(est));
+                    if (target >= est) target = est - 1;
+                    if (target < 0) target = 0;
+                  }
+                }
+                // Anchor: stop when found. Last-page: run to complete. Else: stop when
+                // target page index exists (pageCount > target).
+                if (anchorJump && section->findAnchor(pendingAnchor).has_value()) break;
+                if (!anchorJump && !jumpToLastPage && static_cast<int>(section->pageCount) > target) break;
+
+                const int chunk = openBuildPagesPerChunk();
+                if (!section->buildSomeMore(chunk)) {
+                  LOG_ERR("ERS", "Failed during incremental section build free=%u maxAlloc=%u chunk=%d",
+                          static_cast<unsigned>(ESP.getFreeHeap()),
+                          static_cast<unsigned>(ESP.getMaxAllocHeap()), chunk);
+                  started = false;
+                  break;
+                }
+              }
+            }
           }
           if (!started) {
-            LOG_ERR("ERS", "Failed to start section build free=%u maxAlloc=%u",
+            LOG_ERR("ERS", "Failed to start/build section free=%u maxAlloc=%u",
                     static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
             section.reset();
             buildPopupPending = false;
             pendingPageJump.reset();
             showBuildError();
             return;
-          }
-          buildPopupPending = false;
-          while (!section->isBuildComplete()) {
-            // Refresh percent target as the estimate improves (byte-based EMA).
-            if (pendingPercentJump) {
-              const int est = static_cast<int>(section->estimatedTotalPages());
-              if (est > 0) {
-                target = static_cast<int>(pendingSpineProgress * static_cast<float>(est));
-                if (target >= est) target = est - 1;
-                if (target < 0) target = 0;
-              }
-            }
-            // Anchor: stop when found. Last-page: run to complete. Else: stop when
-            // target page index exists (pageCount > target).
-            if (anchorJump && section->findAnchor(pendingAnchor).has_value()) break;
-            if (!anchorJump && !jumpToLastPage && static_cast<int>(section->pageCount) > target) break;
-
-            const int chunk = openBuildPagesPerChunk();
-            if (!section->buildSomeMore(chunk)) {
-              LOG_ERR("ERS", "Failed during incremental section build free=%u maxAlloc=%u chunk=%d",
-                      static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-                      chunk);
-              section.reset();
-              buildPopupPending = false;
-              pendingPageJump.reset();
-              showBuildError();
-              return;
-            }
           }
           buildPopupPending = false;
         }
@@ -3020,6 +3072,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     pagesUntilFullRefresh = 1;
   }
   while (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
+    // Loan covers image ZIP inflate during parse (same as open path above).
+    GfxRenderer::FrameBufferLoan loan(renderer);
     // Start a build to extend a partial toward the requested page.
     if (!section->isBuilding() && !section->startBuild(renderSpec)) {
       LOG_ERR("ERS", "Failed to start partial extension build");
@@ -3040,6 +3094,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
   // For an in-progress incremental build, make sure the page we're about to show has been laid out.
   if (section->isBuilding()) {
+    GfxRenderer::FrameBufferLoan loan(renderer);
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
       if (!section->buildSomeMore(openBuildPagesPerChunk())) {
         LOG_ERR("ERS", "Failed during incremental section build free=%u maxAlloc=%u",

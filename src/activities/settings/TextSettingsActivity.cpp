@@ -86,13 +86,14 @@ void TextSettingsActivity::onEnter() {
 
   rebuildFontList();
 
-  // Point sizes matching built-in faces (12 / 14 / 16 / 18), not Small/Medium/…
+  // Point sizes matching built-in faces (10 / 12 / 14 / 16 / 18).
   sizes_.clear();
   sizes_.reserve(CrossPointSettings::FONT_SIZE_COUNT);
-  sizes_.push_back({"12", static_cast<uint8_t>(CrossPointSettings::SMALL)});
-  sizes_.push_back({"14", static_cast<uint8_t>(CrossPointSettings::MEDIUM)});
-  sizes_.push_back({"16", static_cast<uint8_t>(CrossPointSettings::LARGE)});
-  sizes_.push_back({"18", static_cast<uint8_t>(CrossPointSettings::EXTRA_LARGE)});
+  sizes_.push_back({"10", static_cast<uint8_t>(CrossPointSettings::SIZE_10)});
+  sizes_.push_back({"12", static_cast<uint8_t>(CrossPointSettings::SIZE_12)});
+  sizes_.push_back({"14", static_cast<uint8_t>(CrossPointSettings::SIZE_14)});
+  sizes_.push_back({"16", static_cast<uint8_t>(CrossPointSettings::SIZE_16)});
+  sizes_.push_back({"18", static_cast<uint8_t>(CrossPointSettings::SIZE_18)});
 
   currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
   currentSizeIndex_ = findCurrentFontSizeIndex(SETTINGS.fontSize, sizes_.size());
@@ -440,14 +441,49 @@ void TextSettingsActivity::render(RenderLock&&) {
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
   // Unboxed full-width preview: double-line "Preview" header + reader-accurate sample.
-  textsettings::renderPreview(renderer, previewLayout_, geo.previewTop, geo.previewHeight, familyName, sizeName,
-                              focusedRowHasNoPreview() ? tr(STR_NOT_IN_PREVIEW) : nullptr);
+  const textsettings::PreviewPaint previewPaint =
+      textsettings::renderPreview(renderer, previewLayout_, geo.previewTop, geo.previewHeight, familyName, sizeName);
 
   // Front Up/Down: list. Side: switch tabs. Confirm on tab bar also advances tab.
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  UiGhostPolicy::displayMenuFrame(renderer);
+  // Text AA off: solid BW. AA on: BW base + grey multipass of the sample text (live preview).
+  const bool wantPreviewAa = SETTINGS.textAntiAliasing != 0 && previewPaint.hasSample;
+  if (!wantPreviewAa) {
+    UiGhostPolicy::displayMenuFrame(renderer);
+    return;
+  }
+
+  // Home-style multipass: store BW chrome, grey planes for sample only, restore FB.
+  if (!renderer.storeBwBuffer()) {
+    UiGhostPolicy::displayMenuFrame(renderer);
+    return;
+  }
+
+  // FAST base keeps Style tab snappy; greys still show AA / darkness clearly in the preview.
+  const HalDisplay::RefreshMode baseMode =
+      UiGhostPolicy::hardScrubArmed() ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  if (baseMode == HalDisplay::HALF_REFRESH) UiGhostPolicy::noteHalf();
+  renderer.displayGrayscaleBase(baseMode);
+
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+  textsettings::renderPreviewSampleText(renderer, previewLayout_, previewPaint);
+  renderer.copyGrayscaleLsbBuffers();
+
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+  textsettings::renderPreviewSampleText(renderer, previewLayout_, previewPaint);
+  renderer.copyGrayscaleMsbBuffers();
+
+  // Window the grey refresh to the sample body so header/tabs are not GC-hazed.
+  const int grayH = std::max(1, previewPaint.bodyBottom - previewPaint.sampleTop);
+  renderer.displayGrayBufferWindow(0, previewPaint.sampleTop, pageWidth, grayH);
+
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.restoreBwBuffer();
+  renderer.cleanupGrayscaleWithFrameBuffer();
 }
 
 // Font switching runs on the main task from loop(), which deliberately holds no
@@ -459,7 +495,7 @@ void TextSettingsActivity::rebuildFontList() {
   fonts_.clear();
   fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
   fonts_.push_back({I18N.get(StrId::STR_SOURCE_SERIF_4), true, static_cast<uint8_t>(CrossPointSettings::SOURCESERIF4)});
-  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::BITTER)});
+  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::LEXENDDECA)});
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
@@ -630,12 +666,8 @@ std::string TextSettingsActivity::styleValueText(int row) const {
   }
 }
 
-// Text AA does not change the sample pane; Bionic / Guide Dots / Hyphenation do.
-bool TextSettingsActivity::focusedRowHasNoPreview() const {
-  if (selectedIndex() == 0 || tab_ != Tab::Style) return false;
-  const StyleRow row = static_cast<StyleRow>(selectedIndex() - 1);
-  return row == StyleRow::AntiAliasing;
-}
+// All Style rows have a live preview (AA multipasses the sample when enabled).
+bool TextSettingsActivity::focusedRowHasNoPreview() const { return false; }
 
 void TextSettingsActivity::switchTab(int direction, bool focusTabBar) {
   constexpr int tabCount = static_cast<int>(Tab::Count);

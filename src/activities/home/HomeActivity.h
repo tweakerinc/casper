@@ -47,6 +47,10 @@ class HomeActivity final : public Activity {
   bool leaveForUiChildSnappy = false;
   // After snappy BW shell is on the panel: multipass greys only (no clear/redraw).
   bool deferredGreysOnly = false;
+  // Penumbra / text home: FAST first ink on resume, then HALF scrub without redraw
+  // so Back→Home is ~0.4s not ~2s of multipass. Timer armed after FAST paints.
+  bool deferredHalfScrubOnly = false;
+  unsigned long deferredHalfScrubAtMs = 0;
   // Soft FAST grayscale base (panel already shows matching BW shell).
   bool softGrayscaleBase = false;
   // Abort in-flight multipass between stages (Recents/Settings must not freeze

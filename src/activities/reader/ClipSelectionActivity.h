@@ -38,7 +38,9 @@ class ClipSelectionActivity final : public Activity {
  private:
   static constexpr size_t BUFFER_CHUNK_SIZE = 4096;
   static constexpr size_t MAX_SAVED_BUFFER_CHUNKS = 16;
-  static constexpr size_t MAX_READING_ORDER_WORDS = 240;
+  // Small fonts (10–12 pt) can put 400–700+ words on a dense page; 240 truncated
+  // selection so Down could not reach the bottom of the page.
+  static constexpr size_t MAX_READING_ORDER_WORDS = 768;
 
   std::vector<WordRef> words;
   int renderFontId = 0;

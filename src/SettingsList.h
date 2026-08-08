@@ -145,6 +145,7 @@ inline SettingInfo buildPwrBtnSetting(StrId nameId, uint8_t CrossPointSettings::
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // Built-in font labels (StrId) — order matches FONT_FAMILY enum.
+  // Labels: Source Serif 4 + Lexend Deca (STR_NOTO_SANS string is "Lexend Deca").
   std::vector<StrId> enumValues = {StrId::STR_SOURCE_SERIF_4, StrId::STR_NOTO_SANS};
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
@@ -305,8 +306,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS}, "fontFamily", StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
-                          {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, "fontSize",
-                          StrId::STR_CAT_READER)
+                          {StrId::STR_STATUS_BAR_FONT_10, StrId::STR_MENU_FONT_SMALL, StrId::STR_MENU_FONT_MEDIUM,
+                           StrId::STR_MENU_FONT_LARGE, StrId::STR_STATUS_BAR_FONT_18},
+                          "fontSize", StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "lineSpacing", StrId::STR_CAT_READER)

@@ -698,10 +698,10 @@ void drawMicroProgressBar(const GfxRenderer& renderer, const int x, const int y,
   }
 }
 
-// Progress % cache — SD load only when the recents *path list* changes (panel
-// load / new book opened). Never re-scan on Down scroll, minute tick, or when
-// the number of fitted rows changes (that used to thrash loadForBook on SPI).
-// Sized for X4's 5-row list (X3 uses ≤4 + View All).
+// Progress % cache — kept in RAM across Home resume. SD only for paths we have
+// never seen (or after invalidate). Reader exit updates the current book via
+// updateRecentsProgressForPath so we never re-read all N stats files on Back.
+// Never re-scan on Down scroll / minute tick. Sized for X4's 5-row list.
 constexpr int kRecentsPctCacheMax = 5;
 struct RecentsPctCache {
   std::string path[kRecentsPctCacheMax];
@@ -710,22 +710,57 @@ struct RecentsPctCache {
 };
 RecentsPctCache g_recentsPctCache;
 
+float lookupCachedProgressByPath(const std::string& path) {
+  for (int i = 0; i < g_recentsPctCache.n; ++i) {
+    if (g_recentsPctCache.path[i] == path) return g_recentsPctCache.pct[i];
+  }
+  return -999.0f;  // sentinel: not in cache (distinct from unknown -1)
+}
+
 void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int /*nDisplay*/,
                                 const bool forceReload = false) {
   // Always cache the full on-panel list capacity (not the fit count for this paint).
   const int count = std::min(static_cast<int>(books.size()), kRecentsPctCacheMax);
-  bool hit = !forceReload && (g_recentsPctCache.n == count);
-  for (int i = 0; hit && i < count; ++i) {
-    if (g_recentsPctCache.path[i] != books[static_cast<size_t>(i)].path) hit = false;
+
+  // Exact path-order match and not forced → nothing to do (draw / second warm).
+  if (!forceReload && g_recentsPctCache.n == count) {
+    bool hit = true;
+    for (int i = 0; i < count; ++i) {
+      if (g_recentsPctCache.path[i] != books[static_cast<size_t>(i)].path) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit) return;
   }
-  if (hit) return;
-  // Path set changed, first paint, or forced (home resume after reader) — SD pass for %.
+
+  // Snapshot prior entries so reorder / resume can reuse % without SD.
+  RecentsPctCache prior = g_recentsPctCache;
   g_recentsPctCache.n = count;
+  int sdLoads = 0;
   for (int i = 0; i < count; ++i) {
-    g_recentsPctCache.path[i] = books[static_cast<size_t>(i)].path;
-    g_recentsPctCache.pct[i] = BookReadingStats::loadForBook(g_recentsPctCache.path[i]).getProgressPercent();
-    LOG_DBG("HOME", "Recents progress cache[%d] %.1f%% %s", i,
-            static_cast<double>(g_recentsPctCache.pct[i]), g_recentsPctCache.path[i].c_str());
+    const std::string& path = books[static_cast<size_t>(i)].path;
+    g_recentsPctCache.path[i] = path;
+    float pct = -999.0f;
+    if (!forceReload) {
+      for (int j = 0; j < prior.n; ++j) {
+        if (prior.path[j] == path) {
+          pct = prior.pct[j];
+          break;
+        }
+      }
+    }
+    if (pct < -900.0f) {
+      pct = BookReadingStats::loadForBook(path).getProgressPercent();
+      ++sdLoads;
+      LOG_DBG("HOME", "Recents progress cache[%d] SD %.1f%% %s", i, static_cast<double>(pct), path.c_str());
+    } else {
+      LOG_DBG("HOME", "Recents progress cache[%d] reuse %.1f%% %s", i, static_cast<double>(pct), path.c_str());
+    }
+    g_recentsPctCache.pct[i] = pct;
+  }
+  if (sdLoads == 0 && count > 0) {
+    LOG_DBG("HOME", "Recents progress cache: %d rows, 0 SD loads (RAM reuse)", count);
   }
 }
 
@@ -1189,10 +1224,30 @@ Rect PenumbraThemeUi::redrawUnderPanel(GfxRenderer& renderer, const std::vector<
 
 void PenumbraThemeUi::warmRecentsProgressCache(const std::vector<RecentBook>& books) {
   const int n = std::min(static_cast<int>(books.size()), penumbraRecentsListCap());
-  // Always re-read stats files here. Path-only hit left micro-bars stuck at an old
-  // % (often 0%) after Go to Percent / reading — X4 Recents under-panel is the main
-  // surface that shows those bars (X3 Stats under-panel uses live progressPercent).
-  ensureRecentsProgressCache(books, n, /*forceReload=*/true);
+  // Merge by path: reuse RAM % for known books; SD only for new paths.
+  // Reader exit must call updateRecentsProgressForPath so the current book is fresh.
+  ensureRecentsProgressCache(books, n, /*forceReload=*/false);
+}
+
+void PenumbraThemeUi::updateRecentsProgressForPath(const char* bookPath, const float progressPercent) {
+  if (!bookPath || !bookPath[0]) return;
+  for (int i = 0; i < g_recentsPctCache.n; ++i) {
+    if (g_recentsPctCache.path[i] == bookPath) {
+      g_recentsPctCache.pct[i] = progressPercent;
+      LOG_DBG("HOME", "Recents progress cache update %.1f%% %s", static_cast<double>(progressPercent), bookPath);
+      return;
+    }
+  }
+  // Path not in cache yet (first open / empty cache) — no-op; warm will SD-load once.
+}
+
+void PenumbraThemeUi::invalidateRecentsProgressCache() {
+  g_recentsPctCache.n = 0;
+  for (int i = 0; i < kRecentsPctCacheMax; ++i) {
+    g_recentsPctCache.path[i].clear();
+    g_recentsPctCache.pct[i] = -1.0f;
+  }
+  LOG_DBG("HOME", "Recents progress cache invalidated");
 }
 
 bool PenumbraThemeUi::formatHeroTimeNow(char* buf, size_t bufSize) { return formatHeroTime(buf, bufSize); }

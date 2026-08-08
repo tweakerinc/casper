@@ -299,6 +299,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperSystemStatusBarMigrated"] = casperSystemStatusBarMigrated;
   doc["casperOpendyslexicMigrated"] = casperOpendyslexicMigrated;
   doc["casperBuiltinFontsSlimMigrated"] = casperBuiltinFontsSlimMigrated;
+  doc["casperReaderFontSizePtMigrated"] = casperReaderFontSizePtMigrated;
   doc["casperButtonAxisMigrated"] = casperButtonAxisMigrated;
   doc["casperSpeedDefaultsMigrated"] = casperSpeedDefaultsMigrated;
   doc["casperAntiGhost15Migrated"] = casperAntiGhost15Migrated;
@@ -502,14 +503,14 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperOpendyslexicMigrated = 1;
   }
 
-  // Compact builtins: Source Serif 4 (0) + Bitter (1). Remap older multi-family IDs.
-  // Old: 0=Lexend, 1=Bitter, 2=Source Serif, 3=Literata.
+  // Compact builtins: Source Serif 4 (0) + Lexend Deca (1). Remap older multi-family IDs.
+  // Old: 0=Lexend, 1=Bitter, 2=Source Serif, 3=Literata. Slot 1 is now Lexend Deca again.
   const uint8_t slimMigrated = doc["casperBuiltinFontsSlimMigrated"] | (uint8_t)0;
   if (slimMigrated == 0) {
     if (sdFontFamilyName[0] != '\0') {
       fontFamily = SOURCESERIF4;  // SD name is source of truth
     } else if (storedFontFamily == 1) {
-      fontFamily = BITTER;  // old Bitter id
+      fontFamily = LEXENDDECA;  // old Bitter id → Lexend Deca slot
     } else {
       fontFamily = SOURCESERIF4;  // Lexend / Source / Literata / unknown → Source Serif
     }
@@ -520,6 +521,22 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     casperBuiltinFontsSlimMigrated = 1;
     fontFamily = clamp(storedFontFamily, BUILTIN_FONT_COUNT, static_cast<uint8_t>(SOURCESERIF4));
     if (storedFontFamily >= BUILTIN_FONT_COUNT) needsResave = true;
+  }
+
+  // Reader sizes: old 0..3 = 12/14/16/18 → new 0..4 = 10/12/14/16/18 (shift +1).
+  const uint8_t sizePtMigrated = doc["casperReaderFontSizePtMigrated"] | (uint8_t)0;
+  if (sizePtMigrated == 0) {
+    if (fontSize < 4) {
+      fontSize = static_cast<uint8_t>(fontSize + 1);
+    } else if (fontSize >= FONT_SIZE_COUNT) {
+      fontSize = SIZE_14;
+    }
+    casperReaderFontSizePtMigrated = 1;
+    needsResave = true;
+    LOG_DBG("CPS", "casperReaderFontSizePtMigrated: fontSize=%u", fontSize);
+  } else {
+    casperReaderFontSizePtMigrated = 1;
+    fontSize = clamp(fontSize, FONT_SIZE_COUNT, static_cast<uint8_t>(SIZE_14));
   }
 
   // Theme / battery % / sleep screen: DynamicEnum (no valuePtr) — load real storage.
@@ -1258,7 +1275,7 @@ float CrossPointSettings::getReaderLineCompression() const {
   }
 
   switch (fontFamily) {
-    case BITTER:
+    case LEXENDDECA:
     case SOURCESERIF4:
     default:
       switch (lineSpacing) {
@@ -1310,29 +1327,33 @@ int CrossPointSettings::getReaderFontId() const {
   }
 
   switch (fontFamily) {
-    case BITTER:
+    case LEXENDDECA:
       switch (fontSize) {
-        case SMALL:
-          return BITTER_12_FONT_ID;
-        case MEDIUM:
+        case SIZE_10:
+          return LEXENDDECA_10_FONT_ID;
+        case SIZE_12:
+          return LEXENDDECA_12_FONT_ID;
+        case SIZE_14:
         default:
-          return BITTER_14_FONT_ID;
-        case LARGE:
-          return BITTER_16_FONT_ID;
-        case EXTRA_LARGE:
-          return BITTER_18_FONT_ID;
+          return LEXENDDECA_14_FONT_ID;
+        case SIZE_16:
+          return LEXENDDECA_16_FONT_ID;
+        case SIZE_18:
+          return LEXENDDECA_18_FONT_ID;
       }
     case SOURCESERIF4:
     default:
       switch (fontSize) {
-        case SMALL:
+        case SIZE_10:
+          return SOURCESERIF4_10_FONT_ID;
+        case SIZE_12:
           return SOURCESERIF4_12_FONT_ID;
-        case MEDIUM:
+        case SIZE_14:
         default:
           return SOURCESERIF4_14_FONT_ID;
-        case LARGE:
+        case SIZE_16:
           return SOURCESERIF4_16_FONT_ID;
-        case EXTRA_LARGE:
+        case SIZE_18:
           return SOURCESERIF4_18_FONT_ID;
       }
   }

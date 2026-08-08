@@ -191,22 +191,35 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum SIDE_BUTTON_LAYOUT { PREV_NEXT = 0, NEXT_PREV = 1, SIDE_BUTTONS_DISABLED = 2, SIDE_BUTTON_LAYOUT_COUNT };
 
   // Built-in fonts only (SD card fonts use sdFontFamilyName).
-  // 0 Source Serif 4 (default UI + reader), 1 Bitter.
+  // 0 Source Serif 4 (default UI + reader), 1 Lexend Deca (OFL sans).
   // Older IDs (Lexend=0, Bitter=1, Source=2, Literata=3) remapped in fromJson.
   enum FONT_FAMILY {
     SOURCESERIF4 = 0,
-    BITTER = 1,
+    LEXENDDECA = 1,
     FONT_FAMILY_COUNT
   };
   // Legacy aliases (older code / migrations).
   static constexpr uint8_t NOTOSERIF = SOURCESERIF4;
-  static constexpr uint8_t NOTOSANS = BITTER;
-  static constexpr uint8_t LEXENDDECA = SOURCESERIF4;  // removed from flash; alias → Source Serif
-  static constexpr uint8_t LITERATA = SOURCESERIF4;    // removed from flash; alias → Source Serif
+  static constexpr uint8_t NOTOSANS = LEXENDDECA;
+  static constexpr uint8_t BITTER = LEXENDDECA;  // Bitter removed; slot is Lexend Deca
+  static constexpr uint8_t LITERATA = SOURCESERIF4;
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
-  // Font size options
-  enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
+  // Reader body size (pt). Enum order is stable on disk after casperReaderFontSizePtMigrated.
+  // Pre-migration: 0..3 = 12/14/16/18. Post: 0..4 = 10/12/14/16/18.
+  enum FONT_SIZE {
+    SIZE_10 = 0,
+    SIZE_12 = 1,
+    SIZE_14 = 2,
+    SIZE_16 = 3,
+    SIZE_18 = 4,
+    FONT_SIZE_COUNT
+  };
+  // Legacy aliases (pre-5-size enum used these names for 12/14/16/18).
+  static constexpr uint8_t SMALL = SIZE_12;
+  static constexpr uint8_t MEDIUM = SIZE_14;
+  static constexpr uint8_t LARGE = SIZE_16;
+  static constexpr uint8_t EXTRA_LARGE = SIZE_18;
   // Shared list / settings menus (Library, Recents activity, Settings rows) — not reader body,
   // not Penumbra home under-panel. Maps to Source Serif 12 / 14 / 16 (labels: 12pt / 14pt / 16pt).
   // Menu list title size (Source Serif bitmaps). Values are stable on-disk.
@@ -453,7 +466,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
       BTN_FUNC_BACK, BTN_FUNC_CONFIRM, BTN_FUNC_UP, BTN_FUNC_DOWN, BTN_FUNC_LEFT, BTN_FUNC_RIGHT};
   // Reader font settings
   uint8_t fontFamily = SOURCESERIF4;
-  uint8_t fontSize = MEDIUM;  // 14 pt Source Serif 4 (Casper default)
+  uint8_t fontSize = SIZE_14;  // 14 pt Source Serif 4 (Casper default)
   // Library / Recents / Settings list title size (not reader body, not Penumbra home panel).
   uint8_t menuFontSize = MENU_FONT_SMALL;  // 12pt Source Serif (shipping default)
   // One-time: old menuFontSize 0/1/2 (12/14/16) → 1/2/3 after inserting 10pt at 0.
@@ -523,8 +536,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t casperSystemStatusBarMigrated = 0;
   // One-time: legacy fontFamily==2 OpenDyslexic builtin → SD pack.
   uint8_t casperOpendyslexicMigrated = 0;
-  // One-time: drop Lexend/Literata builtins; compact enum to Source Serif + Bitter.
+  // One-time: drop Lexend/Literata builtins; compact enum to Source Serif + Bitter/Lexend.
   uint8_t casperBuiltinFontsSlimMigrated = 0;
+  // One-time: reader fontSize 0..3 (12/14/16/18) → 0..4 (10/12/14/16/18).
+  uint8_t casperReaderFontSizePtMigrated = 0;
   // One-time: classic Left/Right list axes → Up/Down list + Left/Right sides.
   uint8_t casperButtonAxisMigrated = 0;
   // One-time: historical AA/embedded speed defaults. Default 1 so factory installs

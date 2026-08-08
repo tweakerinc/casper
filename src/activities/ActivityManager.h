@@ -81,6 +81,9 @@ class ActivityManager {
   // Main task must not destroy the current activity while this is set (use-after-free).
   std::atomic<bool> renderInProgress{false};
 
+  // Set for the duration of goToSleep() so outgoing onExit() can avoid leave chrome.
+  bool sleepTransition_ = false;
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
@@ -136,6 +139,10 @@ class ActivityManager {
   bool hasPendingActivityChange() const;
   // True while the render task is inside Activity::render (including multipass waits).
   bool isRenderInProgress() const { return renderInProgress.load(std::memory_order_acquire); }
+
+  // True while goToSleep() is running (replace → onExit → SleepActivity paint).
+  // Reader uses this to skip Back→Home "Saving..." chrome on power/timeout sleep.
+  bool isSleepTransition() const { return sleepTransition_; }
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

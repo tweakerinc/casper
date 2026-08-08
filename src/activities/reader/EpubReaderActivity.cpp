@@ -989,9 +989,12 @@ void EpubReaderActivity::showExitSavingChrome() {
 }
 
 void EpubReaderActivity::onExit() {
-  // Always show Saving before heavy leave work (progress SD, suspend, font clear).
-  // leaveReaderToHome may already have painted this for instant Back feedback.
-  showExitSavingChrome();
+  // Back→Home: "Saving..." so leave is not a frozen book page with no feedback.
+  // Sleep / Quick Resume: never flash this — goToSleep paints moon/wallpaper next
+  // and may snapshot the panel; a Saving popup ruins that path.
+  if (!activityManager.isSleepTransition()) {
+    showExitSavingChrome();
+  }
 
   // Ensure recents/app-state still update if user leaves before first paint finished.
   // (No-op when open path already ran this after first ink.)

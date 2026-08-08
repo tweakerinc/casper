@@ -220,17 +220,32 @@ Casper pulls firmware from **this fork only** — never CrossPoint stock release
 
 ### Publishing a release
 
-1. Bump `[crosspoint] version` in `platformio.ini` (e.g. `v0.1.1`).
-2. Build a clean release binary (not the default env’s branch+SHA suffix):
+GitHub’s “Source code” zip is **always** the **git tag’s commit**. Uploading only a `.bin` does **not** update source. Ship source and binary from the **same** commit.
+
+1. Bump `[casper] version` in `platformio.ini` (e.g. `v0.1.9`) — must match the tag.
+2. Commit everything that belongs in that firmware (not serial logs / temp dirs).
+3. Build a clean release binary (not the default env’s branch+SHA suffix):
    ```bash
    pio run -e gh_release
    ```
-3. Create a GitHub release on **TweakerInc/casper** with tag **exactly** matching the version (`v0.1.1`).
-4. Attach the built binary renamed to your usual asset name, e.g.:
-   - `Casper-v0.1.1` or `Casper-v0.1.1.bin`
-   - Build output path: `.pio/build/gh_release/firmware.bin`
-5. On device: **Settings → System → Check for updates** → Wi‑Fi → confirm install.
+   Post-script copies to `dist/Casper-<version>.bin` (e.g. `dist/Casper-v0.1.8.bin`).
+4. **Push source before or when creating the release** (remote `casper` = `tweakerinc/casper`):
+   ```bash
+   git push casper HEAD:main
+   git tag -a v0.1.8 -m "Casper v0.1.8"
+   git push casper v0.1.8
+   ```
+   If the tag already exists on an old commit and you are re-shipping that version:
+   ```bash
+   git tag -f -a v0.1.8 -m "Casper v0.1.8"
+   git push casper v0.1.8 --force
+   ```
+5. Create/edit the GitHub release on **TweakerInc/casper** with tag **exactly** matching the version (`v0.1.8`). Prefer “Choose a tag” → the tag you just pushed (not a floating “main” without a tag).
+6. Attach `dist/Casper-v0.1.8.bin` (or `Casper-v0.1.8` without extension if you prefer).
+7. On device: **Settings → System → Check for updates** → Wi‑Fi → confirm install.
    Device reboots into the new partition on success.
+
+**Checklist:** version string in firmware == git tag == release tag == bin filename version.
 
 ### Testing notes
 

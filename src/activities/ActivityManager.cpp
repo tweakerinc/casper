@@ -375,8 +375,12 @@ void ActivityManager::goToReader(std::string path) {
 }
 
 void ActivityManager::goToSleep(bool fromTimeout, bool useQuickResume) {
+  // Flag while reader (etc.) onExit runs so leave chrome ("Saving...") is not painted
+  // over the page before Quick Resume / wallpaper sleep art.
+  sleepTransition_ = true;
   replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, useQuickResume));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
+  sleepTransition_ = false;
 }
 
 void ActivityManager::goToBoot() { replaceActivity(std::make_unique<BootActivity>(renderer, mappedInput)); }

@@ -167,6 +167,7 @@ class EpubReaderActivity final : public Activity {
   bool openFirstInkLogged = false;
   // Leave path: "Saving..." on glass before SD/teardown so Back→Home is not a
   // frozen book page. Set once; leaveReaderToHome may show it before onExit.
+  // Never used on sleep/QR (ActivityManager::isSleepTransition).
   bool exitSavingChromeShown_ = false;
   void showExitSavingChrome();
 

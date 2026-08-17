@@ -885,20 +885,44 @@ void loop() {
     lastMemPrint = millis();
   }
 
-  // Handle incoming serial commands,
-  // nb: we use logSerial from logging to avoid deprecation warnings
-  if (logSerial.available() > 0) {
-    String line = logSerial.readStringUntil('\n');
-    if (line.startsWith("CMD:")) {
-      String cmd = line.substring(4);
-      cmd.trim();
-      if (cmd == "SCREENSHOT") {
-        const uint32_t bufferSize = display.getBufferSize();
-        logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
-        uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
-        logSerial.printf("SCREENSHOT_END\n");
+  // Handle incoming serial commands.
+  //
+  // This used to be `logSerial.readStringUntil('\n')`, which blocks for the
+  // Stream timeout (~1s) whenever bytes are available but no newline has
+  // arrived yet — a terminal that echoes, a partial paste, or line noise on the
+  // USB CDC stalled gpio.update() and every button for a full second. Drain
+  // non-blocking into a fixed buffer instead and act only on a complete line.
+  // Static buffer, not String: no heap churn on the main loop.
+  {
+    static char cmdBuf[64];
+    static uint8_t cmdLen = 0;
+    while (logSerial.available() > 0) {
+      const int c = logSerial.read();
+      if (c < 0) break;
+      if (c == '\n' || c == '\r') {
+        if (cmdLen > 0) {
+          cmdBuf[cmdLen] = '\0';
+          if (strncmp(cmdBuf, "CMD:", 4) == 0) {
+            const char* cmd = cmdBuf + 4;
+            while (*cmd == ' ' || *cmd == '\t') ++cmd;
+            if (strcmp(cmd, "SCREENSHOT") == 0) {
+              const uint32_t bufferSize = display.getBufferSize();
+              logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
+              uint8_t* buf = display.getFrameBuffer();
+              logSerial.write(buf, bufferSize);
+              logSerial.printf("SCREENSHOT_END\n");
+            }
+          }
+          cmdLen = 0;
+        }
+        continue;
       }
+      // Overlong line (noise): drop it rather than wrapping into a false match.
+      if (cmdLen >= sizeof(cmdBuf) - 1) {
+        cmdLen = 0;
+        continue;
+      }
+      cmdBuf[cmdLen++] = static_cast<char>(c);
     }
   }
 

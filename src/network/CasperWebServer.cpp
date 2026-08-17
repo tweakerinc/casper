@@ -114,7 +114,13 @@ void CasperWebServer::begin() {
   LOG_DBG("WEB", "Network mode: %s", apMode ? "AP" : "STA");
 
   LOG_DBG("WEB", "Creating web server on port %d...", port);
-  server.reset(new WebServer(port));
+  server.reset(new (std::nothrow) WebServer(port));
+  if (!server) {
+    // begin() is void and signals failure by leaving the server unstarted;
+    // callers check isRunning(). Same shape as the no-network bail above.
+    LOG_ERR("WEB", "OOM: WebServer on port %d", port);
+    return;
+  }
 
   // Disable WiFi sleep to improve responsiveness and prevent 'unreachable' errors.
   // This is critical for reliable web server operation on ESP32.
@@ -190,18 +196,29 @@ void CasperWebServer::begin() {
   // Collect WebDAV headers and register handler
   const char* davHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout"};
   server->collectHeaders(davHeaders, 6);
-  server->addHandler(new WebDAVHandler());  // Note: WebDAVHandler will be deleted by WebServer when server is stopped
+  // Note: WebDAVHandler ownership passes to WebServer, which deletes it on stop.
+  if (auto* dav = new (std::nothrow) WebDAVHandler()) {
+    server->addHandler(dav);
+  } else {
+    LOG_ERR("WEB", "OOM: WebDAV handler; continuing without WebDAV");
+  }
   LOG_DBG("WEB", "WebDAV handler initialized");
 
   server->begin();
 
   // Start WebSocket server for fast binary uploads
   LOG_DBG("WEB", "Starting WebSocket server on port %d...", wsPort);
-  wsServer.reset(new WebSocketsServer(wsPort));
-  wsInstance = const_cast<CasperWebServer*>(this);
-  wsServer->begin();
-  wsServer->onEvent(wsEventCallback);
-  LOG_DBG("WEB", "WebSocket server started");
+  // Optional: the HTTP upload path works without it, so an OOM here degrades
+  // rather than fails the whole server.
+  wsServer.reset(new (std::nothrow) WebSocketsServer(wsPort));
+  if (!wsServer) {
+    LOG_ERR("WEB", "OOM: WebSocket server on port %d; uploads fall back to HTTP", wsPort);
+  } else {
+    wsInstance = const_cast<CasperWebServer*>(this);
+    wsServer->begin();
+    wsServer->onEvent(wsEventCallback);
+    LOG_DBG("WEB", "WebSocket server started");
+  }
 
   udpActive = udp.begin(LOCAL_UDP_PORT);
   LOG_DBG("WEB", "Discovery UDP %s on port %d", udpActive ? "enabled" : "failed", LOCAL_UDP_PORT);

@@ -10,6 +10,7 @@
 #include <Bitmap.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -31,8 +32,13 @@ Xtc::Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move
 bool Xtc::load() {
   LOG_DBG("XTC", "Loading XTC: %s", filepath.c_str());
 
-  // Initialize parser
-  parser.reset(new xtc::XtcParser());
+  // Initialize parser. nothrow: bare `new` abort()s under -fno-exceptions, and
+  // load() already reports failure by returning false.
+  parser = makeUniqueNoThrow<xtc::XtcParser>();
+  if (!parser) {
+    LOG_ERR("XTC", "OOM: XtcParser for %s", filepath.c_str());
+    return false;
+  }
 
   // Open XTC file
   xtc::XtcError err = parser->open(filepath.c_str());

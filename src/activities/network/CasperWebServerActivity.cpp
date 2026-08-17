@@ -231,10 +231,16 @@ void CasperWebServerActivity::startAccessPoint() {
   // Start DNS server for captive portal behavior
   // This redirects all DNS queries to our IP, making any domain typed resolve to us
   stopDnsServer();
-  dnsServer = new DNSServer();
-  dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer->start(DNS_PORT, "*", apIP);
-  LOG_DBG("WEBACT", "DNS server started for captive portal");
+  // Captive-portal DNS is a convenience, not a requirement: without it users
+  // reach the server by IP. nothrow so an OOM here degrades instead of abort()ing.
+  dnsServer = new (std::nothrow) DNSServer();
+  if (dnsServer) {
+    dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
+    dnsServer->start(DNS_PORT, "*", apIP);
+    LOG_DBG("WEBACT", "DNS server started for captive portal");
+  } else {
+    LOG_ERR("WEBACT", "OOM: DNS server; captive portal disabled (reach the server by IP)");
+  }
 
   LOG_DBG("WEBACT", "Free heap after AP start: %d bytes", ESP.getFreeHeap());
 
@@ -245,11 +251,12 @@ void CasperWebServerActivity::startAccessPoint() {
 void CasperWebServerActivity::startWebServer() {
   LOG_DBG("WEBACT", "Starting web server...");
 
-  // Create the web server instance
-  webServer.reset(new CasperWebServer());
-  webServer->begin();
+  // Create the web server instance. nothrow: the failure path below already
+  // surfaces "could not start" to the user, which beats abort()ing.
+  webServer.reset(new (std::nothrow) CasperWebServer());
+  if (webServer) webServer->begin();
 
-  if (webServer->isRunning()) {
+  if (webServer && webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
     LOG_DBG("WEBACT", "Web server started successfully");
     lastWifiBars = isApMode ? 0 : barsForRssi(WiFi.RSSI(), 0);

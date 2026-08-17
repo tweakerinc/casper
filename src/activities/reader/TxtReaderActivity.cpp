@@ -402,9 +402,13 @@ void TxtReaderActivity::renderPage() {
   // Reader-only dark: displayWithRefreshCycle inverts around the panel push only.
   // AA re-paints light greys — skip AA in dark mode.
 
+  // BW frame is already painted above; AA sits on top of it. A failed AA pass must
+  // still fall through to the BW refresh or the page never reaches the panel.
+  bool aaRan = false;
   if (SETTINGS.textAntiAliasing && !ReaderUtils::readerDarkModeEnabled()) {
-    ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
-  } else {
+    aaRan = ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
+  }
+  if (!aaRan) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   // scope destructor clears font cache via FontCacheManager

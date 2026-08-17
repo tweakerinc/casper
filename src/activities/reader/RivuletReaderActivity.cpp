@@ -3593,18 +3593,23 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
                            !(preferFastFirst && hadOpenHints) && !deferAa;
 
   const uint32_t tRefresh = millis();
+  // The BW page is already painted into the framebuffer above. AA is an optional
+  // enhancement on top of it: if the pass cannot allocate its 48 KB BW snapshot we
+  // must still push the BW frame, or the turn silently shows the previous page.
+  bool aaRan = false;
   if (aaThisFrame) {
-    ReaderUtils::renderAntiAliased(renderer, [&]() {
+    aaRan = ReaderUtils::renderAntiAliased(renderer, [&]() {
       renderer.clearScreen(0x00);
       paintPageContent();
       // Status bar stays BW chrome (same as classic — not re-AA'd into greys).
     });
-  } else {
+  }
+  if (!aaRan) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);
   }
   if (hadOpenHints || preferFastFirst) {
     LOG_INF("RVR", "first_ink refresh=%lums preferFast=%d aa=%d wall=%lums",
-            static_cast<unsigned long>(millis() - tRefresh), preferFastFirst ? 1 : 0, aaThisFrame ? 1 : 0,
+            static_cast<unsigned long>(millis() - tRefresh), preferFastFirst ? 1 : 0, aaRan ? 1 : 0,
             openWallMs != 0 ? static_cast<unsigned long>(millis() - openWallMs) : 0UL);
   }
 

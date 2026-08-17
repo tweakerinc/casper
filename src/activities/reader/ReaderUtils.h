@@ -298,11 +298,17 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // the grayscale buffer. Only the content callback is re-rendered — status bars
 // and other overlays should be drawn before calling this.
 // Kept as a template to avoid std::function overhead; instantiated once per reader type.
+//
+// Returns false when the pass could not run (storeBwBuffer needs ~48 KB in 8 KB
+// chunks and fails under heap pressure). On false NOTHING has been pushed to the
+// panel and the BW framebuffer is left untouched, so the caller MUST fall back to
+// an ordinary refresh — otherwise the page the caller already painted never
+// reaches the glass and the turn looks like it did nothing.
 template <typename RenderFn>
-void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
+[[nodiscard]] bool renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
   if (!renderer.storeBwBuffer()) {
-    LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing");
-    return;
+    LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing; falling back to BW refresh");
+    return false;
   }
 
   renderer.clearScreen(0x00);
@@ -319,6 +325,7 @@ void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();
+  return true;
 }
 
 struct BackNavCallback {

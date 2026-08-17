@@ -66,9 +66,28 @@ inline void readString(HalFile& file, std::string& s) {
   file.read(&s[0], len);
 }
 
+// Reads a length-prefixed string, refusing any length the file cannot actually
+// contain.
+//
+// The old bound was `s.max_size()`, which on a 32-bit target is on the order of
+// a gigabyte — so a corrupt or truncated file could still hand back a length of
+// e.g. 0x40000000, sail past the check, and reach std::string::resize(). Under
+// -fno-exceptions that throw becomes abort(), i.e. the device reboots because a
+// cache file on the SD card went bad.
+//
+// The only meaningful bound is the number of bytes left in the file: a string
+// stored here cannot be longer than what follows its own length prefix. That
+// caps the allocation at the file size and turns every malformed record into a
+// clean `false` for the caller to handle.
 inline bool tryReadString(HalFile& file, std::string& s) {
   uint32_t len = 0;
   if (!tryReadPod(file, len)) {
+    return false;
+  }
+  const size_t pos = file.position();
+  const size_t total = file.size();
+  const size_t remaining = (total > pos) ? (total - pos) : 0;
+  if (static_cast<size_t>(len) > remaining) {
     return false;
   }
   if (static_cast<size_t>(len) > s.max_size() || len > static_cast<uint32_t>(std::numeric_limits<int>::max())) {

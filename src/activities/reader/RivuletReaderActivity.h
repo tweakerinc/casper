@@ -171,5 +171,16 @@ class RivuletReaderActivity final : public Activity {
   bool heavyReleasedForUi_ = false;
   int heldSpineForUi_ = 0;
   int heldPageForUi_ = 0;
+  // Last position actually written by saveProgress(), so repeat calls for an
+  // unchanged position are skipped. saveProgress() is invoked from ~20 sites
+  // (menu open/close, sleep entry, orientation change, bookmark, KO sync, exit)
+  // and each call is a ProgressFile::writeAtomic — several FAT operations for
+  // six bytes. The classic reader guarded this the same way; the rewrite lost
+  // it, which put redundant SD writes on the paths the user feels and burns
+  // erase cycles for nothing (Resource Protocol rule 8).
+  // -1 = nothing written yet this session.
+  mutable int lastSavedSpine_ = -1;
+  mutable int lastSavedPage_ = -1;
+  mutable int lastSavedPageCount_ = -1;
   std::string errorMsg_;
 };

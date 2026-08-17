@@ -233,6 +233,12 @@ bool RivuletReaderActivity::saveProgress() const {
   if (spine < 0 || spine > 0xFFFF || page < 0 || page > 0xFFFF || pageCount < 0 || pageCount > 0xFFFF) {
     return false;
   }
+  // Nothing moved since the last write — skip the FAT round trip. Reported as
+  // success because the on-disk state already reflects this position, which is
+  // what every caller actually cares about.
+  if (spine == lastSavedSpine_ && page == lastSavedPage_ && pageCount == lastSavedPageCount_) {
+    return true;
+  }
   uint8_t data[6];
   data[0] = static_cast<uint8_t>(spine & 0xFF);
   data[1] = static_cast<uint8_t>((spine >> 8) & 0xFF);
@@ -244,6 +250,9 @@ bool RivuletReaderActivity::saveProgress() const {
     LOG_ERR("RVR", "progress save fail %s", casperBookDir_.c_str());
     return false;
   }
+  lastSavedSpine_ = spine;
+  lastSavedPage_ = page;
+  lastSavedPageCount_ = pageCount;
   LOG_INF("RVR", "progress saved casper spine=%d page=%d dir=%s", spine, page, casperBookDir_.c_str());
   return true;
 }
@@ -1492,6 +1501,14 @@ bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
     heavyReleasedForUi_ = false;
     return false;
   }
+
+  // A child activity had the foreground and may have touched SD (cache clear,
+  // sync, font install). Drop the saveProgress() skip-cache so the next save
+  // definitely writes rather than trusting state from before the excursion.
+  // Costs at most one extra write per child-UI return.
+  lastSavedSpine_ = -1;
+  lastSavedPage_ = -1;
+  lastSavedPageCount_ = -1;
 
   const int spine = heldSpineForUi_;
   const int page = heldPageForUi_;

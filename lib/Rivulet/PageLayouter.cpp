@@ -6,6 +6,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -21,6 +22,21 @@ struct Tok {
   uint16_t byteOff = 0;
   uint16_t byteLen = 0;
   bool space = false;
+  // Memoized advance width for this token, -1 = not measured yet.
+  //
+  // Every word used to be measured twice per layout: once by the line-fitting
+  // loop and again by the span-emit loop, with identical (fontId, style, bytes)
+  // inputs — and a word pushed to the next line was measured a third time.
+  // measureWord() walks every codepoint through getTextAdvanceX (map lookup,
+  // glyph lookup, kerning), and layoutPage runs on EVERY page turn (Rivulet
+  // lays out on demand rather than reading precomputed geometry), so this was
+  // pure duplicated work on the hot path.
+  //
+  // Only word tokens are cached. Space widths depend on their flanking
+  // codepoints, which change when hyphenation rewrites a neighbour, so they
+  // stay uncached (measureInterWordSpace is far cheaper anyway).
+  // MUST be reset to -1 whenever byteOff/byteLen are rewritten.
+  int16_t w = -1;
 };
 
 int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const float lc) {
@@ -125,6 +141,23 @@ void tokenizeFrom(const ChapterIr& ch, const uint16_t runBegin, const uint16_t r
   out.clear();
   const auto& runs = ch.runs();
   const uint16_t runEnd = static_cast<uint16_t>(runBegin + runCount);
+
+  // Reserve up front: this runs per block on EVERY page layout, and an unreserved
+  // push_back loop costs a chain of geometric reallocations (allocate + copy +
+  // free each time) that fragments DRAM — the one thing the C3 cannot afford.
+  // Estimate from the remaining byte span at ~1 token per 4 bytes (a word plus its
+  // space averages well above that in Latin prose), clamped so a pathological run
+  // list cannot reserve something silly. Over-estimating slightly is free; the
+  // vector is a per-layout scratch that is cleared and refilled.
+  {
+    size_t remainingBytes = 0;
+    for (uint16_t ri = startRun < runBegin ? runBegin : startRun; ri < runEnd && ri < runs.size(); ++ri) {
+      remainingBytes += runs[ri].textLen;
+    }
+    size_t estimate = remainingBytes / 4 + 8;
+    if (estimate > 4096) estimate = 4096;
+    if (out.capacity() < estimate) out.reserve(estimate);
+  }
   uint16_t ri = startRun < runBegin ? runBegin : startRun;
   uint16_t bo = (ri == startRun) ? startByte : 0;
   int prevRunWithText = -1;
@@ -392,6 +425,32 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       default:
         break;
     }
+  }
+
+  // Per-layout scratch, hoisted out of the block/line loops below so their
+  // capacity is reused instead of being rebuilt from scratch. These used to be
+  // declared inside the loops — `toks` per block and `lineToks` +
+  // `hyphenPrefixStorage` per LINE — which meant a fresh allocate/grow/free cycle
+  // for every line of every page turn.
+  std::vector<Tok> toks;
+  std::vector<Tok> lineToks;
+  std::string hyphenPrefixStorage;  // owns the "prefix-" string for the current line
+
+  // Reserve the span vector once. A page holds one GlyphSpan per word
+  // (sizeof ≈ 48 B with its owned std::string), so an unreserved fill grew
+  // through ~9 reallocations, and the last of those needs the old and new
+  // buffers live at the same time — a transient contiguous demand of tens of KB
+  // at exactly the moment the heap is tightest. Estimate lines × words-per-line,
+  // assuming an average word occupies ~3em, and clamp so a tiny font or a huge
+  // viewport cannot reserve something absurd (over-reserving GlyphSpan is
+  // expensive, so the cap matters as much as the floor).
+  {
+    const int linesPerPage = std::max(1, viewH / std::max(1, bodyLine));
+    const int wordsPerLine = std::max(1, viewW / std::max(1, bodyEm * 3));
+    size_t spanEstimate = static_cast<size_t>(linesPerPage) * static_cast<size_t>(wordsPerLine);
+    if (spanEstimate < 32) spanEstimate = 32;
+    if (spanEstimate > 512) spanEstimate = 512;
+    out.spans.reserve(spanEstimate);
   }
 
   // Process blocks until page full or chapter ends.
@@ -747,7 +806,6 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       }
     }
 
-    std::vector<Tok> toks;
     tokenizeFrom(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
 
     int indent = 0;
@@ -797,9 +855,11 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       size_t lineStart = ti;
       int lineW = 0;
       size_t lineEnd = ti;
-      // When hyphenation splits a word, we inject prefix/suffix tokens for this line only.
-      std::vector<Tok> lineToks;
-      std::string hyphenPrefixStorage;  // owns "prefix-" string for this line
+      // When hyphenation splits a word, we inject prefix/suffix tokens for this line
+      // only. Hoisted to the function scope above; clear (not reallocate) per line so
+      // the capacity carries over.
+      lineToks.clear();
+      hyphenPrefixStorage.clear();
       bool usedHyphenSplit = false;
       while (ti < toks.size()) {
         const Tok& t = toks[ti];
@@ -815,8 +875,11 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           if (ti > 0 && !toks[ti - 1].space) leftCp = tokenLastCp(chapter, toks[ti - 1]);
           if (ti + 1 < toks.size() && !toks[ti + 1].space) rightCp = tokenFirstCp(chapter, toks[ti + 1]);
           tw = measureInterWordSpace(renderer, fid, st, leftCp, rightCp);
+        } else if (t.w >= 0) {
+          tw = t.w;  // already measured (previous line attempt, or an earlier pass)
         } else {
           tw = measureWord(renderer, fid, st, chapter.runText(run) + t.byteOff, t.byteLen);
+          if (tw >= 0 && tw <= INT16_MAX) toks[ti].w = static_cast<int16_t>(tw);
         }
         if (lineW + tw > maxW && lineEnd > lineStart) {
           // Keep "." / "," / "!" with the preceding word (slight overflow ok).
@@ -840,11 +903,15 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
               prefixTok.byteOff = 0;
               prefixTok.byteLen = static_cast<uint16_t>(hyphenPrefixStorage.size());
               prefixTok.space = false;
+              // Prefix text lives in hyphenPrefixStorage, not the run; prefW is its
+              // measured width, so the emit loop can reuse it directly.
+              prefixTok.w = (prefW >= 0 && prefW <= INT16_MAX) ? static_cast<int16_t>(prefW) : -1;
               lineToks.push_back(prefixTok);
               lineW += prefW;
               usedHyphenSplit = true;
               toks[ti].byteOff = static_cast<uint16_t>(t.byteOff + prefBytes);
               toks[ti].byteLen = static_cast<uint16_t>(t.byteLen - prefBytes);
+              toks[ti].w = -1;  // token now covers only the suffix — remeasure
               break;
             }
           }
@@ -863,12 +930,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
               Tok prefixTok = t;
               prefixTok.byteOff = 0;
               prefixTok.byteLen = static_cast<uint16_t>(hyphenPrefixStorage.size());
+              prefixTok.w = (prefW >= 0 && prefW <= INT16_MAX) ? static_cast<int16_t>(prefW) : -1;
               lineToks.clear();
               lineToks.push_back(prefixTok);
               lineW = prefW;
               usedHyphenSplit = true;
               toks[ti].byteOff = static_cast<uint16_t>(t.byteOff + prefBytes);
               toks[ti].byteLen = static_cast<uint16_t>(t.byteLen - prefBytes);
+              toks[ti].w = -1;  // token now covers only the suffix — remeasure
               lineEnd = lineStart;
               break;
             }
@@ -975,7 +1044,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         } else {
           sp.text.assign(chapter.runText(run) + t.byteOff, t.byteLen);
         }
-        x += measureWord(renderer, fid, st, sp.text.data(), sp.text.size());
+        // Reuse the width the fitting loop already measured for this exact
+        // (fontId, style, bytes) triple — see Tok::w. Falls back to measuring
+        // only when the token was never measured (defensive; should not happen).
+        x += (t.w >= 0) ? t.w : measureWord(renderer, fid, st, sp.text.data(), sp.text.size());
         out.spans.push_back(std::move(sp));
       }
 

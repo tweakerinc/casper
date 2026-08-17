@@ -1,7 +1,10 @@
 #include "Bitmap.h"
 
+#include <Logging.h>
+
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 // ============================================================================
 // IMAGE PROCESSING OPTIONS
@@ -167,10 +170,18 @@ BmpReaderError Bitmap::parseHeaders() {
   //  - High-color + dithering disabled → simple quantization (no error diffusion)
   const bool highColor = !nativePalette;
   if (highColor && dithering) {
+    // nothrow: these carry per-row error buffers sized to the image width and are
+    // built while decoding covers, when the heap is already under pressure. A bare
+    // `new` would abort() under -fno-exceptions; falling back to plain
+    // quantization (both pointers left null) is how readNextRow already behaves
+    // when dithering is off, so the image still renders — just without error
+    // diffusion.
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(width);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width);
+      if (!atkinsonDitherer) LOG_ERR("BMP", "OOM: Atkinson ditherer (w=%d); falling back to quantization", width);
     } else {
-      fsDitherer = new FloydSteinbergDitherer(width);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width);
+      if (!fsDitherer) LOG_ERR("BMP", "OOM: Floyd-Steinberg ditherer (w=%d); falling back to quantization", width);
     }
   }
 

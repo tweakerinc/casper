@@ -180,6 +180,9 @@ class GfxRenderer {
   bool supportsAsyncRefresh() const;
   void invertScreen() const;
   void clearScreen(uint8_t color = 0xFF) const;
+  // Re-arms drawPixel()'s rate-limited out-of-range logging. Called by
+  // clearScreen(); exposed for paths that start a frame without clearing.
+  static void resetOutOfRangeLogBudget();
   void getOrientedViewableTRBL(int* outTop, int* outRight, int* outBottom, int* outLeft) const;
 
   // Tiled grayscale strip target. While active, drawPixel() and clearScreen()

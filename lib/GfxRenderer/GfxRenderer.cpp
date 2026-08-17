@@ -548,6 +548,16 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   }
 }
 
+namespace {
+// Per-frame budget for drawPixel's out-of-range complaint. Reset by clearScreen()
+// rather than by drawPixel itself: re-arming on every valid pixel would put a
+// store on the hottest path in the renderer.
+constexpr uint16_t kMaxOutOfRangeLogsPerFrame = 8;
+uint16_t g_outOfRangeLogs = 0;
+}  // namespace
+
+void GfxRenderer::resetOutOfRangeLogBudget() { g_outOfRangeLogs = 0; }
+
 // IMPORTANT: This function is in critical rendering path and is called for every pixel. Please keep it as simple and
 // efficient as possible.
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
@@ -559,7 +569,19 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
 
   // Bounds checking against runtime panel dimensions
   if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) {
-    LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)", x, y, phyX, phyY);
+    // Rate-limited per frame: this is per-pixel. A single off-by-one in any
+    // drawing routine (a glyph one column past the margin, an oversized bitmap)
+    // used to emit one serial line PER OUT-OF-RANGE PIXEL — tens of thousands of
+    // lines for one bad frame, which at 115200 baud stalls the render task for
+    // seconds and turns a cosmetic clipping bug into a device-wide freeze.
+    // The budget is re-armed by clearScreen() (once per frame), so every frame
+    // still reports its own defect but no frame can flood the link.
+    if (g_outOfRangeLogs < kMaxOutOfRangeLogsPerFrame) {
+      ++g_outOfRangeLogs;
+      LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)%s", x, y, phyX, phyY,
+              g_outOfRangeLogs == kMaxOutOfRangeLogsPerFrame ? " (further out-of-range pixels this frame suppressed)"
+                                                            : "");
+    }
     return;
   }
 
@@ -1683,6 +1705,7 @@ static unsigned long start_ms = 0;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  resetOutOfRangeLogBudget();  // new frame: let it report its own clipping defects
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);

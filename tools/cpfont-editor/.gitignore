@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# build caches/outputs created by build-sd-fonts.py
+build/downloaded_fonts/
+build/instanced_fonts/
+build/output/
+*.cpfont

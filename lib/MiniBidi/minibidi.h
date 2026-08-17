@@ -8,7 +8,7 @@
  * Includes: UAX#9 bidi (do_bidi) and Arabic contextual shaping (do_shape),
  * both ported from mintty src/minibidi.c (Ahmad Khalifa, Thomas Wolff).
  * Stripped of: box-drawing mirror, terminal dependencies, GCC nested
- * functions, VLAs, and Unicode data for scripts CrossPoint doesn't render.
+ * functions, VLAs, and Unicode data for scripts Casper doesn't render.
  */
 
 #include <stdbool.h>
@@ -135,7 +135,7 @@ ucschar mirror(ucschar ch);
  *   Returns 1.
  *
  *   Ported from mintty src/minibidi.c (Ahmad Khalifa, Thomas Wolff,
- *   MIT licence), https://github.com/mintty/mintty — with CrossPoint
+ *   MIT licence), https://github.com/mintty/mintty — with Casper
  *   extensions for Perso-Arabic letters and in-stream diacritics, see
  *   minibidi.c for details.
  */

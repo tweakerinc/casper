@@ -591,11 +591,16 @@ void DictionaryDefinitionActivity::normalizeDefinition() {
 }
 
 void DictionaryDefinitionActivity::layoutPopup() {
-  const int pageW = renderer.getScreenWidth();
-  const int pageH = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
-  popupW = std::max(200, pageW - kPopupMarginX * 2);
-  popupX = (pageW - popupW) / 2;
+  // Orientation-aware content band: portrait reserves the bottom hint strip;
+  // landscape CW/CCW reserves the logical side where drawButtonHints paints
+  // front-button chrome (was full-width and underlapped the side strip).
+  const Rect safe =
+      UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true, /*hasSideButtonHints=*/false);
+  const int pageW = safe.width;
+  const int pageH = safe.height;
+  popupW = std::max(160, pageW - kPopupMarginX * 2);
+  popupX = safe.x + (pageW - popupW) / 2;
 
   // Pronunciation sits on the same line as the bold headword (regular weight),
   // so chrome is always one title line — more room for definitions.
@@ -604,27 +609,23 @@ void DictionaryDefinitionActivity::layoutPopup() {
   const int chromeH = kPopupPadY + titleLineH + kHeaderLineGap + 2 + kTitleBodyGap + kPopupPadY;
   constexpr int minBodyLines = 3;
 
-  // Free band between top status/chrome and bottom Back·Done hints — never let the
-  // card grow into either strip (long defs like "head" used pageH-80 and overflowed).
-  const int topReserve =
-      std::max(kPopupGapTop, metrics.topPadding + BaseTheme::kTopChromeBatteryY +
-                                 std::max(metrics.batteryHeight + 4, metrics.statusBarVerticalMargin) + kPopupGapTop);
-  // Touch themes zero buttonHintsHeight; still leave a floor so the card is not full-bleed.
-  const int hintsH = metrics.buttonHintsHeight > 0 ? metrics.buttonHintsHeight : 40;
-  const int bottomReserve = hintsH + kPopupGapAboveHints;
+  // Free band inside safe rect: top status air + gap above bottom/side chrome.
+  const int topReserve = std::max(kPopupGapTop, metrics.topPadding + kPopupGapTop);
+  const int bottomReserve = kPopupGapAboveHints;
   const int bandH = std::max(chromeH + lineH * minBodyLines, pageH - topReserve - bottomReserve);
 
   const int contentLines = std::max(minBodyLines, static_cast<int>(lines.size()));
   const int desiredH = chromeH + contentLines * lineH;
   popupH = std::clamp(desiredH, chromeH + minBodyLines * lineH, bandH);
 
-  // Center in the free band; clamp so top/bottom gaps always hold.
-  popupY = topReserve + std::max(0, (bandH - popupH) / 2);
-  if (popupY + popupH > pageH - bottomReserve) {
-    popupY = pageH - bottomReserve - popupH;
+  // Center in the free band; clamp so we never leave the safe rect.
+  popupY = safe.y + topReserve + std::max(0, (bandH - popupH) / 2);
+  const int maxBottom = safe.y + pageH - bottomReserve;
+  if (popupY + popupH > maxBottom) {
+    popupY = maxBottom - popupH;
   }
-  if (popupY < topReserve) {
-    popupY = topReserve;
+  if (popupY < safe.y + topReserve) {
+    popupY = safe.y + topReserve;
   }
 
   bodyTop = popupY + kPopupPadY + titleLineH + kHeaderLineGap + 2 + kTitleBodyGap;
@@ -918,14 +919,26 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
     drawDefinitionScrollBar(renderer, popupX, popupW, bodyTop, bodyH, totalLines, visibleLines, scrollLine);
   }
 
-  // Wipe any prior activity's button chrome from the restored snapshot so we
-  // never stack two sets of Left/Right (or Back/Select) under Back/Done.
+  // Wipe prior button chrome in the *orientation-aware* hint band (portrait =
+  // bottom; landscape = logical side) so we never stack two hint sets or paint
+  // the definition card under the strip.
   {
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const int stripH = metrics.buttonHintsHeight + 4;
-    const int stripY = renderer.getScreenHeight() - stripH;
-    if (stripH > 0 && stripY >= 0) {
-      renderer.fillRect(0, stripY, renderer.getScreenWidth(), stripH, false);
+    const Rect safe =
+        UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true, /*hasSideButtonHints=*/false);
+    const int fullW = renderer.getScreenWidth();
+    const int fullH = renderer.getScreenHeight();
+    // Region outside the safe content rect is where drawButtonHints draws.
+    if (safe.x > 0) {
+      renderer.fillRect(0, 0, safe.x, fullH, false);
+    }
+    if (safe.x + safe.width < fullW) {
+      renderer.fillRect(safe.x + safe.width, 0, fullW - (safe.x + safe.width), fullH, false);
+    }
+    if (safe.y > 0) {
+      renderer.fillRect(0, 0, fullW, safe.y, false);
+    }
+    if (safe.y + safe.height < fullH) {
+      renderer.fillRect(0, safe.y + safe.height, fullW, fullH - (safe.y + safe.height), false);
     }
   }
 

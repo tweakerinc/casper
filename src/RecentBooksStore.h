@@ -10,6 +10,9 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
+  // Casper Home progress: 0–10000 = 0.00–100.00%, 0xFFFF = unknown.
+  // Written on reader leave so Home never opens per-book stats files.
+  uint16_t progressPercentMilli = 0xFFFF;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
@@ -17,20 +20,34 @@ struct RecentBook {
 class RecentBooksStore : public PersistableStore<RecentBooksStore> {
  private:
   std::vector<RecentBook> recentBooks;
-
-  static constexpr int MAX_RECENT_BOOKS = 10;
+  // False until the first successful load attempt (including "no file yet").
+  // Prevents addBook from writing a 1-entry list over a full recent.json when
+  // boot deferred loadFromFile (Quick Resume) or load never ran.
+  bool loadedOnce_ = false;
 
   RecentBooksStore() = default;
   ~RecentBooksStore() = default;
 
   friend class PersistableStore<RecentBooksStore>;
 
+  // Load from SD if not yet loaded. Safe to call before any mutate/save.
+  void ensureLoaded();
+  // Pull any disk entries missing from memory (path-keyed) onto the tail.
+  void mergeMissingFromDisk();
+  static bool parseBooksArray(JsonVariantConst doc, std::vector<RecentBook>& out);
+
  public:
+  // Full history for Recents Menu (full-screen list). Home under-panel still
+  // shows only 4 (X3) / 5 (X4) via theme metrics — not this cap.
+  static constexpr int MAX_RECENT_BOOKS = 20;
+
   static const char* getFilePath() { return "/.crosspoint/recent.json"; }
+
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 
-  // Add a book to the recent list (moves to front if already exists)
+  // Add a book to the recent list (moves to front if already exists).
+  // Always loads disk first so a deferred boot load cannot wipe history.
   void addBook(const std::string& path, const std::string& title, const std::string& author,
                const std::string& coverBmpPath);
 
@@ -62,6 +79,12 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   int getCount() const { return static_cast<int>(recentBooks.size()); }
 
   RecentBook getDataFromBook(std::string path) const;
+
+  // Update Home progress for a path already on the list. Returns true if changed.
+  bool setProgressMilli(const std::string& path, uint16_t progressPercentMilli);
+
+  // Needed by CasperStats (ensureLoaded is private otherwise).
+  void ensureLoadedPublic() { ensureLoaded(); }
 };
 
 // Helper macro to access recent books store

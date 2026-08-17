@@ -111,6 +111,8 @@ const fui::KeyboardLayout URL_SHIFT_LAYOUT{URL_SHIFT_ROWS, 5};
 const fui::KeyboardLayout URL_SNIPPET_LAYOUT{URL_SNIP_ROWS, 4};
 
 fui::KeyboardLayoutId layoutForLanguage(const Language language) {
+  // EN-only product builds only define Language::EN in the generated enum.
+#ifndef CASPER_I18N_ENGLISH_ONLY
   switch (language) {
     case Language::FR:
       return fui::KeyboardLayoutId::AzertyFr;
@@ -119,8 +121,12 @@ fui::KeyboardLayoutId layoutForLanguage(const Language language) {
     case Language::ES:
       return fui::KeyboardLayoutId::SpanishEs;
     default:
-      return fui::KeyboardLayoutId::QwertyEn;
+      break;
   }
+#else
+  (void)language;
+#endif
+  return fui::KeyboardLayoutId::QwertyEn;
 }
 
 }  // namespace

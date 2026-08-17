@@ -2,12 +2,14 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <WiFi.h>
 
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
+#include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -24,6 +26,10 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
+  // Drop any residual scan tables before TLS (WifiSelection may leave none;
+  // quiet path never scanned — cheap no-op).
+  WiFi.scanDelete();
+
   {
     RenderLock lock(*this);
     state = AUTHENTICATING;
@@ -31,6 +37,8 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdate();
 
+  LOG_DBG("KOSync", "Auth pre-TLS heap=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
   performAuthentication();
 }
 
@@ -51,23 +59,123 @@ void KOReaderAuthActivity::performAuthentication() {
   requestUpdate();
 }
 
+void KOReaderAuthActivity::startQuietWifiConnect() {
+  WIFI_STORE.loadFromFile();
+  quietWifiPending = true;
+  quietWifiAttempts = 0;
+  quietWifiBeginIssued = false;
+  quietWifiStartMs = 0;
+  quietWifiCredIndex = 0;
+
+  const auto& creds = WIFI_STORE.getCredentials();
+  const std::string& last = WIFI_STORE.getLastConnectedSsid();
+  if (!last.empty()) {
+    for (size_t i = 0; i < creds.size(); ++i) {
+      if (creds[i].ssid == last) {
+        quietWifiCredIndex = i;
+        break;
+      }
+    }
+  }
+
+  {
+    RenderLock lock(*this);
+    state = CONNECTING;
+    statusMessage = tr(STR_CONNECTING_SAVED_WIFI);
+  }
+  requestUpdate();
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(50);
+  LOG_DBG("KOSync", "Auth quiet WiFi start heap=%u maxAlloc=%u creds=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(creds.size()));
+}
+
+void KOReaderAuthActivity::tickQuietWifiConnect() {
+  if (!quietWifiPending) {
+    return;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    quietWifiPending = false;
+    WIFI_STORE.setLastConnectedSsid(WiFi.SSID().c_str());
+    WIFI_STORE.saveToFile();
+    LOG_DBG("KOSync", "Auth quiet WiFi connected: %s heap=%u maxAlloc=%u", WiFi.SSID().c_str(),
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    onWifiSelectionComplete(true);
+    return;
+  }
+
+  const auto& creds = WIFI_STORE.getCredentials();
+  if (creds.empty()) {
+    quietWifiPending = false;
+    onWifiSelectionComplete(false);
+    return;
+  }
+
+  if (!quietWifiBeginIssued) {
+    if (quietWifiAttempts >= creds.size()) {
+      quietWifiPending = false;
+      onWifiSelectionComplete(false);
+      return;
+    }
+    const auto& cred = creds[quietWifiCredIndex % creds.size()];
+    LOG_DBG("KOSync", "Auth quiet WiFi try [%u/%u]: %s", static_cast<unsigned>(quietWifiAttempts + 1),
+            static_cast<unsigned>(creds.size()), cred.ssid.c_str());
+    {
+      RenderLock lock(*this);
+      state = CONNECTING;
+      statusMessage = tr(STR_CONNECTING_SAVED_WIFI);
+    }
+    requestUpdate();
+    if (!cred.password.empty()) {
+      WiFi.begin(cred.ssid.c_str(), cred.password.c_str());
+    } else {
+      WiFi.begin(cred.ssid.c_str());
+    }
+    quietWifiBeginIssued = true;
+    quietWifiStartMs = millis();
+    return;
+  }
+
+  if (millis() - quietWifiStartMs < QUIET_WIFI_TIMEOUT_MS) {
+    return;
+  }
+
+  WiFi.disconnect(true, false);
+  delay(30);
+  quietWifiBeginIssued = false;
+  quietWifiAttempts++;
+  quietWifiCredIndex = (quietWifiCredIndex + 1) % creds.size();
+}
+
 void KOReaderAuthActivity::onEnter() {
   Activity::onEnter();
 
-  // Check if already connected
   if (WiFi.status() == WL_CONNECTED) {
     onWifiSelectionComplete(true);
     return;
   }
 
-  // Launch WiFi selection
+  // Prefer quiet saved-network connect: full scan UI + settings stack left
+  // ~45 KB free and blocked TLS. Quiet path keeps STA without scan tables.
+  WIFI_STORE.loadFromFile();
+  if (!WIFI_STORE.getCredentials().empty()) {
+    startQuietWifiConnect();
+    return;
+  }
+
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
 void KOReaderAuthActivity::onExit() {
   Activity::onExit();
+  quietWifiPending = false;
 
+  // silentRestart() itself tears WiFi fully; still disconnect so we always
+  // take the defrag reboot after a radio session (heap fragmentation).
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
@@ -87,7 +195,7 @@ void KOReaderAuthActivity::render(RenderLock&&) {
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = (pageHeight - height) / 2;
 
-  if (state == AUTHENTICATING) {
+  if (state == CONNECTING || state == AUTHENTICATING) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, statusMessage.c_str());
   } else if (state == SUCCESS) {
     renderer.drawCenteredText(UI_10_FONT_ID, top,
@@ -106,6 +214,11 @@ void KOReaderAuthActivity::render(RenderLock&&) {
 }
 
 void KOReaderAuthActivity::loop() {
+  if (quietWifiPending) {
+    tickQuietWifiConnect();
+    return;
+  }
+
   if (state == SUCCESS || state == FAILED) {
     int x = 0;
     int y = 0;

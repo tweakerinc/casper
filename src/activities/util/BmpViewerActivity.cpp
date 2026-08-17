@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -67,8 +67,7 @@ void BmpViewerActivity::onEnter() {
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
+  GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
   // 1. Open the file
   if (Storage.openFileForRead("BMP", filePath, file)) {
     Bitmap bitmap(file, true);
@@ -103,8 +102,6 @@ void BmpViewerActivity::onEnter() {
 
       const auto labels =
           mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
-
-      GUI.fillPopupProgress(renderer, popupRect, 50);
 
       renderer.clearScreen();
       // Assuming drawBitmap defaults to 0,0 crop if omitted, or pass explicitly: drawBitmap(bitmap, x, y, pageWidth,
@@ -144,7 +141,7 @@ void BmpViewerActivity::onExit() {
 }
 
 void BmpViewerActivity::doSetSleepCover() {
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
 
   bool success = false;
   HalFile inFile, outFile;
@@ -165,7 +162,7 @@ void BmpViewerActivity::doSetSleepCover() {
   }
 
   if (success) {
-    SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
+    SETTINGS.sleepScreen = CasperSettings::SLEEP_SCREEN_MODE::CUSTOM;
     SETTINGS.saveToFile();
     GUI.drawPopup(renderer, tr(STR_DONE));
   } else {

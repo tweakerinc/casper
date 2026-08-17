@@ -6,7 +6,7 @@
 #include <cctype>
 #include <cstring>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 
 FontInstaller::FontInstaller(SdCardFontRegistry& registry) : registry_(registry) {}
 

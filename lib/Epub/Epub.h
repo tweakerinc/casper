@@ -40,10 +40,8 @@ class Epub {
   bool spineLooksCoverOnly(int spineIndex) const;
 
  public:
-  explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-    // create a cache key based on the filepath
-    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
-  }
+  // cacheDir: typically "/.crosspoint" → epub_<std::hash(path)> (v0.1.8 layout)
+  explicit Epub(std::string filepath, const std::string& cacheDir);
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);

@@ -53,7 +53,13 @@ namespace {
 // v66: drop-cap only after explicit .ct1/dropcap hosts (not every visible h1 — DCC ch70)
 // v67: nested CSS width contain for images (DCC scene rules not full-page thick bars)
 // v68: cap ultra-wide rule image height (~1.5em) — white-padded dividers not tall slabs
-constexpr uint8_t SECTION_FILE_VERSION = 68;
+// v69: BlockStyle.smallCaps + syntheticScale (Rivulet quality pass).
+// v70: drop-cap = body face 2× + 2-line zone (no foreign 16/18pt pick at small sizes).
+// v71: do not startNewTextBlock for super/sub font-size spans (DCC/Butcher "21st").
+// v72: drop-cap picks same-family ladder face whose 2× ink fills the 2-line zone
+//      (body 2× alone was ~1 line tall because glyphH ≈ advanceY/2).
+// v73: metric drop-cap scale 2–4× (paintGlyphScale) so single-size SD fonts match builtins.
+constexpr uint8_t SECTION_FILE_VERSION = 73;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

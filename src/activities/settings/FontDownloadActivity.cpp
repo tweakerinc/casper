@@ -1,12 +1,17 @@
 #include "FontDownloadActivity.h"
 
-#include <ArduinoJson.h>
+#include <Esp.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 #include <esp_rom_crc.h>
+
+#include <cctype>
+#include <cstring>
 
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
@@ -19,13 +24,135 @@
 #include "util/UiGhostPolicy.h"
 
 namespace {
-// Names match CrossInk fonts.json for families compiled into firmware (main.cpp).
-// Compared case-insensitively; "LexendDeca" accepted as a defensive alias.
+// Names match legacy fonts.json for families compiled into firmware (main.cpp).
+// Compared case-insensitively; legacy Bitter/Lexend aliases accepted defensively.
 bool isFirmwareBuiltinFamily(const char* name) {
   if (name == nullptr || name[0] == '\0') return false;
-  return strcasecmp(name, "Bitter") == 0 || strcasecmp(name, "SourceSerif4") == 0 ||
-         strcasecmp(name, "Source Serif 4") == 0;
+  return strcasecmp(name, "Literata") == 0 || strcasecmp(name, "SourceSerif4") == 0 ||
+         strcasecmp(name, "Source Serif 4") == 0 || strcasecmp(name, "Sourcerer") == 0 ||
+         strcasecmp(name, "Bitter") == 0 ||
+         strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
 }
+
+// --- Minimal fonts.json (schema v1) scanner ---------------------------------
+// Avoids ArduinoJson's full DOM (file size × ~2 plus our copies), which OOMs
+// on ESP32-C3 once Wi‑Fi is up. Walks one in-memory copy of the file only.
+
+void skipWs(const char*& p, const char* end) {
+  while (p < end && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) ++p;
+}
+
+bool parseJsonString(const char*& p, const char* end, std::string& out) {
+  skipWs(p, end);
+  if (p >= end || *p != '"') return false;
+  ++p;
+  out.clear();
+  while (p < end) {
+    const char c = *p++;
+    if (c == '"') return true;
+    if (c == '\\' && p < end) {
+      const char e = *p++;
+      switch (e) {
+        case '"':
+        case '\\':
+        case '/':
+          out.push_back(e);
+          break;
+        case 'b':
+          out.push_back('\b');
+          break;
+        case 'f':
+          out.push_back('\f');
+          break;
+        case 'n':
+          out.push_back('\n');
+          break;
+        case 'r':
+          out.push_back('\r');
+          break;
+        case 't':
+          out.push_back('\t');
+          break;
+        case 'u':
+          // Skip \uXXXX (manifest is ASCII for names/URLs).
+          for (int i = 0; i < 4 && p < end; ++i) ++p;
+          break;
+        default:
+          out.push_back(e);
+          break;
+      }
+    } else {
+      out.push_back(c);
+    }
+  }
+  return false;
+}
+
+bool parseJsonUint(const char*& p, const char* end, uint32_t& out) {
+  skipWs(p, end);
+  if (p >= end || !std::isdigit(static_cast<unsigned char>(*p))) return false;
+  uint64_t v = 0;
+  while (p < end && std::isdigit(static_cast<unsigned char>(*p))) {
+    v = v * 10u + static_cast<uint32_t>(*p - '0');
+    if (v > 0xFFFFFFFFull) return false;
+    ++p;
+  }
+  out = static_cast<uint32_t>(v);
+  return true;
+}
+
+// Skip one JSON value (object/array/string/number/literal) without copying.
+bool skipJsonValue(const char*& p, const char* end) {
+  skipWs(p, end);
+  if (p >= end) return false;
+  if (*p == '"') {
+    std::string discard;
+    return parseJsonString(p, end, discard);
+  }
+  if (*p == '{' || *p == '[') {
+    const char open = *p++;
+    const char close = (open == '{') ? '}' : ']';
+    int depth = 1;
+    bool inStr = false;
+    bool esc = false;
+    while (p < end && depth > 0) {
+      const char c = *p++;
+      if (inStr) {
+        if (esc) {
+          esc = false;
+        } else if (c == '\\') {
+          esc = true;
+        } else if (c == '"') {
+          inStr = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inStr = true;
+      } else if (c == open) {
+        ++depth;
+      } else if (c == close) {
+        --depth;
+      }
+    }
+    return depth == 0;
+  }
+  // number / true / false / null
+  while (p < end && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n' && *p != '\r' && *p != '\t') {
+    ++p;
+  }
+  return true;
+}
+
+bool parseJsonKey(const char*& p, const char* end, std::string& key) { return parseJsonString(p, end, key); }
+
+bool expectChar(const char*& p, const char* end, char c) {
+  skipWs(p, end);
+  if (p >= end || *p != c) return false;
+  ++p;
+  return true;
+}
+
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -33,10 +160,35 @@ FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputMan
 
 // --- Lifecycle ---
 
+void FontDownloadActivity::prepareHeapForNetwork() {
+  // legacy: drop SD faces + catalog before Wi‑Fi. Casper also clears the
+  // glyph cache — it fragments maxAlloc and competes with HTTP buffers.
+  sdFontSystem.releaseForNetwork(renderer);
+  if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+    if (!fcm->isScanning()) fcm->clearCache();
+  }
+  WiFi.scanDelete();
+  yield();
+  LOG_INF("FONT", "Heap after releaseForNetwork: free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+}
+
 void FontDownloadActivity::onEnter() {
   Activity::onEnter();
+  fontsChanged_ = false;
+  pendingManifestFetch_ = false;
+  // Free SD fonts *before* WIFI_STA — not after Wi‑Fi is already up (too late).
+  prepareHeapForNetwork();
   WiFi.mode(WIFI_STA);
-  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+  auto wifi = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput);
+  if (!wifi) {
+    LOG_ERR("FONT", "OOM creating WifiSelectionActivity free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    errorMessage_ = "Out of memory";
+    state_ = ERROR;
+    return;
+  }
+  startActivityForResult(std::move(wifi),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
@@ -46,8 +198,16 @@ void FontDownloadActivity::onExit() {
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    if (fontsChanged_) {
+      // Installed/removed fonts: full reboot reloads SD faces cleanly (legacy).
+      silentRestart();
+      return;
+    }
+    WiFi.mode(WIFI_OFF);
   }
+
+  // Browse-only / failed list: no reboot — restore SD selection if any.
+  sdFontSystem.ensureLoaded(renderer);
 }
 
 void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
@@ -56,17 +216,26 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
+  // Drop residual scan tables before HTTP (can free a few KB).
+  WiFi.scanDelete();
+
   {
     RenderLock lock(*this);
     state_ = LOADING_MANIFEST;
   }
-  requestUpdateAndWait();
+  // Defer fetch to loop() so we are not nested under ActivityManager's result
+  // callback stack when SecureHttpClient + parse run.
+  pendingManifestFetch_ = true;
+  requestUpdate();
+}
+
+void FontDownloadActivity::runPendingManifestFetch() {
+  pendingManifestFetch_ = false;
+  requestUpdateAndWait();  // paint "Loading…" first
 
   if (!fetchAndParseManifest()) {
-    {
-      RenderLock lock(*this);
-      state_ = ERROR;
-    }
+    RenderLock lock(*this);
+    state_ = ERROR;
     return;
   }
 
@@ -75,29 +244,207 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     state_ = FAMILY_LIST;
     selectedIndex_ = 0;
   }
+  requestUpdate();
 }
 
 // --- Manifest fetching ---
 
+bool FontDownloadActivity::parseManifestBuffer(const char* buf, const size_t len) {
+  if (!buf || len == 0) return false;
+  const char* p = buf;
+  const char* end = buf + len;
+
+  skipWs(p, end);
+  if (!expectChar(p, end, '{')) return false;
+
+  int version = -1;
+  baseUrl_.clear();
+  families_.clear();
+
+  while (p < end) {
+    skipWs(p, end);
+    if (p < end && *p == '}') {
+      ++p;
+      break;
+    }
+    if (p < end && *p == ',') {
+      ++p;
+      continue;
+    }
+
+    std::string key;
+    if (!parseJsonKey(p, end, key)) return false;
+    if (!expectChar(p, end, ':')) return false;
+
+    if (key == "version") {
+      uint32_t v = 0;
+      if (!parseJsonUint(p, end, v)) return false;
+      version = static_cast<int>(v);
+    } else if (key == "baseUrl") {
+      if (!parseJsonString(p, end, baseUrl_)) return false;
+    } else if (key == "families") {
+      skipWs(p, end);
+      if (!expectChar(p, end, '[')) return false;
+      while (p < end) {
+        skipWs(p, end);
+        if (p < end && *p == ']') {
+          ++p;
+          break;
+        }
+        if (p < end && *p == ',') {
+          ++p;
+          continue;
+        }
+        if (!expectChar(p, end, '{')) return false;
+
+        ManifestFamily family;
+        while (p < end) {
+          skipWs(p, end);
+          if (p < end && *p == '}') {
+            ++p;
+            break;
+          }
+          if (p < end && *p == ',') {
+            ++p;
+            continue;
+          }
+          std::string fkey;
+          if (!parseJsonKey(p, end, fkey)) return false;
+          if (!expectChar(p, end, ':')) return false;
+
+          if (fkey == "name") {
+            if (!parseJsonString(p, end, family.name)) return false;
+          } else if (fkey == "description") {
+            if (!parseJsonString(p, end, family.description)) return false;
+          } else if (fkey == "files") {
+            skipWs(p, end);
+            if (!expectChar(p, end, '[')) return false;
+            while (p < end) {
+              skipWs(p, end);
+              if (p < end && *p == ']') {
+                ++p;
+                break;
+              }
+              if (p < end && *p == ',') {
+                ++p;
+                continue;
+              }
+              if (!expectChar(p, end, '{')) return false;
+              ManifestFile file;
+              bool sawCrc = false;
+              while (p < end) {
+                skipWs(p, end);
+                if (p < end && *p == '}') {
+                  ++p;
+                  break;
+                }
+                if (p < end && *p == ',') {
+                  ++p;
+                  continue;
+                }
+                std::string ikey;
+                if (!parseJsonKey(p, end, ikey)) return false;
+                if (!expectChar(p, end, ':')) return false;
+                if (ikey == "name") {
+                  if (!parseJsonString(p, end, file.name)) return false;
+                } else if (ikey == "size") {
+                  uint32_t sz = 0;
+                  if (!parseJsonUint(p, end, sz)) return false;
+                  file.size = static_cast<size_t>(sz);
+                } else if (ikey == "crc32") {
+                  uint32_t crc = 0;
+                  if (!parseJsonUint(p, end, crc)) return false;
+                  file.crc32 = crc;
+                  sawCrc = true;
+                } else {
+                  if (!skipJsonValue(p, end)) return false;
+                }
+              }
+              if (file.name.empty() || !sawCrc) {
+                errorMessage_ = "Invalid font manifest";
+                return false;
+              }
+              family.totalSize += file.size;
+              family.files.push_back(std::move(file));
+            }
+          } else {
+            // styles[] and any future keys — skip without allocating.
+            if (!skipJsonValue(p, end)) return false;
+          }
+        }
+        if (!family.name.empty() && !family.files.empty()) {
+          families_.push_back(std::move(family));
+        }
+      }
+    } else {
+      if (!skipJsonValue(p, end)) return false;
+    }
+  }
+
+  if (version != FONTS_MANIFEST_VERSION) {
+    LOG_ERR("FONT", "Unsupported manifest version: %d", version);
+    errorMessage_ = "Unsupported manifest version";
+    return false;
+  }
+  if (baseUrl_.empty() || families_.empty()) {
+    errorMessage_ = "Invalid font manifest";
+    return false;
+  }
+  return true;
+}
+
+void FontDownloadActivity::resolveInstalledFlags() {
+  fontInstaller_.refreshRegistry();
+  for (auto& family : families_) {
+    const bool firmwareBuiltin = isFirmwareBuiltinFamily(family.name.c_str());
+    family.installed = firmwareBuiltin || fontInstaller_.isFamilyInstalled(family.name.c_str());
+    family.hasUpdate = false;
+
+    if (family.installed && !firmwareBuiltin) {
+      for (const auto& file : family.files) {
+        char path[128];
+        FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), path, sizeof(path));
+        HalFile f;
+        if (Storage.openFileForRead("FONT", path, f)) {
+          const size_t actual = f.fileSize();
+          f.close();
+          if (actual != file.size) {
+            family.hasUpdate = true;
+            break;
+          }
+        } else {
+          family.hasUpdate = true;
+          break;
+        }
+      }
+    }
+  }
+}
+
 bool FontDownloadActivity::fetchAndParseManifest() {
-  // Download manifest to a temp file on SD card to avoid holding both
-  // network buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
   static constexpr int kManifestMaxAttempts = 5;
   static constexpr unsigned long kRetryDelayMs = 1500;
 
-  LOG_DBG("FONT", "Fetching font manifest: %s", FONT_MANIFEST_URL);
+  baseUrl_.clear();
+  families_.clear();
+
+  // Extra headroom right before HTTP (Wi‑Fi may have allocated scan tables).
+  prepareHeapForNetwork();
+
+  LOG_INF("FONT", "Fetching font manifest: %s", FONT_MANIFEST_URL);
   Storage.remove(MANIFEST_TMP);
   HttpDownloader::DownloadError result = HttpDownloader::HTTP_ERROR;
   for (int attempt = 1; attempt <= kManifestMaxAttempts; ++attempt) {
     if (attempt > 1) {
-      LOG_DBG("FONT", "Retrying font manifest download (%d/%d)", attempt, kManifestMaxAttempts);
+      LOG_INF("FONT", "Retrying font manifest download (%d/%d)", attempt, kManifestMaxAttempts);
       delay(kRetryDelayMs);
     }
     result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
     if (result == HttpDownloader::OK) break;
-    LOG_ERR("FONT", "Font manifest download attempt failed (%d/%d, error=%d)", attempt, kManifestMaxAttempts,
-            static_cast<int>(result));
+    LOG_ERR("FONT", "Font manifest download attempt failed (%d/%d, error=%d) free=%u maxAlloc=%u", attempt,
+            kManifestMaxAttempts, static_cast<int>(result), static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
@@ -106,7 +453,6 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
-  // HTTP client is now closed — TLS buffers freed. Parse JSON from file.
   HalFile manifestFile;
   if (!Storage.openFileForRead("FONT", MANIFEST_TMP, manifestFile)) {
     LOG_ERR("FONT", "Failed to open temp manifest");
@@ -115,89 +461,67 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
 
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, manifestFile);
-  manifestFile.close();
-  Storage.remove(MANIFEST_TMP);
-
-  if (err) {
-    LOG_ERR("FONT", "Manifest parse error: %s", err.c_str());
+  const size_t fileSize = manifestFile.fileSize();
+  // Cap: public catalog is ~30KB; reject absurd payloads.
+  constexpr size_t kMaxManifestBytes = 96 * 1024;
+  if (fileSize == 0 || fileSize > kMaxManifestBytes) {
+    LOG_ERR("FONT", "Manifest size invalid: %zu", fileSize);
+    manifestFile.close();
+    Storage.remove(MANIFEST_TMP);
     errorMessage_ = "Invalid font manifest";
     return false;
   }
 
-  int version = doc["version"] | 0;
-  if (version != FONTS_MANIFEST_VERSION) {
-    LOG_ERR("FONT", "Unsupported manifest version: %d", version);
-    errorMessage_ = "Unsupported manifest version";
+  LOG_INF("FONT", "Manifest on SD: %zu bytes free=%u maxAlloc=%u", fileSize, static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  if (ESP.getMaxAllocHeap() < fileSize + 4096) {
+    LOG_ERR("FONT", "Not enough contiguous heap for manifest buffer");
+    manifestFile.close();
+    Storage.remove(MANIFEST_TMP);
+    errorMessage_ = "Out of memory";
     return false;
   }
 
-  baseUrl_ = doc["baseUrl"] | "";
-  families_.clear();
-  fontInstaller_.refreshRegistry();
-
-  JsonArray familiesArr = doc["families"].as<JsonArray>();
-  families_.reserve(familiesArr.size());
-
-  for (JsonObject fObj : familiesArr) {
-    ManifestFamily family;
-    family.name = fObj["name"] | "";
-    family.description = fObj["description"] | "";
-
-    for (JsonVariant s : fObj["styles"].as<JsonArray>()) {
-      family.styles.push_back(s.as<std::string>());
-    }
-
-    family.totalSize = 0;
-    for (JsonObject fileObj : fObj["files"].as<JsonArray>()) {
-      ManifestFile file;
-      file.name = fileObj["name"] | "";
-      file.size = fileObj["size"] | 0;
-
-      if (!fileObj["crc32"].is<uint32_t>()) {
-        LOG_ERR("FONT", "Malformed manifest file entry: missing or invalid crc32 for %s", file.name.c_str());
-        errorMessage_ = "Invalid font manifest";
-        return false;
-      }
-      file.crc32 = fileObj["crc32"].as<uint32_t>();
-
-      family.totalSize += file.size;
-      family.files.push_back(std::move(file));
-    }
-
-    // Firmware ships Lexend Deca + Bitter in flash; treat those as installed even
-    // when there is no SD copy (isFamilyInstalled only sees /.fonts).
-    const bool firmwareBuiltin = isFirmwareBuiltinFamily(family.name.c_str());
-    family.installed = firmwareBuiltin || fontInstaller_.isFamilyInstalled(family.name.c_str());
-
-    // Detect updates by comparing manifest file sizes with files on disk.
-    // Not a checksum, but a size mismatch reliably indicates a rebuild in practice.
-    // Skip for firmware builtins — they are not SD packages and would always look "missing".
-    if (family.installed && !firmwareBuiltin) {
-      for (const auto& file : family.files) {
-        char path[128];
-        FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), path, sizeof(path));
-        HalFile f;
-        if (Storage.openFileForRead("FONT", path, f)) {
-          size_t actual = f.fileSize();
-          f.close();
-          if (actual != file.size) {
-            family.hasUpdate = true;
-            break;
-          }
-        } else {
-          // File missing on disk but family dir exists — treat as update
-          family.hasUpdate = true;
-          break;
-        }
-      }
-    }
-
-    families_.push_back(std::move(family));
+  auto buf = makeUniqueNoThrow<char[]>(fileSize + 1);
+  if (!buf) {
+    LOG_ERR("FONT", "OOM allocating %zu-byte manifest buffer", fileSize + 1);
+    manifestFile.close();
+    Storage.remove(MANIFEST_TMP);
+    errorMessage_ = "Out of memory";
+    return false;
   }
 
-  LOG_DBG("FONT", "Manifest loaded: %zu families", families_.size());
+  size_t got = 0;
+  while (got < fileSize) {
+    const int n = manifestFile.read(reinterpret_cast<uint8_t*>(buf.get() + got), fileSize - got);
+    if (n <= 0) break;
+    got += static_cast<size_t>(n);
+  }
+  manifestFile.close();
+  Storage.remove(MANIFEST_TMP);
+  buf[got] = '\0';
+
+  if (got != fileSize) {
+    LOG_ERR("FONT", "Short read of manifest: %zu/%zu", got, fileSize);
+    errorMessage_ = "Failed to read font list";
+    return false;
+  }
+
+  if (!parseManifestBuffer(buf.get(), got)) {
+    if (errorMessage_.empty()) errorMessage_ = "Invalid font manifest";
+    LOG_ERR("FONT", "Manifest parse failed free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    families_.clear();
+    return false;
+  }
+  // Drop file buffer before registry rediscover + stringy path checks.
+  buf.reset();
+
+  resolveInstalledFlags();
+
+  LOG_INF("FONT", "Manifest loaded: %zu families free=%u maxAlloc=%u", families_.size(),
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
   return true;
 }
 
@@ -304,9 +628,13 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
-  // Font .cpfont files + TLS need large contiguous heap. Log free heap and
-  // yield so other tasks can release short-lived buffers before the download.
-  LOG_DBG("FONT", "Heap before download %s: free=%u largest=%u", family.name.c_str(),
+  // Free glyph cache + scan residue only — keep families_ and do not thrash
+  // registry mid-catalog (list already resolved installed flags).
+  if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+    if (!fcm->isScanning()) fcm->clearCache();
+  }
+  WiFi.scanDelete();
+  LOG_INF("FONT", "Heap before download %s: free=%u largest=%u", family.name.c_str(),
           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
   delay(50);
   yield();
@@ -415,6 +743,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   fontInstaller_.refreshRegistry();
   family.installed = true;
   family.hasUpdate = false;
+  fontsChanged_ = true;
 
   {
     RenderLock lock(*this);
@@ -431,7 +760,9 @@ void FontDownloadActivity::promptDeleteSelectedFamily() {
   std::string heading = tr(STR_DELETE);
   const auto& family = families_[pendingDeleteFamilyIndex];
   std::string body = family.name;
-  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, body),
+  auto confirm = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, heading, body);
+  if (!confirm) return;
+  startActivityForResult(std::move(confirm),
                          [this](const ActivityResult& result) { onDeleteConfirmationResult(result); });
 }
 
@@ -451,6 +782,7 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
     fontInstaller_.refreshRegistry();
     family.installed = false;
     family.hasUpdate = false;
+    fontsChanged_ = true;
   }
 
   requestUpdate();
@@ -467,6 +799,11 @@ bool FontDownloadActivity::isSelectedFamilyDeletable() const {
 // --- Input handling ---
 
 void FontDownloadActivity::loop() {
+  if (pendingManifestFetch_) {
+    runPendingManifestFetch();
+    return;
+  }
+
   if (state_ == FAMILY_LIST) {
     auto activateSelected = [this] {
       if (families_.empty()) return;
@@ -573,28 +910,51 @@ void FontDownloadActivity::loop() {
       requestUpdate();
     }
   } else if (state_ == ERROR) {
+    // Manifest load failed (no list) or install failed — Back leaves the activity.
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      if (families_.empty()) {
+        finish();
+        return;
+      }
       {
         RenderLock lock(*this);
         state_ = FAMILY_LIST;
       }
       requestUpdate();
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+      if (families_.empty()) {
+        // Retry list fetch
+        {
+          RenderLock lock(*this);
+          state_ = LOADING_MANIFEST;
+        }
+        pendingManifestFetch_ = true;
+        requestUpdate();
+        return;
+      }
       if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
         downloadFamily(families_[downloadingFamilyIndex_]);
         requestUpdateAndWait();
         return;
-      } else {
-        {
-          RenderLock lock(*this);
-          state_ = FAMILY_LIST;
-        }
-        requestUpdate();
       }
+      {
+        RenderLock lock(*this);
+        state_ = FAMILY_LIST;
+      }
+      requestUpdate();
     } else {
       int x = 0;
       int y = 0;
       if (mappedInput.wasScreenTapped(x, y)) {
+        if (families_.empty()) {
+          {
+            RenderLock lock(*this);
+            state_ = LOADING_MANIFEST;
+          }
+          pendingManifestFetch_ = true;
+          requestUpdate();
+          return;
+        }
         if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
           downloadFamily(families_[downloadingFamilyIndex_]);
           requestUpdateAndWait();
@@ -606,6 +966,11 @@ void FontDownloadActivity::loop() {
         }
         requestUpdate();
       }
+    }
+  } else if (state_ == LOADING_MANIFEST) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      cancelRequested_ = true;
+      finish();
     }
   }
 }
@@ -637,7 +1002,7 @@ void FontDownloadActivity::render(RenderLock&&) {
   const auto contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const auto centerY = (pageHeight - lineHeight) / 2;
 
-  if (state_ == LOADING_MANIFEST) {
+  if (state_ == LOADING_MANIFEST || pendingManifestFetch_) {
     renderer.drawCenteredText(UI_10_FONT_ID, centerY, tr(STR_LOADING_FONT_LIST));
   } else if (state_ == FAMILY_LIST) {
     if (families_.empty()) {
@@ -716,6 +1081,9 @@ void FontDownloadActivity::render(RenderLock&&) {
     }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (state_ == WIFI_SELECTION) {
+    // Brief frame before Wi‑Fi UI takes over (or if Wi‑Fi activity failed to start).
+    renderer.drawCenteredText(UI_10_FONT_ID, centerY, tr(STR_LOADING_FONT_LIST));
   }
 
   UiGhostPolicy::displayMenuFrame(renderer);

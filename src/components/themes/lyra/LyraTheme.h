@@ -48,13 +48,16 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .popupFrameThickness = 2,
                                  .popupCornerRadius = 6,
                                  .popupTextBold = false,
-                                 .popupTextInverted = false,
+                                 // Body text polarity is fixed in BaseTheme::drawPopup
+                                 // (black on white pill). Kept true for any callers that
+                                 // still read the flag for progress-bar fill semantics.
+                                 .popupTextInverted = true,
                                  .popupTextBaselineOffsetY = -2,
                                  .popupProgressBarHeight = 4,
                                  .popupProgressDrawOutline = false,
                                  .popupProgressClampPercent = false,
-                                 .popupProgressFillInverted = false,
-                                 .popupProgressOutlineInverted = false,
+                                 .popupProgressFillInverted = true,
+                                 .popupProgressOutlineInverted = true,
                                  // Tighter than list rows so long pickers (status-bar slots)
                                  // fit on-screen with scrolling rather than overflowing.
                                  .optionPopupItemSpacing = 2,

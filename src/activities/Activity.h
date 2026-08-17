@@ -50,6 +50,11 @@ class Activity {
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }
   virtual bool isHomeActivity() const { return false; }
+  virtual bool isSettingsActivity() const { return false; }
+  // Reader book menu (EpubReaderMenuActivity) — QR can reopen it after the book.
+  virtual bool isReaderMenuActivity() const { return false; }
+  // Flush book progress / settings before deep sleep while the activity is still alive.
+  virtual void persistProgressForSleep() {}
   virtual bool handleHomeGesture() { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 

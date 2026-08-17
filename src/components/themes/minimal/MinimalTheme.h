@@ -4,7 +4,7 @@
 
 #include "components/themes/lyra/LyraTheme.h"
 
-// Thin Minimal theme for CrossPoint 1.5: metrics + text-only bottom labels.
+// Thin Minimal theme for Casper 1.5: metrics + text-only bottom labels.
 // Dashboard (Stats) and Bare both use this footer style; Bare only reorders labels.
 namespace MinimalMetrics {
 constexpr int coverWidthForHeight(const int coverHeight) {

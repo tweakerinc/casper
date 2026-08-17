@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 
+#include "DitherUtils.h"
+
 class GfxRenderer;
 
 struct ImageDimensions {
@@ -18,8 +20,11 @@ struct RenderConfig {
   bool useDithering = true;
   bool performanceMode = false;
   bool useExactDimensions = false;  // If true, use maxWidth/maxHeight as exact output size (no recalculation)
-  // Darken midtones for drop-cap letter glyphs only. Full Tenniel plates must
-  // stay neutral or shaded inserts render as solid black boxes on BW.
+  // Plate = photos/art (lift). Ink = drop-cap letters (darken).
+  // Cover = document text-in-JPEG / Illuminae briefings (cover-thumb midtones,
+  // Bayer only — no Atkinson multipass like home cover gen).
+  EinkImageTone tone = EinkImageTone::Plate;
+  // Legacy alias: true → Ink, false leaves tone as set (default Plate).
   bool inkBias = false;
   // When false, decoders only populate cachePath (.pxc) and never touch the
   // live framebuffer. Layout precache runs mid-SAX under a deep stack; writing
@@ -27,6 +32,11 @@ struct RenderConfig {
   // heap is already fragmented after TextSettings reflow.
   bool writeToFramebuffer = true;
   std::string cachePath;  // If non-empty, decoder will write pixel cache to this path
+
+  EinkImageTone resolvedTone() const {
+    if (inkBias) return EinkImageTone::Ink;
+    return tone;
+  }
 };
 
 class ImageToFramebufferDecoder {

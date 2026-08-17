@@ -8,7 +8,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "util/CasperLogPaths.h"
 
 // Append-only Quick Resume timing log: /.casper-logs/qr_timing.log only.
@@ -52,7 +52,7 @@ inline void appendRaw(const char* text) {
 inline void begin(const char* reason) {
   // Gated with System → Enable Logging (same switch as SystemLog). Crash reports
   // are independent and always write.
-  if (SETTINGS.systemLogLevel == CrossPointSettings::SYSTEM_LOG_OFF) {
+  if (SETTINGS.systemLogLevel == CasperSettings::SYSTEM_LOG_OFF) {
     gActive = false;
     return;
   }
@@ -64,8 +64,8 @@ inline void begin(const char* reason) {
            "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s\n",
            static_cast<unsigned long>(gT0), reason ? reason : "?", gpio.deviceIsX3() ? "X3" : "X4",
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
-#ifdef CROSSPOINT_VERSION
-           CROSSPOINT_VERSION
+#ifdef CASPER_VERSION
+           CASPER_VERSION
 #else
            "?"
 #endif

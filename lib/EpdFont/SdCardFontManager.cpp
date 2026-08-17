@@ -6,6 +6,9 @@
 #include <SdCardFont.h>
 #include <SdCardFontRegistry.h>
 
+#include <algorithm>
+#include <cstdlib>
+
 SdCardFontManager::~SdCardFontManager() {
   for (auto& lf : loaded_) {
     delete lf.font;
@@ -113,4 +116,91 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
 int SdCardFontManager::getFontId(const std::string& familyName) const {
   if (familyName != loadedFamilyName_ || loaded_.empty()) return 0;
   return loaded_.front().fontId;
+}
+
+bool SdCardFontManager::ownsFontId(const int fontId) const {
+  if (fontId == 0) return false;
+  for (const auto& lf : loaded_) {
+    if (lf.fontId == fontId) return true;
+  }
+  return false;
+}
+
+bool SdCardFontManager::fillRelativeLadder(const int baseFontId, const SdCardFontFamilyInfo& family,
+                                           GfxRenderer& renderer, int outFontIdByStep[5]) {
+  if (!ownsFontId(baseFontId) || !outFontIdByStep) return false;
+
+  // Standard reader point sizes (matches builtin Literata/SS4 ladders).
+  static constexpr uint8_t kReaderPts[] = {8, 10, 12, 14, 16, 18};
+  static constexpr int kN = 6;
+
+  uint8_t basePt = 0;
+  for (const auto& lf : loaded_) {
+    if (lf.fontId == baseFontId) {
+      basePt = lf.size;
+      break;
+    }
+  }
+  if (basePt == 0) basePt = loadedPointSize_;
+  if (basePt == 0) return false;
+
+  // Map basePt onto the nearest index in kReaderPts for relative step math.
+  int baseIdx = 0;
+  int bestDist = 255;
+  for (int i = 0; i < kN; ++i) {
+    const int d = std::abs(static_cast<int>(kReaderPts[i]) - static_cast<int>(basePt));
+    if (d < bestDist) {
+      bestDist = d;
+      baseIdx = i;
+    }
+  }
+
+  int distinct = 0;
+  int lastId = 0;
+  // StyleResolve sizeStep is still 0..4 relative to user base (SIZE_STEP_BASE=2).
+  // Map those five relative steps onto the absolute 6-rung point ladder.
+  static constexpr int kStepBase = 2;
+  static constexpr int kStepMax = 4;
+  for (int step = 0; step <= kStepMax; ++step) {
+    const int absIdx = std::max(0, std::min(kN - 1, baseIdx + (step - kStepBase)));
+    const uint8_t wantPt = kReaderPts[absIdx];
+    int id = 0;
+    // Prefer already-loaded face at this point size.
+    for (const auto& lf : loaded_) {
+      if (lf.size == wantPt) {
+        id = lf.fontId;
+        break;
+      }
+    }
+    if (id == 0) {
+      id = loadFamilyExtraSize(family, renderer, wantPt);
+    }
+    // Fallback: closest loaded size if this pt is missing on disk.
+    if (id == 0) {
+      int best = -1;
+      int bestD = 255;
+      for (const auto& lf : loaded_) {
+        const int d = std::abs(static_cast<int>(lf.size) - static_cast<int>(wantPt));
+        if (d < bestD) {
+          bestD = d;
+          best = lf.fontId;
+        }
+      }
+      id = best > 0 ? best : baseFontId;
+    }
+    outFontIdByStep[step] = id;
+    if (id != 0 && id != lastId) {
+      if (lastId != 0) ++distinct;
+      lastId = id;
+    }
+  }
+  // Ensure base step maps to the caller's baseFontId when possible.
+  outFontIdByStep[kStepBase] = baseFontId;
+  // Multi-size only when we actually have more than one face.
+  for (int step = 0; step <= kStepMax; ++step) {
+    if (outFontIdByStep[step] != 0 && outFontIdByStep[step] != baseFontId) {
+      return true;
+    }
+  }
+  return false;
 }

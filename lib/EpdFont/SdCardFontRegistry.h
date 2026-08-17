@@ -44,6 +44,13 @@ class SdCardFontRegistry {
   // Scan SD card, populate families_. Returns true if any families found.
   bool discover();
 
+  // Drop the in-memory catalog (paths/names). Used before large network/JSON
+  // work so discovery strings are not resident alongside TLS + ArduinoJson.
+  void clear() {
+    families_.clear();
+    families_.shrink_to_fit();
+  }
+
   const std::vector<SdCardFontFamilyInfo>& getFamilies() const { return families_; }
   const SdCardFontFamilyInfo* findFamily(const std::string& name) const;
   int getFamilyIndex(const std::string& name) const;

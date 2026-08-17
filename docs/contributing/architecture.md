@@ -136,8 +136,8 @@ Notes:
 
 Two singletons are central:
 
-- `src/CrossPointSettings.h` (`SETTINGS`): user preferences and behavior flags
-- `src/CrossPointState.h` (`APP_STATE`): runtime/session state such as current book and sleep context
+- `src/CasperSettings.h` (`SETTINGS`): user preferences and behavior flags
+- `src/CasperState.h` (`APP_STATE`): runtime/session state such as current book and sleep context
 
 Typical persisted areas on SD:
 
@@ -160,7 +160,7 @@ binary cache formats, see `docs/file-formats.md`.
 
 ## Networking architecture
 
-Network file transfer is controlled by `src/activities/network/CrossPointWebServerActivity.h` and served by `src/network/CrossPointWebServer.h`.
+Network file transfer is controlled by `src/activities/network/CasperWebServerActivity.h` and served by `src/network/CasperWebServer.h`.
 
 Modes:
 

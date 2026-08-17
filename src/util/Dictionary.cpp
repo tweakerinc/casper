@@ -606,6 +606,8 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out) 
     path = basePath + ".dict";
     offset = location.offset;
   } else {
+    // Ensure Casper root exists (first dict use may precede other stores).
+    Storage.mkdir("/.crosspoint");
     HalFile tmp = Storage.open(DICT_TMP_FILE, O_WRITE | O_CREAT | O_TRUNC);
     if (!tmp) {
       LOG_ERR("DICT", "Failed to open %s", DICT_TMP_FILE);
@@ -649,7 +651,7 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out) 
 std::string Dictionary::cleanWord(const char* word) {
   if (!word || !*word) return "";
 
-  // Port of Casper/CrossInk normalizeWord for StarDict keys:
+  // Port of Casper/legacy normalizeWord for StarDict keys:
   // - lowercase ASCII letters
   // - keep Spanish letters (UTF-8 C3 accents + ñ)
   // - keep ASCII hyphens in compounds (well-known)

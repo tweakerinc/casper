@@ -4,16 +4,18 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <string>
 #include <vector>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "FontDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
+#include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/UiGhostPolicy.h"
@@ -27,16 +29,23 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontF
     const auto& families = registry->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       if (families[i].name == sdFontFamilyName) {
-        return CrossPointSettings::BUILTIN_FONT_COUNT + i;
+        return CasperSettings::BUILTIN_FONT_COUNT + i;
       }
     }
   }
 
-  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  return fontFamily < CasperSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
 }
 
-int findCurrentFontSizeIndex(uint8_t fontSize, size_t listSize) {
-  return fontSize < listSize ? fontSize : 0;  // default SMALL (Lexend Deca 12)
+// Map SETTINGS.fontSize (FONT_SIZE enum, not list position) → index in a size list.
+// Never treat the enum ordinal as a list index: after 8/18 were dropped the
+// builtin list is [10,12,14,16] so SIZE_10(=1) would wrongly highlight "12".
+template <typename SizeEntryT>
+int findSizeListIndex(const std::vector<SizeEntryT>& sizes, const uint8_t fontSize) {
+  for (int i = 0; i < static_cast<int>(sizes.size()); ++i) {
+    if (sizes[static_cast<size_t>(i)].settingIndex == fontSize) return i;
+  }
+  return 0;
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
@@ -44,9 +53,9 @@ constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId
 // Storage: JUSTIFIED=0, LEFT=1, CENTER=2, RIGHT=3, BOOK_STYLE=4.
 constexpr StrId ALIGNMENT_DISPLAY_IDS[] = {StrId::STR_BOOK_S_STYLE, StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT,
                                            StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
-constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {CrossPointSettings::BOOK_STYLE, CrossPointSettings::JUSTIFIED,
-                                                    CrossPointSettings::LEFT_ALIGN, CrossPointSettings::CENTER_ALIGN,
-                                                    CrossPointSettings::RIGHT_ALIGN};
+constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {CasperSettings::BOOK_STYLE, CasperSettings::JUSTIFIED,
+                                                    CasperSettings::LEFT_ALIGN, CasperSettings::CENTER_ALIGN,
+                                                    CasperSettings::RIGHT_ALIGN};
 static_assert(std::size(ALIGNMENT_DISPLAY_IDS) == std::size(ALIGNMENT_DISPLAY_TO_SETTING));
 
 int alignmentDisplayIndex(const uint8_t setting) {
@@ -59,12 +68,12 @@ int alignmentDisplayIndex(const uint8_t setting) {
 // Book's Style = publisher CSS (embedded on). Any forced alignment = plain body (embedded off).
 void applyAlignmentAndEmbedded(const uint8_t paragraphAlignment) {
   SETTINGS.paragraphAlignment = paragraphAlignment;
-  SETTINGS.embeddedStyle = (paragraphAlignment == CrossPointSettings::BOOK_STYLE) ? 1 : 0;
+  SETTINGS.embeddedStyle = (paragraphAlignment == CasperSettings::BOOK_STYLE) ? 1 : 0;
 }
 
-constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
-constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
-constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
+constexpr int MARGIN_MIN = CasperSettings::SCREEN_MARGIN_MIN;
+constexpr int MARGIN_MAX = CasperSettings::SCREEN_MARGIN_MAX;
+constexpr int MARGIN_STEP = CasperSettings::SCREEN_MARGIN_STEP;
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -86,17 +95,8 @@ void TextSettingsActivity::onEnter() {
 
   rebuildFontList();
 
-  // Point sizes matching built-in faces (10 / 12 / 14 / 16 / 18).
-  sizes_.clear();
-  sizes_.reserve(CrossPointSettings::FONT_SIZE_COUNT);
-  sizes_.push_back({"10", static_cast<uint8_t>(CrossPointSettings::SIZE_10)});
-  sizes_.push_back({"12", static_cast<uint8_t>(CrossPointSettings::SIZE_12)});
-  sizes_.push_back({"14", static_cast<uint8_t>(CrossPointSettings::SIZE_14)});
-  sizes_.push_back({"16", static_cast<uint8_t>(CrossPointSettings::SIZE_16)});
-  sizes_.push_back({"18", static_cast<uint8_t>(CrossPointSettings::SIZE_18)});
-
   currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-  currentSizeIndex_ = findCurrentFontSizeIndex(SETTINGS.fontSize, sizes_.size());
+  rebuildSizeList();  // sets currentSizeIndex_ from SETTINGS.fontSize via settingIndex match
   // Nav ring: 0 = tab bar, 1..N = list rows. Open focused on the tab bar so the
   // user can pick Font / Size / Layout / … before diving into a list item.
   std::fill(std::begin(selectedIndex_), std::end(selectedIndex_), 0);
@@ -120,7 +120,12 @@ void TextSettingsActivity::armAwaitOpenButtonRelease(const bool force) {
   awaitOpenButtonRelease_ = force || held;
 }
 
-void TextSettingsActivity::onExit() { Activity::onExit(); }
+void TextSettingsActivity::onExit() {
+  // Persist font/layout/style toggles. Without this, Extra Paragraph Spacing (and
+  // other Text Settings) only lived in RAM and reset to factory defaults on reboot.
+  (void)SETTINGS.saveToFile();
+  Activity::onExit();
+}
 
 TextSettingsActivity::PaneGeometry TextSettingsActivity::paneGeometry() const {
   // Fixed panes so tab changes never shift layout:
@@ -254,7 +259,7 @@ void TextSettingsActivity::loop() {
 
   // Finish on release, not press. When this screen is opened from the reader
   // menu, a press-to-finish leaves a Back release for the reader — and the
-  // reader treats any Back release as "go home" after reflow. Match CrossPoint.
+  // reader treats any Back release as "go home" after reflow. Match Casper.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -335,6 +340,7 @@ void TextSettingsActivity::loop() {
 void TextSettingsActivity::render(RenderLock&&) {
   if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
 
+  clampStyleSelection();
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -393,28 +399,55 @@ void TextSettingsActivity::render(RenderLock&&) {
       break;
 
     case Tab::Layout: {
-      constexpr int LAYOUT_ROWS = static_cast<int>(LayoutRow::Count);
-      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_ALIGNMENT, StrId::STR_EXTRA_SPACING,
-                                                          StrId::STR_LINE_SPACING, StrId::STR_SCREEN_MARGIN};
+      const auto layoutRows = visibleLayoutRows();
+      const int layoutCount = static_cast<int>(layoutRows.size());
       GUI.drawList(
-          renderer, listRect, LAYOUT_ROWS, selectedItem,
-          [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
-          [this](int index) { return layoutValueText(index); }, true);
+          renderer, listRect, layoutCount, selectedItem,
+          [this](int index) {
+            switch (layoutRowAt(index)) {
+              case LayoutRow::Alignment:
+                return std::string(tr(STR_ALIGNMENT));
+              case LayoutRow::ParaSpacing:
+                return std::string(tr(STR_EXTRA_SPACING));
+              case LayoutRow::SpacingHeight:
+                return std::string(tr(STR_SPACING_HEIGHT));
+              case LayoutRow::LineSpacing:
+                return std::string(tr(STR_LINE_SPACING));
+              case LayoutRow::ScreenMargin:
+                return std::string(tr(STR_SCREEN_MARGIN));
+              default:
+                return std::string();
+            }
+          },
+          nullptr, nullptr, [this](int index) { return layoutValueText(index); }, true);
       if (onTabBar)
         confirmLabel = tr(STR_STYLE);
       else  // Extra Paragraph Spacing toggles; the rest open a picker
-        confirmLabel = (selectedItem == static_cast<int>(LayoutRow::ParaSpacing)) ? tr(STR_TOGGLE) : tr(STR_SELECT);
+        confirmLabel =
+            (layoutRowAt(selectedItem) == LayoutRow::ParaSpacing) ? tr(STR_TOGGLE) : tr(STR_SELECT);
       break;
     }
 
     case Tab::Style: {
-      constexpr int STYLE_ROWS = static_cast<int>(StyleRow::Count);
-      static constexpr StrId ROW_NAME_IDS[STYLE_ROWS] = {StrId::STR_BIONIC_READING, StrId::STR_GUIDE_READING,
-                                                         StrId::STR_HYPHENATION, StrId::STR_TEXT_AA};
+      const auto styleRows = visibleStyleRows();
+      const int styleCount = static_cast<int>(styleRows.size());
       GUI.drawList(
-          renderer, listRect, STYLE_ROWS, selectedItem,
-          [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
-          [this](int index) { return styleValueText(index); }, true);
+          renderer, listRect, styleCount, selectedItem,
+          [this](int index) {
+            switch (styleRowAt(index)) {
+              case StyleRow::BionicReading:
+                return std::string(tr(STR_BIONIC_READING));
+              case StyleRow::GuideDots:
+                return std::string(tr(STR_GUIDE_READING));
+              case StyleRow::Hyphenation:
+                return std::string(tr(STR_HYPHENATION));
+              case StyleRow::AntiAliasing:
+                return std::string(tr(STR_TEXT_AA));
+              default:
+                return std::string();
+            }
+          },
+          nullptr, nullptr, [this](int index) { return styleValueText(index); }, true);
       confirmLabel = onTabBar ? tr(STR_FONT) : tr(STR_TOGGLE);
       break;
     }
@@ -483,17 +516,110 @@ void TextSettingsActivity::render(RenderLock&&) {
 // arrays out from under prewarmStyle() (crash: null s.miniGlyphs mid-read/sort).
 void TextSettingsActivity::rebuildFontList() {
   fonts_.clear();
-  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
-  fonts_.push_back({I18N.get(StrId::STR_SOURCE_SERIF_4), true, static_cast<uint8_t>(CrossPointSettings::SOURCESERIF4)});
-  fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::LEXENDDECA)});
+  fonts_.reserve(CasperSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
+  // Brand names are fixed product labels (not translated). Literal avoids stale i18n
+  // blobs / partial flashes still saying "Source Serif 4".
+  fonts_.push_back({"Sourcerer", true, static_cast<uint8_t>(CasperSettings::SOURCESERIF4)});
+  fonts_.push_back({"Literata", true, static_cast<uint8_t>(CasperSettings::LITERATA)});
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CasperSettings::BUILTIN_FONT_COUNT + i)});
     }
   }
   // Last row: open catalog / Wi‑Fi download (keeps tab bar to four labels so type stays large).
   fonts_.push_back({I18N.get(StrId::STR_DOWNLOAD_FONTS), false, 0, /*isDownloadAction=*/true});
+}
+
+void TextSettingsActivity::rebuildSizeList() {
+  sizes_.clear();
+  sizes_.reserve(CasperSettings::FONT_SIZE_COUNT);
+
+  // Built-in reader faces ship 10/12/14/16 only (8/18 flash cut). SD packs may list any size.
+  const bool usingSd = SETTINGS.sdFontFamilyName[0] != '\0' && registry_;
+  if (usingSd) {
+    const auto* fam = registry_->findFamily(SETTINGS.sdFontFamilyName);
+    if (fam) {
+      const std::vector<uint8_t> pts = fam->availableSizes();
+      for (const uint8_t pt : pts) {
+        uint8_t enumIdx = CasperSettings::SIZE_12;
+        switch (pt) {
+          case 8:
+            enumIdx = CasperSettings::SIZE_8;
+            break;
+          case 10:
+            enumIdx = CasperSettings::SIZE_10;
+            break;
+          case 12:
+            enumIdx = CasperSettings::SIZE_12;
+            break;
+          case 14:
+            enumIdx = CasperSettings::SIZE_14;
+            break;
+          case 16:
+            enumIdx = CasperSettings::SIZE_16;
+            break;
+          case 18:
+            enumIdx = CasperSettings::SIZE_18;
+            break;
+          default:
+            // Map odd SD sizes onto nearest enum slot by point value for resolver.
+            if (pt < 9)
+              enumIdx = CasperSettings::SIZE_8;
+            else if (pt < 11)
+              enumIdx = CasperSettings::SIZE_10;
+            else if (pt < 13)
+              enumIdx = CasperSettings::SIZE_12;
+            else if (pt < 15)
+              enumIdx = CasperSettings::SIZE_14;
+            else if (pt < 17)
+              enumIdx = CasperSettings::SIZE_16;
+            else
+              enumIdx = CasperSettings::SIZE_18;
+            break;
+        }
+        char label[8];
+        std::snprintf(label, sizeof(label), "%u", static_cast<unsigned>(pt));
+        // Prefer listing each physical point once (label = real pt).
+        bool dup = false;
+        for (const auto& s : sizes_) {
+          if (s.name == label) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) sizes_.push_back({label, enumIdx});
+      }
+    }
+  }
+  if (sizes_.empty()) {
+    // Builtin ship set.
+    sizes_.push_back({"10", static_cast<uint8_t>(CasperSettings::SIZE_10)});
+    sizes_.push_back({"12", static_cast<uint8_t>(CasperSettings::SIZE_12)});
+    sizes_.push_back({"14", static_cast<uint8_t>(CasperSettings::SIZE_14)});
+    sizes_.push_back({"16", static_cast<uint8_t>(CasperSettings::SIZE_16)});
+  }
+
+  // If saved fontSize is not in the list, snap to nearest listed enum.
+  bool have = false;
+  for (const auto& s : sizes_) {
+    if (s.settingIndex == SETTINGS.fontSize) {
+      have = true;
+      break;
+    }
+  }
+  if (!have && !sizes_.empty()) {
+    // Prefer 12 if present, else first entry.
+    uint8_t pick = sizes_[0].settingIndex;
+    for (const auto& s : sizes_) {
+      if (s.settingIndex == CasperSettings::SIZE_12) {
+        pick = s.settingIndex;
+        break;
+      }
+    }
+    SETTINGS.fontSize = pick;
+  }
+  currentSizeIndex_ = findSizeListIndex(sizes_, SETTINGS.fontSize);
 }
 
 void TextSettingsActivity::applyFamily(int listIndex) {
@@ -506,7 +632,7 @@ void TextSettingsActivity::applyFamily(int listIndex) {
     sdFontSystem.ensureLoaded(renderer);  // unloads the previously resident SD font
     currentFamilyIndex_ = listIndex;
   } else if (registry_) {
-    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
+    const int sdIdx = font.settingIndex - CasperSettings::BUILTIN_FONT_COUNT;
     const auto& families = registry_->getFamilies();
     if (sdIdx < static_cast<int>(families.size())) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -515,6 +641,7 @@ void TextSettingsActivity::applyFamily(int listIndex) {
       currentFamilyIndex_ = listIndex;
     }
   }
+  rebuildSizeList();
 }
 
 void TextSettingsActivity::activateRow(int row) {
@@ -522,13 +649,8 @@ void TextSettingsActivity::activateRow(int row) {
     case Tab::Family:
       if (row < 0 || row >= static_cast<int>(fonts_.size())) break;
       if (fonts_[row].isDownloadAction) {
-        startActivityForResult(
-            std::make_unique<FontDownloadActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-              sdFontSystem.refreshIfDirty();
-              rebuildFontList();
-              currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
-              requestUpdate();
-            });
+        startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
+                               [this](const ActivityResult&) { requestUpdate(); });
         break;
       }
       if (row != currentFamilyIndex_) {
@@ -543,7 +665,7 @@ void TextSettingsActivity::activateRow(int row) {
       }
       break;
     case Tab::Layout:
-      confirmLayoutRow(row);
+      confirmLayoutRow(static_cast<int>(layoutRowAt(row)));
       break;
     case Tab::Style:
       confirmStyleRow(row);
@@ -563,23 +685,105 @@ void TextSettingsActivity::applySize(int listIndex) {
   sdFontSystem.ensureLoaded(renderer);
 }
 
+std::vector<TextSettingsActivity::StyleRow> TextSettingsActivity::visibleStyleRows() const {
+  std::vector<StyleRow> rows;
+  rows.reserve(static_cast<size_t>(StyleRow::Count));
+  // Bionic + Guide Dots do nothing under Book's Style — hide so users aren't confused.
+  if (SETTINGS.paragraphAlignment != CasperSettings::BOOK_STYLE) {
+    rows.push_back(StyleRow::BionicReading);
+    rows.push_back(StyleRow::GuideDots);
+  }
+  rows.push_back(StyleRow::Hyphenation);
+  rows.push_back(StyleRow::AntiAliasing);
+  return rows;
+}
+
+TextSettingsActivity::StyleRow TextSettingsActivity::styleRowAt(const int listIndex) const {
+  const auto rows = visibleStyleRows();
+  if (listIndex < 0 || listIndex >= static_cast<int>(rows.size())) return StyleRow::Count;
+  return rows[static_cast<size_t>(listIndex)];
+}
+
+void TextSettingsActivity::clampStyleSelection() {
+  if (tab_ != Tab::Style) return;
+  const int n = static_cast<int>(visibleStyleRows().size());
+  int& sel = selectedIndex();
+  // 0 = tab bar; 1..n = list rows.
+  if (sel > n) sel = (n > 0) ? n : 0;
+}
+
+std::vector<TextSettingsActivity::LayoutRow> TextSettingsActivity::visibleLayoutRows() const {
+  std::vector<LayoutRow> rows;
+  rows.reserve(static_cast<size_t>(LayoutRow::Count));
+  rows.push_back(LayoutRow::Alignment);
+  rows.push_back(LayoutRow::ParaSpacing);
+  // Nested under Extra Paragraph Spacing — only when that toggle is On.
+  if (SETTINGS.extraParagraphSpacing != 0) {
+    rows.push_back(LayoutRow::SpacingHeight);
+  }
+  rows.push_back(LayoutRow::LineSpacing);
+  rows.push_back(LayoutRow::ScreenMargin);
+  return rows;
+}
+
+TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int listIndex) const {
+  const auto rows = visibleLayoutRows();
+  if (listIndex < 0 || listIndex >= static_cast<int>(rows.size())) return LayoutRow::Count;
+  return rows[static_cast<size_t>(listIndex)];
+}
+
+void TextSettingsActivity::clampLayoutSelection() {
+  if (tab_ != Tab::Layout) return;
+  const int n = static_cast<int>(visibleLayoutRows().size());
+  int& sel = selectedIndex();
+  if (sel > n) sel = (n > 0) ? n : 0;
+}
+
 void TextSettingsActivity::confirmLayoutRow(int row) {
   switch (static_cast<LayoutRow>(row)) {
     case LayoutRow::Alignment:
       optionPopup_.show(StrId::STR_ALIGNMENT, ALIGNMENT_DISPLAY_IDS, static_cast<int>(std::size(ALIGNMENT_DISPLAY_IDS)),
-                        alignmentDisplayIndex(SETTINGS.paragraphAlignment), [](int idx) {
+                        alignmentDisplayIndex(SETTINGS.paragraphAlignment), [this](int idx) {
                           if (idx < 0 || idx >= static_cast<int>(std::size(ALIGNMENT_DISPLAY_TO_SETTING))) return;
                           applyAlignmentAndEmbedded(ALIGNMENT_DISPLAY_TO_SETTING[idx]);
+                          (void)SETTINGS.saveToFile();
+                          // Dropping to Book's Style hides Bionic/Guide — keep selection in range.
+                          clampStyleSelection();
                         });
       requestUpdate();
       break;
     case LayoutRow::ParaSpacing:
       SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;
+      (void)SETTINGS.saveToFile();
+      clampLayoutSelection();
       requestUpdate();
       break;
+    case LayoutRow::SpacingHeight: {
+      // Popup order: Quarter → Half → Full (lightest first). Values stay 2/0/1.
+      static constexpr StrId HEIGHT_IDS[] = {StrId::STR_QUARTER, StrId::STR_HALF, StrId::STR_FULL};
+      static constexpr uint8_t HEIGHT_VALUES[] = {CasperSettings::SPACING_QUARTER, CasperSettings::SPACING_HALF,
+                                                  CasperSettings::SPACING_FULL};
+      int cur = 1;  // Half
+      for (int i = 0; i < 3; ++i) {
+        if (SETTINGS.extraParagraphSpacingHeight == HEIGHT_VALUES[i]) {
+          cur = i;
+          break;
+        }
+      }
+      optionPopup_.show(StrId::STR_SPACING_HEIGHT, HEIGHT_IDS, 3, cur, [](int idx) {
+        if (idx < 0 || idx > 2) return;
+        SETTINGS.extraParagraphSpacingHeight = HEIGHT_VALUES[idx];
+        (void)SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
-                        SETTINGS.lineSpacing, [](int idx) { SETTINGS.lineSpacing = static_cast<uint8_t>(idx); });
+                        SETTINGS.lineSpacing, [](int idx) {
+                          SETTINGS.lineSpacing = static_cast<uint8_t>(idx);
+                          (void)SETTINGS.saveToFile();
+                        });
       requestUpdate();
       break;
     case LayoutRow::ScreenMargin: {
@@ -587,8 +791,10 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
       for (int m = MARGIN_MIN; m <= MARGIN_MAX; m += MARGIN_STEP) options.push_back(std::to_string(m));
       const int cur = (std::clamp<int>(SETTINGS.screenMargin, MARGIN_MIN, MARGIN_MAX) - MARGIN_MIN) / MARGIN_STEP;
-      optionPopup_.show(StrId::STR_SCREEN_MARGIN, options, cur,
-                        [](int idx) { SETTINGS.screenMargin = static_cast<uint8_t>(MARGIN_MIN + idx * MARGIN_STEP); });
+      optionPopup_.show(StrId::STR_SCREEN_MARGIN, options, cur, [](int idx) {
+        SETTINGS.screenMargin = static_cast<uint8_t>(MARGIN_MIN + idx * MARGIN_STEP);
+        (void)SETTINGS.saveToFile();
+      });
       requestUpdate();
       break;
     }
@@ -599,13 +805,17 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
 }
 
 std::string TextSettingsActivity::layoutValueText(int row) const {
-  switch (static_cast<LayoutRow>(row)) {
+  switch (layoutRowAt(row)) {
     case LayoutRow::Alignment: {
       const int di = alignmentDisplayIndex(SETTINGS.paragraphAlignment);
       return I18N.get(ALIGNMENT_DISPLAY_IDS[di]);
     }
     case LayoutRow::ParaSpacing:
       return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case LayoutRow::SpacingHeight:
+      if (SETTINGS.extraParagraphSpacingHeight == CasperSettings::SPACING_FULL) return tr(STR_FULL);
+      if (SETTINGS.extraParagraphSpacingHeight == CasperSettings::SPACING_QUARTER) return tr(STR_QUARTER);
+      return tr(STR_HALF);
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;
       return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
@@ -619,7 +829,7 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
 }
 
 void TextSettingsActivity::confirmStyleRow(int row) {
-  switch (static_cast<StyleRow>(row)) {
+  switch (styleRowAt(row)) {
     case StyleRow::BionicReading:
       SETTINGS.focusReadingEnabled = !SETTINGS.focusReadingEnabled;
       break;
@@ -636,11 +846,12 @@ void TextSettingsActivity::confirmStyleRow(int row) {
     default:
       return;
   }
+  (void)SETTINGS.saveToFile();
   requestUpdate();
 }
 
 std::string TextSettingsActivity::styleValueText(int row) const {
-  switch (static_cast<StyleRow>(row)) {
+  switch (styleRowAt(row)) {
     case StyleRow::BionicReading:
       return SETTINGS.focusReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case StyleRow::GuideDots:
@@ -667,6 +878,7 @@ void TextSettingsActivity::switchTab(int direction, bool focusTabBar) {
   } else {
     selectedIndex() = 1;
   }
+  clampStyleSelection();
   requestUpdate();
 }
 
@@ -677,9 +889,9 @@ int TextSettingsActivity::currentListSize() const {
     case Tab::Size:
       return static_cast<int>(sizes_.size());
     case Tab::Layout:
-      return static_cast<int>(LayoutRow::Count);
+      return static_cast<int>(visibleLayoutRows().size());
     case Tab::Style:
-      return static_cast<int>(StyleRow::Count);
+      return static_cast<int>(visibleStyleRows().size());
 
     default:
       return 0;

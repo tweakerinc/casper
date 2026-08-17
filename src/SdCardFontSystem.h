@@ -22,8 +22,14 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
+  /// Free resident SD font faces + catalog strings before Wi‑Fi / large JSON.
+  /// legacy: without this, font-list download OOMs on ESP32-C3 (TLS +
+  /// ArduinoJson + loaded .cpfont + registry). Marks registry dirty so the
+  /// next ensureLoaded/refresh rediscovers.
+  void releaseForNetwork(GfxRenderer& renderer);
+
   /// Resolve an SD card font ID from family name + fontSize enum.
-  /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
+  /// Returns 0 if not found. Used by CasperSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
@@ -31,6 +37,13 @@ class SdCardFontSystem {
 
   /// Non-const access to the registry (for FontInstaller).
   SdCardFontRegistry& registry() { return registry_; }
+
+  /// Manager (StyleResolve SD ladder hook).
+  SdCardFontManager& manager() { return manager_; }
+  const SdCardFontManager& manager() const { return manager_; }
+
+  /// Last renderer passed to begin/ensureLoaded (for ladder load hook).
+  GfxRenderer* renderer() const { return renderer_; }
 
   /// Mark the registry as needing re-discovery.
   /// Thread-safe: can be called from the web server task.
@@ -55,6 +68,7 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
+  GfxRenderer* renderer_ = nullptr;
   std::atomic<bool> registryDirty_{false};
 };
 

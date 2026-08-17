@@ -10,10 +10,10 @@
 #include <ctime>
 
 namespace {
-// Default sync server URL. crosspoint-sync speaks the full KOSync protocol, so
+// Default sync server URL. Casper-sync speaks the full KOSync protocol, so
 // pointing at any other kosync server (e.g. https://sync.koreader.rocks:443)
 // still works via the custom server URL setting.
-constexpr char DEFAULT_SERVER_URL[] = "https://sync.crosspointreader.com";
+constexpr char DEFAULT_SERVER_URL[] = "https://sync.Casperreader.com";
 
 // Default before config version 2. Configs saved without a version stamp and an
 // empty serverUrl were implicitly syncing here — they get pinned on upgrade.
@@ -154,7 +154,7 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
   setCredentials(user, pass);
   setServerUrl(doc["serverUrl"] | "");
 
-  // The default server changed in config v2 (sync.koreader.rocks -> crosspoint-sync).
+  // The default server changed in config v2 (sync.koreader.rocks -> Casper-sync).
   const uint8_t cfgVersion = doc["cfgVersion"] | (uint8_t)1;
   if (cfgVersion < CONFIG_VERSION) {
     if (getServerUrl().empty() && hasCredentials()) {

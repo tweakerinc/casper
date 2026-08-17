@@ -11,15 +11,12 @@
 #include <cstring>
 
 #include "BackupStatsActivity.h"
-#if FREEINK_CAP_BLE_HID_HOST
-#include "BluetoothSettingsActivity.h"
-#endif
 #include <WiFi.h>
 
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "DictionarySelectActivity.h"
 #include "FontDownloadActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -89,12 +86,18 @@ void SettingsActivity::rebuildSettingsLists() {
       // Sleep Screen (+ cover nest) only when Quick Resume on Timeout is Off.
       // When Timeout QR is On, idle sleep is last-frame; wallpaper picker is hidden.
       const bool timeoutQrOn =
-          SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+          SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
       if (timeoutQrOn && (setting.nameId == StrId::STR_SLEEP_SCREEN || setting.nameId == StrId::STR_SLEEP_COVER_MODE ||
                           setting.nameId == StrId::STR_SLEEP_COVER_FILTER ||
                           (setting.key && (strcmp(setting.key, "sleepScreen") == 0 ||
                                            strcmp(setting.key, "sleepScreenCoverMode") == 0 ||
                                            strcmp(setting.key, "sleepScreenCoverFilter") == 0)))) {
+        continue;
+      }
+      // Nested under Dark Mode — only list when Dark Mode is On.
+      if ((setting.nameId == StrId::STR_DARK_MODE_READER_ONLY ||
+           (setting.key && strcmp(setting.key, "darkModeReaderOnly") == 0)) &&
+          !SETTINGS.readerDarkMode) {
         continue;
       }
       displaySettings.push_back(setting);
@@ -103,9 +106,9 @@ void SettingsActivity::rebuildSettingsLists() {
       if (setting.inTextSettings) continue;
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
-          SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
-          SETTINGS.longPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
+      if (setting.valuePtr == &CasperSettings::pwrBtnFootnoteBack &&
+          SETTINGS.shortPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES &&
+          SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
       controlsSettings.push_back(setting);
@@ -132,8 +135,9 @@ void SettingsActivity::rebuildSettingsLists() {
     }
   }
 
-  // Controls order: … → Side Button Layout → Remap Front Buttons → Tilt → …
-  // Insert Remap after Side Button Layout (before Tilt when present).
+  // Controls order: … → Double-Press Menu → Remap Front Buttons → Tilt → …
+  // Side Button Layout lives under Reader → Reading Orientation (reader-only).
+  // Insert Remap after Double-Press Menu (before Tilt when present).
   if (!BoardConfig::hasTouch()) {
     auto insertAt = controlsSettings.end();
     for (auto it = controlsSettings.begin(); it != controlsSettings.end(); ++it) {
@@ -141,7 +145,7 @@ void SettingsActivity::rebuildSettingsLists() {
         insertAt = it;
         break;
       }
-      if (it->nameId == StrId::STR_SIDE_BTN_LAYOUT) {
+      if (it->nameId == StrId::STR_DOUBLE_PRESS_MENU) {
         insertAt = it + 1;
       }
     }
@@ -159,9 +163,6 @@ void SettingsActivity::rebuildSettingsLists() {
   // Network folder: Wi‑Fi, KOReader Sync, OPDS. Session Time lives under Stats.
   // Time to Sleep is under Display (above Quick Resume on Timeout).
   systemSettings.push_back(SettingInfo::Action(StrId::STR_NETWORK, SettingAction::NetworkFolder));
-#if FREEINK_CAP_BLE_HID_HOST
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
-#endif
   if (gpio.deviceIsX3()) {
     systemSettings.push_back(SettingInfo::Action(StrId::STR_STATS, SettingAction::Stats));
   }
@@ -182,10 +183,10 @@ void SettingsActivity::rebuildSettingsLists() {
     // Fallback if the shared list entry is missing (should not happen).
     systemSettings.push_back(SettingInfo::DynamicEnum(
         StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
-        [] { return static_cast<uint8_t>(SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF ? 1 : 0); },
+        [] { return static_cast<uint8_t>(SETTINGS.systemLogLevel != CasperSettings::SYSTEM_LOG_OFF ? 1 : 0); },
         [](uint8_t on) {
-          SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_TIMING)
-                                       : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
+          SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CasperSettings::SYSTEM_LOG_TIMING)
+                                       : static_cast<uint8_t>(CasperSettings::SYSTEM_LOG_OFF);
         },
         "systemLogLevel"));
   }
@@ -223,12 +224,14 @@ void SettingsActivity::rebuildSettingsLists() {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
+  // Prefer FAST first paint so Settings does not sit dark for a full HALF scrub
+  // after the user already waited on list build. Arm scrub only if ghosting piles up.
 
   // Reset selection to first category
   selectedCategoryIndex = 0;
   selectedSettingIndex = 0;
   preserveQuickResumeTimeoutOn =
-      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+      SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
   syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
@@ -240,19 +243,18 @@ void SettingsActivity::onEnter() {
   armAwaitOpenButtonRelease();
 
   // FAST plate (same as long-press book menu). HALF on enter was multi-second
-  // on X3 and felt like Settings was frozen. List nav stays FAST-only.
+  // on X3 and felt like Settings was frozen. List nav stays FAST.
   UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
 
 void SettingsActivity::onResume() {
   Activity::onResume();
-  // FAST return from child (Button Remap, etc.) — no transition HALF flash.
-  UiGhostPolicy::clearHardScrub();
   // Returning from a child (esp. Button Remap): Back was pressed under a locked
   // layout, then the new map applied — same physical key may now be Left/Up.
   // Without a quiet frame, Settings tab-nav would fire on that residual edge
   // (Remap Back → Controls also jumps to Reader).
+  UiGhostPolicy::clearHardScrub();
   armAwaitOpenButtonRelease(/*force=*/true);
 }
 
@@ -359,18 +361,17 @@ void SettingsActivity::loop() {
     return;
   }
 
+  // Touch: tabs + list (BaseTheme hit testing).
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int tx = 0;
-  int ty = 0;
   const int tabTop = metrics.topPadding + metrics.headerHeight;
-  const int listTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  // System tab reserves a band for the firmware version under the last row.
-  const int systemVersionBand =
-      (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
-  const int listHeight =
-      renderer.getScreenHeight() - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
-                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + systemVersionBand);
-  auto buildTabs = [&]() {
+  const int listTop = tabTop + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int versionBand =
+      (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(SMALL_FONT_ID) + 4) : 0;
+  const int listHeight = renderer.getScreenHeight() -
+                         (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                          metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
+  int tx = 0, ty = 0;
+  auto buildTabs = [this]() {
     std::vector<TabInfo> tabs;
     tabs.reserve(categoryCount);
     for (int i = 0; i < categoryCount; i++) {
@@ -406,7 +407,6 @@ void SettingsActivity::loop() {
       }
       return;
     }
-
     int touchedSetting = -1;
     if (settingIndexFromPoint(tx, ty, touchedSetting)) {
       if (selectedSettingIndex != touchedSetting) {
@@ -428,7 +428,6 @@ void SettingsActivity::loop() {
       requestUpdate();
       return;
     }
-
     int tappedSetting = -1;
     if (settingIndexFromPoint(tx, ty, tappedSetting)) {
       selectedSettingIndex = tappedSetting;
@@ -442,9 +441,9 @@ void SettingsActivity::loop() {
   const auto& navMetrics = UITheme::getInstance().getMetrics();
   const int navSystemVersionBand =
       (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
-  const int settingsListHeight = renderer.getScreenHeight() -
-                                 (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
-                                  navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
+  const int settingsListHeight =
+      renderer.getScreenHeight() - (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
+                                    navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
   const int settingsPageItems = GUI.getListPageItems(settingsListHeight, false);
   // Front Up/Down: within-category list ring only
   //   0 = this tab's label, 1..N = list rows (Down past last → tab label).
@@ -472,8 +471,6 @@ void SettingsActivity::loop() {
     selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, ringSize);
     requestUpdate();
   };
-  // Tab changes (side or Confirm on tab bar) preserve focus depth:
-  // tab-bar focus stays on the tab bar so Select can cycle tabs without interruption.
   auto moveTabNext = [this, &hasChangedCategory] {
     hasChangedCategory = true;
     selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
@@ -519,16 +516,16 @@ void SettingsActivity::toggleCurrentSetting() {
 
   const auto& setting = (*currentSettings)[selectedSetting];
   // DynamicEnum sleep picker has no valuePtr — match by name/key as well.
-  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen ||
+  const bool sleepScreenChanged = setting.valuePtr == &CasperSettings::sleepScreen ||
                                   setting.nameId == StrId::STR_SLEEP_SCREEN ||
                                   (setting.key && strcmp(setting.key, "sleepScreen") == 0);
-  const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
+  const bool quickResumeTimeoutChanged = setting.valuePtr == &CasperSettings::quickResumeSleepScreen;
 
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
     openSleepTimeoutPicker();
     return;
   }
-  if (setting.nameId == StrId::STR_SESSION_TIME || setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
+  if (setting.nameId == StrId::STR_SESSION_TIME || setting.valuePtr == &CasperSettings::readingSessionIdleMinutes) {
     openSessionTimePicker();
     return;
   }
@@ -538,8 +535,13 @@ void SettingsActivity::toggleCurrentSetting() {
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
     // Clear-from-recents is a child of Move Finished — hide + reset when parent turns off.
-    if (setting.valuePtr == &CrossPointSettings::moveFinishedToReadFolder && !SETTINGS.moveFinishedToReadFolder) {
+    if (setting.valuePtr == &CasperSettings::moveFinishedToReadFolder && !SETTINGS.moveFinishedToReadFolder) {
       SETTINGS.removeReadBooksFromRecents = 0;
+    }
+    // Apply whole-UI invert immediately so the Settings list flips with the toggle.
+    if (setting.valuePtr == &CasperSettings::readerDarkMode ||
+        setting.valuePtr == &CasperSettings::darkModeReaderOnly) {
+      renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
     }
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Always open a popup for multi-choice enums (including 2 options, e.g. Theme).
@@ -555,15 +557,15 @@ void SettingsActivity::toggleCurrentSetting() {
           [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
             SETTINGS.*valuePtr = idx;
             // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
-            if (valuePtr == &CrossPointSettings::menuFontSize &&
-                (idx == CrossPointSettings::MENU_FONT_MEDIUM || idx == CrossPointSettings::MENU_FONT_LARGE)) {
+            if (valuePtr == &CasperSettings::menuFontSize &&
+                (idx == CasperSettings::MENU_FONT_MEDIUM || idx == CasperSettings::MENU_FONT_LARGE)) {
               SETTINGS.splitBookTitleLines = 1;
             }
             // Reading Orientation: seed Orient Front Buttons for that layout.
             // Portrait / Landscape CW → Off; Portrait 180° / Landscape CCW → On.
-            if (valuePtr == &CrossPointSettings::orientation) {
+            if (valuePtr == &CasperSettings::orientation) {
               SETTINGS.frontButtonFollowOrientation =
-                  CrossPointSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
+                  CasperSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
             }
             if (isEnableLogging) {
               SystemLog::reloadLevel();
@@ -576,9 +578,9 @@ void SettingsActivity::toggleCurrentSetting() {
       return;
     }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
-    if (setting.valuePtr == &CrossPointSettings::menuFontSize) {
+    if (setting.valuePtr == &CasperSettings::menuFontSize) {
       const uint8_t size = SETTINGS.*(setting.valuePtr);
-      if (size == CrossPointSettings::MENU_FONT_MEDIUM || size == CrossPointSettings::MENU_FONT_LARGE) {
+      if (size == CasperSettings::MENU_FONT_MEDIUM || size == CasperSettings::MENU_FONT_LARGE) {
         SETTINGS.splitBookTitleLines = 1;
       }
     }
@@ -693,14 +695,6 @@ void SettingsActivity::toggleCurrentSetting() {
               }
             });
         break;
-#if FREEINK_CAP_BLE_HID_HOST
-      case SettingAction::Bluetooth:
-        startActivityForResult(
-            std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput, /*exitOnSuccessfulConnect=*/false,
-                                                        /*disableOnExit=*/true),
-            resultHandler);
-        break;
-#endif
       case SettingAction::ClearCache:
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
@@ -717,12 +711,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::DownloadFonts:
-        startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 SETTINGS.saveToFile();
-                                 settingsDirty = false;
-                                 rebuildSettingsLists();
-                               });
+        startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::TextSettings:
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
@@ -761,7 +750,7 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
   (void)sleepScreenChanged;
   if (quickResumeTimeoutChanged) {
     preserveQuickResumeTimeoutOn =
-        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+        SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
     quickResumeTimeoutAutoEnabled = false;
   }
 }
@@ -770,7 +759,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
           renderer, mappedInput, "SleepTimeoutInterval", StrId::STR_TIME_TO_SLEEP, SETTINGS.sleepTimeoutMinutes,
-          CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
+          CasperSettings::MIN_SLEEP_TIMEOUT_MINUTES, CasperSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
           StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true, StrId::STR_SLEEP_NEVER),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
@@ -786,8 +775,8 @@ void SettingsActivity::openSessionTimePicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
                                                   static_cast<int>(SETTINGS.readingSessionIdleMinutes),
-                                                  static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
-                                                  static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
+                                                  static_cast<int>(CasperSettings::MIN_SESSION_IDLE_MINUTES),
+                                                  static_cast<int>(CasperSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
                                                   StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
@@ -798,6 +787,24 @@ void SettingsActivity::openSessionTimePicker() {
       });
 }
 
+void SettingsActivity::applyCategorySelection() {
+  switch (selectedCategoryIndex) {
+    case 0:
+      currentSettings = &displaySettings;
+      break;
+    case 1:
+      currentSettings = &readerSettings;
+      break;
+    case 2:
+      currentSettings = &controlsSettings;
+      break;
+    case 3:
+      currentSettings = &systemSettings;
+      break;
+  }
+  settingsCount = static_cast<int>(currentSettings->size());
+}
+
 void SettingsActivity::render(RenderLock&&) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
 
@@ -805,10 +812,8 @@ void SettingsActivity::render(RenderLock&&) {
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  // Version lives under System (centered above button hints), not in the header.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE));
 
   std::vector<TabInfo> tabs;
@@ -820,7 +825,6 @@ void SettingsActivity::render(RenderLock&&) {
                  selectedSettingIndex == 0);
 
   const bool systemTab = selectedCategoryIndex == categoryCount - 1;
-  // Compact 8pt version strip so more System rows fit without scrolling.
   const int versionBand = systemTab ? (renderer.getLineHeight(SMALL_FONT_ID) + 4) : 0;
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
   const int listHeight = pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
@@ -835,13 +839,12 @@ void SettingsActivity::render(RenderLock&&) {
       nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
-        std::string valueText = "";
+        std::string valueText;
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-          const bool value = SETTINGS.*(setting.valuePtr);
-          valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+          valueText = SETTINGS.*(setting.valuePtr) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
-          valueText = I18N.get(setting.enumValues[value]);
+          if (value < setting.enumValues.size()) valueText = I18N.get(setting.enumValues[value]);
         } else if (setting.type == SettingType::ENUM && setting.valueGetter) {
           const uint8_t value = setting.valueGetter();
           if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
@@ -851,16 +854,16 @@ void SettingsActivity::render(RenderLock&&) {
           }
         } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
           if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
-            char valueBuffer[32];
-            if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
+            if (SETTINGS.sleepTimeoutMinutes >= CasperSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
               valueText = tr(STR_SLEEP_NEVER);
             } else {
+              char valueBuffer[32];
               snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
                        static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
               valueText = valueBuffer;
             }
           } else if (setting.nameId == StrId::STR_SESSION_TIME ||
-                     setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
+                     setting.valuePtr == &CasperSettings::readingSessionIdleMinutes) {
             char valueBuffer[32];
             snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
                      static_cast<unsigned int>(SETTINGS.readingSessionIdleMinutes));
@@ -869,40 +872,38 @@ void SettingsActivity::render(RenderLock&&) {
             valueText = std::to_string(SETTINGS.*(setting.valuePtr));
           }
         } else if (setting.type == SettingType::ACTION) {
-          // Submenu / folder affordance: keeps focus chip on the right like On/Off rows.
           valueText = ">";
         }
         return valueText;
       },
       true);
 
-  // Confirm hint: next tab name on the tab bar; Toggle only for true on/off
-  // settings; Select for enums, actions, values, and multi-choice pickers.
   const char* confirmLabel = tr(STR_SELECT);
   if (selectedSettingIndex == 0) {
     confirmLabel = I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount]);
   } else if (selectedSettingIndex > 0) {
     const auto& setting = (*currentSettings)[selectedSettingIndex - 1];
-    if (setting.type == SettingType::TOGGLE) {
-      confirmLabel = tr(STR_TOGGLE);
-    } else {
-      confirmLabel = tr(STR_SELECT);
-    }
+    confirmLabel = (setting.type == SettingType::TOGGLE) ? tr(STR_TOGGLE) : tr(STR_SELECT);
   }
-
-  // Front Up/Down: list. Side: switch tabs. Confirm on tab bar also advances tab.
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  // System: compact firmware version between the list and button hints.
   if (systemTab) {
     const int bandTop = listTop + listHeight;
     const int bandBottom = pageHeight - metrics.buttonHintsHeight;
     const int textH = renderer.getLineHeight(SMALL_FONT_ID);
     const int textY = bandTop + std::max(0, (bandBottom - bandTop - textH) / 2);
-    renderer.drawCenteredText(SMALL_FONT_ID, textY, CROSSPOINT_VERSION, true);
+#ifndef CASPER_VERSION
+#define CASPER_VERSION "dev"
+#endif
+    renderer.drawCenteredText(SMALL_FONT_ID, textY, CASPER_VERSION, true);
   }
 
-  // UI anti-ghost: FAST + periodic HALF (not greyscale-base). Reader 15 does not apply.
-  UiGhostPolicy::displayMenuFrame(renderer);
+  // Open: FAST plate + soft settle (same as Library). Up/Down: plain FAST only.
+  if (softOpenPending_) {
+    softOpenPending_ = false;
+    UiGhostPolicy::displaySoftOpen(renderer, /*softCount=*/1);
+  } else {
+    UiGhostPolicy::displayMenuFrame(renderer);
+  }
 }

@@ -91,10 +91,15 @@ class HomeActivity final : public Activity {
   // so PopToHome onResume takes the snappy FAST path instead of a new-Home HALF
   // multipass (~5s on X3). Does not paint.
   void markSnappyResumeReady();
+  // QR/cold open: push Home under the reader with zero SD / paint (critical path).
+  // Full recents/stats load happens on first onResume (Back from book).
+  void seedUnderReader();
 
  private:
   // Book-action menu (etc.) dismissed: must paint home over the child FB once.
   bool forceHomeShellRepaint = false;
+  // seedUnderReader: defer loadRecentBooks / stats until first onResume.
+  bool deferredEnterLoad_ = false;
   int minimalMenuIndex = 0;
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   size_t coverBufferSize = 0;      // Bytes allocated to coverBuffer
@@ -121,10 +126,6 @@ class HomeActivity final : public Activity {
     if (hasOpdsUrl) ++i;
     if (item == HomeMenuItem::FILE_TRANSFER) return i;
     ++i;
-#if FREEINK_CAP_BLE_HID_HOST
-    if (item == HomeMenuItem::BLUETOOTH) return i;
-    ++i;
-#endif
     if (item == HomeMenuItem::SETTINGS_MENU) return i;
     return 0;
   }
@@ -136,9 +137,6 @@ class HomeActivity final : public Activity {
     if (idx == i++) return HomeMenuItem::RECENTS;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
-#if FREEINK_CAP_BLE_HID_HOST
-    if (idx == i++) return HomeMenuItem::BLUETOOTH;
-#endif
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
     return HomeMenuItem::NONE;
   }
@@ -148,7 +146,6 @@ class HomeActivity final : public Activity {
   void onRecentsOpen();
   void onSettingsOpen();
   void onFileTransferOpen();
-  void onBluetoothOpen();
   void onOpdsBrowserOpen();
   void showCurrentBookActionMenu(bool ignoreInitialConfirmRelease = false);
   void reloadHomeAfterBookAction();
@@ -185,6 +182,8 @@ class HomeActivity final : public Activity {
   void multipassHomeCoverGrayscale();
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+
+  void paintMinimalMenu(bool bandOnly);
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

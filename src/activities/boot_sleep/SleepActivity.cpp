@@ -13,8 +13,9 @@
 #include <string>
 #include <vector>
 
-#include "CrossPointSettings.h"
-#include "CrossPointState.h"
+#include "CasperSettings.h"
+#include "util/CasperPaths.h"
+#include "CasperState.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -37,11 +38,20 @@ void SleepActivity::onEnter() {
   // useQuickResume is decided by enterDeepSleep (power QR action and/or timeout QR).
   // Legacy: Sleep Screen == QUICK_RESUME still maps to last-frame until migrated.
   const bool renderQuickResume =
-      useQuickResume || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
+      useQuickResume || SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
 
   if (renderQuickResume) {
-    return renderLastScreenSleepScreen();
+    // Keep system-wide Dark Mode invert ON. The framebuffer stays in light paint
+    // space after the last page refresh; invert-on-display is what made the glass
+    // dark. Suspending invert here re-pushed the light FB and washed QR sleep white.
+    renderLastScreenSleepScreen();
+    return;
   }
+
+  // Wallpaper sleep (Dark/Light/Cover/Custom): suspend UI Dark Mode invert so
+  // Sleep Screen polarity and cover invert filters are not double-inverted.
+  const bool uiDark = renderer.getInvertOnDisplay();
+  renderer.setInvertOnDisplay(false);
 
   // Show popup with reader orientation only when going to sleep from reader
   if (APP_STATE.lastSleepFromReader) {
@@ -53,21 +63,27 @@ void SleepActivity::onEnter() {
   }
 
   switch (SETTINGS.sleepScreen) {
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
-      return renderBlankSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
-      return renderCustomSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER):
-      return renderCoverSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
+    case (CasperSettings::SLEEP_SCREEN_MODE::BLANK):
+      renderBlankSleepScreen();
+      break;
+    case (CasperSettings::SLEEP_SCREEN_MODE::CUSTOM):
+      renderCustomSleepScreen();
+      break;
+    case (CasperSettings::SLEEP_SCREEN_MODE::COVER):
+      renderCoverSleepScreen();
+      break;
+    case (CasperSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
       if (APP_STATE.lastSleepFromReader) {
-        return renderCoverSleepScreen();
+        renderCoverSleepScreen();
       } else {
-        return renderCustomSleepScreen();
+        renderCustomSleepScreen();
       }
+      break;
     default:
-      return renderDefaultSleepScreen();
+      renderDefaultSleepScreen();
+      break;
   }
+  renderer.setInvertOnDisplay(uiDark);
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
@@ -232,9 +248,9 @@ void SleepActivity::renderDefaultSleepScreen() const {
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
-  renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CASPER), true, EpdFontFamily::BOLD);
 
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::DARK) {
+  if (SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::DARK) {
     renderer.invertScreen();
   }
 
@@ -256,7 +272,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
     LOG_DBG("SLP", "bitmap ratio: %f, screen ratio: %f", ratio, screenRatio);
     if (ratio > screenRatio) {
       // image wider than viewport ratio, scaled down image needs to be centered vertically
-      if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
+      if (SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropX = 1.0f - (screenRatio / ratio);
         LOG_DBG("SLP", "Cropping bitmap x: %f", cropX);
         ratio = (1.0f - cropX) * static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
@@ -266,7 +282,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
       LOG_DBG("SLP", "Centering with ratio %f to y=%d", ratio, y);
     } else {
       // image taller than viewport ratio, scaled down image needs to be centered horizontally
-      if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
+      if (SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropY = 1.0f - (ratio / screenRatio);
         LOG_DBG("SLP", "Cropping bitmap y: %f", cropY);
         ratio = static_cast<float>(bitmap.getWidth()) / ((1.0f - cropY) * static_cast<float>(bitmap.getHeight()));
@@ -285,11 +301,11 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   renderer.clearScreen();
 
   const bool hasGreyscale = bitmap.hasGreyscale() &&
-                            SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
+                            SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
 
-  if (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
+  if (SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
     renderer.invertScreen();
   }
 
@@ -330,7 +346,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
 void SleepActivity::renderCoverSleepScreen() const {
   void (SleepActivity::*renderNoCoverSleepScreen)() const;
   switch (SETTINGS.sleepScreen) {
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
+    case (CasperSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
       renderNoCoverSleepScreen = &SleepActivity::renderCustomSleepScreen;
       break;
     default:
@@ -343,12 +359,12 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   std::string coverBmpPath;
-  bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+  bool cropped = SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
   // Check if the current book is XTC, TXT, or EPUB
   if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
     // Handle XTC file
-    Xtc lastXtc(APP_STATE.openEpubPath, "/.crosspoint");
+    Xtc lastXtc(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
     if (!lastXtc.load()) {
       LOG_ERR("SLP", "Failed to load last XTC");
       return (this->*renderNoCoverSleepScreen)();
@@ -362,7 +378,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastXtc.getCoverBmpPath();
   } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
     // Handle TXT file - looks for cover image in the same folder
-    Txt lastTxt(APP_STATE.openEpubPath, "/.crosspoint");
+    Txt lastTxt(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
     if (!lastTxt.load()) {
       LOG_ERR("SLP", "Failed to load last TXT");
       return (this->*renderNoCoverSleepScreen)();
@@ -376,7 +392,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastTxt.getCoverBmpPath();
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
     // Handle EPUB file
-    Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");
+    Epub lastEpub(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
     // Skip loading css since we only need metadata here
     if (!lastEpub.load(true, true)) {
       LOG_ERR("SLP", "Failed to load last epub");
@@ -408,8 +424,9 @@ void SleepActivity::renderCoverSleepScreen() const {
 
 void SleepActivity::renderLastScreenSleepScreen() const {
   // Keep the current page on-panel and only add a small ink-only moon in the
-  // top status-bar row (centered between the left/right chrome slots — usually
-  // battery and clock). No white plate, so it does not cover page glyphs.
+  // top status-bar row (same edge as battery/clock in the live reading orientation).
+  // Reader onExit forces Portrait; drawAtTopChrome re-applies SETTINGS.orientation
+  // so Landscape CCW/CW does not place the moon on a portrait corner.
   // Both devices: differential FAST only (moon ink delta) — no HALF scrub flash.
   // Do not use displayGrayscaleBase here: AA-pre-BW mid is greyscale preconditioning
   // and leaves white muddy when no grey planes follow (v0.1.3 used plain FAST).

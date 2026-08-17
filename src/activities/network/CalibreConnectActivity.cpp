@@ -80,7 +80,7 @@ void CalibreConnectActivity::startWebServer() {
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
 
-  webServer.reset(new CrossPointWebServer());
+  webServer.reset(new CasperWebServer());
   webServer->begin();
 
   if (webServer->isRunning()) {

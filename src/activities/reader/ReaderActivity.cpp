@@ -3,13 +3,14 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <Memory.h>
 
 #include <optional>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "Epub.h"
-#include "EpubReaderActivity.h"
+#include "RivuletReaderActivity.h"
 #include "SdCardFontSystem.h"
 #include "Txt.h"
 #include "TxtReaderActivity.h"
@@ -19,8 +20,13 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
+#include "util/CasperBookStore.h"
+#include "util/CasperPaths.h"
 #include "util/QrTimingLog.h"
 #include "util/SystemLog.h"
+
+#include <BookPathId.h>
+#include <functional>
 
 bool ReaderActivity::s_preferFastFirstRefresh = false;
 bool ReaderActivity::s_deferFirstPageTextAa = false;
@@ -57,34 +63,101 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
+namespace {
+
+// Best-effort copy of a single file if dest missing.
+bool copyFileIfMissing(const std::string& src, const std::string& dst) {
+  if (!Storage.exists(src.c_str()) || Storage.exists(dst.c_str())) return false;
+  // Ensure parent of dst
+  const size_t slash = dst.find_last_of('/');
+  if (slash != std::string::npos && slash > 0) {
+    Storage.ensureDirectoryExists(dst.substr(0, slash).c_str());
+  }
+  HalFile in, out;
+  if (!Storage.openFileForRead("EPUB", src, in)) return false;
+  if (!Storage.openFileForWrite("EPUB", dst, out)) {
+    in.close();
+    return false;
+  }
+  uint8_t buf[512];
+  for (;;) {
+    const int n = in.read(buf, sizeof(buf));
+    if (n < 0) {
+      in.close();
+      out.close();
+      Storage.remove(dst.c_str());
+      return false;
+    }
+    if (n == 0) break;
+    if (out.write(buf, static_cast<size_t>(n)) != static_cast<size_t>(n)) {
+      in.close();
+      out.close();
+      Storage.remove(dst.c_str());
+      return false;
+    }
+  }
+  out.flush();
+  out.close();
+  in.close();
+  return true;
+}
+
+// Import classic epub_<std::hash> package into book_<pathId>/package once.
+void importLegacyPackageIfNeeded(const std::string& path) {
+  const std::string pkg = BookPathId::packageDir(path);
+  if (Storage.exists((pkg + "/book.bin").c_str())) return;
+
+  // Only rekey within /.casper (epub_<hash> → book_<id>/package). No /.casper.
+  const std::string legacyCasper = BookPathId::legacyEpubHashDir(path, CasperPaths::kPackageCacheRoot);
+  if (!Storage.exists((legacyCasper + "/book.bin").c_str())) return;
+
+  Storage.ensureDirectoryExists(pkg.c_str());
+  if (copyFileIfMissing(legacyCasper + "/book.bin", pkg + "/book.bin")) {
+    LOG_INF("READER", "imported package book.bin → %s", pkg.c_str());
+  }
+  for (const char* name : {"cover.bmp", "thumb.bmp", "progress.bin", "progress.bin.bak"}) {
+    (void)copyFileIfMissing(legacyCasper + "/" + name, pkg + "/" + name);
+  }
+  const std::string bookRoot = BookPathId::bookRoot(path);
+  Storage.ensureDirectoryExists(bookRoot.c_str());
+  (void)copyFileIfMissing(legacyCasper + "/progress.bin", bookRoot + "/progress.bin");
+  (void)copyFileIfMissing(legacyCasper + "/stats_v6.bin", bookRoot + "/stats_v6.bin");
+}
+
+}  // namespace
+
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
-  auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
+  // Unified /.crosspoint/book_<pathId>/package. Import classic epub_* once if needed.
+  importLegacyPackageIfNeeded(path);
+  (void)CasperBook::openBook(path, "", "");  // ensure epub_<hash> + rivulet dirs
+
+  const char* cacheRoot = CasperPaths::kPackageCacheRoot;
+  auto epub = makeUniqueNoThrow<Epub>(path, cacheRoot);
   if (!epub) {
     LOG_ERR("READER", "Failed to allocate EPUB object");
     return nullptr;
   }
-  // First open: building the spine/TOC index (book.bin) takes a couple of seconds. Show
-  // Loading (same chrome as Home) so it isn't a silent wait. Cached open → no popup.
+  // First open: building the spine/TOC index (book.bin) takes a couple of seconds.
+  // Upper-left status (not center pill). Cached open → no cue.
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
   if (uncached && !hasOpenHints()) {
-    // Same Y as Home Read chrome — never a second pill at the theme top offset.
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
   }
   bool loaded;
   {
     // Lend the framebuffer's 48 KB to the container parse (expat + spine/TOC
-    // build). The popup just displayed stays on the panel; whichever reader
-    // activity follows redraws the full screen anyway.
+    // build). Rivulet always needs maxAlloc for first-chapter ZIP inflate.
     std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached) loan.emplace(renderer);
+    loan.emplace(renderer);
     const uint32_t t0 = millis();
-    // Book's Style ⇒ parse CSS; forced alignments skip publisher stylesheets.
-    loaded = epub->load(true, SETTINGS.paragraphAlignment != CrossPointSettings::BOOK_STYLE);
+    // Rivulet does not consume publisher CSS (HTML→IR tags only) — skip CSS load
+    // to save heap for inflate + convert. Styling comes from HTML tags + Settings.
+    loaded = epub->load(true, /*skipLoadingCss=*/true);
     LOG_DBG("READER", "epub->load %s in %lums (book.bin %s)", path.c_str(), static_cast<unsigned long>(millis() - t0),
             uncached ? "miss" : "hit");
     if (QrTimingLog::active()) {
@@ -107,7 +180,7 @@ std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
     return nullptr;
   }
 
-  auto xtc = makeUniqueNoThrow<Xtc>(path, "/.crosspoint");
+  auto xtc = makeUniqueNoThrow<Xtc>(path, CasperPaths::kPackageCacheRoot);
   if (!xtc) {
     LOG_ERR("READER", "Failed to allocate XTC object");
     return nullptr;
@@ -126,7 +199,7 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
     return nullptr;
   }
 
-  auto txt = makeUniqueNoThrow<Txt>(path, "/.crosspoint");
+  auto txt = makeUniqueNoThrow<Txt>(path, CasperPaths::kPackageCacheRoot);
   if (!txt) {
     LOG_ERR("READER", "Failed to allocate TXT object");
     return nullptr;
@@ -140,16 +213,16 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
 }
 
 void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
-  // If coming from a book, start in that book's folder; otherwise start from root
-  auto initialPath = fromBookPath.empty() ? "/" : FsHelpers::extractFolderPath(fromBookPath);
+  // From a book: that folder. Otherwise SD root (books live on card root).
+  auto initialPath = fromBookPath.empty() ? std::string{"/"} : FsHelpers::extractFolderPath(fromBookPath);
   activityManager.goToFileBrowser(std::move(initialPath));
 }
 
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  // Swap keeps a stacked Home alive (Phase 2 goHome fast path).
-  activityManager.swapActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  LOG_INF("READER", "Opening with Rivulet engine: %s", epubPath.c_str());
+  activityManager.swapActivity(std::make_unique<RivuletReaderActivity>(renderer, mappedInput, std::move(epub)));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
@@ -179,11 +252,10 @@ void ReaderActivity::onEnter() {
   const uint32_t tEnter = millis();
   if (QrTimingLog::active()) QrTimingLog::line("ReaderActivity::onEnter start");
   SystemLog::logTiming("READER", "open start");
-  // Home Read already paints a centered Loading and refreshes the panel. Drawing
-  // another Loading here (or one at a different Y) produces the dual-chrome bug
-  // (top + middle). Only paint when we did not come through that path.
+  // Home Read already FASTs/HALFs "Opening". Cold entry (no open hints): show
+  // Loading on glass so the wait is never silent.
   if (!hasOpenHints()) {
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/false);
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
   }
   sdFontSystem.ensureLoaded(renderer);
   LOG_DBG("READER", "ensureLoaded %lums", static_cast<unsigned long>(millis() - tEnter));

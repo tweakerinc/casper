@@ -38,6 +38,16 @@ bool ImageBlock::isLetterGlyph(const int contentWidthPx) const {
   return width <= maxW && height <= maxH;
 }
 
+// Text-in-JPEG document plates (Illuminae briefings ~723×640, headers, email chrome).
+// Plate "lift" lightens midtones for photos but washes printed type to unreadable
+// light grey — use ink-biased darken instead. Tall portrait art keeps plate lift.
+bool ImageBlock::isDocumentPlate() const {
+  if (width < 200 || height < 100) return false;
+  // Portrait full-page illustrations (h much greater than w) stay neutral/lifted.
+  if (height > (width * 14) / 10) return false;
+  return true;
+}
+
 void* ImageBlock::extractCtx = nullptr;
 ImageBlock::ExtractFn ImageBlock::extractFn = nullptr;
 
@@ -51,13 +61,13 @@ bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str());
 namespace {
 
 std::string getCachePath(const std::string& imagePath) {
-  // .pxc7: stronger plate lift for full-page JPEGs (DCC inter-chapter art).
-  // Invalidates darker pxc6 plate caches.
+  // .pxc10: milder plate lift (Alice/Tenniel were washed) + less Bayer grain.
+  // Invalidates pxc9 cover-mid / heavy plate-lift caches.
   size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
-    return imagePath.substr(0, dotPos) + ".pxc7";
+    return imagePath.substr(0, dotPos) + ".pxc10";
   }
-  return imagePath + ".pxc7";
+  return imagePath + ".pxc10";
 }
 
 bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int expectedHeight, uint16_t& cachedWidth,
@@ -362,8 +372,15 @@ bool ImageBlock::ensureDecodedCache(GfxRenderer& renderer) {
   config.useDithering = true;
   config.performanceMode = false;
   config.useExactDimensions = true;
-  // Drop-caps only — full plates stay neutral (see DitherUtils).
-  config.inkBias = isLetterGlyph(renderer.getScreenWidth());
+  // Letters = Ink; document text-in-JPEG = Cover (home-thumb curve, Bayer only);
+  // photos/art = Plate lift. No Atkinson multipass (cover gen is too heavy here).
+  if (isLetterGlyph(renderer.getScreenWidth())) {
+    config.tone = EinkImageTone::Ink;
+  } else if (isDocumentPlate()) {
+    config.tone = EinkImageTone::Cover;
+  } else {
+    config.tone = EinkImageTone::Plate;
+  }
   // Cache only: never stamp the live FB mid-parse (was a heap-corruption /
   // crash source under deep SAX stack after TextSettings reflow).
   config.writeToFramebuffer = false;
@@ -433,9 +450,9 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
 
-  // Letter glyphs already painted sharp black in the BW pass. Re-drawing them
-  // into grey planes only softens ink (Alice "A" flash black→grey) and costs
-  // ~14 band re-walks. Leave the BW ink alone on greyscale multipass.
+  // Letter glyphs already paint sharp in BW; grey multipass only softens them.
+  // Document plates (Cover tone) still benefit from a single greys pass when AA
+  // is on — skip only true letter glyphs.
   const auto mode = renderer.getRenderMode();
   if ((mode == GfxRenderer::GRAYSCALE_LSB || mode == GfxRenderer::GRAYSCALE_MSB) && isLetterGlyph(screenWidth)) {
     return;
@@ -523,7 +540,14 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   config.useDithering = true;
   config.performanceMode = false;
   config.useExactDimensions = true;  // Use pre-calculated dimensions to avoid rounding mismatches
-  config.inkBias = isLetterGlyph(screenWidth);
+  // Letters = Ink; briefings/doc plates = Cover midtones; art = Plate lift.
+  if (isLetterGlyph(screenWidth)) {
+    config.tone = EinkImageTone::Ink;
+  } else if (isDocumentPlate()) {
+    config.tone = EinkImageTone::Cover;
+  } else {
+    config.tone = EinkImageTone::Plate;
+  }
   config.cachePath = cachePath;  // Enable caching during decode
 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);

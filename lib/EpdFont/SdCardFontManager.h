@@ -17,9 +17,8 @@ class SdCardFontManager {
   SdCardFontManager& operator=(const SdCardFontManager&) = delete;
 
   // Load the font file whose physical point size is closest to the reader
-  // fontSizeEnum (SMALL=12, MEDIUM=14, LARGE=16, EXTRA_LARGE=18). Only one
-  // .cpfont file is loaded; other sizes remain on disk. This keeps resident
-  // interval + kern/ligature tables to one size's worth of memory.
+  // fontSizeEnum (0..5 = 8/10/12/14/16/18 pt). Only one .cpfont file is loaded
+  // for body text; other sizes remain on disk (ladder hook may load extras).
   // Returns true on success.
   bool loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t fontSizeEnum);
 
@@ -36,6 +35,16 @@ class SdCardFontManager {
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
   // or familyName doesn't match.
   int getFontId(const std::string& familyName) const;
+
+  // True if `fontId` is one of the currently loaded SD faces (reader or extra size).
+  bool ownsFontId(int fontId) const;
+
+  // Fill sizeStep 0..4 ladder relative to `baseFontId` using available .cpfont
+  // files near the base point size (reader ladder: 10/12/14/16/18). Loads missing
+  // sizes via loadFamilyExtraSize. Returns true if at least two distinct sizes
+  // were filled (multi-size family); false → StyleResolve collapses to one face.
+  bool fillRelativeLadder(int baseFontId, const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
+                          int outFontIdByStep[5]);
 
   // Get name of currently loaded family (empty if none).
   const std::string& currentFamilyName() const { return loadedFamilyName_; };

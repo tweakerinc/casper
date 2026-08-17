@@ -5,15 +5,18 @@
 
 #include <algorithm>
 
-#include "OpdsServerStore.h"
+#include "CasperState.h"
+
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
+
+#include "OpdsServerStore.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
-#include "network/CrossPointWebServerActivity.h"
+#include "network/CasperWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
@@ -274,7 +277,7 @@ void ActivityManager::swapActivity(std::unique_ptr<Activity>&& newActivity) {
 }
 
 void ActivityManager::goToFileTransfer() {
-  replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
+  replaceActivity(std::make_unique<CasperWebServerActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToSettings() {
@@ -353,7 +356,7 @@ void ActivityManager::goToReader(std::string path) {
   }
 
   // No Home yet: exit whatever is current (Boot, etc.), seed Home on the stack
-  // (onEnter for stats/recents, no paint), then enter the reader.
+  // without SD/recents work (QR critical path). Full Home load runs on first Back.
   if (currentActivity) {
     RenderLock lock;
     exitActivity(lock);
@@ -363,8 +366,7 @@ void ActivityManager::goToReader(std::string path) {
     }
   }
   auto home = std::make_unique<HomeActivity>(renderer, mappedInput, HomeMenuItem::NONE);
-  home->onEnter();                // load recents/stats (requestUpdate is harmless — Reader is current next)
-  home->markSnappyResumeReady();  // PopToHome → FAST, not new-Home HALF/multipass
+  home->seedUnderReader();  // no loadRecentBooks / GlobalStats / requestUpdate
   stackActivities.push_back(std::move(home));
   LOG_DBG("ACT", "Seeded Home under reader (QR/cold open snappy Back path)");
   currentActivity = std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path));
@@ -407,7 +409,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::RECENTS;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
-    } else if (activityName == "CrossPointWebServer") {
+    } else if (activityName == "CasperWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     }
     // Do not map Settings → SETTINGS_MENU: that selected the classic bottom-row
@@ -448,6 +450,37 @@ bool ActivityManager::isReaderActivity() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->isReaderActivity(); }) ||
          (currentActivity && currentActivity->isReaderActivity());
+}
+
+bool ActivityManager::isSettingsActivity() const {
+  return (currentActivity && currentActivity->isSettingsActivity()) ||
+         std::any_of(stackActivities.begin(), stackActivities.end(),
+                     [](const auto& activity) { return activity && activity->isSettingsActivity(); });
+}
+
+bool ActivityManager::isReaderMenuActivity() const {
+  return currentActivity && currentActivity->isReaderMenuActivity();
+}
+
+void ActivityManager::persistForSleep() {
+  // Walk stack + current so a pushed menu still lets the reader under it save.
+  for (const auto& stacked : stackActivities) {
+    if (stacked) stacked->persistProgressForSleep();
+  }
+  if (currentActivity) currentActivity->persistProgressForSleep();
+}
+
+uint8_t ActivityManager::classifySleepResumeTarget() const {
+  if (isReaderMenuActivity() && isReaderActivity()) {
+    return CasperState::RESUME_READER_MENU;
+  }
+  if (isReaderActivity()) {
+    return CasperState::RESUME_READER;
+  }
+  if (isSettingsActivity()) {
+    return CasperState::RESUME_SETTINGS;
+  }
+  return CasperState::RESUME_HOME;
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }

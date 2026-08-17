@@ -1,7 +1,7 @@
 /**
  * Xtc.h
  *
- * Main XTC ebook class for CrossPoint Reader
+ * Main XTC ebook class for Casper Reader
  * Provides EPUB-like interface for XTC file handling
  */
 
@@ -27,10 +27,7 @@ class Xtc {
   bool loaded;
 
  public:
-  explicit Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)), loaded(false) {
-    // Create cache key based on filepath (same as Epub)
-    cachePath = cacheDir + "/xtc_" + std::to_string(std::hash<std::string>{}(this->filepath));
-  }
+  explicit Xtc(std::string filepath, const std::string& cacheDir);
   ~Xtc() = default;
 
   /**

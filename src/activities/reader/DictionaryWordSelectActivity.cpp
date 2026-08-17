@@ -10,12 +10,16 @@
 #include <cctype>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
-#include "CrossPointSettings.h"
+#include <HalDisplay.h>
+
+#include "CasperSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
+#include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/Dictionary.h"
@@ -55,8 +59,10 @@ void indexBuildYield(void*) { vTaskDelay(1); }
 
 void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
-  fontId = SETTINGS.getReaderFontId();
-  lineHeight = renderer.getLineHeight(fontId);
+  if (fontId == 0) fontId = SETTINGS.getReaderFontId();
+  // Match the page's line pitch (Tight default ~0.9× advanceY). Using bare
+  // getLineHeight made size-10 highlights spill into the next line.
+  lineHeight = std::max(1, renderer.getLineHeight(fontId, SETTINGS.getReaderLineCompression()));
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
   // full-repaint path as the fallback.
@@ -66,7 +72,17 @@ void DictionaryWordSelectActivity::onEnter() {
   confirmDown = false;
   // Residual long-press Menu that opened dictionary: wait for Select release.
   ignoreConfirmUntilReleased = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-  extractWords();
+  // Classic path extracts from Page; Rivulet path already has `words` prebuilt.
+  if (page) {
+    extractWords();
+  } else if (!words.empty()) {
+    // Measure widths if caller left them zero.
+    for (auto& w : words) {
+      if (w.width <= 0 && w.text) {
+        w.width = static_cast<int16_t>(renderer.getTextAdvanceX(fontId, w.text, w.style));
+      }
+    }
+  }
   // Start on the middle row's word nearest mid-screen instead of top-left:
   // any word on the page is then at most half a page of moves away.
   if (!words.empty()) {
@@ -77,15 +93,18 @@ void DictionaryWordSelectActivity::onEnter() {
 }
 
 void DictionaryWordSelectActivity::extractWords() {
+  if (!page) return;
   words.clear();
   words.reserve(128);
   rowCount = 0;
 
-  // Do not select words that sit under the front-button hint strip. The reader
-  // page was laid out for status-bar chrome, not the taller dictionary hints;
-  // without this limit, last-line tokens highlight behind Back/Lookup buttons.
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int maxWordBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - kHintWordClearance;
+  // Do not select words under the front-button hint strip. Orientation-aware:
+  // portrait = bottom band; landscape = logical side band (same as drawButtonHints).
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true,
+                                                             /*hasSideButtonHints=*/false);
+  const int maxWordBottom = safe.y + safe.height - kHintWordClearance;
+  const int minWordLeft = safe.x + kHintWordClearance;
+  const int maxWordRight = safe.x + safe.width - kHintWordClearance;
   // lineHeight is set in onEnter() before extractWords().
   const int lh = std::max(1, lineHeight);
 
@@ -115,8 +134,12 @@ void DictionaryWordSelectActivity::extractWords() {
       const char* text = block->wordText(i);
       if (!isSelectableToken(text)) continue;
 
+      const int wordX = line->xPos + block->wordXpos(i) + marginLeft;
+      // Landscape: skip tokens that sit under the side hint strip.
+      if (wordX >= maxWordRight) continue;
+
       WordBox box;
-      box.x = static_cast<int16_t>(line->xPos + block->wordXpos(i) + marginLeft);
+      box.x = static_cast<int16_t>(std::max(wordX, minWordLeft));
       box.y = static_cast<int16_t>(lineY);
       box.style = block->wordStyle(i);
       box.width = 0;  // measured below, once the advance table is ready
@@ -134,8 +157,14 @@ void DictionaryWordSelectActivity::extractWords() {
 
   if (styleMask == 0) styleMask = 0x01;  // REGULAR
   renderer.ensureSdCardFontReady(fontId, pageText.c_str(), styleMask);
+  const Rect safeClip = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int clipRight = safeClip.x + safeClip.width - kHintWordClearance;
   for (auto& word : words) {
     word.width = static_cast<int16_t>(renderer.getTextAdvanceX(fontId, word.text, word.style));
+    // Clamp width so highlight never crosses into the landscape side chrome.
+    if (word.x + word.width > clipRight) {
+      word.width = static_cast<int16_t>(std::max(0, clipRight - word.x));
+    }
   }
 }
 
@@ -187,8 +216,9 @@ void DictionaryWordSelectActivity::selectionBounds(int& lo, int& hi) const {
   if (startMarkIdx >= 0) {
     lo = std::min(startMarkIdx, selected);
     hi = std::max(startMarkIdx, selected);
-    // Cap phrase length for lookup key size.
-    if (hi - lo + 1 > kMaxPhraseWords) {
+    // Dictionary: cap phrase length for lookup key size.
+    // Clip: allow the full page range (CLIPPING_TEXT_MAX truncates on save).
+    if (mode_ == Mode::Dictionary && hi - lo + 1 > kMaxPhraseWords) {
       if (selected >= startMarkIdx) {
         lo = hi - (kMaxPhraseWords - 1);
       } else {
@@ -386,6 +416,62 @@ void DictionaryWordSelectActivity::performLookup() {
   requestUpdate();
 }
 
+void DictionaryWordSelectActivity::performClipConfirm() {
+  if (words.empty() || selected < 0 || selected >= static_cast<int>(words.size())) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+
+  // First Select: set range start (classic Clipping Tool).
+  if (startMarkIdx < 0) {
+    startMarkIdx = selected;
+    snapshotIdx = -1;
+    requestUpdate();
+    return;
+  }
+
+  // Second Select: confirm end and return the selected text.
+  int lo = 0;
+  int hi = 0;
+  selectionBounds(lo, hi);
+  std::string text = buildLookupToken();
+  if (text.empty()) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+
+  ClippingResult clip;
+  clip.text = std::move(text);
+  clip.fromWordIdx = lo;
+  clip.toWordIdx = hi;
+  clip.startPageWordIndex = static_cast<uint16_t>(std::max(0, lo));
+  clip.endPageWordIndex = static_cast<uint16_t>(std::max(0, hi));
+  clip.wordCount = static_cast<uint16_t>(std::max(0, hi - lo + 1));
+  // Page indices filled by the reader (single-page Rivulet harvest).
+  clip.sectionPage = 0;
+  clip.endSectionPage = 0;
+  clip.sectionPageCount = 1;
+  if (words[static_cast<size_t>(lo)].text) clip.startText = words[static_cast<size_t>(lo)].text;
+  if (words[static_cast<size_t>(hi)].text) clip.endText = words[static_cast<size_t>(hi)].text;
+  setResult(ActivityResult{std::move(clip)});
+  finish();
+}
+
+void DictionaryWordSelectActivity::handleSelectAction() {
+  if (words.empty()) return;
+  if (mode_ == Mode::Clip) {
+    performClipConfirm();
+  } else {
+    performLookup();
+  }
+}
+
 void DictionaryWordSelectActivity::loop() {
   if (popup == Popup::NotFound || popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
@@ -416,9 +502,10 @@ void DictionaryWordSelectActivity::loop() {
     confirmDownAtMs = millis();
     multiSelectArmedThisHold = false;
   }
-  if (confirmDown && selectDown && !multiSelectArmedThisHold && startMarkIdx < 0 && !words.empty() &&
-      (millis() - confirmDownAtMs) >= MULTI_SELECT_HOLD_MS) {
-    // Long-press Select: arm multi-word range at cursor (lookup on a later short Select).
+  // Dictionary only: long-press Select arms multi-word range.
+  // Clip mode uses two short Selects (start mark → confirm end), like classic.
+  if (mode_ == Mode::Dictionary && confirmDown && selectDown && !multiSelectArmedThisHold && startMarkIdx < 0 &&
+      !words.empty() && (millis() - confirmDownAtMs) >= MULTI_SELECT_HOLD_MS) {
     startMarkIdx = selected;
     multiSelectArmedThisHold = true;
     snapshotIdx = -1;  // force full repaint for range highlight
@@ -433,9 +520,7 @@ void DictionaryWordSelectActivity::loop() {
       // Release after arming range — user extends with Left/Right next.
       return;
     }
-    if (!words.empty()) {
-      performLookup();
-    }
+    handleSelectAction();
     return;
   }
 
@@ -455,7 +540,7 @@ void DictionaryWordSelectActivity::loop() {
   if (words.empty()) return;
 
   // Touch: a touch-down moves the highlight to the touched word (differential
-  // repaint), a tap on a word selects and looks it up in one go.
+  // repaint), a tap on a word acts like Select.
   int tx = 0;
   int ty = 0;
   if (mappedInput.wasScreenTouchDown(tx, ty)) {
@@ -470,11 +555,14 @@ void DictionaryWordSelectActivity::loop() {
     const int hit = wordAt(tx, ty);
     if (hit >= 0) {
       selected = hit;
-      performLookup();
+      handleSelectAction();
     }
     return;
   }
 
+  // Button::Up/Down/Left/Right are logical screen directions (MappedInputManager
+  // applies Orient Front Buttons for Portrait 180° / Landscape CCW), matching
+  // the captions from mapLabels().
   if (mappedInput.wasPressed(Button::Left) && selected > 0) {
     selected--;
     requestUpdate();
@@ -488,28 +576,77 @@ void DictionaryWordSelectActivity::loop() {
   }
 }
 
+void DictionaryWordSelectActivity::highlightBoxFor(const WordBox& word, int& hx, int& hy, int& hw, int& hh) const {
+  // Horizontal pad only. Fill must cover every white drawText pixel or ink
+  // outside the black rect is painted white (vanishes — bad in dark mode).
+  const int padX = std::max(1, std::min(2, lineHeight / 16));
+  hx = word.x - padX;
+  hw = word.width + padX * 2;
+
+  // One layout line: compressed pitch, or exact gap to the next row.
+  int cellH = lineHeight;
+  int nextRowY = INT_MAX;
+  for (const auto& w : words) {
+    if (w.row == static_cast<uint16_t>(word.row + 1) && w.y < nextRowY) {
+      nextRowY = w.y;
+    }
+  }
+  if (nextRowY != INT_MAX && nextRowY > word.y) {
+    cellH = nextRowY - word.y;
+  }
+
+  // drawText: baseline = word.y + ascender. Bottom of the band needs to clear
+  // descenders (g/y/p). Top of the line box is usually empty above Latin caps
+  // (ascender covers accents / max extent) — pull the top down so the bar looks
+  // centered on the word (still enough black above caps / accents).
+  const int asc = std::max(1, renderer.getFontAscenderSize(fontId));
+  const int minInk = asc + std::max(2, asc / 6);
+  const int bottom = word.y + std::max(cellH, minInk);
+  // ~30% of ascender is typical empty headroom above body caps.
+  const int topInset = std::max(2, (asc * 3) / 10);
+  hy = word.y + topInset;
+  hh = bottom - hy;
+  if (hh < 6) {
+    hy = word.y;
+    hh = bottom - hy;
+  }
+
+  // Landscape: front-button chrome sits on a logical side. Clamp so the black
+  // bar does not run under the hint strip (looked like the menu overlapping).
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true,
+                                                             /*hasSideButtonHints=*/false);
+  if (hx < safe.x) {
+    hw -= (safe.x - hx);
+    hx = safe.x;
+  }
+  if (hy < safe.y) {
+    hh -= (safe.y - hy);
+    hy = safe.y;
+  }
+  const int safeRight = safe.x + safe.width;
+  const int safeBottom = safe.y + safe.height;
+  if (hx + hw > safeRight) hw = safeRight - hx;
+  if (hy + hh > safeBottom) hh = safeBottom - hy;
+  if (hw < 0) hw = 0;
+  if (hh < 0) hh = 0;
+}
+
+void DictionaryWordSelectActivity::paintWordHighlight(const WordBox& word) const {
+  if (!word.text) return;
+  int hx = 0, hy = 0, hw = 0, hh = 0;
+  highlightBoxFor(word, hx, hy, hw, hh);
+  if (hw <= 0 || hh <= 0) return;
+  // Fill first so every white glyph pixel lands on black (no erased halves).
+  renderer.fillRect(hx, hy, hw, hh, true);
+  renderer.drawText(fontId, word.x, word.y, word.text, false, word.style);
+}
+
 void DictionaryWordSelectActivity::drawSelectionHighlights() {
   int lo = 0;
   int hi = 0;
   selectionBounds(lo, hi);
   for (int i = lo; i <= hi; ++i) {
-    const WordBox& word = words[static_cast<size_t>(i)];
-    int hx = word.x - 2;
-    int hy = word.y - 2;
-    int hw = word.width + 4;
-    int hh = lineHeight + 4;
-    if (hx < 0) {
-      hw += hx;
-      hx = 0;
-    }
-    if (hy < 0) {
-      hh += hy;
-      hy = 0;
-    }
-    if (hw > 0 && hh > 0) {
-      renderer.fillRect(hx, hy, hw, hh, true);
-      renderer.drawText(fontId, word.x, word.y, word.text, false, word.style);
-    }
+    paintWordHighlight(words[static_cast<size_t>(i)]);
   }
 }
 
@@ -525,19 +662,8 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   }
 
   const WordBox& word = words[selected];
-  int hx = word.x - 2;
-  int hy = word.y - 2;
-  int hw = word.width + 4;
-  int hh = lineHeight + 4;
-  // Clamp to the panel so save, draw and restore all use the same box.
-  if (hx < 0) {
-    hw += hx;
-    hx = 0;
-  }
-  if (hy < 0) {
-    hh += hy;
-    hy = 0;
-  }
+  int hx = 0, hy = 0, hw = 0, hh = 0;
+  highlightBoxFor(word, hx, hy, hw, hh);
 
   bool saved = false;
   if (snapshot && hw > 0 && hh > 0) {
@@ -549,8 +675,7 @@ bool DictionaryWordSelectActivity::drawHighlightWithSnapshot() {
   snapshotH = static_cast<int16_t>(hh);
   snapshotIdx = saved ? selected : -1;
 
-  renderer.fillRect(hx, hy, hw, hh, true);
-  renderer.drawText(fontId, word.x, word.y, word.text, false, word.style);
+  paintWordHighlight(word);
   return saved;
 }
 
@@ -566,14 +691,22 @@ void DictionaryWordSelectActivity::drawHints() const {
   // previous/next args label UP/DOWN functions after remap. LEFT/RIGHT functions
   // still get hardcoded Left/Right from mapLabels (word-step actions).
   // Passing Left/Right here made remapped Up/Down buttons read "Left"/"Right".
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // Clip mode mirrors classic: Select (mark start) then Done (confirm end).
+  const char* confirmLabel =
+      (mode_ == Mode::Clip && startMarkIdx >= 0) ? tr(STR_DONE) : tr(STR_SELECT);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 // Reader top chrome (battery/clock) is gone in this activity — use that band
 // for a quiet mode title so users know they left the reader.
 void DictionaryWordSelectActivity::drawModeTitle() const {
-  const char* title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
+  const char* title;
+  if (mode_ == Mode::Clip) {
+    title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_CLIPPING_TOOL);
+  } else {
+    title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
+  }
   // UI_10 bold: a step up from SMALL_FONT so the mode label is easy to spot
   // without colliding with body text (page still has top chrome headroom).
   constexpr int kTitleFont = UI_10_FONT_ID;
@@ -590,27 +723,53 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
   if (popup == Popup::None && startMarkIdx < 0 && snapshotIdx >= 0 && !words.empty() && selected != snapshotIdx) {
     renderer.writeFramebufferRegion(snapshotX, snapshotY, snapshotW, snapshotH, snapshot.get());
     // The full path's PrewarmScope cleared the glyph cache on exit; batch-load
-    // just the highlighted word's glyphs before drawing them white-on-black.
+    // just the highlighted word's glyphs before redrawing white-on-black.
     renderer.getFontCacheManager()->prewarmCache(
         fontId, words[selected].text, static_cast<uint8_t>(1u << (static_cast<uint8_t>(words[selected].style) & 0x03)));
     if (drawHighlightWithSnapshot()) {
       drawModeTitle();
       drawHints();
-      UiGhostPolicy::displayMenuFrame(renderer);
+      ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
       return;
     }
     // Snapshot failed (oversize box) — fall through to a full repaint.
   }
 
-  renderer.clearScreen();
+  renderer.clearScreen(0xFF);
 
-  // Same prewarm-scan-then-render pass the reader uses, so SD-card fonts hit
-  // the in-RAM glyph cache during the real draw.
-  auto* fcm = renderer.getFontCacheManager();
-  auto scope = fcm->createPrewarmScope();
-  page->render(renderer, fontId, marginLeft, marginTop);
-  scope.endScanAndPrewarm();
-  page->render(renderer, fontId, marginLeft, marginTop);
+  if (pageFb_ && pageFbBytes_ > 0 && renderer.getFrameBuffer() && pageFbBytes_ <= renderer.getBufferSize()) {
+    // Rivulet: restore the page snapshot captured when the tool opened.
+    std::memcpy(renderer.getFrameBuffer(), pageFb_.get(), pageFbBytes_);
+  } else if (page) {
+    // Same prewarm-scan-then-render pass the reader uses, so SD-card fonts hit
+    // the in-RAM glyph cache during the real draw.
+    auto* fcm = renderer.getFontCacheManager();
+    auto scope = fcm->createPrewarmScope();
+    page->render(renderer, fontId, marginLeft, marginTop);
+    scope.endScanAndPrewarm();
+    page->render(renderer, fontId, marginLeft, marginTop);
+  } else if (!words.empty()) {
+    // No snapshot (OOM) and no classic Page: redraw selectable tokens as body
+    // ink so the tool is still usable instead of a blank plate.
+    auto* fcm = renderer.getFontCacheManager();
+    if (fcm) {
+      std::string warm;
+      warm.reserve(words.size() * 8);
+      uint8_t styleMask = 0;
+      for (const auto& w : words) {
+        if (!w.text) continue;
+        warm += w.text;
+        warm += ' ';
+        styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(w.style) & 0x03));
+      }
+      if (styleMask == 0) styleMask = 0x01;
+      fcm->prewarmCache(fontId, warm.c_str(), styleMask);
+    }
+    for (const auto& w : words) {
+      if (!w.text) continue;
+      renderer.drawText(fontId, w.x, w.y, w.text, true, w.style);
+    }
+  }
 
   if (!words.empty()) {
     drawHighlightWithSnapshot();
@@ -619,14 +778,19 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
   drawModeTitle();
   drawHints();
 
-  if (popup != Popup::None) {
-    // The popup overdraws the page, so the snapshot no longer matches the
-    // framebuffer — force the next render onto the full-repaint path.
+  if (popup == Popup::Busy) {
+    // Looking up / indexing: small upper-left status (no center pill ghosting).
     snapshotIdx = -1;
-    // drawPopup overlays the framebuffer and refreshes the display itself.
-    // I18N.get directly: tr() only accepts literal key names.
+    GUI.drawTopLeftStatus(renderer, I18N.get(popupMsg), /*refresh=*/false);
+    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+    return;
+  }
+  if (popup != Popup::None) {
+    // Not found / error: keep the center dialog so the result is hard to miss.
+    snapshotIdx = -1;
     GUI.drawPopup(renderer, I18N.get(popupMsg));
     return;
   }
-  UiGhostPolicy::displayMenuFrame(renderer);
+  // Dark Mode: invert at display time so page + BW highlight keep polarity.
+  ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
 }

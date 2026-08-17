@@ -4,8 +4,8 @@
 |-------|--------|
 | **Document** | Rivulet Layout Core design |
 | **Author** | TBD (Casper / CrossPoint contributor) |
-| **Date** | 2026-08-05 |
-| **Status** | Draft (rev 3 — residual paint/line-height fixes) |
+| **Date** | 2026-08-08 |
+| **Status** | Draft (rev 4 — quality pass: SD ladder, paint parity, small-caps, half-leading) |
 | **Scope** | `lib/Epub/` render path only — no new top-level activities |
 | **Hardware target** | ESP32-C3 ~320–380 KB usable RAM, no PSRAM, SD page cache |
 
@@ -32,19 +32,20 @@ ChapterHtmlSlimParser (expat SAX, resumable begin/step/finish)
        ↓  CssParser::resolveStyle + inline style
 ParsedText (words / styles / continues / noSpace / focusSuffix vectors)
        ↓  layoutAndExtractLines → TextBlock arena
-Page { PageLine | PageImage | PageHorizontalRule } → Section .bin (v33)
+Page { PageLine | PageImage | PageHorizontalRule } → Section .bin (v69)
 ```
 
 | Component | Path | Role today |
 |-----------|------|------------|
-| Slim parser | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` | SAX, style stack, tables, images, incremental parse |
-| CSS model | `lib/Epub/Epub/css/CssStyle.h`, `CssParser.cpp` | Margins, align, bold/italic, decoration, direction, super/sub, image size; **no font-size / line-height / float / font-variant** |
-| Word stream | `lib/Epub/Epub/ParsedText.h/.cpp` | Multi-`std::vector` + BiDi scratch; OOM-gated reserve (`kHeapFloor` 12 KB) |
-| Painted line | `lib/Epub/Epub/blocks/TextBlock.*` | Single arena; flags `focusPresent` / `guideDotsPresent`; underline + strikethrough draw |
+| Slim parser | `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp` | SAX, style stack, tables, images, incremental parse; Rivulet sizeStep + floats + drop-cap |
+| CSS model | `lib/Epub/Epub/css/CssStyle.h`, `CssParser.cpp` | Margins, align, bold/italic, decoration, direction, super/sub, image size, **font-size / line-height / float / font-variant** |
+| Style resolve | `lib/Epub/Epub/css/StyleResolve.*` | sizeStep 0..4 ladder (builtin + SD hook), line-height px, small-caps, synthetic DROP_CAP |
+| Word stream | `lib/Epub/Epub/ParsedText.h/.cpp` | Multi-`std::vector` + BiDi scratch; OOM-gated reserve (`kHeapFloor` 12 KB); synthetic-scale measure |
+| Painted line | `lib/Epub/Epub/blocks/TextBlock.*` | Single arena; sizeStep/lineHeightPx/smallCaps/syntheticScale; half-leading paint |
 | Image | `lib/Epub/Epub/blocks/ImageBlock.*` | JPEG/PNG, lazy extract, PXC session cache |
-| Section cache | `lib/Epub/Epub/Section.*` | `SECTION_FILE_VERSION = 33`, partial `0xFE-(v-28)`, incremental `startBuild` / `buildSomeMore` / `suspendBuild` |
+| Section cache | `lib/Epub/Epub/Section.*` | `SECTION_FILE_VERSION = 69`, partial `0xFE-(v-28)`, incremental `startBuild` / `buildSomeMore` / `suspendBuild` |
 | Render key | `lib/Epub/Epub/ReaderRenderSpec.h` | fontId, lineCompression, viewport, hyphen, embeddedStyle, focus/guide |
-| Page paint | `Page.cpp` | `PageLine::render` passes **single** reader `fontId` into `TextBlock::render` |
+| Page paint | `Page.cpp` + `setPaintStyleResolveParams` | Reader base `fontId`; TextBlock re-resolves sizeStep with measure-matched paint params |
 
 ### Pain points (corpus-backed)
 
@@ -287,7 +288,7 @@ void initStyleResolveContext(StyleResolveContext& ctx, const ReaderRenderSpec&, 
 
 ### Rules
 
-**(a) Builtin families** (`CrossPointSettings::getReaderFontId` ladders: Bitter / Source Serif 4 at 12/14/16/18):
+**(a) Builtin families** (`CasperSettings::getReaderFontId` ladders: Bitter / Source Serif 4 at 12/14/16/18):
 
 | User `fontSize` enum | step0 | step1 | step2 (base) | step3 | step4 |
 |----------------------|-------|-------|--------------|-------|-------|
@@ -724,19 +725,14 @@ sequenceDiagram
 
 | PR | SECTION_FILE_VERSION | CSS_CACHE_VERSION | Notes |
 |----|---------------------:|------------------:|-------|
-| (current) | 33 | 8 | Baseline |
+| (current shipped) | **69** | (see CssParser) | Rivulet quality pass: smallCaps + syntheticScale on BlockStyle; SD ladder hook; paint params; half-leading; span sizeStep flush |
+| (historical) 33 | 8 | Baseline pre-Rivulet |
 | **PR1a** CSS parse only | 33 (unchanged) | **9** | Wire fields present; unused by layout until 1b |
 | **PR1b-min** block metrics | **34** | 9 | Geometry changes; BlockStyle sizeStep/lineHeightPx affect breaks |
-| **PR1c** per-word sizeStep slab | **35** | 9 | TextBlock arena flag + slab |
-| **PR2** decoration harden | 35 unless paint-only | 9 | Bump SECTION only if line metrics change |
-| **PR3** small-caps | **36** if style bit in arena | **10** if fontVariant in CSS wire from 9-only parse gap; if fontVariant already in CSS v9, stay 9 | Prefer ship fontVariant in PR1a wire to avoid extra CSS bump |
-| **PR4** floats | **37** | 9/10 | Geometry; y/x placement |
-| **PR5a** table Tier A | **38** | — | Text content/breaks change |
-| **PR5b** table Tier B | **39** | — | Side-by-side lines |
-| **PR6a** LineBoxer extract | no bump if identical | — | |
-| **PR6b/c** IR change | **40** if word encoding changes | — | |
+| … intermediate Rivulet PRs … | 35–68 | | floats, drop-cap override, line-height, etc. |
+| **Quality pass (rev 4)** | **69** | — | `smallCaps` + `syntheticScale` serialized; measure/paint DROP_CAP parity |
 
-**Recommendation:** PR1a serializes **all** new CSS fields (fontSize, lineHeight*, float, clear, fontVariant) in **CSS v9** once, even if layout ignores float until PR4 — avoids CSS v10/v11 churn. Layout PRs bump **SECTION** only.
+**Policy note:** any change to TextBlock BlockStyle wire format or page geometry **must** bump `SECTION_FILE_VERSION` (partial sentinel lockstep). Version mismatch → rebuild only.
 
 Every bump PR **must** patch `docs/file-formats.md` with TextBlock arena layout and CSS wire layout.
 
@@ -1027,7 +1023,7 @@ flowchart LR
 ## References
 
 - `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.*`, `css/CssStyle.h`, `css/CssParser.*`, `ParsedText.*`, `blocks/TextBlock.*`, `blocks/ImageBlock.*`, `blocks/BlockStyle.h`, `Section.*`, `Page.*`, `ReaderRenderSpec.h`
-- `src/activities/reader/EpubReaderActivity.*`, `src/CrossPointSettings.cpp` (`getReaderFontId`), `src/SdCardFontSystem.h`
+- `src/activities/reader/EpubReaderActivity.*`, `src/CasperSettings.cpp` (`getReaderFontId`), `src/SdCardFontSystem.h`
 - `lib/EpdFont/EpdFontFamily.h`, `lib/GfxRenderer/GfxRenderer.cpp` (SUP/SUB 50% scale)
 - `scripts/_probe_calibre_epubs.py`, `test/epubs/*`
 - Witchhunt public README only — https://github.com/jpirnay/witchhunt-reader

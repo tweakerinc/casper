@@ -30,10 +30,22 @@ class TextSettingsActivity final : public Activity {
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
-  // Order: Alignment, Extra Paragraph Spacing, Line Spacing, Screen Margin.
-  enum class LayoutRow { Alignment, ParaSpacing, LineSpacing, ScreenMargin, Count };
+  // Order: Alignment, Extra Paragraph Spacing, [Spacing Height when Extra On],
+  // Line Spacing, Screen Margin. Spacing Height is only in the visible list when
+  // Extra Paragraph Spacing is On (see visibleLayoutRows).
+  enum class LayoutRow { Alignment, ParaSpacing, SpacingHeight, LineSpacing, ScreenMargin, Count };
   // Embedded Style is not listed — it follows Book's Style alignment.
+  // Bionic + Guide only when not Book's Style (reader ignores them under Book's Style).
   enum class StyleRow { BionicReading, GuideDots, Hyphenation, AntiAliasing, Count };
+
+  // Visible Style rows for current Alignment (hides Bionic/Guide under Book's Style).
+  std::vector<StyleRow> visibleStyleRows() const;
+  StyleRow styleRowAt(int listIndex) const;
+  // Visible Layout rows (hides Spacing Height when Extra Paragraph Spacing is Off).
+  std::vector<LayoutRow> visibleLayoutRows() const;
+  LayoutRow layoutRowAt(int listIndex) const;
+  void clampStyleSelection();
+  void clampLayoutSelection();
 
   void applyFamily(int listIndex);
   void applySize(int listIndex);
@@ -75,6 +87,9 @@ class TextSettingsActivity final : public Activity {
   };
 
   void rebuildFontList();
+  // Built-in ship sizes: 10/12/14/16. 8/18 only appear when the active SD family
+  // (or a rare pack) actually provides that point size.
+  void rebuildSizeList();
   // Drain the Confirm/Back/nav edge that opened this screen (same pattern as SettingsActivity).
   // Without this, Confirm-release cycles Font → Size on the first loop because selection
   // starts on the tab bar (index 0).
@@ -82,7 +97,7 @@ class TextSettingsActivity final : public Activity {
 
   struct SizeEntry {
     std::string name;
-    uint8_t settingIndex;
+    uint8_t settingIndex;  // CasperSettings::FONT_SIZE enum value
   };
 
   const SdCardFontRegistry* registry_;

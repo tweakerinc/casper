@@ -31,7 +31,7 @@ Casper does **not** replace the CrossPoint 1.5 reader pipeline. It:
 1. Keeps stock EPUB/TXT/XTC, dictionary folder (`/dictionaries` StarDict), KOReader sync, and HAL as shipped in 1.5.
 2. Extends theme APIs only where needed (`drawRecentBookCover` optional stats args; `drawStatusBar` optional time-left).
 3. Adds thin **Minimal** / **Dashboard** themes and stats persistence used by the home screen.
-4. Wires **EpubReaderActivity** with a minimal session load/save so Dashboard counters update.
+4. Opens books with **Rivulet** and updates recents/progress so Dashboard counters stay current.
 
 CrossInk is a **reference design**, not a tree to robocopy.
 
@@ -255,9 +255,11 @@ GitHub’s “Source code” zip is **always** the **git tag’s commit**. Uploa
 - Fallback: Settings → System → **SD firmware update** if Wi‑Fi OTA fails.
 - Repo must be **public** (or the API needs auth, which this client does not send).
 
-## Fonts (Lexend / Bitter)
+## Fonts (built-in)
 
-Full Lexend/Bitter packs are **deferred** while flash is tight (~84.5% of app partition). Document fonts remain Noto; UI uses Inter 10/12. Revisit if a slim build frees enough flash.
+- **Literata** — default reader body  
+- **Source Serif 4** — UI chrome + alternate reader  
+- Bitter / Lexend are **not** shipping built-ins (Bitter removed; Lexend not product). SD packs still work for extra faces.
 
 ## Factory defaults (Casper)
 
@@ -289,7 +291,7 @@ Home covers use **cover-fill** (scale = max of width/height ratios, centered ove
 - Full **Lyra Carousel** artwork and selection chrome (stub uses Lyra drawing + carousel metrics)
 - Multi-book home swap / carousel SD frame cache from CrossInk
 - Full CrossInk time-left estimator (session pace floors, progress floor); Casper uses simplified pace × remaining pages
-- Lexend Deca / Bitter as built-in reader fonts (flash budget)
+- Extra built-in families beyond Literata + Source Serif (flash budget)
 - CXDict / multi-word selection stack
 - Sleep-screen stats modes (cover + stats on sleep)
 - Dark mode / clipping stack

@@ -19,10 +19,12 @@
 #include <vector>
 
 #include "BookActions.h"
-#include "CrossPointSettings.h"
-#include "CrossPointState.h"
+#include "CasperSettings.h"
+#include "CasperState.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
+#include "util/CasperPaths.h"
+
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
@@ -30,9 +32,6 @@
 #include "activities/reader/BookStatsActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/reader/ReaderActivity.h"
-#if FREEINK_CAP_BLE_HID_HOST
-#include "activities/settings/BluetoothSettingsActivity.h"
-#endif
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/HomeCoverMetrics.h"
@@ -44,12 +43,12 @@
 
 namespace {
 
-// Home / Bare long-press (Read menu, Library→Recents, Menu→Settings).
-// Was 1000 → 500; 300ms still separates tap from hold without feeling sticky.
-constexpr unsigned long READ_LONG_PRESS_MS = 300;
-// Start aborting multipass greys before the threshold so waitForRenderIdle is
-// short when the menu push runs (otherwise hold + grey stage feels like 1s+).
-constexpr unsigned long LONG_PRESS_PRECANCEL_MS = 120;
+// Home long-press (Menu→Settings, Read→book menu).
+// Keep clearly above debounce (~5–20ms) and below "sticky hold" feel.
+// 200ms: snappy hold; short taps still release before threshold.
+constexpr unsigned long READ_LONG_PRESS_MS = 200;
+// Abort greys while still holding so ActivityManager idle wait is short.
+constexpr unsigned long LONG_PRESS_PRECANCEL_MS = 70;
 
 // Legacy Dashboard shelf/scroll themes are not in the firmware; stubs keep
 // shared helper call sites compiling without pulling DashboardTheme.cpp.
@@ -58,11 +57,11 @@ bool isDashboardScrollTheme() { return false; }
 bool usesRecentBookSideNav() { return false; }
 
 bool isBareTheme() {
-  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::BARE;
+  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::BARE;
 }
 
 bool isPenumbraTheme() {
-  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::PENUMBRA;
+  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::PENUMBRA;
 }
 
 // Stats (FocusTheme) is not in this firmware build.
@@ -102,7 +101,7 @@ bool isAnyFrontButtonPressed(const MappedInputManager& mappedInput) {
 // Popup menu: Dashboard BACK (Menu) / Bare CONFIRM (Menu).
 // Settings is always in the Menu list (front bar is Menu · Library · Recents · Read).
 // Recents is a front button — not duplicated in the popup menu.
-enum class MinimalMenuAction : uint8_t { ReadingStats, OpdsBrowser, FileTransfer, Bluetooth, Settings };
+enum class MinimalMenuAction : uint8_t { ReadingStats, OpdsBrowser, FileTransfer, Settings };
 
 struct MinimalMenuItem {
   const char* label;
@@ -119,23 +118,21 @@ int buildMinimalMenuItems(MinimalMenuItem* out, int maxItems, const bool hasOpds
     out[n++] = {tr(STR_OPDS_BROWSER), MinimalMenuAction::OpdsBrowser};
   }
   if (n < maxItems) out[n++] = {tr(STR_FILE_TRANSFER), MinimalMenuAction::FileTransfer};
-#if FREEINK_CAP_BLE_HID_HOST
-  if (n < maxItems) out[n++] = {tr(STR_BLUETOOTH), MinimalMenuAction::Bluetooth};
-#endif
   if (includeSettings && n < maxItems) {
     out[n++] = {tr(STR_SETTINGS_TITLE), MinimalMenuAction::Settings};
   }
   return n;
 }
 
-// Same path as EpubReaderActivity save: Epub(path, "/.crosspoint").getCachePath().
+// Same path as EpubReaderActivity save: Epub(path, CasperPaths::kPackageCacheRoot).getCachePath().
 // Constructor hashes the path; load() is not required for the cache directory.
 std::string getRecentBookCachePath(const RecentBook& book) {
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, "/.crosspoint").getCachePath();
+    return Epub(book.path, CasperPaths::kPackageCacheRoot).getCachePath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
-    return std::string("/.crosspoint/xtc_") + std::to_string(std::hash<std::string>{}(book.path));
+    return std::string(CasperPaths::kPackageCacheRoot) + "/xtc_" +
+           std::to_string(std::hash<std::string>{}(book.path));
   }
   if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
     return std::string("/.crosspoint/txt_") + std::to_string(std::hash<std::string>{}(book.path));
@@ -144,16 +141,16 @@ std::string getRecentBookCachePath(const RecentBook& book) {
 }
 
 BookReadingStats loadRecentBookStats(const RecentBook& book) {
-  // Dual-path: 1.5 std::hash cache first, then CrossInk FNV-64 epub_* path.
+  // Full stats only when Stats UI needs them — single book dir via loadForBook.
   return BookReadingStats::loadForBook(book.path);
 }
 
-// Dashboard progress %: prefer the value written on reader exit (stats v6+).
-// Fail-soft: returns -1 when missing (old books / never opened this build).
-// Intentionally does NOT open the EPUB — that was a home-enter peak-heap hit.
+// Dashboard progress %: prefer recent.json (CasperStats); no multi-path SD hunt.
 float loadRecentBookProgressPercent(const RecentBook& book) {
-  const BookReadingStats stats = BookReadingStats::loadForBook(book.path);
-  return stats.getProgressPercent();
+  if (book.progressPercentMilli != 0xFFFF) {
+    return static_cast<float>(book.progressPercentMilli) / 100.0f;
+  }
+  return BookReadingStats::loadForBook(book.path).getProgressPercent();
 }
 
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
@@ -177,7 +174,7 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
   }
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, "/.crosspoint");
+      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
       const std::string heroPath = epub.getThumbBmpPath(heroH);
       if (!thumbLooksValid(heroPath)) {
         return false;
@@ -189,7 +186,7 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
         book.coverBmpPath = epub.getThumbBmpPath();
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, "/.crosspoint");
+      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
       // Path-only probe — avoid full XTC load when the hero BMP is already on disk.
       const std::string heroPath = xtc.getThumbBmpPath(heroH);
       if (!thumbLooksValid(heroPath)) {
@@ -209,11 +206,7 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
 }  // namespace
 
 int HomeActivity::getMenuItemCount() const {
-#if FREEINK_CAP_BLE_HID_HOST
-  int count = 5;  // File Browser, Recents, File transfer, Bluetooth, Settings
-#else
   int count = 4;  // File Browser, Recents, File transfer, Settings
-#endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -221,6 +214,54 @@ int HomeActivity::getMenuItemCount() const {
     count++;
   }
   return count;
+}
+
+void HomeActivity::paintMinimalMenu(const bool bandOnly) {
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int bandTop = metrics.topPadding + metrics.homeTopPadding;
+  const int bandBottom = pageHeight - metrics.buttonHintsHeight;
+
+  MinimalMenuItem menuItems[6];
+  const int menuCount =
+      buildMinimalMenuItems(menuItems, 6, hasOpdsServers, !recentBooks.empty(), /*includeSettings=*/true);
+  const int menuH =
+      menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
+  const int menuTop = bandTop + std::max(0, (bandBottom - bandTop - menuH) / 2);
+  const Rect menuRect{0, menuTop, pageWidth, std::max(menuH, 1)};
+  auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index].label); };
+  const std::function<UIIcon(int)> noIcon;
+
+  if (bandOnly) {
+    if (bandBottom > bandTop) {
+      renderer.fillRect(0, bandTop, pageWidth, bandBottom - bandTop, false);
+    }
+    GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
+    UiGhostPolicy::displayMenuBand(renderer, 0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
+    return;
+  }
+
+  // Greys teardown must happen *before* painting the menu plate, never after.
+  // Multipass ends by rebasing controller DTM1/DTM2 to the *home* BW shell while
+  // greys stay on glass. Library open diffs that home baseline → dense list and
+  // looks clean. If we cleanup with the *new* menu FB after draw, both planes
+  // become the sparse menu with no glass update — the following FAST sees zero
+  // differential and the main home image remains fully visible on glass.
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.restoreBwBuffer();  // no-op if multipass already freed the store
+
+  renderer.clearScreen(0xFF);
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
+  GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  homeMenuShellOnPanel = true;
+  coverGrayOnPanel = false;
+  coverRendered = false;
+  // Same open path as Library (FAST + soft settle). DTM1 still holds home BW so
+  // the differential actually drives home → menu. Up/Down = band FAST only.
+  UiGhostPolicy::displaySoftOpen(renderer, /*softCount=*/1);
 }
 
 void HomeActivity::loadRecentBooks(int maxBooks) {
@@ -246,7 +287,6 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
   bool showingLoading = false;
-  Rect popupRect;
 
   // Per-theme hero height so gen matches the on-screen plate (1:1, no grids).
   // Shelf still needs a compact 168px row when that theme is active.
@@ -270,13 +310,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool anyNeedWork = false;
   for (const RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, "/.crosspoint");
+      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
       if (!heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)))) {
         anyNeedWork = true;
         break;
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, "/.crosspoint");
+      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
       if (!xtc.load()) {
         anyNeedWork = true;
         break;
@@ -304,18 +344,14 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     }
   }
 
-  // Draw Loading into the framebuffer only — do NOT displayWindow / half-refresh
+  // Upper-left "Loading" into the framebuffer only — do NOT window/HALF refresh
   // here. On X4 (SSD1677), a window while greys are on glass can promote to a full
-  // HALF clean and black-flash in a loop. v0.1.3 only painted the dialog into the
-  // FB; the next full multipass/home paint shows the result once.
-  auto showProgress = [&](int progress, int total) {
-    // Stats jacket is large — pin dialog lower so it is not under the cover plate.
-    const float topRatio = usesStatsFamilyCover() ? 0.72f : BaseTheme::kPopupCenterY;
+  // HALF clean and black-flash in a loop. Next multipass/home paint shows it once.
+  auto showProgress = [&](int /*progress*/, int /*total*/) {
     if (!showingLoading) {
-      popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), topRatio, /*refresh=*/false);
+      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
       showingLoading = true;
     }
-    GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / std::max(1, total)), /*refresh=*/false);
   };
 
   const int total = std::max(1, static_cast<int>(recentBooks.size()));
@@ -325,7 +361,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool pathsUpdated = false;
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, "/.crosspoint");
+      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
       const bool needWork = !heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)));
       if (needWork) {
         showProgress(progress, total);
@@ -387,7 +423,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         }
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, "/.crosspoint");
+      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
       if (xtc.load()) {
         const bool needWork = !heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)));
         if (needWork) {
@@ -467,6 +503,8 @@ void HomeActivity::onEnter() {
   backPressSeen = false;
   backResumeArmed = false;
   minimalMenuIndex = 0;
+  // Cold/first Home: HALF scrub (boot logo residual / first shell).
+  UiGhostPolicy::requestHardScrub();
   // Allow cover pass to run again after leaving reader / changing theme.
   // Clear settled multipass so a theme switch always redraws and re-multipasses.
   freeCoverBuffer();
@@ -558,22 +596,72 @@ void HomeActivity::markSnappyResumeReady() {
   }
 }
 
+void HomeActivity::seedUnderReader() {
+  // QR critical path: do not touch SD or request paint. Back from book runs
+  // onResume → full enter load once RECENT_BOOKS (etc.) are available.
+  deferredEnterLoad_ = true;
+  minimalMenuOpen = false;
+  homeMenuShellOnPanel = false;
+  markSnappyResumeReady();
+  // recentsLoaded=true from markSnappy is a lie until deferred load — paint
+  // path rebinds when deferredEnterLoad_ completes on resume.
+  recentsLoaded = false;
+  homeUiReady = false;
+}
+
 void HomeActivity::onResume() {
   // Back from reader / settings / library / menu: hard HALF on first home paint so
   // residual from soft FAST children is scrubbed. One intentional flash; panel looks clean.
   // Cover themes may still defer greys after the BW shell.
   Activity::onResume();
 
+  if (deferredEnterLoad_) {
+    deferredEnterLoad_ = false;
+    // Same data load as onEnter, without re-arming a second cold boot scrub race.
+    hasOpdsServers = OPDS_STORE.hasServers();
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    loadRecentBooks(metrics.homeRecentBooksCount);
+    currentBookStats = BookReadingStats{};
+    currentBookProgressPercent = -1.0f;
+    if (SETTINGS.readingStatsTrackingEnabled()) {
+      globalStats = GlobalReadingStats::load();
+    } else {
+      globalStats = GlobalReadingStats{};
+    }
+    selectorIndex = 0;
+    penumbraRecentsFocus = 0;
+    if (isPenumbraTheme()) {
+      PenumbraThemeUi::resetUnderModeToDefault();
+      PenumbraThemeUi::clampUnderModeToTracking();
+    }
+    if (!recentBooks.empty()) {
+      loadFocusedRecentStats();
+    }
+    const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
+    const bool shelfTheme = isDashboardRecentsTheme();
+    if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
+      recentsLoaded = true;
+    }
+    homeUiReady = true;
+  }
+
   leaveForUiChildSnappy = false;
 
   freeCoverBufferRamOnly();
-  // Panel was overwritten by the child — greys on glass are gone.
+  // Panel was overwritten by the child — greys on glass are gone. Tear down any
+  // leftover grey controller state from an aborted multipass so BW shell is clean
+  // (Bare: Loading/reader residual as "glitched" chrome without this).
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.restoreBwBuffer();
+  renderer.cleanupGrayscaleWithFrameBuffer();
   coverGrayOnPanel = false;
   coverRendered = false;
   coverGrayNeedsRetry = false;
   coverGrayRetryAtMs = 0;
   deferredHalfScrubOnly = false;
   deferredHalfScrubAtMs = 0;
+  deferredGreysOnly = false;
+  softGrayscaleBase = false;
   recentsLoading = false;
   homeUiReady = true;
   coverNeedsRetry = false;
@@ -589,8 +677,10 @@ void HomeActivity::onResume() {
   penumbraHalfBaselineDone = false;
   UiGhostPolicy::requestHardScrub();
   suppressMenuBackUntilMs = millis() + 900UL;
-  // Cover themes: BW shell first (HALF scrub), greys deferred after idle.
-  snappyResumeNoGreys = usesHomeCoverMultipass();
+  // Cover themes: multipass greys on the *first* home paint when thumbs exist
+  // (one HALF greys-base). Deferred "shell HALF → wait → greys HALF" felt like
+  // a second flash 1–10s later on Bare (X3 multipass alone is multi-second).
+  snappyResumeNoGreys = false;
   paintedUiTheme = -1;
 
   // Portrait: reader may have left landscape.
@@ -740,7 +830,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   // same-recipe fallback height while c30_560 regenerates after flash.
   std::string coverPath;
   if (FsHelpers::hasEpubExtension(book.path)) {
-    Epub epub(book.path, "/.crosspoint");
+    Epub epub(book.path, CasperPaths::kPackageCacheRoot);
     if (isBareTheme()) {
       coverPath = firstExisting({
           epub.getThumbBmpPath(heroH),
@@ -880,10 +970,16 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
-  // v0.1.3 perfect multipass: HALF base always (true greys). Soft/FAST base was
-  // for snappy UI but left muddy midtones on Bare covers vs the locked recipe.
+  // Greys base: HALF for true midtones (default). Soft/FAST only when caller already
+  // scrubbed the BW shell and set softGrayscaleBase (avoid a second hard flash).
+  const bool softBase = softGrayscaleBase;
   softGrayscaleBase = false;
-  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  if (softBase) {
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+    LOG_DBG("HOME", "multipass greys base=FAST (shell already scrubbed)");
+  } else {
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  }
 
   if (leavingHome()) {
     abortMultipass();
@@ -1148,14 +1244,15 @@ void HomeActivity::loop() {
         // must be cleared on dismiss — otherwise multipassHomeCoverGrayscale() bails
         // at leave_early without pushing the home FB and the menu stays on glass.
         cancelBackgroundPaint = false;
-        // Menu was FAST; Home HALF scrub cleans residual when the shell repaints.
+        // Menu was FAST; return home with FAST shell (snappy). Force Refresh
+        // still hard-scrubs if residual builds up.
         softGrayscaleBase = false;
         coverGrayOnPanel = false;
         coverRendered = false;
         forceHomeShellRepaint = true;
         snappyResumeNoGreys = usesHomeCoverMultipass();
         penumbraHalfBaselineDone = false;
-        UiGhostPolicy::requestHardScrub();
+        UiGhostPolicy::clearHardScrub();
         requestUpdate();
         return;
       }
@@ -1191,11 +1288,6 @@ void HomeActivity::loop() {
           case MinimalMenuAction::FileTransfer:
             onFileTransferOpen();
             break;
-#if FREEINK_CAP_BLE_HID_HOST
-          case MinimalMenuAction::Bluetooth:
-            onBluetoothOpen();
-            break;
-#endif
           case MinimalMenuAction::Settings:
             minimalMenuOpen = false;
             onSettingsOpen();
@@ -1414,11 +1506,6 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
-#if FREEINK_CAP_BLE_HID_HOST
-      case HomeMenuItem::BLUETOOTH:
-        onBluetoothOpen();
-        break;
-#endif
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -1559,7 +1646,7 @@ void HomeActivity::render(RenderLock&& lock) {
     coverRectX = coverRectY = coverRectW = coverRectH = 0;
     freeCoverBufferRamOnly();
 
-    const int clockTheme = static_cast<int>(CrossPointSettings::UI_THEME::PENUMBRA);
+    const int clockTheme = static_cast<int>(CasperSettings::UI_THEME::PENUMBRA);
     PenumbraThemeUi::clampUnderModeToTracking();
 
     // Partial updates (side L/R / Recents Down) — never while menu owns the panel.
@@ -1619,9 +1706,17 @@ void HomeActivity::render(RenderLock&& lock) {
         }
         if (dirty.width > 0 && dirty.height > 0) {
           const uint32_t tClock = millis();
-          // Windowed even on X3 for clock digits — full FAST greys the whole home.
-          // Fall back path is still available via force_refresh / hard scrub.
-          renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+          // Skip greys multipass when user is leaving (long-press Settings etc.) —
+          // AA is multi-hundred ms and blocked waitForRenderIdle.
+          const bool leave =
+              cancelBackgroundPaint || activityManager.hasPendingActivityChange();
+          if (!leave &&
+              PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
+                                                      &dirty)) {
+            // AA ok
+          } else {
+            renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+          }
           SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_digits x=%d y=%d w=%d h=%d fre=%u", dirty.x,
                               dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
         }
@@ -1648,40 +1743,8 @@ void HomeActivity::render(RenderLock&& lock) {
     }
 
     if (minimalMenuOpen) {
-      // Center text-only list between status chrome and footer hints (no icons).
-      const int bandTop = metrics.topPadding + metrics.homeTopPadding;
-      const int bandBottom = pageHeight - metrics.buttonHintsHeight;
-      MinimalMenuItem menuItems[6];
-      const int menuCount = buildMinimalMenuItems(menuItems, 6, hasOpdsServers, !recentBooks.empty(),
-                                                  /*includeSettings=*/true);
-      const int menuH = menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
-      const int menuTop = bandTop + std::max(0, (bandBottom - bandTop - menuH) / 2);
-      const Rect menuRect{0, menuTop, pageWidth, std::max(menuH, 1)};
-      auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index].label); };
-      // Empty icon callback → themes draw centered labels only.
-      const std::function<UIIcon(int)> noIcon;
-      if (homeMenuShellOnPanel) {
-        if (bandBottom > bandTop) {
-          renderer.fillRect(0, bandTop, pageWidth, bandBottom - bandTop, false);
-        }
-        GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
-        UiGhostPolicy::displayMenuBand(renderer, 0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
-        cancelBackgroundPaint = false;
-        homeUiReady = true;
-        recentsLoaded = true;
-        return;
-      }
-      // First menu open: full white plate + FAST (matches long-press book menu).
-      renderer.clearScreen(0xFF);
-      GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
-      GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      coverGrayOnPanel = false;
-      coverRendered = false;
-      homeMenuShellOnPanel = true;
+      paintMinimalMenu(homeMenuShellOnPanel);
       paintedUiTheme = clockTheme;
-      UiGhostPolicy::displayFastFull(renderer);
       cancelBackgroundPaint = false;
       homeUiReady = true;
       recentsLoaded = true;
@@ -1690,8 +1753,8 @@ void HomeActivity::render(RenderLock&& lock) {
 
     homeMenuShellOnPanel = false;
     renderer.clearScreen(0xFF);
-    const bool chromeOnly = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                            SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
+    const bool chromeOnly = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
+                            SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
     if (chromeOnly) {
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
@@ -1725,17 +1788,28 @@ void HomeActivity::render(RenderLock&& lock) {
     deferredHalfScrubOnly = false;
     const uint32_t tPenumbra = millis();
     // Back→Home arms hard scrub in onResume → HALF cleans residual. Other full
-    // paints (clock tick path uses partial) stay FAST when scrub is not armed.
-    if (UiGhostPolicy::hardScrubArmed()) {
-      SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=HALF theme=%u fre=%u",
-                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+    // paints stay FAST when scrub is not armed. X3: greyscale multipass on the
+    // 72pt clock band so 2-bit AA fringes land (BW-only looked jagged).
+    const bool hard = UiGhostPolicy::hardScrubArmed();
+    const int baseMode =
+        hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
+    SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=%s theme=%u fre=%u", hard ? "HALF" : "FAST",
+                         static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+    // Clock greys can take 400–900ms — skip if user already navigated away.
+    const bool leave = cancelBackgroundPaint || activityManager.hasPendingActivityChange();
+    if (!leave && gpio.deviceIsX3() &&
+        PenumbraThemeUi::displayClockAntiAliased(renderer, baseMode, /*dirtyOverride=*/nullptr)) {
+      if (hard) UiGhostPolicy::noteHalf();
+      penumbraHalfBaselineDone = true;
+      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=%s+clockAA theme=%u fre=%u",
+                          hard ? "HALF" : "FAST", static_cast<unsigned>(SETTINGS.uiTheme),
+                          static_cast<unsigned>(ESP.getFreeHeap()));
+    } else if (hard) {
       UiGhostPolicy::displayHalf(renderer);
       penumbraHalfBaselineDone = true;
       SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF theme=%u fre=%u",
                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     } else {
-      SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=FAST theme=%u fre=%u",
-                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
       UiGhostPolicy::displayFastFull(renderer);
       penumbraHalfBaselineDone = true;
       SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=FAST theme=%u fre=%u",
@@ -1794,39 +1868,7 @@ void HomeActivity::render(RenderLock&& lock) {
     deferredGreysOnly = false;
 
     if (minimalMenuOpen) {
-      MinimalMenuItem menuItems[6];
-      const int menuCount = buildMinimalMenuItems(menuItems, 6, hasOpdsServers, !recentBooks.empty(),
-                                                  /*includeSettings=*/true);
-      // Vertically center text-only list between header band and footer hints.
-      const int bandTop = metrics.topPadding + metrics.homeTopPadding;
-      const int bandBottom = pageHeight - metrics.buttonHintsHeight;
-      const int menuH = menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
-      const int menuTop = bandTop + std::max(0, (bandBottom - bandTop - menuH) / 2);
-      const Rect menuRect{0, menuTop, pageWidth, std::max(menuH, 1)};
-      auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index].label); };
-      const std::function<UIIcon(int)> noIcon;
-
-      // Cursor move while menu already on glass: only repaint the menu stack.
-      if (homeMenuShellOnPanel) {
-        if (bandBottom > bandTop) {
-          renderer.fillRect(0, bandTop, pageWidth, bandBottom - bandTop, false);
-        }
-        GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
-        UiGhostPolicy::displayMenuBand(renderer, 0, bandTop, pageWidth, std::max(1, bandBottom - bandTop));
-        homeUiReady = true;
-        return;
-      }
-
-      renderer.clearScreen(0xFF);
-      GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
-      GUI.drawButtonMenu(renderer, menuRect, menuCount, minimalMenuIndex, menuLabel, noIcon);
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      // FAST white menu plate (same as long-press book menu / Penumbra path).
-      coverGrayOnPanel = false;
-      homeMenuShellOnPanel = true;
-      UiGhostPolicy::displayFastFull(renderer);
-      // Greys are already aborted for the popup; clear so Back→home can multipass.
+      paintMinimalMenu(homeMenuShellOnPanel);
       cancelBackgroundPaint = false;
       homeUiReady = true;
       return;
@@ -1844,8 +1886,8 @@ void HomeActivity::render(RenderLock&& lock) {
     // Top chrome (battery icon+% / clock). Bare / Penumbra default chrome off;
     // Stats always draws the status-bar band (same plate packing on X3 + X4).
     const bool textOnlyHome = isBareTheme() || isPenumbraTheme();
-    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                                                    SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK));
+    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
+                                                    SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK));
     // Bare / Penumbra: header only when the user has enabled battery/clock.
     if (!textOnlyHome || chromeOnlyMinimal) {
       const int headerTop = textOnlyHome ? 0 : metrics.topPadding;
@@ -1911,29 +1953,26 @@ void HomeActivity::render(RenderLock&& lock) {
       UiGhostPolicy::displayHalf(renderer);
       return;
     }
-    // Return from Settings/Library/reader: BW shell first (HALF scrub when armed),
-    // then deferred cover greys clean residual midtones.
+    // Legacy snappy-resume path (shell now, greys later) — kept for rare callers
+    // that still arm snappyResumeNoGreys. Prefer multipass-on-first-paint above.
     if (snappyResumeNoGreys && recentsLoaded) {
       snappyResumeNoGreys = false;
       homeMenuShellOnPanel = false;
       coverRendered = true;
-      // Not settled greys yet — midtones are BW-solid until deferred multipass.
       coverGrayOnPanel = false;
       paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
-      // Free any snapshot so storeBw has room for deferred greys (keep coverRect*).
       freeCoverBufferRamOnly();
       deferredGreysOnly = true;
-      softGrayscaleBase = true;
+      softGrayscaleBase = true;  // multipass uses FAST greys-base (no second HALF)
       coverGrayNeedsRetry = true;
-      // Long enough that Back→home feels done before the grey multipass starts.
-      coverGrayRetryAtMs = millis() + (gpio.deviceIsX3() ? 1600UL : 900UL);
-      // displayFastFull clears hard scrub — use HALF when onResume armed cleanup.
+      // Short defer so Back feels instant; greys base is soft (not a second scrub).
+      coverGrayRetryAtMs = millis() + 250UL;
       if (UiGhostPolicy::hardScrubArmed()) {
         UiGhostPolicy::displayHalf(renderer);
-        LOG_DBG("HOME", "Home shell HALF scrub; greys deferred");
+        LOG_DBG("HOME", "Home shell HALF scrub; greys deferred soft");
       } else {
         UiGhostPolicy::displayFastFull(renderer);
-        LOG_DBG("HOME", "Home shell FAST; greys deferred");
+        LOG_DBG("HOME", "Home shell FAST; greys deferred soft");
       }
       return;
     }
@@ -1990,13 +2029,9 @@ void HomeActivity::render(RenderLock&& lock) {
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored, storeCover,
                           &currentBookStats, currentBookProgressPercent, &globalStats, nullptr);
 
-  // Build menu items dynamically — File Transfer, then (optional) Bluetooth, then Settings.
+  // Build menu items dynamically — File Transfer, then Settings.
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER)};
   std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer};
-#if FREEINK_CAP_BLE_HID_HOST
-  menuItems.push_back(tr(STR_BLUETOOTH));
-  menuIcons.push_back(Bluetooth);
-#endif
   menuItems.push_back(tr(STR_SETTINGS_TITLE));
   menuIcons.push_back(Settings);
 
@@ -2047,36 +2082,46 @@ void HomeActivity::onSelectBook(const std::string& path) {
   leaveForUiChildSnappy = isPenumbraTheme();
   snappyResumeNoGreys = false;
 
-  // Ideal open (revert-friendly):
-  // - Home greys settled (or Penumbra text home) + book.bin present → no Loading
-  //   panel refresh; first ink is FAST page paint (one refresh).
-  // - Greys still running or cold book.bin miss → Loading + HALF first page so the
-  //   device never looks frozen for multi-second work / multipass cancel.
-  // Section-cache rebuild still paints Loading inside EpubReader when needed.
+  // Bare/Dashboard multipass leaves greys in controller RAM. Opening a book with
+  // FAST on that residual paints "Loading" or first page as salt-and-pepper /
+  // glitched glyphs. Tear greys down and force a hard scrub before reader ink.
+  const bool coverTheme = usesHomeCoverMultipass();
   const bool greysSettled = coverGrayOnPanel;
+  if (coverTheme) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.restoreBwBuffer();  // no-op if multipass never stored BW
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    coverGrayOnPanel = false;
+  }
+
+  // v0.1.5-style open: cached book.bin → FAST first ink, no home HALF, no
+  // "Opening" paint. Controller greys already torn down above when coverTheme.
+  // Cold index miss: short status only (reader builds book.bin).
   bool bookIndexReady = true;
   if (FsHelpers::hasEpubExtension(path)) {
-    const std::string cacheDir = Epub(path, "/.crosspoint").getCachePath();
+    const std::string cacheDir = Epub(path, CasperPaths::kPackageCacheRoot).getCachePath();
     bookIndexReady = Storage.exists((cacheDir + "/book.bin").c_str());
   }
-  const bool showLoading = !greysSettled || !bookIndexReady;
-  if (showLoading) {
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), BaseTheme::kPopupCenterY, /*refresh=*/true);
+  // Only force a panel scrub when greys are still mid-flight (not settled) —
+  // never HALF a clean home just because the theme multipasses covers.
+  const bool greysDirty = coverTheme && !greysSettled;
+  const bool preferFast = bookIndexReady && !greysDirty;
+  if (!bookIndexReady && SETTINGS.readerDarkMode == 0) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
   }
 
   const uint32_t t0 = millis();
   activityManager.waitForRenderIdle();
-  LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d bookIndex=%d loading=%d penumbra=%d",
-          static_cast<unsigned long>(millis() - t0), greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, showLoading ? 1 : 0,
-          isPenumbraTheme() ? 1 : 0);
+  LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d bookIndex=%d preferFast=%d penumbra=%d coverTheme=%d",
+          static_cast<unsigned long>(millis() - t0), greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, preferFast ? 1 : 0,
+          isPenumbraTheme() ? 1 : 0, coverTheme ? 1 : 0);
   cancelBackgroundPaint = false;
 
-  // FAST first page only when we skipped Loading (popup on glass needs HALF scrub).
-  const bool preferFast = !showLoading;
-  ReaderActivity::setOpenHints(/*preferFastFirstRefresh=*/preferFast, /*deferFirstPageTextAa=*/true);
-  SystemLog::logTiming("HOME", "read_open preferFast=%d greysSettled=%d bookIndex=%d loading=%d penumbra=%d",
-                       preferFast ? 1 : 0, greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, showLoading ? 1 : 0,
-                       isPenumbraTheme() ? 1 : 0);
+  // Defer AA only when we scrubbed or cold-opened; warm FAST open can AA next turn.
+  ReaderActivity::setOpenHints(/*preferFastFirstRefresh=*/preferFast, /*deferFirstPageTextAa=*/!preferFast);
+  SystemLog::logTiming("HOME", "read_open preferFast=%d greysSettled=%d bookIndex=%d penumbra=%d cover=%d",
+                       preferFast ? 1 : 0, greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, isPenumbraTheme() ? 1 : 0,
+                       coverTheme ? 1 : 0);
   activityManager.goToReader(path);
 }
 
@@ -2205,13 +2250,11 @@ void HomeActivity::showCurrentBookActionMenu(const bool ignoreInitialConfirmRele
   if (recentBooks.empty()) {
     return;
   }
-  // Cancel greys first so ActivityManager waitForRenderIdle is not a multi-second stall.
-  const uint32_t tMenu = millis();
+  // Abort greys and queue the child immediately. ActivityManager waits for the
+  // render task before Push — a second wait here made long-press feel stuck
+  // (especially during Penumbra clock AA / Bare multipass).
   markLeavingForUiChild();
   cancelBackgroundPaint = true;
-  activityManager.waitForRenderIdle();
-  LOG_DBG("HOME", "long-press menu after waitIdle %lums greysSettled=%d", static_cast<unsigned long>(millis() - tMenu),
-          coverGrayOnPanel ? 1 : 0);
   // Penumbra list focus when on Recents under-panel; else last-read / bare focus.
   // View All is not a book — open the full Recents list instead.
   if (isPenumbraTheme() && penumbraViewAllFocused()) {
@@ -2308,46 +2351,24 @@ void HomeActivity::onContinueReading() {
 
 void HomeActivity::onFileBrowserOpen() {
   markLeavingForUiChild();
-  activityManager.waitForRenderIdle();
-  cancelBackgroundPaint = false;
+  // Do not waitForRenderIdle here — ActivityManager does before Push.
   activityManager.goToFileBrowser();
 }
 
 void HomeActivity::onRecentsOpen() {
   markLeavingForUiChild();
-  activityManager.waitForRenderIdle();
-  cancelBackgroundPaint = false;
   activityManager.goToRecentBooks();
 }
 
 void HomeActivity::onSettingsOpen() {
+  // Cancel greys; queue Settings without blocking the hold on idle wait.
   markLeavingForUiChild();
-  // Abort greys so Settings is not delayed behind a multipass wait.
-  activityManager.waitForRenderIdle();
-  cancelBackgroundPaint = false;
   activityManager.goToSettings();
 }
 
 void HomeActivity::onFileTransferOpen() {
   markLeavingForUiChild();
   activityManager.goToFileTransfer();
-}
-
-void HomeActivity::onBluetoothOpen() {
-#if FREEINK_CAP_BLE_HID_HOST
-  markLeavingForUiChild();
-  activityManager.waitForRenderIdle();
-  cancelBackgroundPaint = false;
-  startActivityForResult(
-      std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput, /*exitOnSuccessfulConnect=*/false,
-                                                  /*disableOnExit=*/true),
-      [this](const ActivityResult&) {
-        forceHomeShellRepaint = true;
-        requestUpdate();
-      });
-#else
-  (void)0;  // Bluetooth compiled out of product build
-#endif
 }
 
 void HomeActivity::onOpdsBrowserOpen() {

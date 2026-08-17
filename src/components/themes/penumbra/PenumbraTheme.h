@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "components/themes/minimal/MinimalTheme.h"
 
 class GfxRenderer;
@@ -165,6 +165,12 @@ void invalidateRecentsProgressCache();
 // Returns the tight dirty rect for a windowed/soft panel update.
 Rect redrawClockBlock(GfxRenderer& renderer, const char* prevTime = nullptr, char* outTime = nullptr,
                       size_t outTimeSize = 0);
+
+// X3 only: 72pt clock is 2-bit AA, but BW home paints drop light fringe → jagged.
+// Call after BW home is in the framebuffer (full paint or after redrawClockBlock).
+// baseMode = HALF/FAST for greyscale base; window greys over the clock digit band.
+// Returns false if not X3 / storeBw failed (caller should plain-display BW).
+bool displayClockAntiAliased(GfxRenderer& renderer, int baseRefreshMode, const Rect* dirtyOverride = nullptr);
 
 bool formatHeroTimeNow(char* buf, size_t bufSize);
 }  // namespace PenumbraThemeUi

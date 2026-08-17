@@ -393,8 +393,8 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
 ### Singleton Access
 **Available Singletons**:
 ```cpp
-#define SETTINGS CrossPointSettings::getInstance()  // User settings
-#define APP_STATE CrossPointState::getInstance()    // Runtime state
+#define SETTINGS CasperSettings::getInstance()  // User settings
+#define APP_STATE CasperState::getInstance()    // Runtime state
 #define GUI UITheme::getInstance()                   // Current theme
 #define Storage HalStorage::getInstance()            // SD card I/O
 #define I18N I18n::getInstance()                     // Internationalization
@@ -889,7 +889,7 @@ rm -rf /path/to/sd/.crosspoint/epub_<hash>/sections/
 - After modifying:
   - `lib/Epub/Epub/Section.cpp`
   - `lib/Epub/Epub/BookMetadataCache.cpp`
-  - Render settings in `CrossPointSettings`
+  - Render settings in `CasperSettings`
 
 ### Cache File Format Versioning
 

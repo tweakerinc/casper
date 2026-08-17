@@ -12,7 +12,7 @@
 
 #include "ClockOffsetActivity.h"
 #include "ClockSyncActivity.h"
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
@@ -36,14 +36,14 @@ enum MenuItem {
 
 // Slot content order for popup: Hide, Battery, Clock, Battery Warning.
 constexpr uint8_t kSlotContentOrder[] = {
-    CrossPointSettings::SYS_SLOT_HIDE,
-    CrossPointSettings::SYS_SLOT_BATTERY,
-    CrossPointSettings::SYS_SLOT_CLOCK,
-    CrossPointSettings::SYS_SLOT_BATTERY_WARNING,
+    CasperSettings::SYS_SLOT_HIDE,
+    CasperSettings::SYS_SLOT_BATTERY,
+    CasperSettings::SYS_SLOT_CLOCK,
+    CasperSettings::SYS_SLOT_BATTERY_WARNING,
 };
 constexpr int kSlotContentOrderCount = static_cast<int>(sizeof(kSlotContentOrder) / sizeof(kSlotContentOrder[0]));
 
-const StrId kSlotLabelByEnum[CrossPointSettings::SYSTEM_STATUS_SLOT_COUNT] = {
+const StrId kSlotLabelByEnum[CasperSettings::SYSTEM_STATUS_SLOT_COUNT] = {
     StrId::STR_HIDE,
     StrId::STR_BATTERY,
     StrId::STR_CLOCK,
@@ -54,25 +54,25 @@ constexpr int CLOCK_FORMAT_ITEMS = 2;
 const StrId clockFormatNames[CLOCK_FORMAT_ITEMS] = {StrId::STR_CLOCK_FORMAT_24H, StrId::STR_CLOCK_FORMAT_12H};
 
 // Order matches BATTERY_DISPLAY_MODE: Icon, Percent, Icon + Percent.
-constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
+constexpr int BATTERY_DISPLAY_ITEMS = CasperSettings::BATTERY_DISPLAY_MODE_COUNT;
 const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {StrId::STR_ICON, StrId::STR_PERCENT,
                                                           StrId::STR_ICON_PLUS_PERCENT};
 
 // Battery Warning thresholds (matches BATTERY_WARNING enum).
-constexpr int BATTERY_WARNING_ITEMS = CrossPointSettings::BATTERY_WARNING_COUNT;
+constexpr int BATTERY_WARNING_ITEMS = CasperSettings::BATTERY_WARNING_COUNT;
 const char* batteryWarningValueLabel(uint8_t mode) {
   switch (mode) {
-    case CrossPointSettings::BATTERY_WARNING_5:
+    case CasperSettings::BATTERY_WARNING_5:
       return "5%";
-    case CrossPointSettings::BATTERY_WARNING_10:
+    case CasperSettings::BATTERY_WARNING_10:
       return "10%";
-    case CrossPointSettings::BATTERY_WARNING_15:
+    case CasperSettings::BATTERY_WARNING_15:
       return "15%";
-    case CrossPointSettings::BATTERY_WARNING_20:
+    case CasperSettings::BATTERY_WARNING_20:
       return "20%";
-    case CrossPointSettings::BATTERY_WARNING_25:
+    case CasperSettings::BATTERY_WARNING_25:
       return "25%";
-    case CrossPointSettings::BATTERY_WARNING_OFF:
+    case CasperSettings::BATTERY_WARNING_OFF:
     default:
       return I18N.get(StrId::STR_STATE_OFF);
   }
@@ -105,8 +105,8 @@ std::string formatUtcOffset(uint8_t biasedQ) {
 }
 
 const char* slotContentLabel(uint8_t content) {
-  if (content >= CrossPointSettings::SYSTEM_STATUS_SLOT_COUNT) {
-    content = CrossPointSettings::SYS_SLOT_HIDE;
+  if (content >= CasperSettings::SYSTEM_STATUS_SLOT_COUNT) {
+    content = CasperSettings::SYS_SLOT_HIDE;
   }
   return I18N.get(kSlotLabelByEnum[content]);
 }
@@ -122,7 +122,7 @@ std::vector<std::string> slotOptionLabels(bool includeClock) {
   std::vector<std::string> labels;
   labels.reserve(kSlotContentOrderCount);
   for (int i = 0; i < kSlotContentOrderCount; i++) {
-    if (!includeClock && kSlotContentOrder[i] == CrossPointSettings::SYS_SLOT_CLOCK) continue;
+    if (!includeClock && kSlotContentOrder[i] == CasperSettings::SYS_SLOT_CLOCK) continue;
     labels.emplace_back(slotContentLabel(kSlotContentOrder[i]));
   }
   return labels;
@@ -131,17 +131,17 @@ std::vector<std::string> slotOptionLabels(bool includeClock) {
 uint8_t contentFromFilteredIndex(int idx, bool includeClock) {
   int seen = 0;
   for (int i = 0; i < kSlotContentOrderCount; i++) {
-    if (!includeClock && kSlotContentOrder[i] == CrossPointSettings::SYS_SLOT_CLOCK) continue;
+    if (!includeClock && kSlotContentOrder[i] == CasperSettings::SYS_SLOT_CLOCK) continue;
     if (seen == idx) return kSlotContentOrder[i];
     seen++;
   }
-  return CrossPointSettings::SYS_SLOT_HIDE;
+  return CasperSettings::SYS_SLOT_HIDE;
 }
 
 int filteredDisplayIndex(uint8_t content, bool includeClock) {
   int seen = 0;
   for (int i = 0; i < kSlotContentOrderCount; i++) {
-    if (!includeClock && kSlotContentOrder[i] == CrossPointSettings::SYS_SLOT_CLOCK) continue;
+    if (!includeClock && kSlotContentOrder[i] == CasperSettings::SYS_SLOT_CLOCK) continue;
     if (kSlotContentOrder[i] == content) return seen;
     seen++;
   }
@@ -155,14 +155,14 @@ void pushClockItems(const bool nested) {
 }
 
 void pushNestedForSlot(uint8_t slotContent) {
-  if (slotContent == CrossPointSettings::SYS_SLOT_BATTERY) {
+  if (slotContent == CasperSettings::SYS_SLOT_BATTERY) {
     pushVisible(ITEM_BATTERY_DISPLAY, true);
   }
-  if (slotContent == CrossPointSettings::SYS_SLOT_BATTERY_WARNING) {
+  if (slotContent == CasperSettings::SYS_SLOT_BATTERY_WARNING) {
     // Threshold nests under whichever slot holds Battery Warning (L / M / R).
     pushVisible(ITEM_BATTERY_WARNING, true);
   }
-  if (slotContent == CrossPointSettings::SYS_SLOT_CLOCK && halClock.isAvailable()) {
+  if (slotContent == CasperSettings::SYS_SLOT_CLOCK && halClock.isAvailable()) {
     pushClockItems(/*nested=*/true);
   }
 }
@@ -180,7 +180,7 @@ void rebuildVisibleMenu() {
   // Penumbra has no status-bar clock slot, but still needs format / offset / sync
   // for the large home clock. Top-level when clock is not on the bar.
   if (halClock.isAvailable() && !SETTINGS.systemStatusBarAllowsClock() &&
-      !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
+      !SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK)) {
     pushClockItems(/*nested=*/false);
   }
 }
@@ -257,7 +257,7 @@ void SystemStatusBarSettingsActivity::onEnter() {
   }
   // Clamp slots and enforce exclusivity via assign (no-op assign of current value).
   auto clampSlot = [](uint8_t& s) {
-    if (s >= CrossPointSettings::SYSTEM_STATUS_SLOT_COUNT) s = CrossPointSettings::SYS_SLOT_HIDE;
+    if (s >= CasperSettings::SYSTEM_STATUS_SLOT_COUNT) s = CasperSettings::SYS_SLOT_HIDE;
   };
   clampSlot(SETTINGS.systemStatusBarLeft);
   clampSlot(SETTINGS.systemStatusBarMiddle);

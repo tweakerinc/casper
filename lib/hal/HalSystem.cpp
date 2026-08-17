@@ -128,7 +128,7 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "Casper version: " CROSSPOINT_VERSION;
+    info += "Casper version: " CASPER_VERSION;
     // Wall-clock stamp (RTC when available) so the report itself carries time even if
     // FAT metadata is wrong. Written after boot re-inits the clock; not panic-time.
     {

@@ -49,7 +49,7 @@ bool BookmarkFile::save(const std::string& bookPath, const std::vector<BookmarkE
     obj["pp"] = bookmark.computedChapterProgress;
   }
 
-  // writeDocToFile ensures /.crosspoint; the bookmarks subdirectory is ours.
+  // writeDocToFile ensures /.casper; the bookmarks subdirectory is ours.
   Storage.mkdir(BookmarkUtil::getBookmarksDir().c_str());
   const std::string path = BookmarkUtil::getBookmarkPath(bookPath);
   return PersistableStoreBase::writeDocToFile(path.c_str(), doc);

@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "KOReaderSettingsActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"

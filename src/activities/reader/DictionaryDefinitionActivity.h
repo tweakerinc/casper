@@ -8,7 +8,7 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-// Popup-style viewer for one dictionary definition (StarDict data, CrossInk-like layout).
+// Popup-style viewer for one dictionary definition (StarDict data, legacy-like layout).
 // Headword left/centered bold; optional pronunciation; wrapped senses; Up/Down scroll.
 // Restores a full-framebuffer snapshot under the card so the reader page is not whitened.
 // Back → isCancelled (stay in word-select). Done/Confirm → not cancelled (exit dictionary).

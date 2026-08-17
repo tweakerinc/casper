@@ -1,4 +1,4 @@
-# Generate a digits-only large Source Serif Bold for Clockface.
+# Generate a digits-only large Sourcerer Bold for Penumbra clockface.
 # Invokes fontconvert.py with monkeypatched intervals (space, 0-9, colon, replacement).
 import sys
 from pathlib import Path
@@ -11,10 +11,11 @@ sys.argv = [
     "fontconvert.py",
     "sourceserif4_72_clock",
     "72",
-    str(scripts.parent / "builtinFonts" / "source" / "SourceSerif4" / "SourceSerif4-Bold.ttf"),
+    str(scripts.parent / "builtinFonts" / "source" / "Sourcerer" / "Sourcerer-Bold.ttf"),
     "--2bit",
     "--compress",
     "--pnum",
+    "--darken-aa",
 ]
 
 # Load fontconvert module source and replace intervals block before exec

@@ -18,6 +18,14 @@ inline const uint8_t bayer4x4[4][4] = {
     {15, 7, 13, 5},
 };
 
+// Tone path for reader image decode (Bayer 4-level — no Atkinson error buffers).
+// Cover gen uses Atkinson + multipass; here we approximate cover midtones cheaply.
+enum class EinkImageTone : uint8_t {
+  Plate = 0,  // photos / full art — lift midtones (avoid black-box BW)
+  Ink = 1,    // drop-cap / thin letter glyphs — darken midtones
+  Cover = 2,  // document text-in-JPEG (Illuminae briefings) — cover-thumb curve
+};
+
 // Pull midtones toward black so Tenniel/woodcut *letter* strokes and drop-cap
 // images stay as dark as the printed book. Mild linear mix with a square term
 // (approx gamma > 1 on the ink axis) without crushing pure paper white.
@@ -35,17 +43,40 @@ inline uint8_t darkenForEinkInk(const uint8_t gray) {
   return static_cast<uint8_t>(out);
 }
 
-// Paper lift for full plates / photos (Bare-cover-like midtones).
-// Scanned art and full-page JPEGs (e.g. DCC inter-chapter plates ~1200×1727)
-// sit around mean ~120; without lift the BW plane paints most of the figure
-// solid black and greys only partially recover — "hard to see" on e-ink.
-// Cheap integer gain+bias only — no histogram / no extra buffers.
+// Mild paper lift for full plates / photos (Tenniel, woodcuts, chapter art).
+// Strong lift (gain 1.30 + bias 28) washed Alice/DCC plates to "a little light"
+// on e-ink. Keep a gentle open so midtones are not a solid black box, without
+// bleaching hatching. Cheap integer gain+bias only — no histogram buffers.
 inline uint8_t liftForEinkPlate(const uint8_t gray) {
-  // ≈ gain 1.30 + bias 28 → mean 120 becomes ~184 (more paper / light gray).
-  int g = (static_cast<int>(gray) * 166 + 28 * 128) / 128;
+  // ≈ gain 1.10 + bias 10 → mean 120 becomes ~142 (was ~184).
+  int g = (static_cast<int>(gray) * 141 + 10 * 128) / 128;
   if (g < 0) g = 0;
   if (g > 255) g = 255;
   return static_cast<uint8_t>(g);
+}
+
+// Same mild open as BitmapHelpers::adjustPixelCoverThumb / adjustPixel1Bit
+// (home cover gen). Soft gamma + small lift — readable type without ink crush.
+// Used for document plates (Illuminae briefings) with Bayer, not Atkinson.
+inline uint8_t toneMapCoverDoc(const uint8_t gray) {
+  int g = static_cast<int>(gray);
+  if (g < 0) g = 0;
+  if (g > 255) g = 255;
+  const int product = g * 255;
+  int root = g;
+  if (root > 0) {
+    root = (root + product / root) >> 1;
+    root = (root + product / root) >> 1;
+  }
+  // ~20% toward sqrt + lift 8 (matches cover thumb)
+  int adjusted = (g * 80 + root * 20) / 100 + 8;
+  // Very light cream nudge only (no hard white rail).
+  if (adjusted > 155 && adjusted < 230) {
+    adjusted += 6;
+  }
+  if (adjusted < 0) adjusted = 0;
+  if (adjusted > 255) adjusted = 255;
+  return static_cast<uint8_t>(adjusted);
 }
 
 // Ink-biased breakpoints for letter glyphs / pure line art on white paper.
@@ -59,44 +90,76 @@ inline uint8_t quantizeGray4LevelInk(int adjusted) {
   return 3;
 }
 
-// Paper-leaning breakpoints for full plates (cover multipass quality on greys,
-// and a readable BW fallback when greys are deferred under heap pressure).
-// Narrow pure-black band; generous white so hatching is not a solid blob.
+// Plate quantize: slightly ink-leaning vs pure paper open so Tenniel hatching
+// stays visible after mild lift. BW paints levels 0–2 black; greys recover 1–2.
 inline uint8_t quantizeGray4LevelNeutral(int adjusted) {
   if (adjusted < 0) adjusted = 0;
   if (adjusted > 255) adjusted = 255;
-  if (adjusted < 22) return 0;   // deep ink only
-  if (adjusted < 78) return 1;   // dark gray
-  if (adjusted < 155) return 2;  // light gray (wider — more structure on plates)
+  if (adjusted < 32) return 0;   // deep ink
+  if (adjusted < 95) return 1;   // dark gray
+  if (adjusted < 165) return 2;  // light gray structure
   return 3;                      // paper / highlights
 }
 
+// Equal 0/85/170/255 bins — same as home-cover Atkinson balancedLevels.
+// Keeps midtones mid after cover-thumb tone map (not crushed to dark).
+inline uint8_t quantizeGray4LevelCover(int adjusted) {
+  if (adjusted < 0) adjusted = 0;
+  if (adjusted > 255) adjusted = 255;
+  if (adjusted < 64) return 0;
+  if (adjusted < 128) return 1;
+  if (adjusted < 192) return 2;
+  return 3;
+}
+
 // Apply 8x8 Bayer dither and quantize to 4 levels (0-3).
-// inkBias=true: drop-cap / thin stroke glyphs. inkBias=false: full figures.
 // Stateless — safe for MCU/scanline streaming in any order.
-inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y, bool inkBias = false) {
-  if (inkBias) {
+// Prefer Cover for text-in-JPEG; Ink for drop-caps; Plate for photos/art.
+inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y, EinkImageTone tone = EinkImageTone::Plate) {
+  if (tone == EinkImageTone::Ink) {
     gray = darkenForEinkInk(gray);
+  } else if (tone == EinkImageTone::Cover) {
+    gray = toneMapCoverDoc(gray);
   } else {
     gray = liftForEinkPlate(gray);
   }
   const int bayer = bayer8x8[y & 7][x & 7];
-  // Plates: slightly wider dither (±20) so hatching survives lift+quantize.
-  // Glyphs: tighter (±16) so thin strokes are not speckled away.
-  const int dither = inkBias ? ((bayer - 32) / 2) : (((bayer - 32) * 5) / 8);
+  // Plate: moderate dither (was ±20 — grainy on woodcuts). Cover mid. Ink tight.
+  int dither;
+  if (tone == EinkImageTone::Ink) {
+    dither = (bayer - 32) / 2;
+  } else if (tone == EinkImageTone::Cover) {
+    dither = ((bayer - 32) * 3) / 8;  // ±12-ish
+  } else {
+    dither = ((bayer - 32) * 3) / 8;  // ±12 — less Bayer grain on Tenniel/plates
+  }
   const int adjusted = static_cast<int>(gray) + dither;
-  return inkBias ? quantizeGray4LevelInk(adjusted) : quantizeGray4LevelNeutral(adjusted);
+  if (tone == EinkImageTone::Ink) return quantizeGray4LevelInk(adjusted);
+  if (tone == EinkImageTone::Cover) return quantizeGray4LevelCover(adjusted);
+  return quantizeGray4LevelNeutral(adjusted);
 }
 
 // Point quantize without dither (performance / solid fills).
-inline uint8_t quantizeGray4LevelNoDither(uint8_t gray, bool inkBias = false) {
-  if (inkBias) {
+inline uint8_t quantizeGray4LevelNoDither(uint8_t gray, EinkImageTone tone = EinkImageTone::Plate) {
+  if (tone == EinkImageTone::Ink) {
     gray = darkenForEinkInk(gray);
     return quantizeGray4LevelInk(static_cast<int>(gray));
+  }
+  if (tone == EinkImageTone::Cover) {
+    gray = toneMapCoverDoc(gray);
+    return quantizeGray4LevelCover(static_cast<int>(gray));
   }
   gray = liftForEinkPlate(gray);
   return quantizeGray4LevelNeutral(static_cast<int>(gray));
 }
 
-// Back-compat aliases (old single-path names). Prefer applyBayerDither4Level(..., inkBias).
+// Back-compat: bool inkBias → Plate/Ink (Cover not expressible).
+inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y, bool inkBias) {
+  return applyBayerDither4Level(gray, x, y, inkBias ? EinkImageTone::Ink : EinkImageTone::Plate);
+}
+inline uint8_t quantizeGray4LevelNoDither(uint8_t gray, bool inkBias) {
+  return quantizeGray4LevelNoDither(gray, inkBias ? EinkImageTone::Ink : EinkImageTone::Plate);
+}
+
+// Back-compat aliases (old single-path names).
 inline uint8_t quantizeGray4Level(int adjusted) { return quantizeGray4LevelInk(adjusted); }

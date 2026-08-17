@@ -68,16 +68,16 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   }
 
   // State machine: wake up or sleep based on the enabled flag
-  if ((mode != CrossPointTiltPageTurn::TILT_OFF) && !_isAwake) {
+  if ((mode != CasperTiltPageTurn::TILT_OFF) && !_isAwake) {
     _isAwake = wake();
     return;
-  } else if ((mode == CrossPointTiltPageTurn::TILT_OFF) && _isAwake) {
+  } else if ((mode == CasperTiltPageTurn::TILT_OFF) && _isAwake) {
     _isAwake = !deepSleep();
     return;
   }
 
   // If disabled, skip the rest of the polling logic and avoid unnecessary I2C traffic in non-reader activities
-  if ((mode == CrossPointTiltPageTurn::TILT_OFF) || !inReader) {
+  if ((mode == CasperTiltPageTurn::TILT_OFF) || !inReader) {
     return;
   }
 
@@ -101,17 +101,17 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   // On the X3 PCB: X axis = left/right in portrait, Y axis = left/right in landscape.
   float tiltAxis;
   switch (orientation) {
-    case CrossPointOrientation::PORTRAIT:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? -gx : gx;
+    case CasperOrientation::PORTRAIT:
+      tiltAxis = mode == CasperTiltPageTurn::TILT_INVERTED ? -gx : gx;
       break;
-    case CrossPointOrientation::INVERTED:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? gx : -gx;
+    case CasperOrientation::INVERTED:
+      tiltAxis = mode == CasperTiltPageTurn::TILT_INVERTED ? gx : -gx;
       break;
-    case CrossPointOrientation::LANDSCAPE_CW:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? gy : -gy;
+    case CasperOrientation::LANDSCAPE_CW:
+      tiltAxis = mode == CasperTiltPageTurn::TILT_INVERTED ? gy : -gy;
       break;
-    case CrossPointOrientation::LANDSCAPE_CCW:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? -gy : gy;
+    case CasperOrientation::LANDSCAPE_CCW:
+      tiltAxis = mode == CasperTiltPageTurn::TILT_INVERTED ? -gy : gy;
       break;
     default:
       tiltAxis = gx;

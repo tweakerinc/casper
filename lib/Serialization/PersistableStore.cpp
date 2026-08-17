@@ -5,6 +5,7 @@
 #include <ObfuscationUtils.h>
 
 bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc) {
+  // CrossPoint-compatible on-disk root.
   Storage.mkdir("/.crosspoint");
   String json;
   serializeJson(doc, json);
@@ -40,9 +41,9 @@ std::string PersistableStoreBase::extractPassword(JsonVariantConst doc, bool& ne
     pass = doc["password"] | "";
     if (!pass.empty()) needsResave = true;
   } else {
-    // WiFi (and any other store using this helper): accept CrossInk/Casper CPV1
+    // WiFi (and any other store using this helper): accept legacy/Casper CPV1
     // envelope or bare password. Do not force a resave — keep the SD file
-    // interchangeable with CrossInk.
+    // interchangeable with legacy.
     pass = obfuscation::unwrapWifiPassword(std::move(pass));
   }
 

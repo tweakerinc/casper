@@ -3,7 +3,7 @@
 #include <string>
 
 // On-disk filename format for books downloaded from an OPDS server. Stored as a
-// uint8_t in CrossPointSettings; cast to this enum at the call sites. `Count` is
+// uint8_t in CasperSettings; cast to this enum at the call sites. `Count` is
 // the number of selectable formats (used to cycle the setting in the UI).
 enum class OpdsFilenameFormat : uint8_t {
   AuthorTitle = 0,  // "Author - Title.epub" (default; matches legacy behaviour)

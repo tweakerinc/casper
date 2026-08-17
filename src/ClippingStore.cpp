@@ -26,9 +26,13 @@ struct ClippingFileHeader {
   uint16_t count = 0;
 };
 
-std::string storeFilePathForBook(const std::string& filePath, const std::string& bookType) {
+std::string storeFileNameForBook(const std::string& filePath, const std::string& bookType) {
   const uint32_t crc = uzlib_crc32(filePath.data(), static_cast<unsigned int>(filePath.size()), 0);
-  return std::string(CLIPPINGS_DIR) + "/" + bookType + "_" + std::to_string(crc) + ".bin";
+  return std::string(bookType) + "_" + std::to_string(crc) + ".bin";
+}
+
+std::string storeFilePathForBook(const std::string& filePath, const std::string& bookType) {
+  return std::string(CLIPPINGS_DIR) + "/" + storeFileNameForBook(filePath, bookType);
 }
 
 void copyBounded(char* dst, const size_t dstSize, const char* src) {
@@ -103,11 +107,11 @@ bool ClippingStore::loadForBook(const std::string& filePath, const std::string& 
   }
 
   storeFilePath = storeFilePathForBook(filePath, bookType);
-  if (!Storage.exists(storeFilePath.c_str())) {
-    return true;
+  if (Storage.exists(storeFilePath.c_str())) {
+    return readFromFile();
   }
-
-  return readFromFile();
+  // crosspoint-root: no dual-read of /.crosspoint/clippings.
+  return true;
 }
 
 void ClippingStore::unload() {
@@ -481,29 +485,28 @@ bool ClippingStore::writeToFile(const std::string* replacementText, const size_t
 }
 
 bool ClippingStore::hasAnyClippings() {
-  if (!Storage.exists(CLIPPINGS_DIR)) return false;
-  return !Storage.listFiles(CLIPPINGS_DIR).empty();
+  return Storage.exists(CLIPPINGS_DIR) && !Storage.listFiles(CLIPPINGS_DIR).empty();
 }
 
 bool ClippingStore::getAllClippedBooks(std::vector<ClippedBookEntry>& out) {
-  if (!Storage.exists(CLIPPINGS_DIR)) return true;
+  if (Storage.exists(CLIPPINGS_DIR)) {
+    const auto files = Storage.listFiles(CLIPPINGS_DIR);
+    for (const auto& name : files) {
+      ClippingFileHeader header;
+      const std::string fullPath = std::string(CLIPPINGS_DIR) + "/" + name.c_str();
+      if (!readClippingFileHeader(fullPath, name.c_str(), header)) continue;
+      if (header.path.empty() || header.count == 0 || !Storage.exists(header.path.c_str())) continue;
 
-  const auto files = Storage.listFiles(CLIPPINGS_DIR);
-  for (const auto& name : files) {
-    ClippingFileHeader header;
-    const std::string fullPath = std::string(CLIPPINGS_DIR) + "/" + name.c_str();
-    if (!readClippingFileHeader(fullPath, name.c_str(), header)) continue;
-    if (header.path.empty() || header.count == 0 || !Storage.exists(header.path.c_str())) continue;
-
-    auto existing = std::find_if(out.begin(), out.end(), [&](const ClippedBookEntry& entry) {
-      return entry.bookPath == header.path && entry.bookType == header.bookType;
-    });
-    if (existing != out.end()) {
-      existing->count = std::max(existing->count, header.count);
-      continue;
+      auto existing = std::find_if(out.begin(), out.end(), [&](const ClippedBookEntry& entry) {
+        return entry.bookPath == header.path && entry.bookType == header.bookType;
+      });
+      if (existing != out.end()) {
+        existing->count = std::max(existing->count, header.count);
+        continue;
+      }
+      out.push_back({std::move(header.title), std::move(header.author), std::move(header.path),
+                     std::move(header.bookType), header.count});
     }
-    out.push_back({std::move(header.title), std::move(header.author), std::move(header.path),
-                   std::move(header.bookType), header.count});
   }
   return true;
 }
@@ -520,7 +523,7 @@ bool ClippingStore::migrateForFilePath(const std::string& oldFilePath, const std
                                        const std::string& bookType) {
   const std::string oldStorePath = storeFilePathForBook(oldFilePath, bookType);
   if (!Storage.exists(oldStorePath.c_str())) {
-    return true;
+    return true;  // nothing under /.crosspoint
   }
 
   ClippingStore reader;
@@ -529,42 +532,19 @@ bool ClippingStore::migrateForFilePath(const std::string& oldFilePath, const std
     return false;
   }
 
+  const std::string newStorePath = storeFilePathForBook(newFilePath, bookType);
   ClippingStore writer;
   writer.bookFilePath = newFilePath;
   writer.bookTitle = title;
   writer.bookAuthor = author;
-  writer.storeFilePath = oldStorePath;
+  writer.storeFilePath = newStorePath;
   writer.clippings = std::move(migratedClippings);
   if (!writer.writeToFile()) {
     return false;
   }
 
-  const std::string newStorePath = storeFilePathForBook(newFilePath, bookType);
-  if (oldStorePath == newStorePath) {
-    return true;
-  }
-
-  const std::string backupPath = newStorePath + ".bak";
-  const bool hasDestination = Storage.exists(newStorePath.c_str());
-  if (hasDestination) {
-    if (Storage.exists(backupPath.c_str()) && !Storage.remove(backupPath.c_str())) {
-      LOG_ERR("CLIP", "Failed to remove stale clipping migration backup: %s", backupPath.c_str());
-      return false;
-    }
-    if (!Storage.rename(newStorePath.c_str(), backupPath.c_str())) {
-      LOG_ERR("CLIP", "Failed to back up destination clippings: %s", newStorePath.c_str());
-      return false;
-    }
-  }
-  if (!Storage.rename(oldStorePath.c_str(), newStorePath.c_str())) {
-    LOG_ERR("CLIP", "Failed to rename migrated clippings: %s -> %s", oldStorePath.c_str(), newStorePath.c_str());
-    if (hasDestination && !Storage.rename(backupPath.c_str(), newStorePath.c_str())) {
-      LOG_ERR("CLIP", "Failed to restore destination clipping backup: %s", backupPath.c_str());
-    }
-    return false;
-  }
-  if (hasDestination && Storage.exists(backupPath.c_str())) {
-    Storage.remove(backupPath.c_str());
+  if (oldStorePath != newStorePath && Storage.exists(oldStorePath.c_str())) {
+    Storage.remove(oldStorePath.c_str());
   }
   return true;
 }

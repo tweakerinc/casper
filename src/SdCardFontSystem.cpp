@@ -1,16 +1,17 @@
 #include "SdCardFontSystem.h"
 
+#include <Epub/css/StyleResolve.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "fontIds.h"
 
 namespace {
 
 static uint8_t fontSizeEnumFromSettings() {
   uint8_t e = SETTINGS.fontSize;
-  if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = CrossPointSettings::SIZE_14;
+  if (e >= CasperSettings::FONT_SIZE_COUNT) e = CasperSettings::SIZE_14;
   return e;
 }
 
@@ -27,17 +28,33 @@ constexpr UiFontSize kUiFontSizes[] = {
     {UI_12_FONT_ID, 12},
 };
 
+// StyleResolve ladder hook: load multi-size SD faces around the base fontId.
+bool sdStyleLadderFill(void* ctx, const int baseFontId, int outFontIdByStep[5]) {
+  auto* self = static_cast<SdCardFontSystem*>(ctx);
+  if (!self || !self->renderer() || baseFontId == 0 || !outFontIdByStep) return false;
+  if (!self->manager().ownsFontId(baseFontId)) return false;
+  const std::string& familyName = self->manager().currentFamilyName();
+  if (familyName.empty()) return false;
+  const auto* family = self->registry().findFamily(familyName);
+  if (!family) return false;
+  return self->manager().fillRelativeLadder(baseFontId, *family, *self->renderer(), outFontIdByStep);
+}
+
 }  // namespace
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
+  renderer_ = &renderer;
   registry_.discover();
 
   // Register this system as the SD font ID resolver in settings.
-  // Uses a static trampoline since CrossPointSettings stores a plain function pointer.
+  // Uses a static trampoline since CasperSettings stores a plain function pointer.
   SETTINGS.sdFontIdResolver = [](void* ctx, const char* familyName, uint8_t fontSizeEnum) -> int {
     return static_cast<SdCardFontSystem*>(ctx)->resolveFontId(familyName, fontSizeEnum);
   };
   SETTINGS.sdFontResolverCtx = this;
+
+  // Rivulet: multi-size SD packs get a real sizeStep ladder (headings / CSS font-size).
+  setStyleLadderFillHook(sdStyleLadderFill, this);
 
   // If user has a saved SD font selection, load it
   if (SETTINGS.sdFontFamilyName[0] != '\0') {
@@ -61,7 +78,21 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());
 }
 
+void SdCardFontSystem::releaseForNetwork(GfxRenderer& renderer) {
+  renderer_ = &renderer;
+  if (!manager_.currentFamilyName().empty()) {
+    LOG_DBG("SDFS", "Releasing SD font before network: %s", manager_.currentFamilyName().c_str());
+    manager_.unloadAll(renderer);
+  }
+  if (registry_.getFamilyCount() > 0) {
+    LOG_DBG("SDFS", "Releasing SD font catalog (%d families)", registry_.getFamilyCount());
+  }
+  registry_.clear();
+  registryDirty_.store(true, std::memory_order_release);
+}
+
 void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
+  renderer_ = &renderer;
   // If the web server (or another task) installed/deleted fonts, re-discover.
   // Track whether we just re-discovered so we can force a reload below even
   // when the wanted family/size still maps to the same point size — the file

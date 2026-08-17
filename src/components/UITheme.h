@@ -5,7 +5,7 @@
 #include <functional>
 #include <memory>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "components/themes/BaseTheme.h"
 
 class UITheme {
@@ -30,7 +30,7 @@ class UITheme {
                                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
   void reload();
-  void setTheme(CrossPointSettings::UI_THEME type);
+  void setTheme(CasperSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);

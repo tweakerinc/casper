@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-// size: 32x32 — CrossPoint 16x16 status icon 2× scaled, pre-oriented for
+// size: 32x32 — Casper 16x16 status icon 2× scaled, pre-oriented for
 // GfxRenderer::drawIcon (bitmap(row,col) → screen(size-1-row, col)).
 // Thin line weight matching other menu icons (not a filled/bold glyph).
 static const uint8_t BluetoothIcon[] = {

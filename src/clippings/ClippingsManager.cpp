@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 
 namespace {
 constexpr const char* WEEKDAY_NAMES[] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};

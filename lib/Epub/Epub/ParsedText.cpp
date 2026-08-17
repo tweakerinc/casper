@@ -22,7 +22,7 @@ namespace {
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
 constexpr size_t SOFT_HYPHEN_BYTES = 2;
-// Guide Dots (CrossInk): middle dot between words (UTF-8 for U+00B7).
+// Guide Dots (legacy): middle dot between words (UTF-8 for U+00B7).
 constexpr char GUIDE_DOT_UTF8[] = "\xC2\xB7";
 constexpr uint32_t GUIDE_DOT_CODEPOINT = 0x00B7;
 // Paragraph-level direction: scan the first N words to find base direction.
@@ -256,6 +256,68 @@ bool isWordCharacter(uint32_t cp) {
 
 }  // namespace
 
+namespace {
+
+// True for ASCII/Unicode letters we treat as "word start" after sentence punct.
+bool isLatinLetterCp(const uint32_t cp) {
+  if (cp < 128) {
+    return ((cp | 0x20) >= 'a' && (cp | 0x20) <= 'z');
+  }
+  // Latin-1 supplement letters + Latin Extended (common in EPUBs).
+  if (cp >= 0x00C0 && cp <= 0x024F) return true;
+  if (cp >= 0x1E00 && cp <= 0x1EFF) return true;
+  return false;
+}
+
+bool isSentenceEndPunctCp(const uint32_t cp) {
+  // Intentionally omit '.' — decimals (3.14) and abbreviations (U.S.A) would
+  // gain spurious spaces. Dialogue jams seen in the field are almost always !?
+  return cp == '!' || cp == '?' || cp == 0x2026;  // …
+}
+
+bool isClosingQuoteCp(const uint32_t cp) {
+  return cp == '"' || cp == '\'' || cp == 0x2019 || cp == 0x201D || cp == 0x00BB || cp == 0x203A;
+}
+
+// Insert a real space when sentence-ending punctuation (optionally followed by
+// closing quotes) is glued directly to a following letter: "me!It", "ready!\"she".
+// Does not touch decimals (digit.digit) or abbreviations mid-token without !?.
+std::string insertMissingSpaceAfterSentencePunct(const std::string& in) {
+  if (in.size() < 2) return in;
+  std::string out;
+  out.reserve(in.size() + 4);
+  const auto* p = reinterpret_cast<const unsigned char*>(in.c_str());
+  const auto* begin = p;
+  while (*p) {
+    const auto* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    out.append(reinterpret_cast<const char*>(cpStart), static_cast<size_t>(p - cpStart));
+    if (!isSentenceEndPunctCp(cp)) continue;
+
+    // Peek through optional closing quotes to the next real codepoint.
+    const auto* q = p;
+    while (*q) {
+      const auto* qStart = q;
+      const uint32_t ncp = utf8NextCodepoint(&q);
+      if (ncp == 0) break;
+      if (isClosingQuoteCp(ncp)) {
+        out.append(reinterpret_cast<const char*>(qStart), static_cast<size_t>(q - qStart));
+        p = q;
+        continue;
+      }
+      if (isLatinLetterCp(ncp)) {
+        out.push_back(' ');
+      }
+      break;
+    }
+  }
+  (void)begin;
+  return out;
+}
+
+}  // namespace
+
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious) {
   if (word.empty()) return;
@@ -267,6 +329,9 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // precomposed glyph is used instead. This runs once per word at layout time (the
   // result is cached in the section file) and is a cheap no-op for mark-free text.
   word = utf8ComposeNfc(word);
+  // Repair glued dialogue / sentence boundaries that some converters emit without a
+  // break (or with a dropped non-ASCII space). Must run after NFC compose.
+  word = insertMissingSpaceAfterSentencePunct(word);
 
   EpdFontFamily::Style baseStyle = fontStyle;
   if (underline) {
@@ -292,9 +357,11 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     effectiveNoSpaceBefore = true;
   }
 
-  // Under -fno-exceptions, vector::reserve / push_back OOM calls abort(). Refuse
-  // growth when the largest free block is too small so book open fails soft instead
-  // of rebooting (field: abort() on open / CSS-heavy chapters — issues #1/#2).
+  // Under -fno-exceptions, vector::reserve / push_back / string body alloc abort().
+  // Soft-fail growth so book open never reboots (issue #8 PTX OOM → abort on X4).
+  //
+  // Bug fixed here: a flat 12 KB floor allowed reserve() when maxAlloc was 13 KB but
+  // five parallel vectors needed ~40 KB for the next power-of-two capacity — abort.
   const auto ensureTokenCapacity = [&](const size_t additionalTokens) -> bool {
     if (additionalTokens == 0) return true;
     const size_t requiredSize = words.size() + additionalTokens;
@@ -305,37 +372,70 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       newCapacity = 16;
     }
     while (newCapacity < requiredSize) {
+      // Cap growth so one paragraph cannot demand a multi-hundred-KB realloc.
+      if (newCapacity >= 4096) {
+        newCapacity = requiredSize;
+        break;
+      }
       newCapacity *= 2;
     }
-
-    // Rough lower bound: 5 parallel vectors + string SSO overhead headroom.
-    // Prefer freeing a held PNG warm decoder before giving up — Alice ch3 logged
-    // thousands of skips while PNGdec still held ~50 KB maxAlloc.
-    constexpr size_t kHeapFloor = 12U * 1024U;
-    size_t maxAlloc = ESP.getMaxAllocHeap();
-    if (maxAlloc < kHeapFloor) {
-      PngToFramebufferConverter::releaseWarmIfHeapTight(kHeapFloor);
-      maxAlloc = ESP.getMaxAllocHeap();
+    // Hard cap: beyond this, skip remaining words of the paragraph (soft fail).
+    if (newCapacity > 8192) {
+      static uint16_t s_ptxCapLogs = 0;
+      if (s_ptxCapLogs < 4) {
+        LOG_ERR("PTX", "OOM: word cap skip need=%u size=%u", static_cast<unsigned>(newCapacity),
+                static_cast<unsigned>(words.size()));
+        ++s_ptxCapLogs;
+      }
+      return false;
     }
-    if (maxAlloc < kHeapFloor) {
-      // Rate-limit: a single poem/paragraph can emit thousands of identical lines
-      // and slow the already-failing parse further.
+
+    // Peak cost of growing all five parallel vectors (string element is largest).
+    // libstdc++ empty std::string is typically 24–32 B; bool vectors are bit-packed.
+    constexpr size_t kBytesPerSlot = 40;  // string + style + 3×bool + padding
+    const size_t needBytes = newCapacity * kBytesPerSlot + 2048;
+
+    auto logSkip = [&](const size_t maxAlloc) {
       static uint16_t s_ptxOomLogs = 0;
       if (s_ptxOomLogs < 8) {
-        LOG_ERR("PTX", "OOM: skip word-vector grow need=%u free=%u maxAlloc=%u", static_cast<unsigned>(newCapacity),
+        LOG_ERR("PTX", "OOM: skip word-vector grow need=%u bytes~%u free=%u maxAlloc=%u",
+                static_cast<unsigned>(newCapacity), static_cast<unsigned>(needBytes),
                 static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(maxAlloc));
       } else if (s_ptxOomLogs == 8) {
         LOG_ERR("PTX", "OOM: further word-vector skip logs suppressed");
       }
       if (s_ptxOomLogs < 60000) ++s_ptxOomLogs;
+    };
+
+    size_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < needBytes) {
+      // Prefer freeing a held PNG warm decoder before giving up — Alice ch3 logged
+      // thousands of skips while PNGdec still held ~50 KB maxAlloc.
+      PngToFramebufferConverter::releaseWarmIfHeapTight(needBytes);
+      maxAlloc = ESP.getMaxAllocHeap();
+    }
+    if (maxAlloc < needBytes) {
+      logSkip(maxAlloc);
       return false;
     }
+    // Nothrow probe of the largest single buffer (string vector growth).
+    void* probe = ::operator new(newCapacity * 32U + 256U, std::nothrow);
+    if (!probe) {
+      logSkip(maxAlloc);
+      return false;
+    }
+    ::operator delete(probe);
 
     words.reserve(newCapacity);
     wordStyles.reserve(newCapacity);
     wordContinues.reserve(newCapacity);
     wordNoSpaceBefore.reserve(newCapacity);
     wordIsFocusSuffix.reserve(newCapacity);
+    // If any reserve was a silent no-op shortfall, refuse push (capacity still short).
+    if (words.capacity() < requiredSize || wordStyles.capacity() < requiredSize) {
+      logSkip(ESP.getMaxAllocHeap());
+      return false;
+    }
     return true;
   };
 
@@ -343,6 +443,16 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
                                  const bool isFocusSuffix) -> bool {
     if (words.size() >= words.capacity() && !ensureTokenCapacity(1)) {
       return false;
+    }
+    // Long tokens: string body is a separate heap alloc (not covered by vector reserve).
+    if (token.size() > 16) {
+      const size_t bodyNeed = token.size() + 64;
+      if (ESP.getMaxAllocHeap() < bodyNeed) {
+        PngToFramebufferConverter::releaseWarmIfHeapTight(bodyNeed);
+        if (ESP.getMaxAllocHeap() < bodyNeed) {
+          return false;
+        }
+      }
     }
     pushToken(std::move(token), continues, noSpaceBefore, isFocusSuffix);
     return true;
@@ -522,10 +632,13 @@ std::string ParsedText::peelDropCapLetter() {
     if (cp == 0) return {};
     if (cp == 0x00AD) continue;  // soft hyphen
     if (cp == ' ' || cp == '\t') continue;
-    // Require a letter (ASCII or common Latin); reject dashes/quotes/digits.
+    // Letter for drop-cap: Latin + Greek + Cyrillic (scripts we commonly hyphenate/read).
+    // Reject dashes, quotes, digits, and most punctuation.
     const bool asciiLetter = (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z');
     const bool latinLetter = (cp >= 0x00C0 && cp <= 0x024F) || (cp >= 0x1E00 && cp <= 0x1EFF);
-    if (!asciiLetter && !latinLetter) {
+    const bool greekLetter = (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x1F00 && cp <= 0x1FFF);
+    const bool cyrillicLetter = (cp >= 0x0400 && cp <= 0x04FF) || (cp >= 0x0500 && cp <= 0x052F);
+    if (!asciiLetter && !latinLetter && !greekLetter && !cyrillicLetter) {
       return {};  // not a drop-cap candidate
     }
     break;
@@ -583,20 +696,7 @@ int ParsedText::widthForLine(const int lineIndex, const int pageWidth) const {
   return w < 16 ? 16 : w;
 }
 
-int ParsedText::leftFloatShiftForLine(const int lineIndex) const {
-  if (floatLayoutLineH_ <= 0 || blockStyle.floatZoneCount <= 0) {
-    return 0;
-  }
-  const int lineMid = static_cast<int>(floatLayoutStartY_) + lineIndex * floatLayoutLineH_ + floatLayoutLineH_ / 2;
-  int shift = 0;
-  for (int i = 0; i < blockStyle.floatZoneCount; ++i) {
-    const FloatZone& z = blockStyle.floatZones[i];
-    if (!z.isRight && lineMid >= z.top && lineMid < z.bottom) {
-      shift += z.width;
-    }
-  }
-  return shift;
-}
+
 
 std::vector<size_t> ParsedText::computeFloatAwareLineBreaks(const GfxRenderer& renderer, const int fontId,
                                                             const int pageWidth, std::vector<uint16_t>& wordWidths,
@@ -753,10 +853,40 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {
   std::vector<uint16_t> wordWidths;
-  wordWidths.reserve(words.size());
+  // -fno-exceptions: unguarded reserve aborts (issue #8). Soft-fail → empty widths → no lines.
+  if (!words.empty()) {
+    const size_t need = words.size() * sizeof(uint16_t) + 64;
+    if (ESP.getMaxAllocHeap() < need) {
+      PngToFramebufferConverter::releaseWarmIfHeapTight(need);
+    }
+    if (ESP.getMaxAllocHeap() >= need) {
+      void* p = ::operator new(need, std::nothrow);
+      if (p) {
+        ::operator delete(p);
+        wordWidths.reserve(words.size());
+      }
+    }
+    if (wordWidths.capacity() < words.size()) {
+      LOG_ERR("PTX", "OOM: wordWidths reserve n=%u maxA=%u — skip layout lines",
+              static_cast<unsigned>(words.size()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      return wordWidths;
+    }
+  }
 
   for (size_t i = 0; i < words.size(); ++i) {
-    wordWidths.push_back(measureWordWidth(renderer, fontId, words[i], wordStyles[i]));
+    EpdFontFamily::Style style = wordStyles[i];
+    // Single-size / synthetic scale: measure with DROP_CAP so wrap matches paint.
+    if (blockStyle.syntheticScale) {
+      style = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(style) | static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+    }
+    if ((style & EpdFontFamily::DROP_CAP) != 0) {
+      // Metric drop-cap: paintGlyphScale 2–4; 0/1 → default 2×.
+      const int nn = blockStyle.paintGlyphScale >= 2 ? static_cast<int>(blockStyle.paintGlyphScale) : 2;
+      wordWidths.push_back(static_cast<uint16_t>(
+          renderer.getTextAdvanceX(fontId, words[i].c_str(), style, nn)));
+    } else {
+      wordWidths.push_back(measureWordWidth(renderer, fontId, words[i], style));
+    }
   }
 
   return wordWidths;
@@ -1051,11 +1181,23 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
 
   const int firstLineIndent = resolveFirstLineIndent(breakIndex == 0, renderer, fontId);
 
-  // Build line data by moving from the original vectors using index range
+  // Build line data by moving from the original vectors using index range.
+  // Soft-fail reserve so extractLine never abort()s under -fno-exceptions.
   std::vector<std::string> lineWords;
-  lineWords.reserve(lineWordCount);
   std::vector<EpdFontFamily::Style> lineWordStyles;
-  lineWordStyles.reserve(lineWordCount);
+  if (lineWordCount > 0) {
+    const size_t need = lineWordCount * 40U + 128U;
+    if (ESP.getMaxAllocHeap() < need) {
+      PngToFramebufferConverter::releaseWarmIfHeapTight(need);
+    }
+    if (ESP.getMaxAllocHeap() < need) {
+      LOG_ERR("PTX", "OOM: extractLine skip words=%u maxA=%u", static_cast<unsigned>(lineWordCount),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      return;
+    }
+    lineWords.reserve(lineWordCount);
+    lineWordStyles.reserve(lineWordCount);
+  }
 
   for (size_t i = 0; i < lineWordCount; ++i) {
     std::string word = std::move(words[lastBreakAt + i]);
@@ -1310,7 +1452,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
             if (nextNoSpace) {
               gap = 0;
             } else if (guideReadingEnabled) {
-              // CrossInk Guide Dots: room for · between words (space · space).
+              // legacy Guide Dots: room for · between words (space · space).
               gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]), GUIDE_DOT_CODEPOINT,
                                              lineWordStyles[wordIdx]) +
                     renderer.getTextAdvanceX(fontId, GUIDE_DOT_UTF8, EpdFontFamily::REGULAR) +
@@ -1471,7 +1613,14 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         boundary = static_cast<uint8_t>(std::min(lineWords[i].size(), size_t{255}));
         // Suffix x offset = layout-time advance of the bold prefix, already known from xpos table.
         const int suffixDelta = static_cast<int>(lineXPos[i + 1]) - static_cast<int>(lineXPos[i]);
-        suffixX = static_cast<uint16_t>(suffixDelta > 0 ? suffixDelta : 0);
+        // If layout collapsed the prefix (0-width bold face / kern), still advance
+        // by a measured prefix width so the suffix does not overprint the stem.
+        if (suffixDelta > 0) {
+          suffixX = static_cast<uint16_t>(suffixDelta);
+        } else {
+          const int prefixW = renderer.getTextAdvanceX(fontId, lineWords[i].c_str(), lineWordStyles[i]);
+          suffixX = static_cast<uint16_t>(prefixW > 0 ? prefixW : 0);
+        }
       }
       outWords.push_back(std::move(lineWords[i]));
       outXPos.push_back(lineXPos[i]);

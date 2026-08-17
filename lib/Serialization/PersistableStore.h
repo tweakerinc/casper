@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <HalStorage.h>
 #include <Logging.h>
 
 #include <mutex>
@@ -28,7 +29,7 @@ class PersistableStoreBase {
   //
   // It is deliberately held across the SD write. That is safe only because the
   // read path does NOT take it — derived stores build their snapshots (e.g.
-  // CrossPointSettings::statusBarSpec) unlocked. If you ever lock this mutex on
+  // CasperSettings::statusBarSpec) unlocked. If you ever lock this mutex on
   // a read path, you put it on the render path and stall rendering behind SD
   // I/O, and you create a storeMutex/storageMutex ordering hazard. Don't.
   mutable std::mutex storeMutex;
@@ -46,7 +47,7 @@ class PersistableStoreBase {
   // instead of instantiating serializeJson/deserializeJson in their own TU —
   // that per-TU duplication is exactly what this class exists to prevent.
 
-  // Serializes doc and writes it to path (ensures /.crosspoint exists). Logs on failure.
+  // Serializes doc and writes it to path (ensures /.crosspoint exists).
   static bool writeDocToFile(const char* path, const JsonDocument& doc);
 
   // Reads path and parses it into doc. Returns false silently when the file
@@ -112,17 +113,19 @@ class PersistableStore : public PersistableStoreBase {
       std::lock_guard<std::mutex> lock(storeMutex);
       resaveRequested = false;
       JsonDocument doc;
+      // crosspoint-root storage under /.crosspoint.
       if (!readDocFromFile(T::getFilePath(), doc)) {
         return false;
       }
       ok = static_cast<T*>(this)->fromJson(doc.as<JsonVariantConst>());
-      // Read the flag under the lock that guards the fromJson() that set it.
       doResave = resaveRequested;
       resaveRequested = false;
     }
     // Deliberately outside the lock: saveToFile() takes storeMutex itself.
-    if (ok && doResave && !saveToFile()) {
-      LOG_ERR("PERSIST", "Failed to resave %s after format update", T::getFilePath());
+    if (ok && doResave) {
+      if (!saveToFile()) {
+        LOG_ERR("PERSIST", "Failed to resave %s after format update", T::getFilePath());
+      }
     }
     return ok;
   }

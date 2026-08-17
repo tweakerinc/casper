@@ -12,7 +12,8 @@
 #include <cmath>
 #include <string>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
+#include "util/CasperPaths.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
@@ -36,9 +37,9 @@ constexpr int kMinGapCoverToText = 10;
 constexpr int kTitleMaxLines = 3;  // full-width wrap; long titles must not ellipsize early
 constexpr int kAuthorMaxLines = 2;
 
-bool bareShowsBattery() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY); }
+bool bareShowsBattery() { return SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY); }
 
-bool bareShowsClock() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK); }
+bool bareShowsClock() { return SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK); }
 
 // Y where content may begin: under optional battery/clock chrome.
 int bareContentTopY() {
@@ -87,7 +88,7 @@ std::string coverPathForBook(const RecentBook& book) {
   };
 
   if (FsHelpers::hasEpubExtension(book.path)) {
-    Epub epub(book.path, "/.crosspoint");
+    Epub epub(book.path, CasperPaths::kPackageCacheRoot);
     const std::string found = firstExisting({
         epub.getThumbBmpPath(BareMetrics::homeCoverThumbHeight),
         epub.getThumbBmpPath(BareMetrics::homeCoverImageHeight),

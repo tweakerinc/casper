@@ -7,12 +7,13 @@
 #include <algorithm>
 #include <cstring>
 
-#include "CrossPointSettings.h"
+#include <Logging.h>
+
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/icons/settings2.h"
 #include "fontIds.h"
-#include "util/NestedMenuLabel.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -103,15 +104,15 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
     mainItems.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
   mainItems.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  // Under Go to %: tweak type without leaving the book (Back → reader, not home).
+  // Under Go to %: reader chrome (status bar) then fonts — Back stays in the book.
+  mainItems.push_back({MenuAction::MANAGE_READER_UI, StrId::STR_CUSTOMISE_STATUS_BAR});
   mainItems.push_back({MenuAction::MANAGE_FONTS, StrId::STR_TEXT_SETTINGS});
-  mainItems.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-#if FREEINK_CAP_BLE_HID_HOST
-  mainItems.push_back({MenuAction::BLUETOOTH, StrId::STR_BT_QUICK_CONNECT});
-#endif
+  // Auto page turn removed (product size / unused). Bluetooth / BLE page-turner removed.
   mainItems.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   // Nested under Reading Orientation (same placement as Settings).
   mainItems.push_back({MenuAction::ORIENT_FRONT_BUTTONS, StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION});
+  // Book Dark Mode (reader-scoped). System-wide is Settings → Display.
+  mainItems.push_back({MenuAction::TOGGLE_DARK_MODE, StrId::STR_READER_DARK_MODE});
   // Mark finished is not session tracking — drives finished folder / recents rules.
   mainItems.push_back(
       {MenuAction::TOGGLE_COMPLETED, isBookCompleted ? StrId::STR_MARK_UNFINISHED : StrId::STR_MARK_FINISHED});
@@ -163,10 +164,14 @@ void EpubReaderMenuActivity::cycleActiveTab(const int direction) {
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
-  // FAST white plate over the page (same as long-press book menu). Do not honor
-  // a leftover hard-scrub arm — HALF on open felt multi-second / frozen.
+  // Snappy open: paint the menu with FAST and wait until it is on glass.
+  // Hard HALF scrub used to land *after* prep work — users felt ~2s of dead air
+  // then a flash. Mild page residual under the white plate is preferable.
+  // Cursor moves still use FAST via displayMenuFrame (scrub not armed).
   UiGhostPolicy::clearHardScrub();
-  requestUpdate();
+  const uint32_t t0 = millis();
+  requestUpdateAndWait();
+  LOG_INF("MENU", "open paint %lums", static_cast<unsigned long>(millis() - t0));
 }
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
@@ -241,7 +246,7 @@ void EpubReaderMenuActivity::activateSelected() {
                        pendingOrientation = static_cast<uint8_t>(idx);
                        // Same seed as Settings when Reading Orientation changes.
                        pendingFrontButtonFollow =
-                           CrossPointSettings::defaultFrontButtonFollowForOrientation(pendingOrientation);
+                           CasperSettings::defaultFrontButtonFollowForOrientation(pendingOrientation);
                        // Live so footer / list nav match before leaving the menu.
                        SETTINGS.frontButtonFollowOrientation = pendingFrontButtonFollow;
                        requestUpdate();
@@ -253,6 +258,20 @@ void EpubReaderMenuActivity::activateSelected() {
   if (selectedAction == MenuAction::ORIENT_FRONT_BUTTONS) {
     pendingFrontButtonFollow = pendingFrontButtonFollow ? 0 : 1;
     SETTINGS.frontButtonFollowOrientation = pendingFrontButtonFollow;
+    requestUpdate();
+    return;
+  }
+
+  // Book menu Dark Mode is always reader-scoped: book pages only. Home/settings
+  // stay light. System-wide dark is Settings → Display (Reader Only Off).
+  if (selectedAction == MenuAction::TOGGLE_DARK_MODE) {
+    SETTINGS.readerDarkMode = SETTINGS.readerDarkMode ? 0 : 1;
+    if (SETTINGS.readerDarkMode) {
+      SETTINGS.darkModeReaderOnly = 1;
+    }
+    SETTINGS.saveToFile();
+    // Never arm whole-UI invert from the reader menu (leaked to home / sleep).
+    renderer.setInvertOnDisplay(false);
     requestUpdate();
     return;
   }
@@ -304,7 +323,13 @@ void EpubReaderMenuActivity::loop() {
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const int contentTop =
       screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight * 2 + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - metrics.buttonHintsHeight;
+  // Portrait: leave room for bottom front-key chrome. Landscape: chrome is on the
+  // side (already removed from safe width) — don't also eat bottom height.
+  const auto orient = renderer.getOrientation();
+  const bool landscape = orient == GfxRenderer::Orientation::LandscapeClockwise ||
+                         orient == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  const int bottomHint = landscape ? 0 : metrics.buttonHintsHeight;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - bottomHint;
   const int tabTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight;
 
   // Touch: icon tab bar
@@ -447,14 +472,19 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
 
   const int contentTop =
       screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight * 2 + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - metrics.buttonHintsHeight;
+  const auto orient = renderer.getOrientation();
+  const bool landscape = orient == GfxRenderer::Orientation::LandscapeClockwise ||
+                         orient == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  const int bottomHint = landscape ? 0 : metrics.buttonHintsHeight;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing - bottomHint;
   const auto& items = activeMenuItems();
 
   GUI.drawList(
       renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, static_cast<int>(items.size()), selectedIndex,
       [&items](int index) {
-        const bool nested = items[index].action == MenuAction::ORIENT_FRONT_BUTTONS;
-        return NestedMenuLabel::format(I18N.get(items[index].labelId), nested);
+        // No nested "· " prefix under Orientation — looks wrong in the book menu
+        // (especially landscape). Label stands alone.
+        return std::string(I18N.get(items[index].labelId));
       },
       nullptr, nullptr,
       [this](int index) -> std::string {
@@ -469,6 +499,10 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         if (value == MenuAction::ORIENT_FRONT_BUTTONS) {
           return pendingFrontButtonFollow ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         }
+        // Same On/Off column as Settings → Display → Dark Mode.
+        if (value == MenuAction::TOGGLE_DARK_MODE) {
+          return SETTINGS.readerDarkMode ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        }
         if (value == MenuAction::AUTO_PAGE_TURN) {
           return pageTurnLabels[selectedPageTurnOption];
         }
@@ -482,5 +516,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmHint, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  UiGhostPolicy::displayFastFull(renderer);
+  // Open arms hard scrub once (onEnter). Cursor moves must stay FAST — displayFastFull
+  // always HALF and was multi-second flashing every Down in the reader menu.
+  UiGhostPolicy::displayMenuFrame(renderer);
 }

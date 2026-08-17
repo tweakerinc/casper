@@ -1977,7 +1977,7 @@ void RivuletReaderActivity::persistPageMapIfComplete() {
 }
 
 void RivuletReaderActivity::tickIdlePageMap() {
-  if (!ready_ || !epub_ || engine_.mapComplete()) return;
+  if (!ready_ || !epub_) return;
   // Don't steal the bus while any page-turn control is held.
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
       mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
@@ -1989,6 +1989,13 @@ void RivuletReaderActivity::tickIdlePageMap() {
   lastIdleMapMs_ = now;
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
+  // Paint-ahead first: this is the page the very next forward turn will show, so
+  // warming it here is what keeps that turn free of a layout. Page turns used to
+  // do this synchronously, blocking the reader on a layout for a page they had
+  // not asked for yet. One layout per tick, then yield back to the loop.
+  if (engine_.warmAheadPage(renderer)) return;
+
+  if (engine_.mapComplete()) return;
   if (!engine_.extendPageMap(renderer, rivulet::RivuletEngine::kIdleMapPagesPerTick)) return;
   pageMapDirty_ = true;
   if (engine_.mapComplete()) {

@@ -285,6 +285,15 @@ bool RivuletEngine::layoutAtCursor(const GfxRenderer& renderer, const IrCursor& 
   return laidOutValid_;
 }
 
+bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
+  if (aheadValid_) return false;              // already warm
+  if (!laidOutValid_) return false;           // nothing to be ahead OF yet
+  if (laidOut_.atChapterEnd) return false;    // no next page in this chapter
+  aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+  if (!aheadValid_) ahead_.clear();
+  return aheadValid_;
+}
+
 bool RivuletEngine::ensureLaidOut(const GfxRenderer& renderer) {
   if (laidOutValid_) return true;
   if (chapter_.empty()) return false;
@@ -311,7 +320,7 @@ bool RivuletEngine::goToStart(const GfxRenderer& renderer) {
     } else if (map_.pageStart(1) != laidOut_.end) {
       map_.setPageStart(1, laidOut_.end);
     }
-    aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+    // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
   return true;
 }
@@ -331,7 +340,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
         map_.setPageStart(pageIndex + 1, laidOut_.end);
       }
       // One paint-ahead only; idle tick extends the thin map further.
-      aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+      // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
     return true;
   }
@@ -379,7 +388,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
     } else if (map_.pageStart(pageIndex + 1) != laidOut_.end) {
       map_.setPageStart(pageIndex + 1, laidOut_.end);
     }
-    aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+    // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
   (void)ensureMapAhead(renderer, kMapAheadPages);
   return true;
@@ -427,7 +436,7 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
         map_.setPageStart(currentPage_ + 1, laidOut_.end);
       }
-      aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+      // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
     // Thin map extension is idle-only — keep turn latency to one paint-ahead layout.
     return true;
@@ -443,7 +452,7 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
         map_.setPageStart(currentPage_ + 1, laidOut_.end);
       }
-      aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+      // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
     return true;
   }
@@ -462,7 +471,7 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
         map_.setPageStart(currentPage_ + 1, laidOut_.end);
       }
-      aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+      // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
     return true;
   }
@@ -486,7 +495,7 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
       LOG_DBG("RVEN", "prevPage: re-break page %d end; truncate stale tail", currentPage_);
       map_.setPageStart(nextIdx, laidOut_.end);
     }
-    aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+    // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
   return true;
 }

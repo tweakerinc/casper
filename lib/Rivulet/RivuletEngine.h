@@ -76,6 +76,21 @@ class RivuletEngine {
   // Layout current page into laidOut_ (call before paint).
   bool ensureLaidOut(const GfxRenderer& renderer);
 
+  // Lay out the paint-ahead page (the one after the current page) if it is not
+  // already warm. Call from the idle tick, NOT from a page turn.
+  //
+  // Page turns used to do this synchronously right after promoting ahead_ into
+  // laidOut_, which meant every forward turn blocked on a full layout of a page
+  // the reader had not asked for yet. Deferring it is purely a scheduling
+  // change: if the reader turns again before idle gets a chance, nextPage()
+  // simply takes its existing slow path and lays the page out then — the same
+  // single layout it would have paid anyway. So a turn is never slower than
+  // before, and is one whole layout faster whenever the device had a moment.
+  //
+  // Returns true if it laid a page out (i.e. did real work this tick).
+  bool warmAheadPage(const GfxRenderer& renderer);
+  [[nodiscard]] bool aheadWarm() const { return aheadValid_; }
+
   // Paint laid-out page at origin (margins applied by caller or via key).
   void paint(GfxRenderer& renderer, int originX, int originY) const;
 

@@ -71,6 +71,12 @@ LayoutParams RivuletEngine::makeParams(const GfxRenderer& renderer) const {
   return p;
 }
 
+LayoutParams RivuletEngine::makeMeasureParams(const GfxRenderer& renderer) const {
+  LayoutParams p = makeParams(renderer);
+  p.measureOnly = true;
+  return p;
+}
+
 bool RivuletEngine::ingestHtml(const char* html, const size_t len, const char* irPathSave,
                                const bool armDropCapFirstPara, const uint8_t imageRendering) {
   clear();
@@ -177,7 +183,7 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
     return true;
   }
   LaidOutPage tmp;
-  if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(last), tmp)) {
+  if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
     LOG_DBG("RVEN", "scrubStaleCompleteMap: last page layout fail — incomplete");
     map_.markIncomplete();
     return true;
@@ -223,7 +229,7 @@ void RivuletEngine::markMapCompleteIfPlausible(const GfxRenderer& renderer) {
 
 bool RivuletEngine::buildPageMap(const GfxRenderer& renderer) {
   if (chapter_.empty()) return false;
-  const bool ok = PageLayouter::buildFullPageMap(chapter_, renderer, makeParams(renderer), map_);
+  const bool ok = PageLayouter::buildFullPageMap(chapter_, renderer, makeMeasureParams(renderer), map_);
   if (ok) {
     LOG_DBG("RVEN", "page map pages=%d complete=%d", map_.knownPages(), map_.complete() ? 1 : 0);
   }
@@ -240,7 +246,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     const int last = map_.knownPages() - 1;
     if (last < 0) break;
     LaidOutPage tmp;
-    if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(last), tmp)) {
+    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
       // Layout failed mid-map (e.g. empty image-only transient). Do NOT mark
       // complete — that froze chapters at 2–3 pages after a stuck break.
       break;
@@ -351,7 +357,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
     const int last = map_.knownPages() - 1;
     if (last < 0) break;
     LaidOutPage tmp;
-    if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(last), tmp)) break;
+    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) break;
     if (tmp.atChapterEnd) {
       markMapCompleteIfPlausible(renderer);
       break;
@@ -518,7 +524,12 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   aheadValid_ = false;
   ahead_.clear();
 
-  const LayoutParams params = makeParams(renderer);
+  // The walk below can cover up to `budget` pages (1024 by default) and only
+  // ever inspects `page.end` / `page.atChapterEnd`, so it runs measure-only:
+  // no GlyphSpan, no per-word string copy, no span vector, per walked page.
+  // `paintParams` is used for the pages that actually land in laidOut_.
+  const LayoutParams params = makeMeasureParams(renderer);
+  const LayoutParams paintParams = makeParams(renderer);
   IrCursor cur = start;
   LaidOutPage page;
   const int budget = maxWalkPages > 0 ? maxWalkPages : 1024;
@@ -535,7 +546,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         if (walked == 0) {
           // Empty IR body: one empty last page at start.
           currentPage_ = 0;
-          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, params, start, laidOut_);
+          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, start, laidOut_);
           if (!laidOutValid_) {
             laidOut_.clear();
             laidOut_.start = start;
@@ -554,7 +565,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         if (!ensureLaidOut(renderer) || !laidOut_.atChapterEnd) {
           // Re-layout last start explicitly.
           const IrCursor lastStart = map_.pageStart(lastIdx);
-          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, params, lastStart, laidOut_);
+          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, lastStart, laidOut_);
         }
         if (laidOutValid_ && laidOut_.atChapterEnd) {
           map_.markComplete(map_.knownPages());
@@ -567,10 +578,16 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
     }
 
     if (page.atChapterEnd) {
-      // This page is the true last page of the IR.
+      // This page is the true last page of the IR. `page` came from the
+      // measure-only walk and therefore carries no spans, so re-run it as a
+      // painting pass before handing it to laidOut_ (moving it straight in would
+      // land the reader on a blank last page).
       currentPage_ = walked;
-      laidOut_ = std::move(page);
-      laidOutValid_ = true;
+      laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, page.start, laidOut_);
+      if (!laidOutValid_) {
+        LOG_ERR("RVEN", "goToLastPage repaint of last page failed page=%d", currentPage_);
+        break;
+      }
       map_.markComplete(map_.knownPages() > 0 ? map_.knownPages() : walked + 1);
       LOG_INF("RVEN", "goToLastPage pure-walk page=%d walked=%d known=%d complete=1", currentPage_, walked,
               map_.knownPages());

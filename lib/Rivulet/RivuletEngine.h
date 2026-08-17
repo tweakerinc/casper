@@ -94,6 +94,9 @@ class RivuletEngine {
 
  private:
   LayoutParams makeParams(const GfxRenderer& renderer) const;
+  // Same params with measureOnly set: for page-map walks, which read only the
+  // resulting end cursor and discard the spans. See LayoutParams::measureOnly.
+  LayoutParams makeMeasureParams(const GfxRenderer& renderer) const;
   bool layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c);
   void seedMapIfEmpty();
   // markComplete only if known page count is plausible vs IR estimate.

@@ -444,7 +444,9 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
   // assuming an average word occupies ~3em, and clamp so a tiny font or a huge
   // viewport cannot reserve something absurd (over-reserving GlyphSpan is
   // expensive, so the cap matters as much as the floor).
-  {
+  // (skipped entirely on a measure-only pass — nothing is emitted, so reserving
+  // would just hand back a ~14 KB allocation per page walked.)
+  if (!params.measureOnly) {
     const int linesPerPage = std::max(1, viewH / std::max(1, bodyLine));
     const int wordsPerLine = std::max(1, viewW / std::max(1, bodyEm * 3));
     size_t spanEstimate = static_cast<size_t>(linesPerPage) * static_cast<size_t>(wordsPerLine);
@@ -1029,26 +1031,30 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           x += sw;
           continue;
         }
-        // Shared baseline on the line: drawText baseline = y + ascender(fid).
-        // Set y so all spans share baseline = lineBoxTop + maxAscOnLine.
-        const int spanAsc = std::max(1, renderer.getFontAscenderSize(fid));
-        const int paintTop = lineBoxTop + maxAscOnLine - spanAsc;
-        GlyphSpan sp;
-        sp.x = static_cast<int16_t>(x);
-        sp.y = static_cast<int16_t>(std::max(0, paintTop));
-        sp.fontId = fid;
-        sp.epdStyle = FontLadder::epdStyleBits(run.style);
         // Hyphen prefix lives in hyphenPrefixStorage (last emit token when split).
-        if (usedHyphenSplit && k + 1 == emitEnd && !hyphenPrefixStorage.empty()) {
-          sp.text = hyphenPrefixStorage;
-        } else {
-          sp.text.assign(chapter.runText(run) + t.byteOff, t.byteLen);
-        }
+        const bool isHyphenPrefix = usedHyphenSplit && k + 1 == emitEnd && !hyphenPrefixStorage.empty();
+        const char* tokBytes = isHyphenPrefix ? hyphenPrefixStorage.data() : chapter.runText(run) + t.byteOff;
+        const size_t tokLen = isHyphenPrefix ? hyphenPrefixStorage.size() : t.byteLen;
+
         // Reuse the width the fitting loop already measured for this exact
         // (fontId, style, bytes) triple — see Tok::w. Falls back to measuring
         // only when the token was never measured (defensive; should not happen).
-        x += (t.w >= 0) ? t.w : measureWord(renderer, fid, st, sp.text.data(), sp.text.size());
-        out.spans.push_back(std::move(sp));
+        const int advance = (t.w >= 0) ? static_cast<int>(t.w) : measureWord(renderer, fid, st, tokBytes, tokLen);
+
+        if (!params.measureOnly) {
+          // Shared baseline on the line: drawText baseline = y + ascender(fid).
+          // Set y so all spans share baseline = lineBoxTop + maxAscOnLine.
+          const int spanAsc = std::max(1, renderer.getFontAscenderSize(fid));
+          const int paintTop = lineBoxTop + maxAscOnLine - spanAsc;
+          GlyphSpan sp;
+          sp.x = static_cast<int16_t>(x);
+          sp.y = static_cast<int16_t>(std::max(0, paintTop));
+          sp.fontId = fid;
+          sp.epdStyle = FontLadder::epdStyleBits(run.style);
+          sp.text.assign(tokBytes, tokLen);
+          out.spans.push_back(std::move(sp));
+        }
+        x += advance;
       }
 
       y += thisLineH;

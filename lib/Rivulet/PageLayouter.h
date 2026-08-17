@@ -20,6 +20,20 @@ struct LayoutParams {
   bool extraParagraphSpacing = false;
   // When extraParagraphSpacing: 0 = ½ line (default), 1 = full line, 2 = ¼ line.
   uint8_t extraParagraphSpacingHeight = 0;
+  // Pagination-only pass: compute the page's end cursor and geometry but do not
+  // emit paintable text spans.
+  //
+  // Page-map work (opening at a resume page, extendPageMap, the idle tick,
+  // goToLastPage) only ever reads `out.end` / `atChapterEnd` — it throws the
+  // spans away. Emitting them anyway meant one GlyphSpan per word (~48 B, each
+  // owning a std::string copy of the word) plus the vector to hold them, for
+  // every page walked. Opening a book at page 30 of a chapter did that thirty
+  // times before the first pixel.
+  //
+  // Line breaking, justification, drop-cap zones, image placement and every
+  // y-advance still run exactly as in a painting pass, so the end cursor this
+  // produces is identical — only the throwaway output is skipped.
+  bool measureOnly = false;
 };
 
 // Pixel gap for extra paragraph spacing (matches CasperSettings height enum).

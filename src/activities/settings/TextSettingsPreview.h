@@ -18,6 +18,7 @@ struct PreviewKey {
   float lineCompression = -1.0f;
   uint8_t alignment = 0xFF;
   bool extraParagraphSpacing = false;
+  uint8_t extraParagraphSpacingHeight = 0;  // 0 half / 1 full / 2 quarter
   bool focusReading = false;  // Bionic Reading
   bool guideReading = false;  // Guide Dots
   bool hyphenation = false;

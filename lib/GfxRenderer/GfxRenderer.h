@@ -44,6 +44,9 @@ class GfxRenderer {
   RenderMode renderMode;
   Orientation orientation;
   bool fadingFix;
+  // System-wide Dark Mode: invert FB → push panel → restore FB so paint stays light-space.
+  // Sleep / intentional invert content should temporarily clear this (setInvertOnDisplay).
+  bool invertOnDisplay;
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -104,7 +107,7 @@ class GfxRenderer {
 
  public:
   explicit GfxRenderer(HalDisplay& halDisplay)
-      : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false) {}
+      : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false), invertOnDisplay(false) {}
   ~GfxRenderer() { freeBwBufferChunks(); }
 
   static constexpr int VIEWABLE_MARGIN_TOP = 9;
@@ -152,6 +155,8 @@ class GfxRenderer {
 
   // Fading fix control
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
+  void setInvertOnDisplay(const bool enabled) { invertOnDisplay = enabled; }
+  bool getInvertOnDisplay() const { return invertOnDisplay; }
 
   // Screen ops
   int getScreenWidth() const;
@@ -247,7 +252,7 @@ class GfxRenderer {
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
   void drawText(int fontId, int x, int y, const char* text, bool black = true,
                 EpdFontFamily::Style style = EpdFontFamily::REGULAR,
-                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+                BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO, int dropCapNnScale = 0) const;
   int getSpaceWidth(int fontId, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Returns the total inter-word advance: fp4::toPixel(spaceAdvance + kern(leftCp,' ') + kern(' ',rightCp)).
   /// Using a single snap avoids the +/-1 px rounding error that arises when space advance and kern are
@@ -255,7 +260,8 @@ class GfxRenderer {
   int getSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
-  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+  /// dropCapNnScale: when style has DROP_CAP, 0 → 2× (legacy); 2–4 → that nearest-neighbor scale.
+  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int dropCapNnScale = 0) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;

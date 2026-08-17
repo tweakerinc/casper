@@ -1,6 +1,6 @@
 #pragma once
 
-#include <CrossPointSettings.h>
+#include <CasperSettings.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalTiltSensor.h>
@@ -12,6 +12,42 @@
 
 namespace ReaderUtils {
 
+// Dark Mode (Settings → Display → Dark Mode / reader menu). Master default Off.
+inline bool darkModeEnabled() { return SETTINGS.readerDarkMode != 0; }
+
+// Nested "Reader Only": Off = whole UI (GfxRenderer invert-on-display); On = book pages only.
+inline bool darkModeReaderOnly() { return SETTINGS.darkModeReaderOnly != 0; }
+
+// True when home/menus/reader all invert at display time.
+inline bool systemWideDarkMode() { return darkModeEnabled() && !darkModeReaderOnly(); }
+
+// True when the book page should appear dark (either scope).
+inline bool readerDarkModeEnabled() { return darkModeEnabled(); }
+
+// True when the book page should invert for display without arming whole-UI invert.
+// FB stays in light paint-space; invert only around the panel push (see display*).
+inline bool readerOnlyDarkPaint() { return darkModeEnabled() && darkModeReaderOnly(); }
+
+// DEPRECATED path that permanently inverted the FB (sleep/wake and home leaked
+// polarity). Prefer displayWithRefreshCycle / displayWithDarkMode which invert
+// only for the panel push. No-op kept so call sites compile while migrating.
+inline void applyReaderDarkModeIfEnabled(const GfxRenderer& /*renderer*/) {}
+
+// Push the current framebuffer to the panel with Dark Mode polarity.
+// - System-wide: invertOnDisplay is armed by loop(); displayBuffer inverts there.
+// - Reader-only: temporary invert around the refresh so home/menus stay light.
+// Use for reader pages and reader-context chrome (not home).
+inline void displayWithDarkMode(const GfxRenderer& renderer,
+                                const HalDisplay::RefreshMode mode = HalDisplay::FAST_REFRESH) {
+  if (readerOnlyDarkPaint() && !renderer.getInvertOnDisplay()) {
+    renderer.invertScreen();
+    renderer.displayBuffer(mode);
+    renderer.invertScreen();
+    return;
+  }
+  renderer.displayBuffer(mode);
+}
+
 // Hold threshold used by end-of-book short-Back (last page) and similar chords.
 // Reader leave-to-home is on Back *release* only (no long-press Back).
 constexpr unsigned long GO_HOME_MS = 500;
@@ -19,15 +55,19 @@ constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;  // alias kept for call
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
+// Max gap between two Confirm releases to count as Double-Press Menu.
+// Wait after Confirm release before opening the menu when double-press is enabled.
+// Was 400ms; shave it so single-tap menu still feels snappy without killing double-tap.
+constexpr unsigned long DOUBLE_PRESS_MENU_MS = 220;
 
 // Extra air under top chrome (battery/clock) and matching reserve above bottom
 // chrome so page text never sits under the status bar or dictionary button strip.
 // Bumps slightly when Manage Reader UI → Font Size is larger than 8 pt.
 inline int readerTopChromeExtra() {
   switch (SETTINGS.statusBarFontSize) {
-    case CrossPointSettings::STATUS_BAR_FONT_10:
+    case CasperSettings::STATUS_BAR_FONT_10:
       return 28;
-    case CrossPointSettings::STATUS_BAR_FONT_12:
+    case CasperSettings::STATUS_BAR_FONT_12:
       return 32;
     default:
       return 24;
@@ -45,16 +85,16 @@ enum ReaderTouchAction : freeink::ui::ActionId {
 
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
-    case CrossPointSettings::ORIENTATION::PORTRAIT:
+    case CasperSettings::ORIENTATION::PORTRAIT:
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
       break;
-    case CrossPointSettings::ORIENTATION::LANDSCAPE_CW:
+    case CasperSettings::ORIENTATION::LANDSCAPE_CW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
       break;
-    case CrossPointSettings::ORIENTATION::INVERTED:
+    case CasperSettings::ORIENTATION::INVERTED:
       renderer.setOrientation(GfxRenderer::Orientation::PortraitInverted);
       break;
-    case CrossPointSettings::ORIENTATION::LANDSCAPE_CCW:
+    case CasperSettings::ORIENTATION::LANDSCAPE_CCW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
       break;
     default:
@@ -77,9 +117,9 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
                                           : input.wasReleased(MappedInputManager::Button::PageBack));
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
   const unsigned long held = input.getHeldTime();
-  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                               held < SETTINGS.getPowerButtonLongPressDuration();
-  const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool longPowerTurn = SETTINGS.longPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                              held >= SETTINGS.getPowerButtonLongPressDuration();
   const bool powerTurn = shortPowerTurn || longPowerTurn;
   const bool next = tiltNext || powerTurn ||
@@ -212,15 +252,20 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 //   - FORCE_SCRUB (0) / manual force-refresh: always HALF (visible hard clean)
 //   - Interval "Never": FAST only (FORCE_SCRUB / manual still scrub)
 //
-// Soft greyscale-base is for *reader interval only* — do not use on UI menus.
+// Soft greyscale-base (X3): also used by UiGhostPolicy menu opens (same bank).
 // Async: starts FAST/HALF non-blocking when possible; X3 soft is blocking.
 // Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
   const int freq = SETTINGS.getRefreshFrequency();  // -1 = Never
-  const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
-  const bool forceScrub = (pagesUntilFullRefresh == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool disabled = (freq == CasperSettings::REFRESH_COUNTDOWN_DISABLED);
+  const bool forceScrub = (pagesUntilFullRefresh == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   // Countdown hits 1 on the page that should maintain; also treat 0 as due.
   const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1 && pagesUntilFullRefresh >= 0;
+
+  // Reader-only: invert for the panel push only (FB restored after). System-wide
+  // uses invertOnDisplay inside displayBuffer — never double-invert.
+  const bool tempInvert = readerOnlyDarkPaint() && !renderer.getInvertOnDisplay();
+  if (tempInvert) renderer.invertScreen();
 
   if (maintenanceDue || forceScrub) {
     // Soft interval on X3 only when not a forced hard scrub. Long-press power /
@@ -233,7 +278,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
-    pagesUntilFullRefresh = disabled ? CrossPointSettings::REFRESH_COUNTDOWN_DISABLED : freq;
+    pagesUntilFullRefresh = disabled ? CasperSettings::REFRESH_COUNTDOWN_DISABLED : freq;
     if (pagesUntilFullRefresh < 1 && !disabled) pagesUntilFullRefresh = 1;
   } else {
     if (async) {
@@ -245,6 +290,8 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
       pagesUntilFullRefresh--;
     }
   }
+
+  if (tempInvert) renderer.invertScreen();
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build

@@ -8,20 +8,20 @@
 
 #include <algorithm>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
+#include "util/FinishedBooks.h"
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
-#include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
 // Long-press threshold for book menu / folder delete / hidden-files toggle.
-// Long-press Confirm → book menu; long-press Back → show/hide dotfiles. Match Home 300ms.
+// Long-press Confirm ΓåÆ book menu; long-press Back ΓåÆ show/hide dotfiles. Match Home 300ms.
 constexpr unsigned long GO_HOME_MS = 300;
 constexpr size_t NAME_BUFFER_SIZE = 500;
 constexpr int ROOT_HINT_GAP = 20;
@@ -71,7 +71,7 @@ void FileBrowserActivity::loadFiles() {
 
     if (file.isDirectory()) {
       // Always hide the finished-books folder from Library (/read, /Finished Books).
-      // Browse finished books via Recents → Show Read Books.
+      // Browse finished books via Recents ΓåÆ Show Read Books.
       if (mode == Mode::Books && FinishedBooks::isFinishedDirName(fileNameBuffer.get())) {
         continue;
       }
@@ -110,7 +110,7 @@ void FileBrowserActivity::onEnter() {
   UiGhostPolicy::clearHardScrub();
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
-  // its release — otherwise we'd immediately auto-open whatever is at index 0.
+  // its release ΓÇö otherwise we'd immediately auto-open whatever is at index 0.
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
   auto root = Storage.open(basepath.c_str());
@@ -245,41 +245,42 @@ void FileBrowserActivity::toggleHiddenFiles() {
 void FileBrowserActivity::showBookActionMenu(const std::string& fullPath, const std::string& displayName) {
   // Menu activity handles cache/stats/pace/description itself and stays open.
   // Parent only handles terminal results so this folder (basepath) is preserved.
-  startActivityForResult(std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, displayName, fullPath,
-                                                                     /*includeRemoveFromRecents=*/false,
-                                                                     /*openedFromLongPress=*/true),
-                         [this, fullPath](const ActivityResult& result) {
-                           lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
-                           lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-                           if (result.isCancelled) {
-                             requestUpdate();
-                             return;
-                           }
-                           const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
-                           if (!actionResult) {
-                             requestUpdate();
-                             return;
-                           }
-                           switch (static_cast<FileBrowserAction>(actionResult->action)) {
-                             case FileBrowserAction::Open:
-                               onSelectBook(fullPath);
-                               return;
-                             case FileBrowserAction::Delete:
-                               // File already removed by the menu activity; refresh this folder listing.
-                               loadFiles();
-                               if (files.empty()) {
-                                 selectorIndex = 0;
-                               } else if (selectorIndex >= files.size()) {
-                                 selectorIndex = files.size() - 1;
-                               }
-                               requestUpdate(true);
-                               return;
-                             default:
-                               // Side-effect actions finish inside the menu; should not reach here.
-                               requestUpdate();
-                               return;
-                           }
-                         });
+  startActivityForResult(
+      std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, displayName, fullPath,
+                                                  /*includeRemoveFromRecents=*/false,
+                                                  /*openedFromLongPress=*/true),
+      [this, fullPath](const ActivityResult& result) {
+        lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+        lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+        if (result.isCancelled) {
+          requestUpdate();
+          return;
+        }
+        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+        if (!actionResult) {
+          requestUpdate();
+          return;
+        }
+        switch (static_cast<FileBrowserAction>(actionResult->action)) {
+          case FileBrowserAction::Open:
+            onSelectBook(fullPath);
+            return;
+          case FileBrowserAction::Delete:
+            // File already removed by the menu activity; refresh this folder listing.
+            loadFiles();
+            if (files.empty()) {
+              selectorIndex = 0;
+            } else if (selectorIndex >= files.size()) {
+              selectorIndex = files.size() - 1;
+            }
+            requestUpdate(true);
+            return;
+          default:
+            // Side-effect actions finish inside the menu; should not reach here.
+            requestUpdate();
+            return;
+        }
+      });
 }
 
 void FileBrowserActivity::loop() {
@@ -313,7 +314,7 @@ void FileBrowserActivity::loop() {
   const int contentHeight =
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
 
-  // Long-press Confirm on a book file → same action menu as Recents / Dashboard.
+  // Long-press Confirm on a book file ΓåÆ same action menu as Recents / Dashboard.
   if (mode == Mode::Books && !files.empty() && selectorIndex < files.size() &&
       mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= GO_HOME_MS &&
       !lockNextConfirmRelease) {
@@ -516,10 +517,9 @@ void FileBrowserActivity::render(RenderLock&&) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     // No row icons; extension on the right (epub) marks files vs folders.
-    GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
-        [this](int index) { return getFileName(files[index]); }, nullptr, nullptr,
-        [this](int index) { return getFileExtensionLabel(files[index]); }, false);
+    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
+                 [this](int index) { return getFileName(files[index]); }, nullptr, nullptr,
+                 [this](int index) { return getFileExtensionLabel(files[index]); }, false);
   }
 
   // Full path display (+ root hint for hidden-files toggle)
@@ -532,7 +532,7 @@ void FileBrowserActivity::render(RenderLock&&) {
   const char* pathDisplay = pathStr;
   char leftTruncBuf[256];
   if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
-    const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (…)
+    const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (ΓÇª)
     const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ellipsis);
     const int available = pathMaxWidth - ellipsisWidth;
     // Walk forward from the start until the suffix fits, skipping UTF-8 continuation bytes

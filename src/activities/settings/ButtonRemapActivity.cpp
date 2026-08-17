@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstring>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -18,9 +18,9 @@
 namespace {
 // Function options shown in the picker (order = display order).
 constexpr uint8_t kFunctionChoices[] = {
-    CrossPointSettings::BTN_FUNC_BACK,  CrossPointSettings::BTN_FUNC_CONFIRM, CrossPointSettings::BTN_FUNC_LEFT,
-    CrossPointSettings::BTN_FUNC_RIGHT, CrossPointSettings::BTN_FUNC_UP,      CrossPointSettings::BTN_FUNC_DOWN,
-    CrossPointSettings::BTN_FUNC_NONE,
+    CasperSettings::BTN_FUNC_BACK,  CasperSettings::BTN_FUNC_CONFIRM, CasperSettings::BTN_FUNC_LEFT,
+    CasperSettings::BTN_FUNC_RIGHT, CasperSettings::BTN_FUNC_UP,      CasperSettings::BTN_FUNC_DOWN,
+    CasperSettings::BTN_FUNC_NONE,
 };
 constexpr int kFunctionChoiceCount = static_cast<int>(sizeof(kFunctionChoices) / sizeof(kFunctionChoices[0]));
 
@@ -70,7 +70,7 @@ void ButtonRemapActivity::onEnter() {
 
 void ButtonRemapActivity::onExit() {
   // Persist only a valid map (auto-save when the user made valid edits).
-  if (dirty && CrossPointSettings::isButtonFunctionMapValid(tempMap)) {
+  if (dirty && CasperSettings::isButtonFunctionMapValid(tempMap)) {
     SETTINGS.applyButtonFunctionMap(tempMap);
     SETTINGS.saveToFile();
   }
@@ -84,17 +84,17 @@ void ButtonRemapActivity::showError(const char* msg) {
 }
 
 void ButtonRemapActivity::resetDefaults() {
-  CrossPointSettings::setDefaultButtonFunctionMap(tempMap);
+  CasperSettings::setDefaultButtonFunctionMap(tempMap);
   dirty = true;
   // Do not live-apply while this screen is open — footer chrome and nav stay locked.
   showError(tr(STR_REMAP_RESET_DONE));
 }
 
 bool ButtonRemapActivity::tryAssign(const uint8_t hwIndex, const uint8_t function) {
-  if (hwIndex >= CrossPointSettings::HW_REMAP_BUTTON_COUNT) return false;
-  if (function >= CrossPointSettings::BTN_FUNC_COUNT) return false;
+  if (hwIndex >= CasperSettings::HW_REMAP_BUTTON_COUNT) return false;
+  if (function >= CasperSettings::BTN_FUNC_COUNT) return false;
 
-  uint8_t trial[CrossPointSettings::HW_REMAP_BUTTON_COUNT];
+  uint8_t trial[CasperSettings::HW_REMAP_BUTTON_COUNT];
   std::memcpy(trial, tempMap, sizeof(trial));
 
   // Already this function on this slot — no-op.
@@ -102,15 +102,15 @@ bool ButtonRemapActivity::tryAssign(const uint8_t hwIndex, const uint8_t functio
     return true;
   }
 
-  if (function == CrossPointSettings::BTN_FUNC_NONE) {
+  if (function == CasperSettings::BTN_FUNC_NONE) {
     // Disable this key only (NONE may appear on multiple slots).
-    trial[hwIndex] = CrossPointSettings::BTN_FUNC_NONE;
+    trial[hwIndex] = CasperSettings::BTN_FUNC_NONE;
   } else {
     // Each real function exists at most once: assigning it here swaps with the
     // slot that currently owns it (e.g. put Left on Bottom1 → Bottom1's old
     // function moves to wherever Left was). No puzzle, no duplicate Backs.
     int owner = -1;
-    for (uint8_t i = 0; i < CrossPointSettings::HW_REMAP_BUTTON_COUNT; i++) {
+    for (uint8_t i = 0; i < CasperSettings::HW_REMAP_BUTTON_COUNT; i++) {
       if (trial[i] == function) {
         owner = static_cast<int>(i);
         break;
@@ -123,7 +123,7 @@ bool ButtonRemapActivity::tryAssign(const uint8_t hwIndex, const uint8_t functio
     }
   }
 
-  if (!CrossPointSettings::isButtonFunctionMapValid(trial)) {
+  if (!CasperSettings::isButtonFunctionMapValid(trial)) {
     showError(tr(STR_REMAP_NEED_CORE));
     return false;
   }
@@ -157,7 +157,7 @@ void ButtonRemapActivity::openFunctionPicker() {
 }
 
 void ButtonRemapActivity::commitAndExit() {
-  if (!CrossPointSettings::isButtonFunctionMapValid(tempMap)) {
+  if (!CasperSettings::isButtonFunctionMapValid(tempMap)) {
     showError(tr(STR_REMAP_NEED_CORE));
     return;
   }
@@ -385,20 +385,20 @@ const char* ButtonRemapActivity::slotName(const uint8_t hwIndex) const {
 
 const char* ButtonRemapActivity::functionName(const uint8_t function) const {
   switch (function) {
-    case CrossPointSettings::BTN_FUNC_BACK:
+    case CasperSettings::BTN_FUNC_BACK:
       return tr(STR_BACK);
-    case CrossPointSettings::BTN_FUNC_CONFIRM:
+    case CasperSettings::BTN_FUNC_CONFIRM:
       // Menus label this action "Select"; keep the remapper consistent.
       return tr(STR_SELECT);
-    case CrossPointSettings::BTN_FUNC_LEFT:
+    case CasperSettings::BTN_FUNC_LEFT:
       return tr(STR_DIR_LEFT);
-    case CrossPointSettings::BTN_FUNC_RIGHT:
+    case CasperSettings::BTN_FUNC_RIGHT:
       return tr(STR_DIR_RIGHT);
-    case CrossPointSettings::BTN_FUNC_UP:
+    case CasperSettings::BTN_FUNC_UP:
       return tr(STR_DIR_UP);
-    case CrossPointSettings::BTN_FUNC_DOWN:
+    case CasperSettings::BTN_FUNC_DOWN:
       return tr(STR_DIR_DOWN);
-    case CrossPointSettings::BTN_FUNC_NONE:
+    case CasperSettings::BTN_FUNC_NONE:
       return tr(STR_DISABLED);
     default:
       return "";

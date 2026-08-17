@@ -45,7 +45,7 @@ class FileBrowserActivity final : public Activity {
   void loadFiles();
   size_t findEntry(const std::string& name) const;
 
-  // Long-press Confirm on a book: shared action menu (Read, Description, Delete, …).
+  // Long-press Confirm on a book: shared action menu (Read, Description, Delete, ΓÇª).
   void showBookActionMenu(const std::string& fullPath, const std::string& displayName);
 
  public:

@@ -14,8 +14,8 @@
 
 #include <algorithm>
 
-#include "CrossPointSettings.h"
-#include "CrossPointState.h"
+#include "CasperSettings.h"
+#include "CasperState.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -208,9 +208,9 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
 
 void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition position) const {
   const auto sb = SETTINGS.statusBarSpec();
-  const bool drawBottom = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM &&
+  const bool drawBottom = sb.xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM &&
                           position == StatusBarOverlayPosition::Bottom;
-  const bool drawTop = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP &&
+  const bool drawTop = sb.xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP &&
                        position == StatusBarOverlayPosition::Top;
   if (!drawBottom && !drawTop) {
     return;
@@ -345,8 +345,8 @@ void XtcReaderActivity::renderPage() {
     // XTC grayscale path: same device split as EPUB (YACP-compatible).
     // X3: soft reinforce; X4: stock HALF scrub (SSD1677 clean primitive).
     if (pagesUntilFullRefresh <= 1 &&
-        SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
-      if (gpio.deviceIsX3() && pagesUntilFullRefresh != CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
+        SETTINGS.getRefreshFrequency() != CasperSettings::REFRESH_COUNTDOWN_DISABLED) {
+      if (gpio.deviceIsX3() && pagesUntilFullRefresh != CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
         renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
       } else {
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -355,7 +355,7 @@ void XtcReaderActivity::renderPage() {
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-      if (SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
+      if (SETTINGS.getRefreshFrequency() != CasperSettings::REFRESH_COUNTDOWN_DISABLED) {
         pagesUntilFullRefresh--;
       }
     }
@@ -430,12 +430,14 @@ void XtcReaderActivity::renderPage() {
 
   free(pageBuffer);
 
-  if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
+  if (SETTINGS.statusBarSpec().xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(StatusBarOverlayPosition::Top);
   } else {
     renderStatusBarOverlay(StatusBarOverlayPosition::Bottom);
   }
 
+  // 1-bit XTC only (2-bit greyscale path returns earlier). Reader-only dark is
+  // applied inside displayWithRefreshCycle (temporary invert for panel push).
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);

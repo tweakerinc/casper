@@ -34,13 +34,11 @@ struct BookReadingStats {
   // plus any other stats*.bin). Promotes to the current versioned filename when needed.
   static BookReadingStats load(const std::string& cachePath);
 
-  // Cache path for this book under /.crosspoint (Casper / CrossPoint 1.5 std::hash).
-  // Empty when bookPath is not a known book type.
+  // Primary cache path: /.crosspoint/epub_<std::hash>/ (or xtc_/txt_).
   static std::string cachePathForBook(const std::string& bookPath);
 
-  // Load stats for a book. Also reads CrossInk EPUB cache dirs (FNV-1a 64-bit hash)
-  // and any alternate stats*.bin names, then copies the richest result into
-  // cachePathForBook so no manual SD transfer is required after flashing Casper.
+  // Load stats for a book from the primary cache path.
+  // Prefer CasperStats::loadBook for new product code.
   static BookReadingStats loadForBook(const std::string& bookPath);
 
   // Saves stats to cachePath/stats_vN.bin (current format).
@@ -50,7 +48,7 @@ struct BookReadingStats {
   // Missing files are treated as success.
   static bool remove(const std::string& cachePath);
 
-  // Deletes stats under every known cache path for this book (Casper + CrossInk).
+  // Deletes stats under every known cache path for this book (Casper + legacy).
   static bool removeForBook(const std::string& bookPath);
 
   // Updates the running reading pace with one forward page dwell sample.

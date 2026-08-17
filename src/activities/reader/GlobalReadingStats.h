@@ -5,7 +5,7 @@
 #include "ReadingStatsUtils.h"
 
 // Cumulative reading statistics across all books, persisted to
-// /.crosspoint/global_stats.bin.
+// /.crosspoint/global_stats.bin (migrates from /.crosspoint on first load).
 struct GlobalReadingStats {
   uint32_t totalSessions = 0;        // Total book-open events across all books
   uint32_t totalReadingSeconds = 0;  // Accumulated reading time across all books
@@ -21,16 +21,16 @@ struct GlobalReadingStats {
   static constexpr size_t CURRENT_FILE_SIZE = 159;
   static constexpr size_t MIN_SUPPORTED_FILE_SIZE = 13;
 
-  // Loads stats from /.crosspoint/global_stats.bin. Returns default-constructed
-  // stats if the file is missing or the version byte does not match.
+  // Loads stats from /.crosspoint/global_stats.bin.
+  // Returns default-constructed stats if missing or version mismatch.
   static GlobalReadingStats load();
 
   // Returns true when the optional synced stats directory exists.
   static bool hasSyncedStats();
 
   // Loads this device's local stats plus one synced stats file per other device
-  // from /.crosspoint/synced_stats/. A stale file matching this device's MAC is
-  // skipped to avoid double counting.
+  // from /.crosspoint/synced_stats/ (and legacy /.crosspoint/synced_stats/). A stale
+  // file matching this device's MAC is skipped to avoid double counting.
   static GlobalReadingStats loadAggregated();
 
   // Adds synced device stats to an already-loaded local stats snapshot. Use this

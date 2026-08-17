@@ -16,17 +16,29 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 parser = argparse.ArgumentParser(description="Generate a header file from a font to be used with epdiy.")
 parser.add_argument("name", action="store", help="name of the font.")
-parser.add_argument("size", type=int, help="font size to use.")
+parser.add_argument("size", type=int, help="font size slot (label / default ppem at 150 DPI).")
 parser.add_argument("fontstack", action="store", nargs='+', help="list of font files, ordered by descending priority.")
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
+parser.add_argument("--ppem", type=int, default=None,
+                    help="Render at this pixel size instead of size@150DPI. "
+                         "Use stem-calibrated values (e.g. Literata 10→22, 12→25) from cpfont-editor.")
+parser.add_argument("--gap-fix", dest="gap_fix", action="store_true",
+                    help="Apply destem gap-fix on 2-bit glyphs (iwalton3/cpfont-editor).")
+parser.add_argument("--darken-aa", dest="darken_aa", action="store_true",
+                    help="Darker 2-bit AA thresholds (CrossInk/YACP reader fonts).")
 args = parser.parse_args()
 
 import freetype
 from fontTools.ttLib import TTFont
+
+try:
+    import destem
+except ImportError:
+    destem = None
 
 GlyphProps = namedtuple("GlyphProps", ["width", "height", "advance_x", "left", "top", "data_length", "data_offset", "code_point"])
 
@@ -34,9 +46,22 @@ font_stack = [freetype.Face(f) for f in args.fontstack]
 is2Bit = args.is2Bit
 size = args.size
 font_name = args.name
+# Nominal ppem at 150 DPI (matches historical Casper/CrossPoint builtins).
+nominal_ppem = int(round(size * 150.0 / 72.0))
+render_ppem = args.ppem if args.ppem is not None else nominal_ppem
+if args.gap_fix and destem is None:
+    print("gap-fix requested but destem.py not found next to fontconvert.py", file=sys.stderr)
+    sys.exit(1)
+if args.gap_fix and not is2Bit:
+    print("gap-fix requires --2bit", file=sys.stderr)
+    sys.exit(1)
 load_flags = freetype.FT_LOAD_RENDER
 if args.force_autohint:
     load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
+# 4-bit nibble -> 2-bit cutoffs. Lower = darker/softer edges (CrossInk --darken-aa).
+aa_thresholds = (3, 6, 10) if args.darken_aa else (4, 8, 12)
+print(f"fontconvert: slot={size}pt render_ppem={render_ppem} (nominal@{150}dpi={nominal_ppem})"
+      f"{' gap-fix' if args.gap_fix else ''}", file=sys.stderr)
 
 # inclusive unicode code point intervals
 # must not overlap and be in ascending order
@@ -265,10 +290,39 @@ for i_start, i_end in unvalidated_intervals:
         intervals.append((start, i_end))
 
 for face in font_stack:
-    face.set_char_size(size << 6, size << 6, 150, 150)
+    # Pixel size = stem-calibrated or nominal ppem (not FreeType point@dpi).
+    face.set_pixel_sizes(0, render_ppem)
 
 total_size = 0
 all_glyphs = []
+
+def pack_2bit_levels(levels, width, height):
+    """Pack 2D levels (0..3) into the same 4-pixels-per-byte layout as pixels2b."""
+    pixels2b = []
+    px = 0
+    n = 0
+    for y in range(height):
+        row = levels[y]
+        for x in range(width):
+            px = (px << 2) | (row[x] & 3)
+            n += 1
+            if n % 4 == 0:
+                pixels2b.append(px)
+                px = 0
+    if n % 4 != 0:
+        px = px << (4 - (n % 4)) * 2
+        pixels2b.append(px)
+    return pixels2b
+
+def levels_from_2bit_packed(pixels2b, width, height):
+    levels = [[0] * width for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
+            pos = y * width + x
+            byte = pixels2b[pos // 4]
+            bit_index = (3 - (pos % 4)) * 2
+            levels[y][x] = (byte >> bit_index) & 3
+    return levels
 
 for i_start, i_end in intervals:
     for code_point in range(i_start, i_end + 1):
@@ -293,7 +347,8 @@ for i_start, i_end in intervals:
                 px = 0
 
         if is2Bit:
-            # 0-3 white, 4-7 light grey, 8-11 dark grey, 12-15 black
+            # Default: 0-3 white, 4-7 light grey, 8-11 dark grey, 12-15 black.
+            # --darken-aa: (3,6,10) pushes edge pixels one shade darker (softer/thicker).
             # Downsample to 2-bit bitmap
             pixels2b = []
             px = 0
@@ -304,11 +359,11 @@ for i_start, i_end in intervals:
                     bm = pixels4g[y * pitch + (x // 2)]
                     bm = (bm >> ((x % 2) * 4)) & 0xF
 
-                    if bm >= 12:
+                    if bm >= aa_thresholds[2]:
                         px += 3
-                    elif bm >= 8:
+                    elif bm >= aa_thresholds[1]:
                         px += 2
-                    elif bm >= 4:
+                    elif bm >= aa_thresholds[0]:
                         px += 1
 
                     if (y * bitmap.width + x) % 4 == 3:
@@ -318,15 +373,12 @@ for i_start, i_end in intervals:
                 px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
                 pixels2b.append(px)
 
-            # for y in range(bitmap.rows):
-            #     line = ''
-            #     for x in range(bitmap.width):
-            #         pixelPosition = y * bitmap.width + x
-            #         byte = pixels2b[pixelPosition // 4]
-            #         bit_index = (3 - (pixelPosition % 4)) * 2
-            #         line += '#' if ((byte >> bit_index) & 3) > 0 else '.'
-            #     print(line)
-            # print('')
+            # iwalton3 gap-fix: reopen muddy 1px gaps (quotes etc.) without
+            # killing stem AA (gaps_only=True).
+            if args.gap_fix and bitmap.width > 0 and bitmap.rows > 0:
+                levels = levels_from_2bit_packed(pixels2b, bitmap.width, bitmap.rows)
+                levels = destem.crispen(levels, gaps_only=True)
+                pixels2b = pack_2bit_levels(levels, bitmap.width, bitmap.rows)
         else:
             # Downsample to 1-bit bitmap - treat any 2+ as black
             pixelsbw = []
@@ -413,12 +465,20 @@ for cp, fi in cp_to_face_idx.items():
 def _extract_pairpos_subtable(subtable, glyph_to_cp, raw_kern):
     """Extract kerning from a PairPos subtable (Format 1 or 2)."""
     if subtable.Format == 1:
-        # Individual pairs
+        # Individual pairs. Some fonts (e.g. Sourcerer post-process) expose
+        # PairSet under different otBase layouts — skip rather than abort convert.
+        pair_sets = getattr(subtable, "PairSet", None)
+        if pair_sets is None:
+            return
         for i, coverage_glyph in enumerate(subtable.Coverage.glyphs):
             if coverage_glyph not in glyph_to_cp:
                 continue
-            pair_set = subtable.PairSet[i]
-            for pvr in pair_set.PairValueRecord:
+            try:
+                pair_set = pair_sets[i]
+            except (IndexError, TypeError, AttributeError):
+                continue
+            records = getattr(pair_set, "PairValueRecord", None) or []
+            for pvr in records:
                 if pvr.SecondGlyph not in glyph_to_cp:
                     continue
                 xa = 0
@@ -519,9 +579,8 @@ def extract_kerning_fonttools(font_path, codepoints, ppem, pnum_subs=None):
     return result
 
 # The ppem used by the existing glyph rasterization:
-#   face.set_char_size(size << 6, size << 6, 150, 150)
-# means size_pt at 150 DPI -> ppem = size * 150 / 72
-ppem = size * 150.0 / 72.0
+# Kerning scale uses the actual render ppem (stem-calibrated or nominal).
+ppem = float(render_ppem)
 
 kern_map = {}  # (leftCp, rightCp) -> adjust
 for face_idx, cps in face_idx_cps.items():

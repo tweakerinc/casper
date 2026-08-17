@@ -10,7 +10,7 @@
 #include <cstring>
 
 #include "BookActions.h"
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
@@ -388,9 +388,9 @@ void BookDescriptionActivity::layoutTitleBlock(const int pageWidth) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Compact serif title: prefer a single line; wrap to two only when needed.
   // (18pt was oversized for long titles and ate synopsis space.)
-  titleFontId = LEXENDDECA_14_FONT_ID;
+  titleFontId = SOURCESERIF4_14_FONT_ID;
   if (renderer.getLineHeight(titleFontId) <= 0) {
-    titleFontId = LEXENDDECA_12_FONT_ID;
+    titleFontId = SOURCESERIF4_12_FONT_ID;
   }
   if (renderer.getLineHeight(titleFontId) <= 0) {
     titleFontId = UI_12_FONT_ID;

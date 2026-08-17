@@ -309,13 +309,14 @@ enum class TextRotation { None, Rotated90CW };
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
-// Render a glyph at 2× scale (nearest-neighbor). Used for DROP_CAP first letters
-// when the largest loaded face is still short of CSS 3em (~3 body lines).
-static void renderCharScaled2x(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
+// Render a glyph at N× nearest-neighbor scale (N = 2..4). Used for DROP_CAP so
+// single-size faces can still fill ~2 body lines without a foreign font ladder.
+static void renderCharScaledNx(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                                const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                               const bool pixelState, const EpdFontFamily::Style style) {
+                               const bool pixelState, const EpdFontFamily::Style style, const int scale) {
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) return;
+  const int s = scale < 2 ? 2 : (scale > 4 ? 4 : scale);
 
   const EpdFontData* fontData = fontFamily.getData(style);
   const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
@@ -323,8 +324,8 @@ static void renderCharScaled2x(const GfxRenderer& renderer, GfxRenderer::RenderM
 
   const int srcW = glyph->width;
   const int srcH = glyph->height;
-  const int baseX = cursorX + glyph->left * 2;
-  const int baseY = cursorY - glyph->top * 2;
+  const int baseX = cursorX + glyph->left * s;
+  const int baseY = cursorY - glyph->top * s;
 
   if (fontData->is2Bit) {
     for (int srcY = 0; srcY < srcH; srcY++) {
@@ -333,16 +334,19 @@ static void renderCharScaled2x(const GfxRenderer& renderer, GfxRenderer::RenderM
         const uint8_t byte = bitmap[pos >> 2];
         const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
         const uint8_t bmpVal = static_cast<uint8_t>(3 - raw);
-        if (renderMode == GfxRenderer::BW && bmpVal >= 3) continue;
+        // BW: only solid + dark fringe (skip light AA = grainy speckles without greys).
+        // Greys multipass recovers light fringe when Text AA is on.
+        if (renderMode == GfxRenderer::BW && bmpVal >= 2) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal != 1 && bmpVal != 2) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal != 1) continue;
         const bool state = (renderMode == GfxRenderer::BW) ? pixelState : false;
-        const int dx = baseX + srcX * 2;
-        const int dy = baseY + srcY * 2;
-        renderer.drawPixel(dx, dy, state);
-        renderer.drawPixel(dx + 1, dy, state);
-        renderer.drawPixel(dx, dy + 1, state);
-        renderer.drawPixel(dx + 1, dy + 1, state);
+        const int dx0 = baseX + srcX * s;
+        const int dy0 = baseY + srcY * s;
+        for (int oy = 0; oy < s; ++oy) {
+          for (int ox = 0; ox < s; ++ox) {
+            renderer.drawPixel(dx0 + ox, dy0 + oy, state);
+          }
+        }
       }
     }
   } else {
@@ -352,12 +356,13 @@ static void renderCharScaled2x(const GfxRenderer& renderer, GfxRenderer::RenderM
         const uint8_t byte = bitmap[pos >> 3];
         const uint8_t bit = 7 - (pos & 7);
         if (((byte >> bit) & 1) == 0) continue;
-        const int dx = baseX + srcX * 2;
-        const int dy = baseY + srcY * 2;
-        renderer.drawPixel(dx, dy, pixelState);
-        renderer.drawPixel(dx + 1, dy, pixelState);
-        renderer.drawPixel(dx, dy + 1, pixelState);
-        renderer.drawPixel(dx + 1, dy + 1, pixelState);
+        const int dx0 = baseX + srcX * s;
+        const int dy0 = baseY + srcY * s;
+        for (int oy = 0; oy < s; ++oy) {
+          for (int ox = 0; ox < s; ++ox) {
+            renderer.drawPixel(dx0 + ox, dy0 + oy, pixelState);
+          }
+        }
       }
     }
   }
@@ -505,8 +510,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 black / 1 dark grey / 2 light grey / 3 white.
           const uint8_t bmpVal = static_cast<uint8_t>(3 - ((byte >> bit_index) & 0x3));
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-            // Non-white → solid ink on the BW plane.
+          if (renderMode == GfxRenderer::BW && bmpVal < 2) {
+            // Solid + dark fringe only — light AA fringe as black looked grainy on BW-only.
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
             // Both AA fringes on MSB (historical default "Dark" look).
@@ -611,7 +616,8 @@ void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* te
 }
 
 void GfxRenderer::drawText(const int fontId, const int x, const int y, const char* text, const bool black,
-                           const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir) const {
+                           const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
+                           const int dropCapNnScale) const {
   // cannot draw a NULL / empty string
   if (text == nullptr || *text == '\0') {
     return;
@@ -642,6 +648,16 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     return;
   }
   const auto& font = fontIt->second;
+
+  const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
+  int dropScale = 2;
+  if (isDropCap) {
+    if (dropCapNnScale >= 2 && dropCapNnScale <= 4) {
+      dropScale = dropCapNnScale;
+    } else if (dropCapNnScale > 4) {
+      dropScale = 4;
+    }
+  }
 
   const char* textCursor = renderedText;
   uint32_t cp;
@@ -684,26 +700,24 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
 
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
     if (isSupSub) {
       // Halve the advance so the cursor advances by the same amount the scaled glyph
       // actually occupies, keeping spacing correct without needing a separate smaller font.
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     } else if (isDropCap) {
-      // Double advance to match 2× nearest-neighbor paint (CSS 3em first-letter).
-      prevAdvanceFP = prevAdvanceFP * 2;
+      prevAdvanceFP = prevAdvanceFP * dropScale;
     }
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
       renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     } else if (isDropCap) {
-      // Top-align 2× glyph to the line-box top (`y`), not the normal baseline.
-      // renderCharScaled2x places ink top at (baseline - 2*glyphTop); set
-      // baseline = y + 2*top so the top of the T sits on the first body line.
+      // Top-align N× glyph to the line-box top (`y`), not the normal baseline.
+      // renderCharScaledNx places ink top at (baseline - N*glyphTop); set
+      // baseline = y + N*top so the top of the letter sits on the first body line.
       const int gTop = glyph ? glyph->top : getFontAscenderSize(resolvedFontId);
-      const int dropBaseline = y + 2 * std::max(1, gTop);
-      renderCharScaled2x(*this, renderMode, font, cp, lastBaseX, dropBaseline, black, style);
+      const int dropBaseline = y + dropScale * std::max(1, gTop);
+      renderCharScaledNx(*this, renderMode, font, cp, lastBaseX, dropBaseline, black, style, dropScale);
     } else {
       renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     }
@@ -1716,10 +1730,18 @@ void GfxRenderer::invertScreen() const {
   }
 }
 
+// Invert → panel → restore so all paint code stays black-on-white.
+// Restore is required for partial updates (cursor bands) and the next paint.
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
   display.displayBuffer(refreshMode, fadingFix);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
 }
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
@@ -1728,14 +1750,20 @@ void GfxRenderer::displayWindow(const int x, const int y, const int width, const
   if (!mem.valid) return;
   LOG_DBG("GFX", "displayWindow logical %d,%d %dx%d -> panel %u,%u %ux%u", x, y, width, height, mem.x, mem.y, mem.w,
           mem.h);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
   display.displayWindow(mem.x, mem.y, mem.w, mem.h, fadingFix);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
-  // The async path has no turn-off-screen hook, which the sunlight fading fix
-  // relies on; keep those users on the blocking path.
-  if (fadingFix) {
-    display.displayBuffer(refreshMode, fadingFix);
+  // Async must not leave the FB inverted while the panel still reads it, and
+  // has no turn-off-screen hook for fadingFix — force the blocking path.
+  if (fadingFix || invertOnDisplay) {
+    displayBuffer(refreshMode);
     return;
   }
   display.displayBufferAsync(refreshMode);
@@ -1743,7 +1771,9 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
 
-bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
+bool GfxRenderer::supportsAsyncRefresh() const {
+  return !fadingFix && !invertOnDisplay && display.supportsAsyncRefresh();
+}
 
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {
   if (dst == nullptr || w <= 0 || h <= 0) return 0;
@@ -2048,17 +2078,20 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    const int gap = fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    // Never report a zero/negative inter-word slot (callers add justify extras on top).
+    return gap > 0 ? gap : 1;
   }
 
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", fontId);
-    return 0;
+    return 1;
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
-  return spaceGlyph ? fp4::toPixel(spaceGlyph->advanceX) : 0;  // snap 12.4 fixed-point to nearest pixel
+  const int gap = spaceGlyph ? fp4::toPixel(spaceGlyph->advanceX) : 0;
+  return gap > 0 ? gap : 1;  // snap 12.4 fixed-point to nearest pixel
 }
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -2069,7 +2102,9 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    const int gap = fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    // Never collapse inter-word gaps (see builtin path below).
+    return gap > 0 ? gap : 1;
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -2077,11 +2112,22 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   const auto& font = fontIt->second;
   const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
   const int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  const int spacePx = spaceGlyph ? fp4::toPixel(spaceAdvanceFP) : 0;
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +
                          static_cast<int32_t>(font.getKerning(' ', rightCp, style));
-  return fp4::toPixel(spaceAdvanceFP + kernFP);
+  const int gap = fp4::toPixel(spaceAdvanceFP + kernFP);
+  // Dense serif kern tables (e.g. Literata) can drive leftCp/' ' and/' '/rightCp
+  // far enough negative to cancel the whole space — words then overprint
+  // ("ready!she" → "ready!Tshe"). Floor at ~3/4 of the unkerned space (min 2px):
+  // full space is ideal, but positive kern can still widen; half-space was too tight
+  // for short pairs like "not be" on e-ink.
+  if (spacePx <= 0) {
+    return gap > 0 ? gap : 1;
+  }
+  const int minGap = std::max(2, (spacePx * 3) / 4);
+  return std::max(gap, minGap);
 }
 
 int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -2092,7 +2138,8 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
   return fp4::toPixel(kernFP);                                           // snap 4.4 fixed-point to nearest pixel
 }
 
-int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
+int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style,
+                                 const int dropCapNnScale) const {
   // Match the font drawText would use for CJK-bearing strings (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
   // Measure the exact codepoint stream drawText renders: bidi-reordered and
@@ -2104,6 +2151,16 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   std::string visual;
   text = resolveVisualText(text, visual, BidiUtils::BidiBaseDir::AUTO);
 
+  const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
+  int dropScale = 2;
+  if (isDropCap) {
+    if (dropCapNnScale >= 2 && dropCapNnScale <= 4) {
+      dropScale = dropCapNnScale;
+    } else if (dropCapNnScale > 4) {
+      dropScale = 4;
+    }
+  }
+
   // Advance table fast-path for SD card fonts during layout.
   // No kerning/ligature lookup — consistent with previous metadataOnly behavior
   // where kern/lig data was not loaded.
@@ -2111,7 +2168,6 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     int32_t widthFP = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    const bool isDropCap = (style & EpdFontFamily::DROP_CAP) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     const auto fontIt = fontMap.find(resolvedFontId);
     if (fontIt == fontMap.end()) {
@@ -2132,7 +2188,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       if (isSupSub) {
         widthFP += (advFP + 1) / 2;
       } else if (isDropCap) {
-        widthFP += advFP * 2;
+        widthFP += advFP * dropScale;
       } else {
         widthFP += advFP;
       }
@@ -2172,8 +2228,8 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    } else if ((style & EpdFontFamily::DROP_CAP) != 0) {
-      prevAdvanceFP = prevAdvanceFP * 2;
+    } else if (isDropCap) {
+      prevAdvanceFP = prevAdvanceFP * dropScale;
     }
     prevCp = cp;
   }
@@ -2202,7 +2258,20 @@ int GfxRenderer::getLineHeight(const int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
+  // Pitch = advanceY × family scale (see CasperSettings::getReaderLineCompression).
+  // Soft floor (~88% of max ink) only blocks pathological crush; denser faces
+  // (Literata → Bookerly) must be allowed under full ascender+|descender|.
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+  const EpdFontData* d = fontIt->second.getData(EpdFontFamily::REGULAR);
+  const int base = static_cast<int>(d->advanceY);
+  const int compressed = static_cast<int>(base * compression + 0.5f);
+  const int inkSpan = d->ascender - d->descender;  // descender ≤ 0
+  const int softFloor = std::max(1, (inkSpan * 88) / 100);
+  return std::max(compressed, softFloor);
 }
 
 int GfxRenderer::getTextHeight(const int fontId) const {

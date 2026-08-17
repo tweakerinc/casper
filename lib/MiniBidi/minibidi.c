@@ -1,5 +1,5 @@
 /*
- * minibidi.c — Unicode Bidirectional Algorithm (UAX #9) for CrossPoint/ESP32C3
+ * minibidi.c — Unicode Bidirectional Algorithm (UAX #9) for Casper/ESP32C3
  *
  * Original author:  Ahmad Khalifa (www.arabeyes.org, MIT licence)
  * Mintty changes:   Thomas Wolff (rules N0, W7/L1/X9 fixes, isolates)
@@ -134,10 +134,10 @@ ucschar mirror(ucschar c) {
  * original author Ahmad Khalifa (www.arabeyes.org), maintained by
  * Thomas Wolff.  MIT licence.
  *
- * CrossPoint deviations from the upstream code, each marked inline:
+ * Casper deviations from the upstream code, each marked inline:
  *   1. Joining-context lookups skip NSM marks (harakat).  mintty stores
  *      combining marks out-of-line in terminal cells, so they never appear
- *      in its bidi_char array; in CrossPoint they are real array entries
+ *      in its bidi_char array; in Casper they are real array entries
  *      and must be transparent for joining (Unicode joining type T).
  *   2. The Alef absorbed into a Lam-Alef ligature is overwritten with
  *      LIGATURE_PLACEHOLDER instead of a space: a terminal must keep the
@@ -218,7 +218,7 @@ static const shape_node shapetypes[] = {
     /* 649 */ {SR, 0xEF},
     /* 64A */ {SD, 0xF1}};
 
-/* ── CrossPoint extension: joining types outside U+0621–U+064A ──────────
+/* ── Casper extension: joining types outside U+0621–U+064A ──────────
  * Source: Unicode ArabicShaping.txt (joining type column).  Ranges of
  * letters sharing one type are collapsed.  Sorted ascending (binary
  * search).  Anything not listed here or in shapetypes[] is SU. */
@@ -250,7 +250,7 @@ static const struct {
     {0x200D, 0x200D, SC}, /* ZWJ  — joining type C per ArabicShaping.txt */
 };
 
-/* ── CrossPoint extension: presentation forms outside U+0621–U+064A ─────
+/* ── Casper extension: presentation forms outside U+0621–U+064A ─────
  * Source: UnicodeData.txt, Arabic Presentation Forms-A (U+FB50–U+FBFF).
  * forms = number of consecutive presentation forms allocated for the
  * letter, always in the order isolated, final, initial, medial (matching
@@ -349,7 +349,7 @@ static ucschar shape_form(ucschar c, uchar form) {
   return c;
 }
 
-/* CrossPoint deviation 1: NSM marks (harakat) sit between letters in our
+/* Casper deviation 1: NSM marks (harakat) sit between letters in our
    array but are transparent for joining (Unicode joining type T).  These
    helpers find the effective joining neighbour. */
 static int next_non_nsm(const bidi_char* line, int i, int count) {

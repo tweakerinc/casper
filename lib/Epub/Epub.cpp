@@ -10,11 +10,17 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
+
+Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
+  // v0.1.8 layout (unchanged): /.crosspoint/epub_<std::hash(path)>/
+  cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
+}
 
 namespace {
 
@@ -707,8 +713,7 @@ void Epub::setupCacheDir() const {
   if (Storage.exists(cachePath.c_str())) {
     return;
   }
-
-  Storage.mkdir(cachePath.c_str());
+  Storage.ensureDirectoryExists(cachePath.c_str());
 }
 
 const std::string& Epub::getCachePath() const { return cachePath; }

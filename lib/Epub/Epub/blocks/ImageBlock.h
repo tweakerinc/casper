@@ -22,6 +22,9 @@ class ImageBlock final : public Block {
   // Same size class as layout looksLikeDropCap (narrow left letter floats).
   // These stay 1-bit BW — greyscale multipass only washes them out.
   bool isLetterGlyph(int contentWidthPx) const;
+  // Wide document-style plates with type in the bitmap (briefings, memo headers).
+  // Prefer ink-biased dither over photo plate-lift so grey text stays dark.
+  bool isDocumentPlate() const;
 
   bool imageExists() const;
   bool hasValidCache() const;

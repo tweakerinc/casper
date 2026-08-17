@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 
@@ -17,11 +17,11 @@ class ButtonRemapActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  static constexpr int kSlotCount = CrossPointSettings::HW_REMAP_BUTTON_COUNT;  // 6 physical keys
+  static constexpr int kSlotCount = CasperSettings::HW_REMAP_BUTTON_COUNT;  // 6 physical keys
   static constexpr int kResetRow = kSlotCount;                                  // 7th row: reset defaults
   static constexpr int kListCount = kSlotCount + 1;
 
-  uint8_t tempMap[CrossPointSettings::HW_REMAP_BUTTON_COUNT] = {};
+  uint8_t tempMap[CasperSettings::HW_REMAP_BUTTON_COUNT] = {};
   int selectedIndex = 0;
   unsigned long errorUntil = 0;
   unsigned long lastContinuousNavTime = 0;

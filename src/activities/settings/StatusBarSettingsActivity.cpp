@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
@@ -66,23 +66,23 @@ StrId menuNameForItem(int item) {
 // Progress %, Time Left in Book, Time Left in Chapter, Book Title, Chapter Title,
 // XTC Status Bar (last — placement sets XTC top/bottom overlay).
 constexpr uint8_t kSlotContentOrder[] = {
-    CrossPointSettings::CORNER_HIDE,
-    CrossPointSettings::CORNER_BATTERY,
-    CrossPointSettings::CORNER_CLOCK,
-    CrossPointSettings::CORNER_BOOK_PAGE_COUNTER,
-    CrossPointSettings::CORNER_CHAPTER_PAGE_COUNTER,
-    CrossPointSettings::CORNER_CHAPTER_COUNTER,
-    CrossPointSettings::CORNER_PROGRESS_PERCENT,
-    CrossPointSettings::CORNER_TIME_LEFT_BOOK,
-    CrossPointSettings::CORNER_TIME_LEFT_CHAPTER,
-    CrossPointSettings::CORNER_BOOK_TITLE,
-    CrossPointSettings::CORNER_CHAPTER_TITLE,
-    CrossPointSettings::CORNER_XTC_STATUS_BAR,
+    CasperSettings::CORNER_HIDE,
+    CasperSettings::CORNER_BATTERY,
+    CasperSettings::CORNER_CLOCK,
+    CasperSettings::CORNER_BOOK_PAGE_COUNTER,
+    CasperSettings::CORNER_CHAPTER_PAGE_COUNTER,
+    CasperSettings::CORNER_CHAPTER_COUNTER,
+    CasperSettings::CORNER_PROGRESS_PERCENT,
+    CasperSettings::CORNER_TIME_LEFT_BOOK,
+    CasperSettings::CORNER_TIME_LEFT_CHAPTER,
+    CasperSettings::CORNER_BOOK_TITLE,
+    CasperSettings::CORNER_CHAPTER_TITLE,
+    CasperSettings::CORNER_XTC_STATUS_BAR,
 };
 constexpr int kSlotContentOrderCount = static_cast<int>(sizeof(kSlotContentOrder) / sizeof(kSlotContentOrder[0]));
 
 // Labels for enum values (index = STATUS_BAR_CORNER_CONTENT).
-const StrId kContentLabelByEnum[CrossPointSettings::STATUS_BAR_CORNER_CONTENT_COUNT] = {
+const StrId kContentLabelByEnum[CasperSettings::STATUS_BAR_CORNER_CONTENT_COUNT] = {
     StrId::STR_HIDE,                      // 0
     StrId::STR_BATTERY,                   // 1
     StrId::STR_CHAPTER_PAGE_COUNTER,      // 2
@@ -106,12 +106,12 @@ const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {
     StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK};
 
 // Order matches BATTERY_DISPLAY_MODE: Icon, Percent, Icon + Percent.
-constexpr int BATTERY_DISPLAY_ITEMS = CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT;
+constexpr int BATTERY_DISPLAY_ITEMS = CasperSettings::BATTERY_DISPLAY_MODE_COUNT;
 const StrId batteryDisplayNames[BATTERY_DISPLAY_ITEMS] = {StrId::STR_ICON, StrId::STR_PERCENT,
                                                           StrId::STR_ICON_PLUS_PERCENT};
 
 // Order matches STATUS_BAR_FONT_SIZE: 8 / 10 / 12 pt.
-constexpr int STATUS_BAR_FONT_ITEMS = CrossPointSettings::STATUS_BAR_FONT_SIZE_COUNT;
+constexpr int STATUS_BAR_FONT_ITEMS = CasperSettings::STATUS_BAR_FONT_SIZE_COUNT;
 const StrId statusBarFontNames[STATUS_BAR_FONT_ITEMS] = {StrId::STR_STATUS_BAR_FONT_8, StrId::STR_STATUS_BAR_FONT_10,
                                                          StrId::STR_STATUS_BAR_FONT_12};
 
@@ -141,7 +141,7 @@ void pushVisible(const uint8_t id, const bool nested = false) {
 }
 
 void pushNestedForSlot(uint8_t slotContent) {
-  if (slotContent == CrossPointSettings::CORNER_BATTERY) {
+  if (slotContent == CasperSettings::CORNER_BATTERY) {
     pushVisible(ITEM_BATTERY_DISPLAY, true);
   }
 }
@@ -162,7 +162,7 @@ void rebuildVisibleMenu() {
   pushVisible(ITEM_LOWER_RIGHT);
   pushNestedForSlot(SETTINGS.statusBarLowerRight);
   pushVisible(ITEM_PROGRESS_BAR);
-  if (SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS) {
+  if (SETTINGS.statusBarProgressBar != CasperSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS) {
     pushVisible(ITEM_PROGRESS_BAR_THICKNESS, true);
   }
 }
@@ -201,8 +201,8 @@ uint8_t& cornerFieldForItem(int item) {
 }
 
 const char* cornerContentLabel(uint8_t content) {
-  if (content >= CrossPointSettings::STATUS_BAR_CORNER_CONTENT_COUNT) {
-    content = CrossPointSettings::CORNER_HIDE;
+  if (content >= CasperSettings::STATUS_BAR_CORNER_CONTENT_COUNT) {
+    content = CasperSettings::CORNER_HIDE;
   }
   return I18N.get(kContentLabelByEnum[content]);
 }
@@ -210,8 +210,8 @@ const char* cornerContentLabel(uint8_t content) {
 // Time-left slots need pace samples from stat tracking — hide them when tracking is off.
 bool slotContentAvailable(uint8_t content) {
   if (!SETTINGS.readingStatsTrackingEnabled()) {
-    if (content == CrossPointSettings::CORNER_TIME_LEFT_BOOK ||
-        content == CrossPointSettings::CORNER_TIME_LEFT_CHAPTER) {
+    if (content == CasperSettings::CORNER_TIME_LEFT_BOOK ||
+        content == CasperSettings::CORNER_TIME_LEFT_CHAPTER) {
       return false;
     }
   }
@@ -256,13 +256,13 @@ void StatusBarSettingsActivity::onEnter() {
   selectedIndex = 0;
 
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
-    SETTINGS.statusBarProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+    SETTINGS.statusBarProgressBar = CasperSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
   }
   if (SETTINGS.statusBarProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
-    SETTINGS.statusBarProgressBarThickness = CrossPointSettings::PROGRESS_BAR_THIN;
+    SETTINGS.statusBarProgressBarThickness = CasperSettings::PROGRESS_BAR_THIN;
   }
   if (SETTINGS.statusBarFontSize >= STATUS_BAR_FONT_ITEMS) {
-    SETTINGS.statusBarFontSize = CrossPointSettings::STATUS_BAR_FONT_8;
+    SETTINGS.statusBarFontSize = CasperSettings::STATUS_BAR_FONT_8;
   }
   rebuildVisibleMenu();
   visibleItemCount = gVisibleCount;

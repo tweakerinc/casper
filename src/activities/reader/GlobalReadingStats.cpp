@@ -48,6 +48,7 @@ static constexpr int GLOBAL_STATS_FILE_SIZE_V1 = 13;
 static constexpr uint8_t GLOBAL_STATS_VERSION_V2 = 2;
 static constexpr int GLOBAL_STATS_FILE_SIZE_V2 = 17;
 static constexpr int GLOBAL_STATS_FILE_SIZE = static_cast<int>(GlobalReadingStats::CURRENT_FILE_SIZE);
+// Canonical paths under /.crosspoint.
 static constexpr char GLOBAL_STATS_PATH[] = "/.crosspoint/global_stats.bin";
 static constexpr char GLOBAL_STATS_BAK_PATH[] = "/.crosspoint/global_stats.bin.bak";
 static constexpr char SYNCED_STATS_DIR[] = "/.crosspoint/synced_stats";
@@ -195,6 +196,7 @@ bool verifyFileSize(const char* path, const size_t expectedSize) {
 }
 
 bool saveToFile(const GlobalReadingStats& stats, const char* path, const char* backupPath) {
+  Storage.mkdir("/.crosspoint");
   const std::string tmpPath = std::string(path) + ".tmp";
   if (Storage.exists(tmpPath.c_str()) && !Storage.remove(tmpPath.c_str())) {
     LOG_ERR("GSTATS", "Could not remove stale stats temp file: %s", tmpPath.c_str());
@@ -302,26 +304,21 @@ GlobalReadingStats GlobalReadingStats::loadAggregated() { return loadAggregated(
 bool GlobalReadingStats::hasSyncedStats() {
   HalFile dir = Storage.open(SYNCED_STATS_DIR);
   if (!dir) return false;
-
   const bool exists = dir.isDirectory();
   dir.close();
   return exists;
 }
 
-GlobalReadingStats GlobalReadingStats::loadAggregated(const GlobalReadingStats& localStats) {
-  GlobalReadingStats stats = localStats;
-  HalFile dir = Storage.open(SYNCED_STATS_DIR);
-  if (!dir) return stats;
-
+static void aggregateFromSyncedDir(GlobalReadingStats& stats, const char* dirPath, const std::string& localFileName,
+                                   uint16_t& loadedCount, uint16_t& skippedCount) {
+  HalFile dir = Storage.open(dirPath);
+  if (!dir) return;
   if (!dir.isDirectory()) {
     dir.close();
-    return stats;
+    return;
   }
 
   char name[128];
-  const std::string localFileName = localSyncedStatsFileName();
-  uint16_t loadedCount = 0;
-  uint16_t skippedCount = 0;
   for (HalFile file = dir.openNextFile(); file; file = dir.openNextFile()) {
     const bool isDirectory = file.isDirectory();
     const size_t nameLen = file.getName(name, sizeof(name));
@@ -347,6 +344,14 @@ GlobalReadingStats GlobalReadingStats::loadAggregated(const GlobalReadingStats& 
     file.close();
   }
   dir.close();
+}
+
+GlobalReadingStats GlobalReadingStats::loadAggregated(const GlobalReadingStats& localStats) {
+  GlobalReadingStats stats = localStats;
+  const std::string localFileName = localSyncedStatsFileName();
+  uint16_t loadedCount = 0;
+  uint16_t skippedCount = 0;
+  aggregateFromSyncedDir(stats, SYNCED_STATS_DIR, localFileName, loadedCount, skippedCount);
 
   if (loadedCount > 0 || skippedCount > 0) {
     LOG_DBG("GSTATS", "Aggregated %u synced stats file(s), skipped %u", static_cast<unsigned>(loadedCount),

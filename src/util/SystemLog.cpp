@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "util/CasperLogPaths.h"
 
 namespace SystemLog {
@@ -40,36 +40,36 @@ char gPath[48] = "/.casper-logs/log_00001.log";
 
 // Compact name for field logs (id still logged for exact SETTINGS.uiTheme).
 const char* themeNameForId(const uint8_t id) {
-  switch (static_cast<CrossPointSettings::UI_THEME>(id)) {
-    case CrossPointSettings::UI_THEME::CLASSIC:
+  switch (static_cast<CasperSettings::UI_THEME>(id)) {
+    case CasperSettings::UI_THEME::CLASSIC:
       return "classic";
-    case CrossPointSettings::UI_THEME::LYRA:
+    case CasperSettings::UI_THEME::LYRA:
       return "lyra";
-    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
+    case CasperSettings::UI_THEME::LYRA_3_COVERS:
       return "lyra3";
-    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
+    case CasperSettings::UI_THEME::ROUNDEDRAFF:
       return "roundedraff";
-    case CrossPointSettings::UI_THEME::MINIMAL:
+    case CasperSettings::UI_THEME::MINIMAL:
       return "minimal";
-    case CrossPointSettings::UI_THEME::STATS_LIFE:
+    case CasperSettings::UI_THEME::STATS_LIFE:
       return "stats_life";
-    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
+    case CasperSettings::UI_THEME::LYRA_CAROUSEL:
       return "lyra_carousel";
-    case CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE:
+    case CasperSettings::UI_THEME::DASHBOARD_MAGAZINE:
       return "dash_magazine";
-    case CrossPointSettings::UI_THEME::DASHBOARD_CARD:
+    case CasperSettings::UI_THEME::DASHBOARD_CARD:
       return "dash_card";
-    case CrossPointSettings::UI_THEME::BARE:
+    case CasperSettings::UI_THEME::BARE:
       return "bare";
-    case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
+    case CasperSettings::UI_THEME::DASHBOARD_RECENTS:
       return "dash_recents";
-    case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
+    case CasperSettings::UI_THEME::DASHBOARD_SCROLL:
       return "dash_scroll";
-    case CrossPointSettings::UI_THEME::STATS:
+    case CasperSettings::UI_THEME::STATS:
       return "stats";
-    case CrossPointSettings::UI_THEME::PENUMBRA:
+    case CasperSettings::UI_THEME::PENUMBRA:
       return "penumbra";
-    case CrossPointSettings::UI_THEME::GHOST:
+    case CasperSettings::UI_THEME::GHOST:
       return "ghost";
     default:
       return "other";
@@ -198,10 +198,10 @@ void appendLine(const char* line) {
 
 void begin() {
   gLevel = SETTINGS.systemLogLevel;
-  if (gLevel >= CrossPointSettings::SYSTEM_LOG_LEVEL_COUNT) {
-    gLevel = CrossPointSettings::SYSTEM_LOG_OFF;
+  if (gLevel >= CasperSettings::SYSTEM_LOG_LEVEL_COUNT) {
+    gLevel = CasperSettings::SYSTEM_LOG_OFF;
   }
-  gEnabled = (gLevel != CrossPointSettings::SYSTEM_LOG_OFF);
+  gEnabled = (gLevel != CasperSettings::SYSTEM_LOG_OFF);
   gBufLen = 0;
   gSessionT0 = millis();
   gLastFlushMs = gSessionT0;
@@ -247,8 +247,8 @@ void begin() {
            static_cast<unsigned long>(gSessionT0), gpio.deviceIsX3() ? "X3" : "X4", static_cast<unsigned>(gLevel),
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
            static_cast<unsigned>(SETTINGS.uiTheme), themeNameForId(SETTINGS.uiTheme),
-#ifdef CROSSPOINT_VERSION
-           CROSSPOINT_VERSION,
+#ifdef CASPER_VERSION
+           CASPER_VERSION,
 #else
            "?",
 #endif
@@ -260,8 +260,8 @@ void begin() {
 void reloadLevel() {
   const uint8_t prev = gLevel;
   gLevel = SETTINGS.systemLogLevel;
-  if (gLevel >= CrossPointSettings::SYSTEM_LOG_LEVEL_COUNT) gLevel = CrossPointSettings::SYSTEM_LOG_OFF;
-  const bool want = (gLevel != CrossPointSettings::SYSTEM_LOG_OFF);
+  if (gLevel >= CasperSettings::SYSTEM_LOG_LEVEL_COUNT) gLevel = CasperSettings::SYSTEM_LOG_OFF;
+  const bool want = (gLevel != CasperSettings::SYSTEM_LOG_OFF);
   if (want && !gEnabled) {
     begin();
     return;
@@ -334,8 +334,8 @@ void end() {
 }
 
 bool enabled() { return gEnabled; }
-bool timingEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_LOG_TIMING; }
-bool verboseEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_LOG_VERBOSE; }
+bool timingEnabled() { return gEnabled && gLevel >= CasperSettings::SYSTEM_LOG_TIMING; }
+bool verboseEnabled() { return gEnabled && gLevel >= CasperSettings::SYSTEM_LOG_VERBOSE; }
 
 void maybeSampleHeap() {
   if (!timingEnabled()) return;

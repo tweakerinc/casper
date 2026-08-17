@@ -12,7 +12,7 @@ void WifiCredentialStore::toJson(JsonDocument& doc) const {
   for (const auto& cred : credentials) {
     JsonObject obj = arr.add<JsonObject>();
     obj["ssid"] = cred.ssid;
-    // Same CPV1 envelope CrossInk writes so wifi.json swaps cleanly between firmwares.
+    // Same CPV1 envelope legacy writes so wifi.json swaps cleanly between firmwares.
     obj["password_obf"] = obfuscation::obfuscateWifiPasswordToBase64(cred.password);
   }
 }

@@ -10,8 +10,10 @@
 #include <string_view>
 #include <vector>
 
-#include "CrossPointState.h"
+#include "CasperState.h"
 #include "RecentBooksStore.h"
+#include "util/CasperBookStore.h"
+#include "util/CasperPaths.h"
 
 namespace FinishedBooks {
 namespace {
@@ -33,7 +35,8 @@ bool pathStartsWithFolder(const std::string& path, const char* folder) {
 }
 
 std::string cachePathForEpub(const std::string& epubPath) {
-  return std::string("/.crosspoint/epub_") + std::to_string(std::hash<std::string>{}(epubPath));
+  // v0.1.8 package dir: /.crosspoint/epub_<std::hash>
+  return CasperBook::bookDirForPath(epubPath);
 }
 
 bool writeOriginSidecar(const std::string& cachePath, const std::string& originPath) {

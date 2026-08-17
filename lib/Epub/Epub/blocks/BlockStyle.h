@@ -57,6 +57,14 @@ struct BlockStyle {
   // Drop-cap (and rare absolute faces): non-zero forces TextBlock::render to this fontId
   // instead of resolveRelativeFontId(readerBase, sizeStep). 0 = normal resolve path.
   int paintFontIdOverride = 0;
+  // Nearest-neighbor glyph scale for DROP_CAP paint/measure (2–4). 0 or 1 = default 2×
+  // when DROP_CAP bit is set. Metric drop-cap picker sets this so single-size SD fonts
+  // can fill a 2-line zone without per-family tables.
+  uint8_t paintGlyphScale = 0;
+  // font-variant: small-caps — paint uppercase at reduced sizeStep.
+  bool smallCaps = false;
+  // SD/single-size face: larger sizeSteps use DROP_CAP 2× style for visual scale.
+  bool syntheticScale = false;
 
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
@@ -136,6 +144,18 @@ struct BlockStyle {
     if (child.lineHeightPx == 0 && lineHeightPx > 0) {
       result.lineHeightPx = lineHeightPx;
     }
+    if (!child.smallCaps && smallCaps) {
+      result.smallCaps = true;
+    }
+    if (!child.syntheticScale && syntheticScale) {
+      result.syntheticScale = true;
+    }
+    if (child.paintFontIdOverride == 0 && paintFontIdOverride != 0) {
+      result.paintFontIdOverride = paintFontIdOverride;
+    }
+    if (child.paintGlyphScale == 0 && paintGlyphScale != 0) {
+      result.paintGlyphScale = paintGlyphScale;
+    }
 
     // fromBrElement is consumed by startNewTextBlock when an empty <br> block
     // is merged with the following paragraph; never propagate it further.
@@ -191,7 +211,7 @@ struct BlockStyle {
     // User setting overrides CSS body copy, unless "Book's Style" is selected.
     // Explicit center/right from the book (chapter titles, epigraphs, pull-quotes)
     // is layout intent and must win over a global Left/Justify preference —
-    // otherwise titles look left-biased vs CrossInk when embedded/inline CSS is on.
+    // otherwise titles look left-biased vs legacy when embedded/inline CSS is on.
     if (paragraphAlignment == CssTextAlign::None) {
       blockStyle.alignment = blockStyle.textAlignDefined ? cssStyle.textAlign : CssTextAlign::Justify;
     } else if (blockStyle.textAlignDefined &&

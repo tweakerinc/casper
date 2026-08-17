@@ -198,15 +198,21 @@ class BaseTheme {
 
   // Component drawing methods
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
-  // displayMode: CrossPointSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
+  // displayMode: CasperSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
                        uint8_t displayMode = 2) const;  // Left aligned (reader mode)
   void drawBatteryRight(const GfxRenderer& renderer, Rect rect,
                         uint8_t displayMode = 2) const;  // Right aligned (UI headers)
+  // Icon size tracks status-bar font line height (aspect of base metrics).
+  static void batteryIconSizeForStatusFont(const GfxRenderer& renderer, int& outW, int& outH);
+  // Width of icon (+ gap + "100%") for layout / reserves using current status font.
+  static int batteryGroupWidth(const GfxRenderer& renderer, uint8_t displayMode);
   virtual void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const;
   virtual void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                const char* btn4) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
+  // Portrait footer height, or thinner landscape side strip for front-key chrome.
+  static int frontButtonHintReserve(const GfxRenderer& renderer);
   virtual int getListRowStep(bool hasSubtitle) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
   // rowApplied: when true, draws a filled radio circle on the right (current
@@ -239,11 +245,15 @@ class BaseTheme {
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
   // topOffsetRatio: <0 = metrics default; >=0 = fraction of screen height from top.
-  // Special: kPopupCenterY centers the dialog vertically (home cover Loading).
+  // Special: kPopupCenterY centers the dialog vertically (legacy full-screen dialogs).
   // refresh=false draws into the framebuffer only (caller displays once).
   static constexpr float kPopupCenterY = -2.0f;
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message, float topOffsetRatio = -1.0f,
                          bool refresh = true) const;
+  // Lightweight busy cue: small text in the upper-left status band (no center
+  // pill). Prefer this over drawPopup for open/close/chapter waits — less ghosting.
+  // refresh=false paints FB only (caller HALF/FAST later); true uses FAST only.
+  virtual Rect drawTopLeftStatus(const GfxRenderer& renderer, const char* message, bool refresh = true) const;
   virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
                                int selectedIndex) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress,

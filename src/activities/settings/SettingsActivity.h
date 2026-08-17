@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
@@ -13,7 +13,6 @@
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
 enum class SettingAction {
-  Bluetooth,
   None,
   RemapFrontButtons,
   CustomiseStatusBar,
@@ -21,10 +20,10 @@ enum class SettingAction {
   ClockSettings,
   KOReaderSync,
   OPDSBrowser,
-  Network,        // Wi‑Fi credentials (also opened from Network folder)
+  Network,
   NetworkFolder,  // System → Network (Wi‑Fi / KOReader / OPDS)
   ClearCache,
-  BackupStats,  // legacy; Backup Now lives under Stats folder
+  BackupStats,
   Stats,
   CheckForUpdates,
   SdFirmwareUpdate,
@@ -37,9 +36,9 @@ enum class SettingAction {
 struct SettingInfo {
   StrId nameId;
   SettingType type;
-  uint8_t CrossPointSettings::* valuePtr = nullptr;
+  uint8_t CasperSettings::* valuePtr = nullptr;
   std::vector<StrId> enumValues;
-  std::vector<std::string> enumStringValues;  // runtime alternative to StrId enumValues (for SD card fonts etc.)
+  std::vector<std::string> enumStringValues;
   SettingAction action = SettingAction::None;
 
   struct ValueRange {
@@ -49,18 +48,15 @@ struct SettingInfo {
   };
   ValueRange valueRange = {};
 
-  const char* key = nullptr;             // JSON API key (nullptr for ACTION types)
-  StrId category = StrId::STR_NONE_OPT;  // Category for web UI grouping
-  bool obfuscated = false;               // Save/load via base64 obfuscation (passwords)
-  bool inTextSettings = false;           // Surfaced in the Text Settings screen; hidden from the flat Reader list
-  // Child of the row above (e.g. Theme → Left/Right Button). Renderer prefixes a nested mark.
+  const char* key = nullptr;
+  StrId category = StrId::STR_NONE_OPT;
+  bool obfuscated = false;
+  bool inTextSettings = false;
   bool nestedUnderParent = false;
 
-  // Direct char[] string fields (for settings stored in CrossPointSettings)
   size_t stringOffset = 0;
   size_t stringMaxLen = 0;
 
-  // Dynamic accessors (for settings stored outside CrossPointSettings, e.g. KOReaderCredentialStore)
   std::function<uint8_t()> valueGetter;
   std::function<void(uint8_t)> valueSetter;
   std::function<std::string()> stringGetter;
@@ -81,7 +77,7 @@ struct SettingInfo {
     return *this;
   }
 
-  static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
+  static SettingInfo Toggle(StrId nameId, uint8_t CasperSettings::* ptr, const char* key = nullptr,
                             StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -92,7 +88,7 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo Enum(StrId nameId, uint8_t CrossPointSettings::* ptr, std::vector<StrId> values,
+  static SettingInfo Enum(StrId nameId, uint8_t CasperSettings::* ptr, std::vector<StrId> values,
                           const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -112,7 +108,7 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo Value(StrId nameId, uint8_t CrossPointSettings::* ptr, const ValueRange valueRange,
+  static SettingInfo Value(StrId nameId, uint8_t CasperSettings::* ptr, const ValueRange valueRange,
                            const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -164,14 +160,14 @@ struct SettingInfo {
   }
 };
 
+// Settings — GUI list/tabs (BaseTheme bold focus; FAST plate).
 class SettingsActivity final : public Activity {
   ButtonNavigator buttonNavigator;
 
-  int selectedCategoryIndex = 0;  // Currently selected category
+  int selectedCategoryIndex = 0;
   int selectedSettingIndex = 0;
   int settingsCount = 0;
 
-  // Per-category settings derived from shared list + device-only actions
   std::vector<SettingInfo> displaySettings;
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
@@ -180,15 +176,11 @@ class SettingsActivity final : public Activity {
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
+  // First paint only: soft reinforce pulls (home residual); list nav stays FAST.
+  bool softOpenPending_ = true;
 
   OptionPopup optionPopup;
-
-  // Debounce SD writes: mark dirty on change, flush once on exit / when leaving for a child.
   bool settingsDirty = false;
-
-  // Long-press Menu → Settings leaves the physical key held; remap can make that
-  // key Left/Up so continuous tab nav would fire until release. Wait for quiet.
-  // Also re-armed onResume after children (Button Remap applies a new map on Back).
   bool awaitOpenButtonRelease = false;
 
   static constexpr int categoryCount = 4;
@@ -196,7 +188,6 @@ class SettingsActivity final : public Activity {
 
   void markSettingsDirty() { settingsDirty = true; }
   void flushSettingsIfDirty();
-  // force=true: always wait one quiet frame (after child). force=false: only if a key is held.
   void armAwaitOpenButtonRelease(bool force = false);
 
   void enterCategory(int categoryIndex);
@@ -205,10 +196,13 @@ class SettingsActivity final : public Activity {
   void openSessionTimePicker();
   void rebuildSettingsLists();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
+  void applyCategorySelection();
 
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity("Settings", renderer, mappedInput) {}
+  bool isSettingsActivity() const override { return true; }
+  void persistProgressForSleep() override { flushSettingsIfDirty(); }
   void onEnter() override;
   void onResume() override;
   void onExit() override;

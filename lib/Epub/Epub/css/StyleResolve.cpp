@@ -12,22 +12,30 @@ namespace {
 
 // Builtin reader ladders (must match src/fontIds.h). Kept here so lib/Epub does not
 // depend on the app layer; bump if font IDs change.
-// Order: 10 / 12 / 14 / 16 / 18 pt (matches FONT_SIZE enum after casperReaderFontSizePtMigrated).
-constexpr int kLexendDeca[] = {
-    -1602494176,  // 10
-    -789173636,   // 12
-    300363550,    // 14
-    -940581834,   // 16
-    -2078415541,  // 18
+// Order: 8 / 10 / 12 / 14 / 16 / 18 pt (matches FONT_SIZE after casperReaderFontSize8Migrated).
+constexpr int kLiterata[] = {
+    -1128177077,  // 8 → clamp to 10 (no separate 8 body face)
+    -1128177077,  // 10
+    2090520927,   // 12
+    -847079762,   // 14
+    -209681255,   // 16
+    -209681255,   // 18 → clamp to 16
 };
 constexpr int kSourceSerif[] = {
-    1970618696,   // 10
-    386902914,    // 12
-    -1077864260,  // 14
-    1231166843,   // 16
-    326065580,    // 18
+    1470095001,   // 8
+    -324599973,   // 10
+    876380291,    // 12
+    426921930,    // 14
+    1484141743,   // 16
+    652444703,    // 18
 };
-static constexpr int kReaderLadderLen = 5;
+static constexpr int kReaderLadderLen = 6;
+
+StyleLadderFillFn s_ladderFillFn = nullptr;
+void* s_ladderFillCtx = nullptr;
+
+float s_paintLineCompression = 1.0f;
+bool s_paintEmbeddedStyle = true;
 
 int familyIndex(const int* ladder, int fontId) {
   for (int i = 0; i < kReaderLadderLen; ++i) {
@@ -58,6 +66,21 @@ float clampFactor(float f) { return std::clamp(f, 0.85f, 1.6f); }
 
 }  // namespace
 
+void setStyleLadderFillHook(StyleLadderFillFn fn, void* ctx) {
+  s_ladderFillFn = fn;
+  s_ladderFillCtx = ctx;
+}
+
+void setPaintStyleResolveParams(const float userLineCompression, const bool embeddedStyle) {
+  s_paintLineCompression = userLineCompression;
+  s_paintEmbeddedStyle = embeddedStyle;
+}
+
+void getPaintStyleResolveParams(float& userLineCompression, bool& embeddedStyle) {
+  userLineCompression = s_paintLineCompression;
+  embeddedStyle = s_paintEmbeddedStyle;
+}
+
 float casperEmPx(const GfxRenderer& renderer, const int fontId) {
   return static_cast<float>(renderer.getFontAscenderSize(fontId));
 }
@@ -69,9 +92,9 @@ void initStyleResolveContext(StyleResolveContext& ctx, const int baseFontId, con
   ctx.embeddedStyle = embeddedStyle;
   ctx.baseEmPx = casperEmPx(renderer, baseFontId);
 
-  const int lexendIdx = familyIndex(kLexendDeca, baseFontId);
-  if (lexendIdx >= 0) {
-    fillFromLadder(ctx, kLexendDeca, lexendIdx);
+  const int literataIdx = familyIndex(kLiterata, baseFontId);
+  if (literataIdx >= 0) {
+    fillFromLadder(ctx, kLiterata, literataIdx);
     return;
   }
   const int ssIdx = familyIndex(kSourceSerif, baseFontId);
@@ -80,24 +103,69 @@ void initStyleResolveContext(StyleResolveContext& ctx, const int baseFontId, con
     return;
   }
 
-  // SD / unknown: no multi-size ladder without registry API in this lib.
+  // SD / unknown: try app hook to load multi-size .cpfont ladder.
+  if (s_ladderFillFn && s_ladderFillFn(s_ladderFillCtx, baseFontId, ctx.fontIdByStep)) {
+    ctx.singleSizeFamily = false;
+    // Ensure base step maps to the caller's baseFontId when possible.
+    if (ctx.fontIdByStep[SIZE_STEP_BASE] == 0) {
+      ctx.fontIdByStep[SIZE_STEP_BASE] = baseFontId;
+    }
+    return;
+  }
+
   fillCollapsed(ctx);
-  // Log once per baseFontId — paint calls initStyleResolveContext every line; spam can flood
-  // the serial log and thrash the logger during page turns.
+  // Log once per baseFontId — paint re-inits when base changes.
   static int s_loggedCollapsedFontId = 0;
   if (baseFontId != s_loggedCollapsedFontId) {
     s_loggedCollapsedFontId = baseFontId;
-    LOG_DBG("RLC", "SD/unknown font ladder collapsed to single size (fontId=%d)", baseFontId);
+    LOG_INF("RLC", "SD/unknown font ladder collapsed (fontId=%d); headings use synthetic scale", baseFontId);
   }
+}
+
+int collectDropCapFontCandidates(const StyleResolveContext& ctx, const int bodyFontId, int* outIds,
+                                 const int maxOut) {
+  if (!outIds || maxOut <= 0) return 0;
+
+  auto pushUnique = [&](const int id, int& n) {
+    if (id == 0 || n >= maxOut) return;
+    for (int i = 0; i < n; ++i) {
+      if (outIds[i] == id) return;
+    }
+    outIds[n++] = id;
+  };
+
+  int n = 0;
+
+  // Full builtin 6-rung ladder (8–18): drop caps need faces beyond sizeStep ±2
+  // (body 10pt → step max is only 14pt; 16/18 are required to fill a 2-line zone).
+  for (const int* ladder : {kLiterata, kSourceSerif}) {
+    int idx = familyIndex(ladder, bodyFontId);
+    if (idx < 0) {
+      idx = familyIndex(ladder, ctx.baseFontId);
+    }
+    if (idx >= 0) {
+      for (int i = idx; i < kReaderLadderLen; ++i) {
+        pushUnique(ladder[i], n);
+      }
+      pushUnique(bodyFontId, n);
+      return n;
+    }
+  }
+
+  // SD multi-size / unknown: body first, then every loaded step face.
+  pushUnique(bodyFontId, n);
+  for (int step = 0; step <= SIZE_STEP_MAX; ++step) {
+    pushUnique(ctx.fontIdByStep[step], n);
+  }
+  pushUnique(ctx.baseFontId, n);
+  return n;
 }
 
 uint8_t sizeStepFromCssFontSize(const CssStyle& css, const StyleResolveContext& ctx) {
   if (!ctx.embeddedStyle || !css.hasFontSize()) {
     return SIZE_STEP_BASE;
   }
-  if (ctx.singleSizeFamily) {
-    return SIZE_STEP_BASE;
-  }
+  // Keep relative steps even on single-size faces so paint can DROP_CAP-scale larger steps.
 
   // Resolve length against base em (Casper convention). Percent is relative to base em, not viewport.
   float px = 0.0f;
@@ -137,10 +205,11 @@ uint8_t sizeStepFromCssFontSize(const CssStyle& css, const StyleResolveContext& 
                                          static_cast<int>(SIZE_STEP_MAX)));
 }
 
-uint8_t sizeStepForHeadingLevel(const int level, const StyleResolveContext& ctx) {
-  if (ctx.singleSizeFamily || level < 1) {
+uint8_t sizeStepForHeadingLevel(const int level, const StyleResolveContext& /*ctx*/) {
+  if (level < 1) {
     return SIZE_STEP_BASE;
   }
+  // Always return heading deltas — even when singleSizeFamily (synthetic DROP_CAP on paint).
   int delta = 0;
   if (level == 1) {
     delta = 2;
@@ -185,8 +254,20 @@ void applyRivuletBlockMetrics(BlockStyle& block, const CssStyle& css, const Styl
   } else if (ctx.embeddedStyle && headingLevel >= 1 && headingLevel <= 6 && !css.hasFontSize()) {
     step = sizeStepForHeadingLevel(headingLevel, ctx);
   }
+  // Small-caps: slightly smaller face + uppercase paint (see TextBlock::render).
+  if (ctx.embeddedStyle && css.hasFontVariant() && css.fontVariant == CssFontVariant::SmallCaps) {
+    block.smallCaps = true;
+    if (step > SIZE_STEP_MIN) {
+      step = static_cast<uint8_t>(step - 1);
+    }
+  } else {
+    block.smallCaps = false;
+  }
   block.sizeStep = step;
 
   const int blockFontId = resolveRelativeFontId(ctx, step);
   block.lineHeightPx = resolveLineHeightPx(css, blockFontId, ctx, renderer);
+
+  // Single-size family: mark for synthetic scale so layout can reserve 2× height for large steps.
+  block.syntheticScale = sizeStepNeedsSyntheticScale(ctx, step);
 }

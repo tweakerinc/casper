@@ -69,6 +69,8 @@ class MappedInputManager {
 
   // True when Orient Front Buttons is On and the live orientation needs axis follow
   // (Portrait 180° or Landscape CCW). Portrait / Landscape CW never swap.
+  // When true, logical Up/Down/Left/Right (and page/nav) mirror the front cluster
+  // so captions from mapLabels() match motion; side keys stay under Side Button Layout.
   [[nodiscard]] bool isNavDirectionSwapped() const;
 
  private:
@@ -76,7 +78,7 @@ class MappedInputManager {
   // Logical-to-physical button mapping depends on what the user is actually looking at: when the
   // screen is rendered rotated, the directional buttons must flip to match. The renderer is the only
   // authority on the *live* orientation (the reader rotates it and restores portrait on exit), so we
-  // read it here instead of CrossPointSettings.orientation, which is just the persisted reader
+  // read it here instead of CasperSettings.orientation, which is just the persisted reader
   // preference and stays "rotated" even while portrait UI like home/settings is on screen.
   const GfxRenderer& renderer;
 

@@ -27,34 +27,44 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     return;  // invalid state
   }
 
+  // Serialize frequency changes: concurrent Lock + idle path logged dual
+  // "Restoring normal CPU frequency" and can hang setCpuFrequencyMhz on C3.
+  if (modeMutex) {
+    xSemaphoreTake(modeMutex, portMAX_DELAY);
+  }
+
   auto wifiMode = WiFi.getMode();
   if (wifiMode != WIFI_MODE_NULL) {
     // Wifi is active, force disabling power saving
     enabled = false;
   }
 
-  // Note: We don't use mutex here to avoid too much overhead,
-  // it's not very important if we read a slightly stale value for currentLockMode
   const LockMode mode = currentLockMode;
+  bool didChange = false;
 
   if (mode == None && enabled && !isLowPower) {
     LOG_DBG("PWR", "Going to low-power mode");
     if (!setCpuFrequencyMhz(LOW_POWER_FREQ)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
-      return;
+    } else {
+      isLowPower = true;
+      didChange = true;
     }
-    isLowPower = true;
 
   } else if ((!enabled || mode != None) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
     if (!setCpuFrequencyMhz(normalFreq)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", normalFreq);
-      return;
+    } else {
+      isLowPower = false;
+      didChange = true;
     }
-    isLowPower = false;
   }
 
-  // Otherwise, no change needed
+  (void)didChange;
+  if (modeMutex) {
+    xSemaphoreGive(modeMutex);
+  }
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {

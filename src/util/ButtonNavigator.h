@@ -51,31 +51,12 @@ class ButtonNavigator final {
   [[nodiscard]] static Buttons getPreviousButtons() { return {MappedInputManager::Button::NavPrevious}; }
 
   // List navigation on tabbed screens (vertical): Up / Down only — not NavNext, which also
-  // binds Left/Right used for tabs. Axis matches the function names.
-  [[nodiscard]] static Buttons getFrontNextButtons() {
-    if (mappedInput != nullptr && mappedInput->isNavDirectionSwapped()) {
-      return {MappedInputManager::Button::Up};
-    }
-    return {MappedInputManager::Button::Down};
-  }
-  [[nodiscard]] static Buttons getFrontPreviousButtons() {
-    if (mappedInput != nullptr && mappedInput->isNavDirectionSwapped()) {
-      return {MappedInputManager::Button::Down};
-    }
-    return {MappedInputManager::Button::Up};
-  }
+  // binds Left/Right used for tabs. Button::Up/Down are logical (orient-follow applied
+  // inside MappedInputManager), so no caller-side swap.
+  [[nodiscard]] static Buttons getFrontNextButtons() { return {MappedInputManager::Button::Down}; }
+  [[nodiscard]] static Buttons getFrontPreviousButtons() { return {MappedInputManager::Button::Up}; }
 
-  // Tab switch on tabbed screens (horizontal): Left / Right only.
-  [[nodiscard]] static Buttons getSideNextButtons() {
-    if (mappedInput != nullptr && mappedInput->isNavDirectionSwapped()) {
-      return {MappedInputManager::Button::Left};
-    }
-    return {MappedInputManager::Button::Right};
-  }
-  [[nodiscard]] static Buttons getSidePreviousButtons() {
-    if (mappedInput != nullptr && mappedInput->isNavDirectionSwapped()) {
-      return {MappedInputManager::Button::Right};
-    }
-    return {MappedInputManager::Button::Left};
-  }
+  // Tab switch on tabbed screens (horizontal): Left / Right only (logical).
+  [[nodiscard]] static Buttons getSideNextButtons() { return {MappedInputManager::Button::Right}; }
+  [[nodiscard]] static Buttons getSidePreviousButtons() { return {MappedInputManager::Button::Left}; }
 };

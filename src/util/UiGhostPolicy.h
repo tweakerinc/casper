@@ -7,17 +7,18 @@
 // UI display policy for home / settings / menus (not reader page turns).
 //
 // Reader Anti-Ghosting (SETTINGS.refreshFrequency) is applied only by
-// ReaderUtils::displayWithRefreshCycle.
+// ReaderUtils::displayWithRefreshCycle — same X3 soft bank as displaySoftReinforce.
 //
-// Balance
-// -------
-// Home is the cleanup hub: full-shell Home paints use hard HALF so residual
-// from Menu / Settings / Library / Reader is scrubbed. People live on Home
-// and in the book; they do not need every sub-screen to flash.
-//
-// Menu, Settings, Library, Recents, popups: always FAST full frames (and FAST
-// list scroll forever). Mid-scroll HALF felt like random black flashes.
-// Residual on those screens is acceptable until the next Home scrub.
+// Why Library looked clean while Home→Menu showed the full home image
+// -------------------------------------------------------------------
+// After cover multipass, controller DTM1/DTM2 are rebased to the *home* BW
+// shell (glass may still show greys). Library paints dense ink and FASTs
+// against that home baseline → strong differential, clean plate.
+// Menu used to call cleanupGrayscale with the *new* sparse FB *after* draw:
+// both planes became the menu with no glass update, so FAST saw zero diff and
+// the main screen stayed visible until many Up/Down FASTs eroded residual.
+// Fix: never cleanup with the destination plate before its first display;
+// open with FAST (+ optional soft settle). Cursor moves: plain FAST only.
 
 namespace UiGhostPolicy {
 
@@ -30,22 +31,44 @@ inline bool& hardScrubArmed() {
 
 inline void noteHalf() { detail::hardScrubArmed() = false; }
 
-// Arm hard HALF for the next full-frame paint (Home resume, Force Refresh).
 inline void requestHardScrub() { detail::hardScrubArmed() = true; }
 
-// Drop a pending scrub so a menu/library frame can FAST over residual.
 inline void clearHardScrub() { detail::hardScrubArmed() = false; }
 
 inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
 
-// Hard clean — X3 HALF + HalDisplay resync. Home full shells + Force Refresh.
+// Hard clean — X3 HALF + resync. Force Refresh / intentional home scrub only.
 inline void displayHalf(const GfxRenderer& renderer) {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   noteHalf();
 }
 
-// Full-frame UI (settings / library / popup): FAST unless a scrub was armed
-// (should be rare — menus clear scrub on enter). List nav stays FAST-only.
+// X3 soft B/W reinforce only (OEM AA-pre-BW mid). No strong plate first.
+// Prefer displaySoftOpen for full-screen swaps over home.
+inline void displaySoftReinforce(const GfxRenderer& renderer) {
+  if (gpio.deviceIsX3()) {
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
+}
+
+// New plate open (menu, library, settings, recents):
+//   1) Full FAST — strong differential so sparse white menus actually clear home
+//   2) softCount soft pulls — gentle residual settle (X3; capped)
+// Cursor / band nav must use displayMenuFrame or displayMenuBand instead.
+inline void displaySoftOpen(const GfxRenderer& renderer, int softCount = 1) {
+  clearHardScrub();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  if (!gpio.deviceIsX3() || softCount < 1) return;
+  if (softCount > 2) softCount = 2;
+  for (int i = 0; i < softCount; ++i) {
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  }
+}
+
+// Ongoing UI paints (list cursor, re-draw): plain FAST unless hard scrub armed.
+// Not soft — avoids progressive erase while the user scrolls.
 inline void displayMenuFrame(const GfxRenderer& renderer) {
   if (detail::hardScrubArmed()) {
     displayHalf(renderer);
@@ -54,24 +77,35 @@ inline void displayMenuFrame(const GfxRenderer& renderer) {
   }
 }
 
-// Always snappy FAST full frame (menu / Settings / Library open). Clears any
-// leftover scrub arm so a prior Home scrub does not flash these screens.
+// First full-frame open (library, recents, etc.).
 inline void displayFastFull(const GfxRenderer& renderer) {
-  clearHardScrub();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  displaySoftOpen(renderer, /*softCount=*/1);
 }
 
-// Menu *cursor* / band only: always snappy FAST. Never HALF.
+// Menu cursor / band: always plain FAST. Never soft, never HALF.
 inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, int h) {
   if (gpio.deviceIsX3()) {
-    // X3 has no reliable partial for UI bands — full FAST, still no hard scrub.
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   } else {
     renderer.displayWindow(x, y, w, h);
   }
 }
 
-// Home under-panel scroll: snappy FAST only (no mid-scroll HALF).
+inline void displayListNav(const GfxRenderer& renderer, int listTopY) {
+  const int h = renderer.getScreenHeight() - listTopY;
+  if (h <= 0) {
+    displayMenuFrame(renderer);
+    return;
+  }
+  displayMenuBand(renderer, 0, listTopY, renderer.getScreenWidth(), h);
+}
+
+inline bool sameListPage(int indexA, int indexB, int pageItems) {
+  if (pageItems <= 0) return false;
+  if (indexA < 0 || indexB < 0) return false;
+  return (indexA / pageItems) == (indexB / pageItems);
+}
+
 inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int winY, int winW, int winH) {
   if (gpio.deviceIsX3()) {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -80,10 +114,8 @@ inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int wi
   }
 }
 
-// Soft full frame (honors scrub arm if set).
 inline void displaySoftFull(const GfxRenderer& renderer) { displayMenuFrame(renderer); }
 
-// Partial clock / strip: snappy only.
 inline void displayPartialOrSoft(const GfxRenderer& renderer, int x, int y, int w, int h) {
   if (gpio.deviceIsX3()) {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);

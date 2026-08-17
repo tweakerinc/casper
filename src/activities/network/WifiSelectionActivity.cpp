@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -371,10 +371,10 @@ void WifiSelectionActivity::attemptConnection() {
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
 
-  // Set hostname so routers show "CrossPoint-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
+  // Set hostname so routers show "Casper-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
   String mac = WiFi.macAddress();
   mac.replace(":", "");
-  String hostname = "CrossPoint-Reader-" + mac;
+  String hostname = "Casper-" + mac;
   WiFi.setHostname(hostname.c_str());
 
   LOG_INF("WIFI", "begin ssid=%s enc=%d passLen=%u heap=%u maxAlloc=%u", selectedSSID.c_str(),

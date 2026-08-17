@@ -9,7 +9,7 @@
 #include "util/UiGhostPolicy.h"
 // std::fill used when pre-selecting all packs on first open
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"

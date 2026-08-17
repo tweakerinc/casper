@@ -29,20 +29,25 @@ const SdCardFontFileInfo* SdCardFontFamilyInfo::findClosestReaderSize(const uint
   std::sort(sizes.begin(), sizes.end());
 
   // If the family provides the standard reader sizes, map the enum straight to
-  // them. This keeps body text correct even when the family also ships smaller
-  // UI-fallback sizes (e.g. 8 for CJK chrome) that would otherwise shift the
-  // ordinal mapping below and make reading too small.
-  // Enum: 0..4 = 10 / 12 / 14 / 16 / 18 pt.
-  static constexpr uint8_t kReaderTargets[] = {10, 12, 14, 16, 18};
+  // them. Prefer full 8–18 ladder; fall back to 10–18 then 12–18 packs.
+  // Enum: 0..5 = 8 / 10 / 12 / 14 / 16 / 18 pt.
+  static constexpr uint8_t kReaderTargets[] = {8, 10, 12, 14, 16, 18};
   const auto hasSizeForStyle = [&](uint8_t s) { return std::find(sizes.begin(), sizes.end(), s) != sizes.end(); };
-  if (hasSizeForStyle(10) && hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) && hasSizeForStyle(18)) {
-    const uint8_t idx = fontSizeEnum < 5 ? fontSizeEnum : 4;
+  if (hasSizeForStyle(8) && hasSizeForStyle(10) && hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) &&
+      hasSizeForStyle(18)) {
+    const uint8_t idx = fontSizeEnum < 6 ? fontSizeEnum : 5;
     return findFile(kReaderTargets[idx], style);
   }
-  // Families that only ship 12/14/16/18 (no 10): map enum 0→12, 1→12, 2→14, 3→16, 4→18.
+  // 10–18 only (no 8): map SIZE_8→10, then 10/12/14/16/18.
+  if (hasSizeForStyle(10) && hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) && hasSizeForStyle(18)) {
+    static constexpr uint8_t kNo8[] = {10, 10, 12, 14, 16, 18};
+    const uint8_t idx = fontSizeEnum < 6 ? fontSizeEnum : 5;
+    return findFile(kNo8[idx], style);
+  }
+  // Families that only ship 12/14/16/18: map small enums toward 12.
   if (hasSizeForStyle(12) && hasSizeForStyle(14) && hasSizeForStyle(16) && hasSizeForStyle(18)) {
-    static constexpr uint8_t kLegacy4[] = {12, 12, 14, 16, 18};
-    const uint8_t idx = fontSizeEnum < 5 ? fontSizeEnum : 4;
+    static constexpr uint8_t kLegacy4[] = {12, 12, 12, 14, 16, 18};
+    const uint8_t idx = fontSizeEnum < 6 ? fontSizeEnum : 5;
     return findFile(kLegacy4[idx], style);
   }
 
@@ -55,22 +60,25 @@ const SdCardFontFileInfo* SdCardFontFamilyInfo::findClosestReaderSize(const uint
   }
 
   // Fewer sizes than enum slots (e.g. CJK packs with only 2-3 sizes):
-  // fall back to closest-match against the built-in reader targets (10/12/14/16/18).
+  // fall back to closest-match against the built-in reader targets (8/10/12/14/16/18).
   uint8_t target = 14;
   switch (fontSizeEnum) {
     case 0:
-      target = 10;
+      target = 8;
       break;
     case 1:
-      target = 12;
-      break;
-    case 3:
-      target = 16;
-      break;
-    case 4:
-      target = 18;
+      target = 10;
       break;
     case 2:
+      target = 12;
+      break;
+    case 4:
+      target = 16;
+      break;
+    case 5:
+      target = 18;
+      break;
+    case 3:
     default:
       target = 14;
       break;

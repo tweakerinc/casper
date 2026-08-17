@@ -14,7 +14,7 @@
 #include <string>
 #include <utility>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "fontIds.h"
 
 namespace textsettings {
@@ -37,7 +37,7 @@ constexpr const char* kPreviewPara2 = "How vexingly quick daft zebras jump acros
 constexpr int kRuleThickness = 1;
 
 CssTextAlign toCssAlign(uint8_t align) {
-  if (align == CrossPointSettings::BOOK_STYLE) return CssTextAlign::Justify;
+  if (align == CasperSettings::BOOK_STYLE) return CssTextAlign::Justify;
   return static_cast<CssTextAlign>(align);
 }
 
@@ -184,7 +184,14 @@ PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, c
 
   const float compression = SETTINGS.getReaderLineCompression();
   const int lineAdvance = std::max(1, renderer.getLineHeight(fontId, compression));
-  const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
+  const int paragraphGap = SETTINGS.extraParagraphSpacing
+                               ? [&]() {
+                                   const uint8_t h = SETTINGS.extraParagraphSpacingHeight;
+                                   if (h == CasperSettings::SPACING_FULL) return lineAdvance;
+                                   if (h == CasperSettings::SPACING_QUARTER) return std::max(1, lineAdvance / 4);
+                                   return std::max(1, lineAdvance / 2);
+                                 }()
+                               : 0;
 
   const bool bionic = SETTINGS.focusReadingEnabled != 0;
   const bool guide = SETTINGS.guideReadingEnabled != 0;
@@ -195,6 +202,7 @@ PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, c
                        .lineCompression = compression,
                        .alignment = SETTINGS.paragraphAlignment,
                        .extraParagraphSpacing = SETTINGS.extraParagraphSpacing != 0,
+                       .extraParagraphSpacingHeight = SETTINGS.extraParagraphSpacingHeight,
                        .focusReading = bionic,
                        .guideReading = guide,
                        .hyphenation = SETTINGS.hyphenationEnabled != 0};

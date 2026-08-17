@@ -2,7 +2,7 @@
  * Xtc.cpp
  *
  * Main XTC ebook class implementation
- * XTC ebook support for CrossPoint Reader
+ * XTC ebook support for Casper Reader
  */
 
 #include "Xtc.h"
@@ -13,6 +13,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <functional>
+
 namespace {
 void yieldDuringThumbnail(uint8_t& rowsSinceYield) {
   if (++rowsSinceYield < 8) return;
@@ -20,6 +22,11 @@ void yieldDuringThumbnail(uint8_t& rowsSinceYield) {
   vTaskDelay(1);
 }
 }  // namespace
+
+Xtc::Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)), loaded(false) {
+  // v0.1.8 layout: /.crosspoint/xtc_<std::hash(path)>/
+  cachePath = cacheDir + "/xtc_" + std::to_string(std::hash<std::string>{}(this->filepath));
+}
 
 bool Xtc::load() {
   LOG_DBG("XTC", "Loading XTC: %s", filepath.c_str());

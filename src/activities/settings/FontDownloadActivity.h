@@ -15,14 +15,14 @@
 #define FONTS_MANIFEST_VERSION 1
 
 #ifndef FONT_MANIFEST_URL
-// CrossInk-hosted SD font manifest (same .cpfont v4 schema as CrossPoint).
+// legacy-hosted SD font manifest (same .cpfont v4 schema as Casper).
 // Use plain HTTP for this public S3 bucket: HTTPS often stalls inside
 // esp_http_client on ESP32-C3; downloaded .cpfont files are still CRC-checked.
 // Path must stay in sync with FONTS_MANIFEST_VERSION + CPFONT_VERSION.
 #define FONT_MANIFEST_URL_STRINGIFY_INNER(x) #x
 #define FONT_MANIFEST_URL_STRINGIFY(x) FONT_MANIFEST_URL_STRINGIFY_INNER(x)
 #define FONT_MANIFEST_URL                                                                    \
-  "http://crossink-fonts.s3.us-east-1.amazonaws.com/sd-fonts-m" FONT_MANIFEST_URL_STRINGIFY( \
+  "http://legacy-fonts.s3.us-east-1.amazonaws.com/sd-fonts-m" FONT_MANIFEST_URL_STRINGIFY( \
       FONTS_MANIFEST_VERSION) "-b" FONT_MANIFEST_URL_STRINGIFY(CPFONT_VERSION) "/fonts.json"
 #endif
 
@@ -39,7 +39,7 @@ class FontDownloadActivity : public Activity {
            // The download is synchronous and blocks the main loop until it
            // completes, so activityManager.preventAutoSleep() is never polled
            // during downloading.
-           state_ == COMPLETE || state_ == ERROR;
+           state_ == COMPLETE || state_ == ERROR || pendingManifestFetch_;
   }
   bool skipLoopDelay() override { return true; }
 
@@ -62,7 +62,6 @@ class FontDownloadActivity : public Activity {
   struct ManifestFamily {
     std::string name;
     std::string description;
-    std::vector<std::string> styles;
     std::vector<ManifestFile> files;
     size_t totalSize = 0;
     bool installed = false;
@@ -86,9 +85,19 @@ class FontDownloadActivity : public Activity {
   int downloadingFamilyIndex_ = 0;
   std::string errorMessage_;
   bool cancelRequested_ = false;
+  // Run fetch on the next loop() tick (not inside the Wi‑Fi result callback)
+  // so SecureHttpClient + parse are not stacked on a deep call chain.
+  bool pendingManifestFetch_ = false;
+  // Only reboot when SD fonts were installed/removed (legacy). Always
+  // silentRestart() on exit made Back after Wi‑Fi look like a hard crash.
+  bool fontsChanged_ = false;
 
+  void prepareHeapForNetwork();
   void onWifiSelectionComplete(bool success);
+  void runPendingManifestFetch();
   bool fetchAndParseManifest();
+  bool parseManifestBuffer(const char* buf, size_t len);
+  void resolveInstalledFlags();
   void downloadFamily(ManifestFamily& family);
   void downloadAll();
   void updateAll();

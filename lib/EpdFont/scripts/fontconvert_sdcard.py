@@ -630,11 +630,13 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
                     bm = pixels4g[y * pitch + (x // 2)]
                     bm = (bm >> ((x % 2) * 4)) & 0xF
 
-                    if bm >= 12:
+                    # CrossInk/YACP --darken-aa cutoffs (3,6,10): darker, softer
+                    # edges than default (4,8,12). SD packs are reader fonts.
+                    if bm >= 10:
                         px += 3
-                    elif bm >= 8:
+                    elif bm >= 6:
                         px += 2
-                    elif bm >= 4:
+                    elif bm >= 3:
                         px += 1
 
                     if (y * bitmap.width + x) % 4 == 3:

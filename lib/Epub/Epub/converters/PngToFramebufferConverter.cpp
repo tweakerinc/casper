@@ -276,14 +276,14 @@ void emitPngDstRow(PngContext* ctx, int dstY, const uint8_t* grayRow) {
   const int outXBase = ctx->config->x;
   const int screenWidth = ctx->screenWidth;
   const bool useDithering = ctx->config->useDithering;
-  const bool inkBias = ctx->config->inkBias;
+  const EinkImageTone tone = ctx->config->resolvedTone();
   const int dstWidth = ctx->dstWidth;
 
   for (int dstX = 0; dstX < dstWidth; dstX++) {
     const int outX = outXBase + dstX;
     const uint8_t gray = grayRow[dstX];
     const uint8_t dithered =
-        useDithering ? applyBayerDither4Level(gray, outX, outY, inkBias) : quantizeGray4LevelNoDither(gray, inkBias);
+        useDithering ? applyBayerDither4Level(gray, outX, outY, tone) : quantizeGray4LevelNoDither(gray, tone);
     if (onScreen && outX >= 0 && outX < screenWidth) {
       pw.writePixel(outX, dithered);
     }

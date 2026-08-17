@@ -141,6 +141,7 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   static constexpr uint8_t DEFAULT_PERCENT_THRESHOLD = 1;
 
   static const char* getFilePath() { return "/.crosspoint/koreader.json"; }
+
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 

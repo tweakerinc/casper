@@ -17,7 +17,7 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, BLUETOOTH, SETTINGS_MENU };
+enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
 
 /**
  * ActivityManager
@@ -121,6 +121,12 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  bool isSettingsActivity() const;
+  bool isReaderMenuActivity() const;
+  // Flush reader progress / dirty settings before deep sleep (activities still alive).
+  void persistForSleep();
+  // Classify QR resume target (home / reader / settings / reader menu).
+  uint8_t classifySleepResumeTarget() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

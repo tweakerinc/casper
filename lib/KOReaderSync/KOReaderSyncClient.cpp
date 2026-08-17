@@ -35,7 +35,11 @@ constexpr char DEVICE_ID[] = "casper-reader";
 // the largest single TLS allocation is the ~17 KB wolfSSL record buffer, not
 // a run of fast-math bignums. A handshake was measured succeeding inside a
 // 43 KB largest block; requiring 50 KB contiguous refused syncs that fit.
-constexpr uint32_t MIN_FREE_FOR_TLS = 50000;
+//
+// Free floor 44 KB (was 50 KB): settings-stack auth after quiet WiFi often
+// lands ~45–48 KB free with maxAlloc still ≥20 KB. wolfSSL returns MEMORY_E
+// cleanly if the try fails — gate only skips hopeless multi-second stalls.
+constexpr uint32_t MIN_FREE_FOR_TLS = 44000;
 constexpr uint32_t MIN_BLOCK_FOR_TLS = 20000;
 
 // Apply the shared KOSync auth headers after begin(). x-auth-* is the native
@@ -175,7 +179,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     outProgress.deviceId = doc["device_id"].as<std::string>();
     outProgress.timestamp = doc["timestamp"].as<int64_t>();
 
-    // Extended crosspoint-sync field; absent on plain kosync servers.
+    // Extended Casper-sync field; absent on plain kosync servers.
     outProgress.position.reset();
     const JsonObjectConst pos = doc["position"].as<JsonObjectConst>();
     if (!pos.isNull()) {
@@ -228,7 +232,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   doc["device"] = DEVICE_NAME;
   doc["device_id"] = DEVICE_ID;
   if (progress.position.has_value()) {
-    // Extended crosspoint-sync field; kosync servers ignore unknown keys.
+    // Extended Casper-sync field; kosync servers ignore unknown keys.
     const auto& p = *progress.position;
     auto pos = doc["position"].to<JsonObject>();
     pos["pctQ"] = p.pctQ;

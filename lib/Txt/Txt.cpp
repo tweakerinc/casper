@@ -4,9 +4,11 @@
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
 
+#include <functional>
+
 Txt::Txt(std::string path, std::string cacheBasePath)
     : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)) {
-  // Generate cache path from file path hash
+  // v0.1.8 layout: /.crosspoint/txt_<std::hash(path)>/
   const size_t hash = std::hash<std::string>{}(filepath);
   cachePath = this->cacheBasePath + "/txt_" + std::to_string(hash);
 }

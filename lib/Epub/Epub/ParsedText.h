@@ -41,7 +41,7 @@ class ParsedText {
   // Available text width for lineIndex (0-based). Fast path: returns pageWidth when no zones.
   int widthForLine(int lineIndex, int pageWidth) const;
   // Horizontal shift for a left float on this line (0 if none / right float).
-  int leftFloatShiftForLine(int lineIndex) const;
+
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);

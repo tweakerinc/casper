@@ -32,3 +32,20 @@ lib/EpdFont/scripts/output/
 /sdkconfig.default
 /sdkconfig.defaults
 sdkconfig.sticky
+
+# Local diagnostics / secrets (never push)
+.casper-serial-*.log
+.casper-bt-rebuild*.log
+._comport
+_tmp_*/
+_serial_*/
+_serial_*.py
+_tmp_*.py
+_tmp_*.txt
+_tmp_*.html
+_tmp_*.png
+README*.tmp
+README.md.*backup*
+README.from-*
+*.local*
+stock-firmware/

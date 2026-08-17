@@ -53,7 +53,7 @@ constexpr const char* LINETHROUGH_TAGS[] = {"del", "s", "strike"};
 constexpr const char* IMAGE_TAGS[] = {"img", "image"};
 constexpr const char* SKIP_TAGS[] = {"head"};
 
-bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v'; }
 
 bool matches(const char* tag_name, const char* const* possible_tags, size_t count) {
   for (size_t i = 0; i < count; i++) {
@@ -1328,10 +1328,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
+    // Always glue to the preceding token ("21" + "st") — same as vertical-align:super spans.
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
-      self->nextWordContinues = true;
     }
+    self->nextWordContinues = true;
     StyleStackEntry entry;
     entry.depth = self->depth;
     if (strcmp(name, "sup") == 0) {
@@ -1418,6 +1419,37 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       BlockStyle lineStyle = self->currentTextBlock->getBlockStyle();
       applyRivuletBlockMetrics(lineStyle, cssStyle, self->styleResolve_, self->renderer, /*headingLevel=*/0);
       self->currentTextBlock->setBlockStyle(lineStyle);
+    } else if (self->embeddedStyle && cssStyle.hasFontSize() && self->currentTextBlock &&
+               !self->currentTextBlock->isEmpty()) {
+      // Mid-paragraph size change (inline span font-size): start a new TextBlock so
+      // sizeStep applies to following words without a per-word size slab.
+      //
+      // NEVER do this for super/sub ordinals (DCC / Butcher):
+      //   21<span style="font-size:0.75em; margin-left:0.05em; vertical-align:super">st</span>
+      // A new TextBlock runs makePages on "21", then lays out "st" alone →
+      // "21\nst edition" (field: content-1.jpeg). Paint already scales SUP/SUB to
+      // ~50%; block sizeStep is the wrong tool for glued ordinals.
+      const bool isSuperSubOrdinal =
+          cssStyle.hasVerticalAlign() && (cssStyle.verticalAlign == CssVerticalAlign::Super ||
+                                          cssStyle.verticalAlign == CssVerticalAlign::Sub);
+      if (!isSuperSubOrdinal) {
+        BlockStyle lineStyle = self->currentTextBlock->getBlockStyle();
+        const uint8_t prevStep = lineStyle.sizeStep;
+        const bool prevSynth = lineStyle.syntheticScale;
+        applyRivuletBlockMetrics(lineStyle, cssStyle, self->styleResolve_, self->renderer, /*headingLevel=*/0);
+        if (lineStyle.sizeStep != prevStep || lineStyle.syntheticScale != prevSynth) {
+          if (self->partWordBufferIndex > 0) {
+            self->flushPartWordBuffer();
+            self->nextWordContinues = true;
+          }
+          // Keep mid-paragraph size change from injecting a full paragraph gap.
+          lineStyle.marginTop = 0;
+          lineStyle.marginBottom = 0;
+          lineStyle.paddingTop = 0;
+          lineStyle.paddingBottom = 0;
+          self->startNewTextBlock(lineStyle);
+        }
+      }
     }
 
     // Handle span and other inline elements for CSS styling
@@ -1444,9 +1476,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         if (cssStyle.verticalAlign == CssVerticalAlign::Super) {
           entry.hasSup = true;
           entry.sup = true;
+          // Glue ordinal suffix even if "21" was already flushed (empty buffer).
+          self->nextWordContinues = true;
         } else if (cssStyle.verticalAlign == CssVerticalAlign::Sub) {
           entry.hasSub = true;
           entry.sub = true;
+          self->nextWordContinues = true;
         }
       }
       self->inlineStyleStack.push_back(entry);
@@ -1933,10 +1968,15 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 int ChapterHtmlSlimParser::lineAdvancePx(const BlockStyle& style) const {
-  if (style.lineHeightPx > 0) {
-    return style.lineHeightPx;
+  int h = style.lineHeightPx > 0 ? static_cast<int>(style.lineHeightPx)
+                                 : renderer.getLineHeight(blockFontId(style), lineCompression);
+  // Synthetic 2× (DROP_CAP) on single-size faces needs a taller line box so
+  // headings do not overlap the following line.
+  if (style.syntheticScale) {
+    const int bodyH = renderer.getLineHeight(blockFontId(style), lineCompression);
+    h = std::max(h, bodyH * 2);
   }
-  return renderer.getLineHeight(blockFontId(style), lineCompression);
+  return h;
 }
 
 void ChapterHtmlSlimParser::clearPageFloat() {
@@ -2210,101 +2250,139 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   const int bodyFontId = blockFontId(bs);
   const int bodyLine = std::max(1, lineAdvancePx(bs));
   const int bodyEm = std::max(8, renderer.getFontAscenderSize(bodyFontId));
-  // Book drop-cap geometry (user / tradepub feel):
-  //   - top of letter flush with top of first body line
-  //   - bottom of letter ≈ end of second body line (snug; only TWO indented wrap lines)
-  // CSS 3em is approximate size; wrap zone is fixed at 2 lines.
+
+  // Metric drop-cap (all fonts, no per-family tables):
+  // 1) Target ink height ≈ 2 body line advances (tradepub wrap; line 3 full-width).
+  // 2) Try same-family faces ≥ body × nearest-neighbor scale 2..4.
+  // 3) Pick tallest paint that fits the zone; zone snaps to whole body lines.
+  // Single-size SD fonts use scale 3–4 on the body face — same rules as Literata.
   constexpr int kDropLines = 2;
-  const int targetCapH = kDropLines * bodyLine;
+  const int targetH = kDropLines * bodyLine;
+  const int maxPaintH = targetH + bodyLine / 6;
+  const int looseMaxH = 3 * bodyLine;
 
-  // Prefer +2 ladder steps first, then search every loaded face for a larger glyph
-  // that actually measures this letter (skip digit-only clock faces, empty glyphs).
-  const uint8_t capStep =
-      static_cast<uint8_t>(std::min(static_cast<int>(SIZE_STEP_MAX), static_cast<int>(bs.sizeStep) + 2));
-  int capFontId = resolveRelativeFontId(styleResolve_, capStep);
-  int bestAsc = renderer.getFontAscenderSize(capFontId);
-  int bestW = renderer.getTextAdvanceX(capFontId, letter.c_str(), EpdFontFamily::BOLD);
-  if (bestW < 4) bestW = 0;
-
-  static constexpr int kPreferredCaps[] = {
-      326065580,    // SOURCESERIF4_18
-      1231166843,   // SOURCESERIF4_16
-      -2078415541,  // LEXENDDECA_18
-      -940581834,   // LEXENDDECA_16
-      -1077864260,  // SOURCESERIF4_14
+  auto glyphMetrics = [&](const int fontId, const EpdFontFamily::Style faceStyle, int& outH, int& outTop) -> bool {
+    const auto& map = renderer.getFontMap();
+    const auto it = map.find(fontId);
+    if (it == map.end()) return false;
+    const auto* p = reinterpret_cast<const unsigned char*>(letter.c_str());
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) return false;
+    const EpdGlyph* g = it->second.getGlyph(cp, faceStyle);
+    if (!g || g->height == 0) return false;
+    outH = static_cast<int>(g->height);
+    outTop = static_cast<int>(g->top);
+    return true;
   };
-  const auto& fontMap = renderer.getFontMap();
-  auto considerCap = [&](const int cand) {
-    if (cand == 0 || cand == bodyFontId) return;
-    if (fontMap.find(cand) == fontMap.end()) return;
-    const int w = renderer.getTextAdvanceX(cand, letter.c_str(), EpdFontFamily::BOLD);
-    if (w < 4) return;  // face lacks this glyph
-    const int asc = renderer.getFontAscenderSize(cand);
-    // Prefer taller faces; on ties prefer wider (bolder presence).
-    if (asc > bestAsc || (asc == bestAsc && w > bestW)) {
-      bestAsc = asc;
-      bestW = w;
-      capFontId = cand;
+
+  int candidates[8] = {};
+  const int nCand = collectDropCapFontCandidates(styleResolve_, bodyFontId, candidates, 8);
+
+  const int col = std::max(32, static_cast<int>(viewportWidth) - bs.totalHorizontalInset());
+  const int maxW = std::max(20, (col * 45) / 100);
+  int capFontId = bodyFontId;
+  int bestPaintH = 0;
+  int bestMeasuredW = 0;
+  int bestScale = 2;
+  bool bestUseBold = true;
+  bool found = false;
+
+  auto tryFaceScale = [&](const int fontId, const bool useBold, const int scale, const int maxH) {
+    if (scale < 2 || scale > 4) return;
+    const auto faceStyle = useBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    int gH = 0;
+    int gTop = 0;
+    if (!glyphMetrics(fontId, faceStyle, gH, gTop)) return;
+    const int paintH = gH * scale;
+    if (paintH <= 0 || paintH > maxH) return;
+    const auto styleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(faceStyle) |
+                                                            static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+    const int w = renderer.getTextAdvanceX(fontId, letter.c_str(), styleBits, scale);
+    if (w < 8) return;
+    if (found && w > maxW) return;
+    // Prefer taller ink filling the 2-line zone; ties → body face, then lower scale, then narrower.
+    const bool better = !found || paintH > bestPaintH ||
+                        (paintH == bestPaintH && fontId == bodyFontId && capFontId != bodyFontId) ||
+                        (paintH == bestPaintH && scale < bestScale) ||
+                        (paintH == bestPaintH && scale == bestScale && w < bestMeasuredW);
+    if (!better) return;
+    found = true;
+    capFontId = fontId;
+    bestPaintH = paintH;
+    bestMeasuredW = w;
+    bestScale = scale;
+    bestUseBold = useBold;
+    (void)gTop;
+  };
+
+  // Tight pass: fill up to ~2 body lines.
+  for (int i = 0; i < nCand; ++i) {
+    for (int scale = 2; scale <= 4; ++scale) {
+      tryFaceScale(candidates[i], true, scale, maxPaintH);
+      tryFaceScale(candidates[i], false, scale, maxPaintH);
     }
-  };
-  for (const int cand : kPreferredCaps) considerCap(cand);
-  // SD Bookerly / user faces often include larger sizes than the builtin ladder.
-  for (const auto& entry : fontMap) considerCap(entry.first);
+  }
+  // Loose pass: allow up to 3 lines if nothing fit (very large body, missing glyphs).
+  if (!found) {
+    for (int i = 0; i < nCand; ++i) {
+      for (int scale = 2; scale <= 4; ++scale) {
+        tryFaceScale(candidates[i], true, scale, looseMaxH);
+        tryFaceScale(candidates[i], false, scale, looseMaxH);
+      }
+    }
+  }
+  if (!found || bestMeasuredW < 8) {
+    LOG_DBG("RLC", "Drop-cap '%s': no glyph metrics, leave inline", letter.c_str());
+    currentTextBlock->addWord(letter, EpdFontFamily::BOLD);
+    return;
+  }
 
-  const int capLineH = std::max(1, renderer.getLineHeight(capFontId, lineCompression));
-  const int glyphH = std::max(capLineH, bestAsc > 0 ? bestAsc + 2 : capLineH);
-  // Always 2× paint for drop-caps: a 1× face is far too small for a 2-line zone
-  // (looked like a tiny T below the first line). DROP_CAP draw path top-aligns
-  // the 2× glyph to the line-box top so no negative hang into chrome.
-  constexpr bool use2x = true;
-  const auto capStyleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(EpdFontFamily::BOLD) |
-                                                              static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
-  const int paintGlyphH = glyphH * 2;
-  // Exactly two wrap lines beside the letter (third line full width).
-  const int capH = targetCapH;
-  const int measuredW = renderer.getTextAdvanceX(capFontId, letter.c_str(), capStyleBits);
-  // Gap ≈ CSS margin-right 0.1em on first-letter.
-  const int gap = std::max(3, bodyEm / 10);
-  const int letterW = std::max(16, measuredW + gap);
-  // drawText(DROP_CAP) places ink top at PageLine y. Body capitals sit a few px
-  // below the line-box origin (ascender slack), so a small positive nudge keeps
-  // the T from sitting above "he" / into the gap above the first line.
-  dropCapYAdjust_ = static_cast<int16_t>(std::max(2, std::min(bodyEm / 5, bodyLine / 4)));
-  LOG_DBG("RLC", "Drop-cap '%s' bodyFont=%d capFont=%d w=%d h=%d paintH=%d yAdj=%d x2=1 lines=%d", letter.c_str(),
-          bodyFontId, capFontId, letterW, capH, paintGlyphH, static_cast<int>(dropCapYAdjust_), kDropLines);
-  (void)glyphH;
+  const auto capStyleBits = static_cast<EpdFontFamily::Style>(
+      static_cast<uint8_t>(bestUseBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) |
+      static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+
+  // Zone tracks painted ink, snapped to whole body lines (never an empty 2-line gutter
+  // under a short letter). Prefer 2-line wrap when ink is substantial.
+  int nLines = (bestPaintH + bodyLine - 1) / bodyLine;
+  if (nLines < 1) nLines = 1;
+  if (nLines > 3) nLines = 3;
+  if (bestPaintH * 2 >= targetH && nLines < kDropLines) {
+    nLines = kDropLines;
+  }
+  // If we painted near a full 2-line zone, reserve 2 lines of wrap.
+  if (bestPaintH >= targetH - bodyLine / 4) {
+    nLines = std::max(nLines, kDropLines);
+  }
+  const int capH = nLines * bodyLine;
+
+  const int gap = std::max(4, bodyEm / 8);
+  const int letterW = std::min(maxW, std::max(16, bestMeasuredW + gap));
+
+  // DROP_CAP paint top-aligns ink to PageLine y (= first body line y after re-anchor).
+  // Nudge down by body internal leading so the cap top matches body capital tops.
+  int bodyCapTop = 0;
+  int bodyCapH = 0;
+  if (glyphMetrics(bodyFontId, EpdFontFamily::REGULAR, bodyCapH, bodyCapTop)) {
+    const int bodyLead = std::max(0, bodyEm - bodyCapTop);
+    dropCapYAdjust_ = static_cast<int16_t>(std::min(bodyLead, bodyLine / 3));
+  } else {
+    dropCapYAdjust_ = 0;
+  }
+
+  LOG_DBG("RLC", "Drop-cap '%s' bodyFont=%d capFont=%d w=%d zoneH=%d paintH=%d lines=%d x%d", letter.c_str(),
+          bodyFontId, capFontId, letterW, capH, bestPaintH, nLines, bestScale);
 
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }
-  // Drop-cap letter as a one-word TextBlock; sizeStep only helps when ladder works —
-  // paint still uses resolveRelativeFontId(base, sizeStep). When we picked a foreign
-  // larger fontId, store sizeStep base and measure/paint with explicit capFontId by
-  // temporarily using that id as the layout font (Page still passes reader base at
-  // paint — CRITICAL). TextBlock::render re-resolves sizeStep from reader baseFontId,
-  // so a foreign larger face would paint small again!
-  //
-  // Fix: store sizeStep at MAX and ensure paint ladder maps MAX to a larger face.
-  // For SD single-size, paint collapses too — so force capStyle to use a sizeStep
-  // that paint can only honor if we also teach paint about drop-cap.
-  //
-  // Practical approach: put the drop-cap letter's sizeStep = SIZE_STEP_MAX and
-  // ensure StyleResolve for paint finds larger builtins… paint only knows Bitter/SS
-  // ladders from base id. If base is Bookerly, paint stays Bookerly.
-  //
-  // So for true larger paint under Bookerly we must either (a) change TextBlock paint
-  // to allow an absolute font override, or (b) embed the letter as image, or
-  // (c) use SUP inverted — not available.
-  //
-  // Absolute override: BlockStyle optional paintFontId (0 = use resolve). SECTION bump.
 
   BlockStyle capStyle = bs;
-  capStyle.sizeStep = capStep;
-  // Always paint with the chosen larger face (never re-resolve to body size).
-  capStyle.paintFontIdOverride = capFontId != 0 ? capFontId : bodyFontId;
-  // Tall enough line box for 2× glyph so nothing clips the PageLine bounds.
-  capStyle.lineHeightPx = static_cast<int16_t>(std::max(capLineH, paintGlyphH));
+  // Absolute paint face via override — sizeStep unused for this one-word line.
+  capStyle.sizeStep = bs.sizeStep;
+  capStyle.paintFontIdOverride = capFontId;
+  capStyle.paintGlyphScale = static_cast<uint8_t>(bestScale);
+  capStyle.lineHeightPx = 0;  // no half-leading (would shove scaled ink down)
   capStyle.alignment = CssTextAlign::Left;
   capStyle.textAlignDefined = true;
   capStyle.marginTop = 0;
@@ -2315,9 +2393,10 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   capStyle.textIndentDefined = true;
   capStyle.marginLeft = 0;
   capStyle.paddingLeft = 0;
+  capStyle.syntheticScale = false;
+  capStyle.smallCaps = false;
 
   auto capText = std::make_unique<ParsedText>(false, false, false, false, capStyle);
-  // BOLD | DROP_CAP (2×) when face is still short of 3em — paint + measure agree.
   capText->addWord(letter, capStyleBits);
   const int leftInset = bs.leftInset();
   std::shared_ptr<TextBlock> capLine;
@@ -2326,6 +2405,7 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
       [&](const std::shared_ptr<TextBlock>& line) { capLine = line; }, true);
   if (!capLine) {
     LOG_DBG("RLC", "Drop-cap layout produced no line");
+    currentTextBlock->addWord(letter, EpdFontFamily::BOLD);
     return;
   }
 
@@ -2337,17 +2417,21 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   }
 
   const int16_t xOff = static_cast<int16_t>(leftInset);
-  // Y re-anchored to first body line in addLineToPage; hang via dropCapYAdjust_.
   deferredDropCapLine_ = std::make_shared<PageLine>(capLine, xOff, currentPageNextY);
   currentPage->elements.push_back(deferredDropCapLine_);
 
-  // Zone: full drop-cap height so N body lines wrap beside the letter.
+  // nLines body lines wrap beside the letter; the next is full width under it.
+  // Width must match 2× paint advance or body text draws through the stem.
   const int16_t floatW = static_cast<int16_t>(letterW);
   setPageFloat(currentPageNextY, static_cast<int16_t>(currentPageNextY + capH), floatW, /*isRight=*/false);
   injectPageFloatIntoBlock(bs);
-  // Kill first-line indent so body sits flush to the cap.
   bs.textIndent = 0;
   bs.textIndentDefined = true;
+  // Beside the cap: left-align wrap (justify + narrow column = collisions).
+  if (bs.alignment == CssTextAlign::Justify) {
+    bs.alignment = CssTextAlign::Left;
+    bs.textAlignDefined = true;
+  }
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
@@ -2369,7 +2453,6 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   }
 
   // Re-anchor drop-cap so TOP of letter lines up with TOP of first body line.
-  // dropCapYAdjust_ is typically >= 0 (push down for 2× paint); never hang into chrome.
   if (deferredDropCapLine_) {
     int y = currentPageNextY + static_cast<int>(dropCapYAdjust_);
     if (y < 0) y = 0;
@@ -2543,7 +2626,15 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY = static_cast<int16_t>(currentPageNextY + blockStyle.paddingBottom);
   }
 
+  // Extra Paragraph Spacing: only when the book did not already leave a gap.
+  // Alice-style CSS (margin-bottom ~1em) + always-on half-line made huge voids.
+  // Fill up to half a line of bottom gap; skip when CSS already provided enough.
   if (extraParagraphSpacing) {
-    currentPageNextY = static_cast<int16_t>(currentPageNextY + lineHeight / 2);
+    const int already = static_cast<int>(blockStyle.marginBottom) + static_cast<int>(blockStyle.paddingBottom);
+    // Classic Section always used half-line; Full height is a Rivulet setting.
+    const int want = std::max(1, lineHeight / 2);
+    if (already < want) {
+      currentPageNextY = static_cast<int16_t>(currentPageNextY + (want - already));
+    }
   }
 }

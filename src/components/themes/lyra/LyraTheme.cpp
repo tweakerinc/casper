@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/bluetooth.h"
@@ -271,15 +271,26 @@ int lyraListRowHeight(const GfxRenderer& renderer, const bool hasSubtitle) {
 }  // namespace
 
 int LyraTheme::getListRowStep(bool hasSubtitle) const {
-  // Approximate without GfxRenderer (navigation page size). Painting uses live measure.
-  // Split-title mode does not inflate step — wrap is per-item when text needs it.
+  // Approximate without GfxRenderer (touch hit + page-size math). Must stay ≥
+  // painted single-line row height or taps land one row too low (Size 10→12).
+  // Painting still measures per item for multi-line wrap.
   int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
-  if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_LARGE) {
-    rowHeight += 4;
-  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_XSMALL) {
-    rowHeight = std::max(26, rowHeight - 4);
-  } else if (SETTINGS.menuFontSize == CrossPointSettings::MENU_FONT_SMALL) {
-    rowHeight = std::max(28, rowHeight - 2);
+  // Match compute path: larger menu list fonts grow title line height.
+  switch (SETTINGS.menuFontSize) {
+    case CasperSettings::MENU_FONT_XSMALL:
+      rowHeight = std::max(26, rowHeight - 4);
+      break;
+    case CasperSettings::MENU_FONT_SMALL:
+      rowHeight = std::max(28, rowHeight - 2);
+      break;
+    case CasperSettings::MENU_FONT_MEDIUM:
+      rowHeight += 8;  // ~14 pt Source Serif list titles
+      break;
+    case CasperSettings::MENU_FONT_LARGE:
+      rowHeight += 14;  // ~16 pt
+      break;
+    default:
+      break;
   }
   return rowHeight;
 }

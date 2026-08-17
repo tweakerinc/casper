@@ -5,9 +5,12 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <Utf8.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <string>
 
 #include "Epub/css/StyleResolve.h"
 
@@ -139,23 +142,53 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
   // Rivulet: paint with block sizeStep, or absolute override (drop-cap larger face).
   // Never skip sizeStep (0 means "two steps smaller", not unset).
-  // Cache ladder by base fontId — page paint touches every TextBlock; re-init was
-  // spamming RLC logs and burning CPU on SD Bookerly (single-size collapse).
+  // Match measure: real lineCompression + embeddedStyle from setPaintStyleResolveParams.
   int paintFontId = fontId;
+  StyleResolveContext paintCtx{};
+  float paintLc = 1.0f;
+  bool paintEmbedded = true;
+  getPaintStyleResolveParams(paintLc, paintEmbedded);
   if (blockStyle.paintFontIdOverride != 0) {
     paintFontId = blockStyle.paintFontIdOverride;
   } else {
     static int s_cachedBaseFontId = 0;
+    static float s_cachedLc = -1.0f;
+    static bool s_cachedEmbedded = false;
     static StyleResolveContext s_rivuletPaintCtx;
-    if (s_cachedBaseFontId != fontId) {
-      initStyleResolveContext(s_rivuletPaintCtx, fontId, 1.0f, /*embeddedStyle*/ true, renderer);
+    if (s_cachedBaseFontId != fontId || s_cachedLc != paintLc || s_cachedEmbedded != paintEmbedded) {
+      initStyleResolveContext(s_rivuletPaintCtx, fontId, paintLc, paintEmbedded, renderer);
       s_cachedBaseFontId = fontId;
+      s_cachedLc = paintLc;
+      s_cachedEmbedded = paintEmbedded;
     }
+    paintCtx = s_rivuletPaintCtx;
     paintFontId = resolveRelativeFontId(s_rivuletPaintCtx, blockStyle.sizeStep);
   }
 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(paintFontId);
+  const bool useSyntheticScale =
+      blockStyle.syntheticScale || sizeStepNeedsSyntheticScale(paintCtx, blockStyle.sizeStep);
+  // Drop-cap / 2× paint is top-aligned to PageLine y. Half-leading would center a
+  // 1× metric inside a tall box and shove the letter into the status bar.
+  bool hasDropCapWord = useSyntheticScale;
+  if (!hasDropCapWord) {
+    for (uint16_t i = 0; i < numWords; ++i) {
+      if ((wordStyle(i) & EpdFontFamily::DROP_CAP) != 0) {
+        hasDropCapWord = true;
+        break;
+      }
+    }
+  }
+  // Half-leading: when CSS line-height > content metrics, center the ink in the line box.
+  int paintY = y;
+  if (!hasDropCapWord && blockStyle.lineHeightPx > 0) {
+    const int contentH = std::max(1, renderer.getLineHeight(paintFontId, paintLc));
+    const int extra = static_cast<int>(blockStyle.lineHeightPx) - contentH;
+    if (extra > 1) {
+      paintY += extra / 2;
+    }
+  }
 
   struct DecorationLineTracker {
     EpdFontFamily::Style style;
@@ -192,19 +225,49 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int wordX = xposArr[i] + x;
-    const EpdFontFamily::Style currentStyle = wordStyle(i);
+    EpdFontFamily::Style currentStyle = wordStyle(i);
+    if (useSyntheticScale) {
+      currentStyle = static_cast<EpdFontFamily::Style>(currentStyle | EpdFontFamily::DROP_CAP);
+    }
     const auto baseDir =
         static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
     const uint8_t boundary = focusBoundary(i);
 
-    int wordY = y;
+    int wordY = paintY;
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {
       wordY += ascender / 4;
     }
 
-    if (boundary > 0) {
+    // Synthetic small-caps: uppercase (Latin-focused) into a small stack string.
+    std::string smallCapsScratch;
+    const char* drawWord = word;
+    if (blockStyle.smallCaps && !scanning) {
+      smallCapsScratch.reserve(wordTextLen(i) + 1);
+      const auto* p = reinterpret_cast<const unsigned char*>(word);
+      while (*p) {
+        uint32_t cp = utf8NextCodepoint(&p);
+        if (cp == 0) break;
+        if (cp >= 'a' && cp <= 'z') {
+          cp = cp - 'a' + 'A';
+        } else if (cp >= 0x00E0 && cp <= 0x00F6) {
+          cp -= 0x20;
+        } else if (cp >= 0x00F8 && cp <= 0x00FE) {
+          cp -= 0x20;
+        }
+        utf8AppendCodepoint(cp, smallCapsScratch);
+      }
+      drawWord = smallCapsScratch.c_str();
+    }
+
+    // DROP_CAP nearest-neighbor scale: block override (metric drop-cap) or default 2×.
+    const int dropNn =
+        ((currentStyle & EpdFontFamily::DROP_CAP) != 0)
+            ? (blockStyle.paintGlyphScale >= 2 ? static_cast<int>(blockStyle.paintGlyphScale) : 2)
+            : 0;
+
+    if (boundary > 0 && !blockStyle.smallCaps) {
       static constexpr size_t MAX_FOCUS_PREFIX_BYTES = 9 * 4 + 1;
       char boldBuf[40];
       static_assert(sizeof(boldBuf) >= MAX_FOCUS_PREFIX_BYTES,
@@ -214,11 +277,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(paintFontId, wordX, wordY, boldBuf, true, boldStyle, baseDir);
+      renderer.drawText(paintFontId, wordX, wordY, boldBuf, true, boldStyle, baseDir, dropNn);
       const int suffixX = wordX + focusSuffixXArr[i];
-      renderer.drawText(paintFontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir);
+      renderer.drawText(paintFontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir, dropNn);
     } else {
-      renderer.drawText(paintFontId, wordX, wordY, word, true, currentStyle, baseDir);
+      renderer.drawText(paintFontId, wordX, wordY, drawWord, true, currentStyle, baseDir, dropNn);
     }
 
     // Guide Dots: · placed after this word (offset measured at layout time).
@@ -308,6 +371,9 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.sizeStep);
   serialization::writePod(file, blockStyle.lineHeightPx);
   serialization::writePod(file, blockStyle.paintFontIdOverride);
+  serialization::writePod(file, static_cast<uint8_t>(blockStyle.smallCaps ? 1 : 0));
+  serialization::writePod(file, static_cast<uint8_t>(blockStyle.syntheticScale ? 1 : 0));
+  serialization::writePod(file, blockStyle.paintGlyphScale);
 
   return true;
 }
@@ -386,6 +452,17 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, blockStyle.sizeStep);
   serialization::readPod(file, blockStyle.lineHeightPx);
   serialization::readPod(file, blockStyle.paintFontIdOverride);
+  uint8_t smallCapsU8 = 0;
+  uint8_t syntheticScaleU8 = 0;
+  serialization::readPod(file, smallCapsU8);
+  serialization::readPod(file, syntheticScaleU8);
+  blockStyle.smallCaps = smallCapsU8 != 0;
+  blockStyle.syntheticScale = syntheticScaleU8 != 0;
+  // v73+: paintGlyphScale (0 = default 2× when DROP_CAP). SECTION version invalidates older bins.
+  serialization::readPod(file, blockStyle.paintGlyphScale);
+  if (blockStyle.paintGlyphScale > 4) {
+    blockStyle.paintGlyphScale = 0;
+  }
   // Guard corrupt/old partial reads: sizeStep must stay in 0..4; default to base.
   if (blockStyle.sizeStep > SIZE_STEP_MAX) {
     blockStyle.sizeStep = SIZE_STEP_BASE;

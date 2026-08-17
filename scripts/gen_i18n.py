@@ -113,6 +113,7 @@ def parse_yaml_file(filepath: str) -> Dict[str, str]:
 def load_translations(
     translations_dir: str,
     verbose: bool = False,
+    english_only: bool = False,
 ) -> Tuple[List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
     """
     Read every YAML file in *translations_dir* and return:
@@ -121,7 +122,8 @@ def load_translations(
         string_keys      ordered list of STR_* keys (from English)
         translations     {key: [translation_per_language]}
 
-    English is always first;
+    English is always first.
+    When english_only is True, only english.yaml is loaded (flash cut for product).
     """
     yaml_dir = Path(translations_dir)
     if not yaml_dir.is_dir():
@@ -131,10 +133,17 @@ def load_translations(
     if not yaml_files:
         raise FileNotFoundError(f"No .yaml files found in {translations_dir}")
 
-    # Parse every file
+    # Parse every file (or English only for thin product firmware).
     parsed: Dict[str, Dict[str, str]] = {}
     for yf in yaml_files:
-        parsed[yf.name] = parse_yaml_file(str(yf))
+        data = parse_yaml_file(str(yf))
+        if english_only and data.get("_language_code", "").upper() != "EN":
+            continue
+        parsed[yf.name] = data
+    if english_only and not parsed:
+        raise ValueError("english_only set but no YAML with _language_code: EN found")
+    if english_only and verbose:
+        print("I18n: ENGLISH ONLY (CASPER_I18N_ENGLISH_ONLY) — other languages omitted from flash")
 
     # Identify the English file (must exist)
     english_file = None
@@ -549,17 +558,20 @@ def generate_keys_header(
     lines.append('              "SORTED_LANGUAGE_INDICES size mismatch");')
     lines.append("")
 
-    # V1 language.bin migration table -- frozen enum order from commit 2f969a9.
+    # V1 language.bin migration table -- frozen index order from commit 2f969a9.
     # Maps the old uint8_t index stored on disk to the current Language enum.
-    # If a Language enum value listed here is ever removed, this will fail to
-    # compile, signalling that the migration table needs updating.
+    # When product builds ship a language subset (e.g. English-only), unknown
+    # codes fall back to Language::EN so legacy settings still load.
     v1_codes = [
         "EN", "ES", "FR", "DE", "CS", "PT", "RU", "SV", "RO", "CA", "UK",
         "BE", "IT", "PL", "FI", "DA", "NL", "TR", "KK", "HU", "LT", "SI",
     ]
+    present = set(languages)
+    mapped = [c if c in present else "EN" for c in v1_codes]
     lines.append("// V1 language.bin migration table (frozen enum order from 2f969a9)")
+    lines.append("// Missing product languages map to EN (subset builds).")
     lines.append("constexpr Language V1_LANGUAGES[] = {")
-    lines.append("    " + ", ".join(f"Language::{c}" for c in v1_codes) + ",")
+    lines.append("    " + ", ".join(f"Language::{c}" for c in mapped) + ",")
     lines.append("};")
     lines.append(
         f"constexpr uint8_t V1_LANGUAGE_COUNT = {len(v1_codes)};"
@@ -824,6 +836,7 @@ def main(
     src_dirs: Optional[List[str]] = None,
     strip_unused: bool = False,
     verbose: bool = False,
+    english_only: bool = False,
 ) -> None:
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
@@ -853,11 +866,14 @@ def main(
     if verbose:
         print(f"Reading translations from: {translations_dir}")
         print(f"Output directory: {output_dir}")
+        if english_only:
+            print("Mode: English only")
         print()
 
     try:
         languages, language_names, string_keys, translations, inherited_sets = (
-            load_translations(translations_dir, verbose)
+            load_translations(translations_dir, verbose, english_only=english_only)
+
         )
 
         # --- Unused-string detection ---
@@ -987,6 +1003,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Print per-key INFO/WARNING messages and file generation details",
     )
+    parser.add_argument(
+        "--english-only",
+        action="store_true",
+        help="Emit only English strings (Casper thin product flash cut)",
+    )
     args = parser.parse_args()
     main(
         args.translations_dir,
@@ -994,10 +1015,25 @@ if __name__ == "__main__":
         args.src_dirs,
         args.strip_unused,
         args.verbose,
+        english_only=args.english_only,
     )
 else:
     try:
-        Import("env")
-        main(strip_unused=True)
+        Import("env")  # type: ignore[name-defined]
+        # Default: all languages (CrossPoint-compatible). Opt into EN-only with
+        # -DCASPER_I18N_ENGLISH_ONLY=1. CASPER_I18N_ALL forces full set if both set.
+        cpp = env.Flatten(env.get("CPPDEFINES", []))  # type: ignore[name-defined]
+        def _has_define(name: str) -> bool:
+            for d in cpp:
+                if d == name:
+                    return True
+                if isinstance(d, (list, tuple)) and d and d[0] == name:
+                    return True
+                if isinstance(d, str) and (d == name or d.startswith(name + "=")):
+                    return True
+            return False
+
+        en_only = _has_define("CASPER_I18N_ENGLISH_ONLY") and not _has_define("CASPER_I18N_ALL")
+        main(strip_unused=True, english_only=en_only)
     except NameError:
         pass

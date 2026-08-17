@@ -13,20 +13,28 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <RivuletEngine.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <builtinFonts/all.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 #include <cstring>
 
-#include "CrossPointSettings.h"
-#include "CrossPointState.h"
-#include "KOReaderCredentialStore.h"
+// Pulls lib/Rivulet into the link for bring-up (not the active reader path yet).
+static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
+
+#include "CasperSettings.h"
+#include "CasperState.h"
+#include "casper/CasperProduct.h"
 #include "MappedInputManager.h"
+#include "KOReaderCredentialStore.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "WifiCredentialStore.h"
 #include "SdCardFontSystem.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
@@ -37,17 +45,14 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "images/MoonIcon.h"
 #include "util/ButtonNavigator.h"
+
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SleepChromeIcon.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
-
-#if FREEINK_CAP_BLE_HID_HOST
-// Symbol defined in NimBLE-Arduino (patched) / BleKeyboardHost; declare for log.
-extern "C" bool btInUse(void);
-#endif
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -61,33 +66,33 @@ static bool longPowerButtonHandled = false;
 void enterDeepSleep(bool fromTimeout = false, bool powerQuickResume = false);
 
 // Global long-press power actions that fire while still held (sleep / QR / refresh).
-static bool isGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
-  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
-         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME ||
-         action == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH;
+static bool isGlobalPowerButtonAction(const CasperSettings::SHORT_PWRBTN action) {
+  return action == CasperSettings::SHORT_PWRBTN::SLEEP ||
+         action == CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME ||
+         action == CasperSettings::SHORT_PWRBTN::FORCE_REFRESH;
 }
 
-static bool isSleepStylePowerAction(const CrossPointSettings::SHORT_PWRBTN action) {
-  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
-         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
+static bool isSleepStylePowerAction(const CasperSettings::SHORT_PWRBTN action) {
+  return action == CasperSettings::SHORT_PWRBTN::SLEEP ||
+         action == CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
 }
 
-static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
+static CasperSettings::SHORT_PWRBTN getPowerButtonAction() {
   const unsigned long held = gpio.getPowerButtonHeldTime();
-  const auto shortAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn);
-  const auto longAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+  const auto shortAction = static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn);
+  const auto longAction = static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
   const unsigned long longMs = SETTINGS.getPowerButtonLongPressDuration();
 
   if (mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     if (longPowerButtonHandled) {
       // Wake latch or long-hold action already ran while pressed (e.g. Force Refresh).
       longPowerButtonHandled = false;
-      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+      return CasperSettings::SHORT_PWRBTN::IGNORE;
     }
     // Long hold past threshold with a while-held global action: that action should
     // have fired on the hold. Never also run short sleep/QR on release.
     if (held >= longMs && isGlobalPowerButtonAction(longAction)) {
-      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+      return CasperSettings::SHORT_PWRBTN::IGNORE;
     }
     // Sleep / Quick Resume short actions fire on release for true short taps.
     if (isSleepStylePowerAction(shortAction)) {
@@ -97,26 +102,26 @@ static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
   }
 
   if (longPowerButtonHandled || !gpio.isPressed(HalGPIO::BTN_POWER) || held < longMs) {
-    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+    return CasperSettings::SHORT_PWRBTN::IGNORE;
   }
 
   // While held past threshold: only fire long if it is a global sleep/QR/refresh.
   if (!isGlobalPowerButtonAction(longAction)) {
-    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
+    return CasperSettings::SHORT_PWRBTN::IGNORE;
   }
   longPowerButtonHandled = true;
   return longAction;
 }
 
-static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
+static bool handleGlobalPowerButtonAction(const CasperSettings::SHORT_PWRBTN action) {
   switch (action) {
-    case CrossPointSettings::SHORT_PWRBTN::SLEEP:
+    case CasperSettings::SHORT_PWRBTN::SLEEP:
       enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/false);
       return true;
-    case CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME:
+    case CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME:
       enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/true);
       return true;
-    case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
+    case CasperSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
       SystemLog::logTiming("MAIN", "force_refresh long-power held=%lums",
                            static_cast<unsigned long>(gpio.getPowerButtonHeldTime()));
@@ -134,35 +139,32 @@ static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN
   }
 }
 
-// Reader + UI: Source Serif 4 (default) and Lexend Deca (OFL sans). Sizes 8–18.
+// Reader body: Literata + Source Serif at 10/12/14/16. Source Serif 8 = UI chrome only.
 #ifndef OMIT_FONTS
-EpdFont lexend8RegularFont(&lexenddeca_8_regular);
-EpdFontFamily lexend8FontFamily(&lexend8RegularFont);
-EpdFont lexend10RegularFont(&lexenddeca_10_regular);
-EpdFont lexend10BoldFont(&lexenddeca_10_bold);
-EpdFont lexend10ItalicFont(&lexenddeca_10_italic);
-EpdFont lexend10BoldItalicFont(&lexenddeca_10_bolditalic);
-EpdFontFamily lexend10FontFamily(&lexend10RegularFont, &lexend10BoldFont, &lexend10ItalicFont, &lexend10BoldItalicFont);
-EpdFont lexend12RegularFont(&lexenddeca_12_regular);
-EpdFont lexend12BoldFont(&lexenddeca_12_bold);
-EpdFont lexend12ItalicFont(&lexenddeca_12_italic);
-EpdFont lexend12BoldItalicFont(&lexenddeca_12_bolditalic);
-EpdFontFamily lexend12FontFamily(&lexend12RegularFont, &lexend12BoldFont, &lexend12ItalicFont, &lexend12BoldItalicFont);
-EpdFont lexend14RegularFont(&lexenddeca_14_regular);
-EpdFont lexend14BoldFont(&lexenddeca_14_bold);
-EpdFont lexend14ItalicFont(&lexenddeca_14_italic);
-EpdFont lexend14BoldItalicFont(&lexenddeca_14_bolditalic);
-EpdFontFamily lexend14FontFamily(&lexend14RegularFont, &lexend14BoldFont, &lexend14ItalicFont, &lexend14BoldItalicFont);
-EpdFont lexend16RegularFont(&lexenddeca_16_regular);
-EpdFont lexend16BoldFont(&lexenddeca_16_bold);
-EpdFont lexend16ItalicFont(&lexenddeca_16_italic);
-EpdFont lexend16BoldItalicFont(&lexenddeca_16_bolditalic);
-EpdFontFamily lexend16FontFamily(&lexend16RegularFont, &lexend16BoldFont, &lexend16ItalicFont, &lexend16BoldItalicFont);
-EpdFont lexend18RegularFont(&lexenddeca_18_regular);
-EpdFont lexend18BoldFont(&lexenddeca_18_bold);
-EpdFont lexend18ItalicFont(&lexenddeca_18_italic);
-EpdFont lexend18BoldItalicFont(&lexenddeca_18_bolditalic);
-EpdFontFamily lexend18FontFamily(&lexend18RegularFont, &lexend18BoldFont, &lexend18ItalicFont, &lexend18BoldItalicFont);
+EpdFont literata10RegularFont(&literata_10_regular);
+EpdFont literata10BoldFont(&literata_10_bold);
+EpdFont literata10ItalicFont(&literata_10_italic);
+EpdFont literata10BoldItalicFont(&literata_10_bolditalic);
+EpdFontFamily literata10FontFamily(&literata10RegularFont, &literata10BoldFont, &literata10ItalicFont,
+                                   &literata10BoldItalicFont);
+EpdFont literata12RegularFont(&literata_12_regular);
+EpdFont literata12BoldFont(&literata_12_bold);
+EpdFont literata12ItalicFont(&literata_12_italic);
+EpdFont literata12BoldItalicFont(&literata_12_bolditalic);
+EpdFontFamily literata12FontFamily(&literata12RegularFont, &literata12BoldFont, &literata12ItalicFont,
+                                   &literata12BoldItalicFont);
+EpdFont literata14RegularFont(&literata_14_regular);
+EpdFont literata14BoldFont(&literata_14_bold);
+EpdFont literata14ItalicFont(&literata_14_italic);
+EpdFont literata14BoldItalicFont(&literata_14_bolditalic);
+EpdFontFamily literata14FontFamily(&literata14RegularFont, &literata14BoldFont, &literata14ItalicFont,
+                                   &literata14BoldItalicFont);
+EpdFont literata16RegularFont(&literata_16_regular);
+EpdFont literata16BoldFont(&literata_16_bold);
+EpdFont literata16ItalicFont(&literata_16_italic);
+EpdFont literata16BoldItalicFont(&literata_16_bolditalic);
+EpdFontFamily literata16FontFamily(&literata16RegularFont, &literata16BoldFont, &literata16ItalicFont,
+                                   &literata16BoldItalicFont);
 
 // Penumbra Recents: 8 pt author (regular only), 10 pt title (regular + bold focus).
 EpdFont sourceserif8RegularFont(&sourceserif4_8_regular);
@@ -188,6 +190,7 @@ EpdFont sourceserif16ItalicFont(&sourceserif4_16_italic);
 EpdFont sourceserif16BoldItalicFont(&sourceserif4_16_bolditalic);
 EpdFontFamily sourceserif16FontFamily(&sourceserif16RegularFont, &sourceserif16BoldFont, &sourceserif16ItalicFont,
                                       &sourceserif16BoldItalicFont);
+// Home large titles / UI (not offered as built-in reader body size).
 EpdFont sourceserif18RegularFont(&sourceserif4_18_regular);
 EpdFont sourceserif18BoldFont(&sourceserif4_18_bold);
 EpdFont sourceserif18ItalicFont(&sourceserif4_18_italic);
@@ -227,6 +230,24 @@ enum class BootResume : uint8_t {
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
 
+// WiFi/LWIP leave fragmented heap and sometimes sticky radio state across
+// ESP.restart() if only disconnect() is used. Tear the stack fully so the next
+// boot's power-save / clock path does not hang (seen after KOReader auth).
+static void tearDownWifiForSilentRestart() {
+  if (WiFi.getMode() == WIFI_MODE_NULL) {
+    return;
+  }
+  LOG_DBG("MAIN", "Silent restart: full WiFi teardown heap=%u maxAlloc=%u",
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  WiFi.disconnect(true /*wifioff*/, false /*eraseap*/);
+  delay(30);
+  WiFi.mode(WIFI_OFF);
+  delay(20);
+  // Best-effort; ignore errors if already stopped.
+  esp_wifi_stop();
+  delay(50);
+}
+
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
   silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
@@ -236,8 +257,12 @@ void silentRestart() {
   // Without an overlay, users don't see the reboot and fire input through to
   // Home. Select on the default selectorIndex=0 then opens the most-recent
   // book, looking like a trampoline back to the reader they just exited.
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  // Arm system-wide Dark Mode invert before the status label refreshes the panel
+  // (loop() is not running during silent restart).
+  renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
+  GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
   delay(50);
+  tearDownWifiForSilentRestart();
   ESP.restart();
 }
 
@@ -246,8 +271,10 @@ void silentRestartToReader() {
   silentRebootTarget = SILENT_REBOOT_TARGET_READER;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
+  GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
   delay(50);
+  tearDownWifiForSilentRestart();
   ESP.restart();
 }
 
@@ -280,18 +307,22 @@ static void saveSleepFrameBuffer() {
 }
 
 static bool loadSleepFrameBuffer() {
+  const char* path = SLEEP_FRAME_FILE;
   HalFile file;
-  if (!Storage.openFileForRead("SLP", SLEEP_FRAME_FILE, file)) return false;
+  if (!Storage.openFileForRead("SLP", path, file)) return false;
   const size_t bufferSize = display.getBufferSize();
   const size_t bytesRead = file.read(display.getFrameBuffer(), bufferSize);
   file.close();
   if (bytesRead != bufferSize) {
     LOG_ERR("MAIN", "sleep_frame load: read %u/%u", static_cast<unsigned>(bytesRead),
             static_cast<unsigned>(bufferSize));
-    Storage.remove(SLEEP_FRAME_FILE);
+    Storage.remove(path);
     return false;
   }
-  Storage.remove(SLEEP_FRAME_FILE);
+  Storage.remove(path);
+  if (path != SLEEP_FRAME_FILE && Storage.exists(SLEEP_FRAME_FILE)) {
+    Storage.remove(SLEEP_FRAME_FILE);
+  }
   return true;
 }
 
@@ -299,34 +330,63 @@ static bool loadSleepFrameBuffer() {
 // powerQuickResume: true when Short/Long power action is Quick Resume (not wallpaper Sleep).
 void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
-  // Resume target for Quick Resume: reader only if we actually slept in a book.
-  // Home / Settings / Library / etc. all wake to Home (Settings must never auto-resume).
-  APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+
+  // QR paint vs wallpaper: power action, idle timeout toggle, or legacy Sleep Screen == QR.
+  // Wake path is always seamless for intentional deep sleep (no boot logo) — wallpaper
+  // and last-frame both re-seed from sleep_frame and resume reader/home/settings like QR.
+  const bool isQuickResumeSleep =
+      powerQuickResume ||
+      (fromTimeout &&
+       SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
+      (!fromTimeout && !powerQuickResume &&
+       SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
+
+  // Classify resume target while activities still exist (reader / menu / settings / home).
+  // Must run before the moon so SleepChromeIcon uses the correct context + orientation
+  // (Landscape CCW moon must sit on the same edge as the reader status bar).
+  activityManager.persistForSleep();
+  APP_STATE.sleepResumeTarget = activityManager.classifySleepResumeTarget();
+  APP_STATE.lastSleepFromReader =
+      (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER ||
+       APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU);
   // Successful sleep from reader: clear crash-loop counter so the next QR can
-  // open the book (loadCount>=2 forces Home as a boot-loop guard).
+  // open the book (loadCount guard forces Home only after repeated mid-open panics).
   if (APP_STATE.lastSleepFromReader) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  // QR paint vs wallpaper: power action, idle timeout toggle, or legacy Sleep Screen == QR.
-  // Wake path is always seamless for intentional deep sleep (no boot logo) — wallpaper
-  // and last-frame both re-seed from sleep_frame and resume reader/home like QR.
-  const bool isQuickResumeSleep =
-      powerQuickResume ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
-      (!fromTimeout && !powerQuickResume &&
-       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
+  // Instant feedback: moon on the retained page *before* heavy SD / teardown so
+  // the user sees the device reacted the moment they pressed power.
+  if (isQuickResumeSleep) {
+    // System-wide: keep invertOnDisplay so light paint-space FB stays dark on glass.
+    // Reader-only: FB is light; temporary invert so the moon lands on a dark page
+    // without permanently flipping bits (home must stay light paint-space).
+    const bool sysWideDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
+    const bool readerOnlyDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0;
+    renderer.setInvertOnDisplay(sysWideDark);
+    SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
+    if (readerOnlyDark && APP_STATE.lastSleepFromReader) {
+      renderer.invertScreen();
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      renderer.invertScreen();
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+  }
+
   // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.
   APP_STATE.showBootScreen = false;
+  APP_STATE.lastSleepRenderedQuickResume = isQuickResumeSleep;
 
   APP_STATE.saveToFile();
   // Persist settings before power-off so remaps (and other in-RAM settings)
   // are not lost if a prior save failed or never ran.
   SETTINGS.saveToFile();
 
-  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d qr=%d lastSleepFromReader=%d", fromTimeout ? 1 : 0,
-                       isQuickResumeSleep ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0);
+  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d qr=%d target=%u lastReader=%d pathEmpty=%d",
+                       fromTimeout ? 1 : 0, isQuickResumeSleep ? 1 : 0,
+                       static_cast<unsigned>(APP_STATE.sleepResumeTarget),
+                       APP_STATE.lastSleepFromReader ? 1 : 0, APP_STATE.openEpubPath.empty() ? 1 : 0);
   SystemLog::flush();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
@@ -378,13 +438,12 @@ void setupDisplayAndFonts(bool seamless = false) {
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
 #ifndef OMIT_FONTS
-  renderer.insertFont(LEXENDDECA_8_FONT_ID, lexend8FontFamily);
-  renderer.insertFont(LEXENDDECA_10_FONT_ID, lexend10FontFamily);
-  renderer.insertFont(LEXENDDECA_12_FONT_ID, lexend12FontFamily);
-  renderer.insertFont(LEXENDDECA_14_FONT_ID, lexend14FontFamily);
-  renderer.insertFont(LEXENDDECA_16_FONT_ID, lexend16FontFamily);
-  renderer.insertFont(LEXENDDECA_18_FONT_ID, lexend18FontFamily);
+  renderer.insertFont(LITERATA_10_FONT_ID, literata10FontFamily);
+  renderer.insertFont(LITERATA_12_FONT_ID, literata12FontFamily);
+  renderer.insertFont(LITERATA_14_FONT_ID, literata14FontFamily);
+  renderer.insertFont(LITERATA_16_FONT_ID, literata16FontFamily);
   // UI_10/UI_12 alias Source Serif 12/14 — insert full families once.
+  // Source Serif 8: UI chrome only (not a reader body size in the ship set).
   renderer.insertFont(SOURCESERIF4_8_FONT_ID, sourceserif8FontFamily);
   renderer.insertFont(SOURCESERIF4_10_FONT_ID, sourceserif10FontFamily);
   renderer.insertFont(SOURCESERIF4_12_FONT_ID, sourceserif12FontFamily);
@@ -401,8 +460,20 @@ void setupDisplayAndFonts(bool seamless = false) {
   LOG_DBG("MAIN", "Fonts setup");
 }
 
-void setup() {
+// Xteink C3: GPIO13 is the X4 battery MOSFET latch AND the X3 SD power rail.
+// Re-assert after board detect — a prior sleep/firmware can leave the pin held LOW.
+static void ensureXteinkStayAlive() {
   BoardConfig::holdPowerRails();
+  BoardConfig::releaseSdRail();
+#if defined(FREEINK_MCU_C3) && FREEINK_MCU_C3
+  gpio_hold_dis(static_cast<gpio_num_t>(13));
+  pinMode(13, OUTPUT);
+  digitalWrite(13, HIGH);
+#endif
+}
+
+void setup() {
+  ensureXteinkStayAlive();
 
   t1 = millis();
 
@@ -430,6 +501,7 @@ void setup() {
   silentRebootTarget = 0;
 
   gpio.begin();
+  ensureXteinkStayAlive();  // board profile may have switched X3↔X4
   powerManager.begin();
   halTiltSensor.begin();
   halClock.begin();
@@ -449,6 +521,11 @@ void setup() {
   // stamps new files 12/31/2025 11:00 PM. Install once with no offset, then again
   // after settings so UTC offset is correct for crash_report and all later files.
   Storage.installDateTimeCallback(nullptr);
+
+  // Casper product: no boot migrate, no dual-read (see CasperProduct.h).
+  static_assert(!CasperProduct::kHasBootForeignMigrate, "boot migrate must stay off");
+  static_assert(!CasperProduct::kRuntimeDualReadForeign, "dual-read must stay off");
+
   SETTINGS.loadFromFile();
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
   HalSystem::checkPanic();
@@ -460,10 +537,16 @@ void setup() {
   // Detect sleep-wake → book early so we can skip non-critical boot work.
   // PowerButton covers: deep-sleep GPIO wake (X3 / X4+USB) and X4 battery latch
   // POWERON (MCU fully powered off in sleep). Flash/USB are never PowerButton.
-  // Do not require showBootScreen=false — that flag is advisory; a failed state
-  // save must not block resume-to-book or force the boot logo.
-  const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton && APP_STATE.lastSleepFromReader &&
-                        !APP_STATE.openEpubPath.empty() && APP_STATE.readerActivityLoadCount < 2;
+  // loadCount >= 3: one flaky open must not permanently force Home; repeated mid-open
+  // panics still trip the guard. success and sleep-from-reader reset it.
+  // Target READER/READER_MENU always; legacy state (HOME default + lastSleepFromReader)
+  // still reopens the book. SETTINGS never routes to book.
+  const bool qrToBook = wakeupReason == HalGPIO::WakeupReason::PowerButton &&
+                        !APP_STATE.openEpubPath.empty() && APP_STATE.readerActivityLoadCount < 3 &&
+                        (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER ||
+                         APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU ||
+                         (APP_STATE.lastSleepFromReader &&
+                          APP_STATE.sleepResumeTarget != CasperState::RESUME_SETTINGS));
 
   // Defer recents/KOReader/OPDS SD reads until after first ink on QR→book
   // (saves ~50–150ms and SD contention before the page is readable).
@@ -471,6 +554,7 @@ void setup() {
     RECENT_BOOKS.loadFromFile();
     KOREADER_STORE.loadFromFile();
     OPDS_STORE.loadFromFile();
+    WIFI_STORE.loadFromFile();
   }
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   UITheme::getInstance().reload();
@@ -484,9 +568,14 @@ void setup() {
   // power press cannot reopen the last book (flash → USB sleep → power loop).
   // Do NOT clear on PowerButton — that is a real sleep wake (incl. X4 battery).
   auto clearStickyReaderWake = []() {
-    if (!APP_STATE.lastSleepFromReader && APP_STATE.showBootScreen) return;
+    if (!APP_STATE.lastSleepFromReader && APP_STATE.showBootScreen &&
+        APP_STATE.sleepResumeTarget == CasperState::RESUME_HOME && !APP_STATE.lastSleepRenderedQuickResume) {
+      return;
+    }
     APP_STATE.lastSleepFromReader = false;
     APP_STATE.showBootScreen = true;
+    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
+    APP_STATE.lastSleepRenderedQuickResume = false;
     APP_STATE.saveToFile();
     LOG_DBG("MAIN", "Cleared sticky lastSleepFromReader (non power-button boot)");
   };
@@ -494,13 +583,11 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration (sleep wake)");
-      // Short-tap wake must be allowed for both Sleep and Quick Resume short-power
-      // actions. When shortPressAllowed is false, a released button (normal quick
-      // tap) fails verification and immediately re-enters deep sleep — looks like
-      // "won't wake" especially after sleeping from Settings / Home (QR default).
-      if (!gpio.verifyPowerButtonWakeup(
-              SETTINGS.getPowerButtonDuration(),
-              isSleepStylePowerAction(static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)))) {
+      // Always accept a short power press after intentional deep sleep (X3-like).
+      // Gating short-wake on shortPwrBtn==SLEEP/QR made short taps re-sleep when
+      // long was sleep or settings were mismatched — felt like "long press only".
+      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+                                        /*shortPressAllowed=*/true)) {
         powerManager.startDeepSleep(gpio);
       }
       break;
@@ -541,14 +628,7 @@ void setup() {
   }
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
-  LOG_DBG("MAIN", "Starting Casper version " CROSSPOINT_VERSION);
-#if FREEINK_CAP_BLE_HID_HOST
-  // Fingerprint for the BT-memory-retention fix: with btInUse() true the
-  // controller BSS is kept and free heap at boot is ~35-40 KB lower than when
-  // Arduino released it (old builds sat near 83-98 KB free on X3 Home).
-  LOG_INF("MAIN", "btInUse=%d heap=%u maxAlloc=%u", btInUse() ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()),
-          static_cast<unsigned>(ESP.getMaxAllocHeap()));
-#endif
+  LOG_DBG("MAIN", "Starting Casper version " CASPER_VERSION);
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -588,12 +668,20 @@ void setup() {
     case BootResume::QuickResume: {
       // One-shot flag: re-arm cold-boot splash (saved after first ink on QR→book).
       APP_STATE.showBootScreen = true;
-      // Resume reader only if last sleep was in a book; else Home (Settings never auto-resumes).
+      APP_STATE.lastSleepRenderedQuickResume = false;
+      // Resume destination from sleep: book, book menu, settings, or home.
       const bool qrOpenBook = qrToBook && !mappedInputManager.isPressed(MappedInputManager::Button::Back);
-      SystemLog::logTiming("QR", "power wake openBook=%d lastReader=%d pathEmpty=%d", qrOpenBook ? 1 : 0,
+      const bool qrOpenSettings =
+          !qrOpenBook && APP_STATE.sleepResumeTarget == CasperState::RESUME_SETTINGS &&
+          !mappedInputManager.isPressed(MappedInputManager::Button::Back);
+      SystemLog::logTiming("QR", "power wake openBook=%d settings=%d target=%u lastReader=%d pathEmpty=%d",
+                           qrOpenBook ? 1 : 0, qrOpenSettings ? 1 : 0,
+                           static_cast<unsigned>(APP_STATE.sleepResumeTarget),
                            APP_STATE.lastSleepFromReader ? 1 : 0, APP_STATE.openEpubPath.empty() ? 1 : 0);
       if (QrTimingLog::active()) {
-        QrTimingLog::line("qr_plan openBook=%d pathEmpty=%d lastReader=%d loadCount=%u", qrOpenBook ? 1 : 0,
+        QrTimingLog::line("qr_plan openBook=%d settings=%d target=%u pathEmpty=%d lastReader=%d loadCount=%u",
+                          qrOpenBook ? 1 : 0, qrOpenSettings ? 1 : 0,
+                          static_cast<unsigned>(APP_STATE.sleepResumeTarget),
                           APP_STATE.openEpubPath.empty() ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0,
                           static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
       }
@@ -601,16 +689,23 @@ void setup() {
         if (QrTimingLog::active()) QrTimingLog::line("after loadSleepFrameBuffer");
         // Re-seed controller "previous" plane from the restored FB (X3 DTM1 / X4 RED).
         renderer.cleanupGrayscaleWithFrameBuffer();
-        if (qrOpenBook) {
-          // Leave sleep image (wallpaper or moon-on-page) on glass; first page FAST replaces it.
-          if (QrTimingLog::active()) QrTimingLog::line("sleep frame kept (no spinner; open book next)");
-        } else {
-          // Landing on Home: optional chrome loading icon over retained sleep image.
+        // QR→book: keep moon/page on glass — do NOT FAST the panel before first
+        // ink (was a full ~0.5–1s X3 wait on every wake vs 0.1.5). First page
+        // paint replaces the frame. Non-book wakes still show moon→dots feedback.
+        if (!qrOpenBook) {
+          const bool readerOnlyDarkWake =
+              SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0;
           SleepChromeIcon::replaceAtTopChrome(renderer, LoadingIcon, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-          // Plain FAST only — do not use displayGrayscaleBase here (AA-pre-BW mid
-          // is grayscale preconditioning and leaves white muddy if no greys follow).
-          renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-          if (QrTimingLog::active()) QrTimingLog::line("after sleep-frame loading-icon panel update");
+          if (readerOnlyDarkWake) {
+            renderer.invertScreen();
+            renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+            renderer.invertScreen();
+          } else {
+            renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+          }
+          if (QrTimingLog::active()) QrTimingLog::line("after moon→dots (non-book QR)");
+        } else if (QrTimingLog::active()) {
+          QrTimingLog::line("QR→book: skip pre-ink panel FAST (glass kept)");
         }
       } else {
         // Never show BootActivity here — glass already holds wallpaper/moon through
@@ -619,7 +714,7 @@ void setup() {
         if (QrTimingLog::active()) QrTimingLog::line("sleep_frame MISSING — keep glass (no splash)");
       }
       // QR→book: defer APP_STATE.save (showBootScreen) until after first ink — SD write
-      // was ~200ms on the critical path. Non-book QR still saves now (home is less latency-critical).
+      // was ~200ms on the critical path. Non-book QR still saves now.
       if (!qrOpenBook) {
         APP_STATE.saveToFile();
         if (QrTimingLog::active()) QrTimingLog::line("after showBootScreen saveToFile");
@@ -647,6 +742,20 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (resume == BootResume::QuickResume &&
+             APP_STATE.sleepResumeTarget == CasperState::RESUME_SETTINGS &&
+             !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Slept in Settings — land back in Settings without a Loading flash.
+    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
+    activityManager.goHome();
+    activityManager.goToSettings();
+    // Drain deferred Push (Home may enter sync; Settings is always pushed).
+    activityManager.loop();
+    activityManager.requestUpdateAndWait();
+    if (QrTimingLog::active()) {
+      QrTimingLog::line("QR → Settings");
+      QrTimingLog::end("settings_resume");
+    }
   } else if (resume != BootResume::QuickResume || !qrToBook ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
     // Home for splash / after flash / non-reader sleep / Back held.
@@ -656,16 +765,25 @@ void setup() {
       RECENT_BOOKS.loadFromFile();
       KOREADER_STORE.loadFromFile();
       OPDS_STORE.loadFromFile();
+      WIFI_STORE.loadFromFile();
     }
+    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
     activityManager.goHome();
   } else {
-    // Sleep-from-reader QuickResume: open book. On QR, push first ink in setup
-    // before waiting for power release — waitForPowerRelease used to block the
-    // entire open until the user let go of the wake press.
+    // Sleep-from-reader QuickResume: open book (and optionally book menu).
+    // On QR, push first ink in setup before waiting for power release.
+    //
+    // Keep openEpubPath sticky until open succeeds (YACP-style). Clearing it
+    // before first ink caused pathEmpty=1 on the next wake whenever deferred
+    // path restore had not run yet — QR dumped users on Home.
     const auto path = APP_STATE.openEpubPath;
-    APP_STATE.openEpubPath = "";
+    // Preserve menu target for Rivulet onEnter (openReaderMenu after load).
+    if (APP_STATE.sleepResumeTarget != CasperState::RESUME_READER_MENU) {
+      APP_STATE.sleepResumeTarget = CasperState::RESUME_READER;
+    }
     APP_STATE.readerActivityLoadCount++;
-    // Defer APP_STATE SD write on QR (showBootScreen + loadCount) until after first ink.
+    // Non-QR: persist loadCount before open so a mid-open crash trips the guard.
+    // QR: defer SD write until after first ink (latency), but never wipe the path.
     if (resume != BootResume::QuickResume) {
       APP_STATE.saveToFile();
     }
@@ -674,7 +792,8 @@ void setup() {
                                    /*deferFirstPageTextAa=*/SETTINGS.textAntiAliasing != 0);
     }
     if (QrTimingLog::active()) {
-      QrTimingLog::line("before goToReader path=%s lastReader=1 loadCount=%u", path.c_str(),
+      QrTimingLog::line("before goToReader path=%s target=%u loadCount=%u stickyPath=1", path.c_str(),
+                        static_cast<unsigned>(APP_STATE.sleepResumeTarget),
                         static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
     }
     activityManager.goToReader(path);
@@ -686,11 +805,24 @@ void setup() {
       if (QrTimingLog::active()) QrTimingLog::line("after activityManager.loop drain");
       activityManager.requestUpdateAndWait();
       if (QrTimingLog::active()) QrTimingLog::line("after first_ink wait");
-      // Now safe to touch SD for deferred boot work.
+      // Open landed: keep path, clear crash-loop counter. Failed open leaves path
+      // sticky for the next power wake (loadCount still elevated).
+      if (activityManager.isReaderActivity()) {
+        APP_STATE.openEpubPath = path;
+        APP_STATE.readerActivityLoadCount = 0;
+        if (QrTimingLog::active()) QrTimingLog::line("QR open OK path sticky loadCount=0");
+      } else {
+        APP_STATE.openEpubPath = path;  // never blank the last book on fail
+        if (QrTimingLog::active()) {
+          QrTimingLog::line("QR open FAILED (not reader) path kept loadCount=%u",
+                            static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+        }
+      }
       APP_STATE.saveToFile();
       RECENT_BOOKS.loadFromFile();
       KOREADER_STORE.loadFromFile();
       OPDS_STORE.loadFromFile();
+      WIFI_STORE.loadFromFile();
       if (QrTimingLog::active()) {
         QrTimingLog::line("after deferred stores+save");
         QrTimingLog::end("first_ink_setup");
@@ -737,13 +869,15 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CasperSettings::SHORT_PWRBTN::SLEEP ||
                                                  SETTINGS.shortPwrBtn ==
-                                                     CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
+                                                     CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   renderer.setFadingFix(SETTINGS.fadingFix);
+  // Whole-UI Dark Mode (Display → Dark Mode, Reader Only Off). Reader-only uses paint invert.
+  renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
@@ -809,7 +943,7 @@ void loop() {
   }
 
   // Short vs long power: long held triggers global sleep/refresh immediately;
-  // release dispatches the short or long action (CrossInk-style).
+  // release dispatches the short or long action (legacy-style).
   //
   // Do NOT clear longPowerButtonHandled merely because power is up. Force Refresh
   // blocks for ~1–3s (HALF scrub); the user usually releases during that scrub.

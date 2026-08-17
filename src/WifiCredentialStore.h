@@ -12,9 +12,8 @@ struct WifiCredential {
 
 /**
  * Singleton class for storing WiFi credentials on the SD card.
- * Uses the shared CrossPoint/CrossInk wifi.json format: password_obf is
- * base64(XOR("CPV1" || salt[4] || password, eFuse MAC)). Same file works when
- * swapping firmwares on the same device (MAC-tied; not cryptographically secure).
+ * wifi.json format: password_obf is base64(XOR("CPV1" || salt[4] || password,
+ * eFuse MAC)). MAC-tied obfuscation (not cryptographically secure).
  */
 class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
  private:
@@ -30,6 +29,7 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
 
  public:
   static const char* getFilePath() { return "/.crosspoint/wifi.json"; }
+
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 

@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "components/UITheme.h"
 
 bool MappedInputManager::isNavDirectionSwapped() const {
@@ -28,43 +28,90 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
   const auto sideLayout = SETTINGS.sideButtonLayout;
   const bool orientSwap = isNavDirectionSwapped();
 
-  // Any physical key (front or side) assigned this function.
-  auto anyWithFunc = [&](const uint8_t func) -> bool {
-    for (uint8_t hw = 0; hw < CrossPointSettings::HW_REMAP_BUTTON_COUNT; hw++) {
+  // Front slots are hw 0–3; side slots are hw 4–5 (X3 left/right, X4 upper/lower).
+  // Orient Front Buttons must only re-map the front cluster — side polarity stays
+  // under Side Button Layout so Landscape CCW does not invert page-turn sides.
+  constexpr uint8_t kFrontCount = 4;
+  constexpr uint8_t kHwCount = CasperSettings::HW_REMAP_BUTTON_COUNT;
+
+  auto anyFrontWithFunc = [&](const uint8_t func) -> bool {
+    for (uint8_t hw = 0; hw < kFrontCount && hw < kHwCount; hw++) {
       if (SETTINGS.hwButtonFunction[hw] == func && (gpio.*fn)(hw)) return true;
     }
     return false;
   };
+  auto anySideWithFunc = [&](const uint8_t func) -> bool {
+    for (uint8_t hw = kFrontCount; hw < kHwCount; hw++) {
+      if (SETTINGS.hwButtonFunction[hw] == func && (gpio.*fn)(hw)) return true;
+    }
+    return false;
+  };
+  // Any physical key (front or side) assigned this function.
+  auto anyWithFunc = [&](const uint8_t func) -> bool {
+    return anyFrontWithFunc(func) || anySideWithFunc(func);
+  };
 
   switch (button) {
     case Button::Back:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_BACK);
+      return anyWithFunc(CasperSettings::BTN_FUNC_BACK);
     case Button::Confirm:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_CONFIRM);
+      return anyWithFunc(CasperSettings::BTN_FUNC_CONFIRM);
+    // Left/Right/Up/Down are *logical* screen directions. When Orient Front
+    // Buttons follows Portrait 180° / Landscape CCW, front slots are mirrored
+    // so the pill labeled "Up" moves up (mapLabels already swaps captions).
+    // Side keys keep their assigned function — side polarity is Side Button Layout.
     case Button::Left:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
+      if (orientSwap) {
+        return anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT) ||
+               anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+      }
+      return anyWithFunc(CasperSettings::BTN_FUNC_LEFT);
     case Button::Right:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
+      if (orientSwap) {
+        return anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT) ||
+               anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+      }
+      return anyWithFunc(CasperSettings::BTN_FUNC_RIGHT);
     case Button::Up:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_UP);
+      if (orientSwap) {
+        return anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
+               anySideWithFunc(CasperSettings::BTN_FUNC_UP);
+      }
+      return anyWithFunc(CasperSettings::BTN_FUNC_UP);
     case Button::Down:
-      return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN);
+      if (orientSwap) {
+        return anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
+               anySideWithFunc(CasperSettings::BTN_FUNC_DOWN);
+      }
+      return anyWithFunc(CasperSettings::BTN_FUNC_DOWN);
     case Button::Power:
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
     case Button::PageBack: {
-      // Page turn uses Up/Down + Left/Right. Side layout swaps axes; orientSwap reverses
-      // both so Portrait 180 / landscape keep "forward" feeling correct. (Previously only
-      // Left/Right were flipped in detectPageTurn — Up/Down never followed orientation.)
-      const bool prevIsUpLeft = (sideLayout == CrossPointSettings::PREV_NEXT) != orientSwap;
+      // Page turn uses Up/Down + Left/Right. Side layout sets base polarity;
+      // orientSwap applies to front only so Portrait 180 / Landscape CCW keep
+      // front "forward" correct without flipping side prev/next feel.
+      const bool frontPrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT) != orientSwap;
+      const bool sidePrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT);
       switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-        case CrossPointSettings::NEXT_PREV:
-          if (prevIsUpLeft) {
-            return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
+        case CasperSettings::PREV_NEXT:
+        case CasperSettings::NEXT_PREV: {
+          bool hit = false;
+          if (sidePrevIsUpLeft) {
+            hit = anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+          } else {
+            hit = anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
           }
-          return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
+          if (frontPrevIsUpLeft) {
+            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
+                  anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
+          } else {
+            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
+                  anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+          }
+          return hit;
+        }
+        case CasperSettings::SIDE_BUTTONS_DISABLED:
         default:
           // Still allow remapped front Up/Down/Left/Right for page turn when "sides disabled"
           // only meant the side-layout enum; keep prior behavior (no page from layout).
@@ -72,26 +119,38 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       }
     }
     case Button::PageForward: {
-      const bool nextIsDownRight = (sideLayout == CrossPointSettings::PREV_NEXT) != orientSwap;
+      const bool frontNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT) != orientSwap;
+      const bool sideNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT);
       switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-        case CrossPointSettings::NEXT_PREV:
-          if (nextIsDownRight) {
-            return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
+        case CasperSettings::PREV_NEXT:
+        case CasperSettings::NEXT_PREV: {
+          bool hit = false;
+          if (sideNextIsDownRight) {
+            hit = anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+          } else {
+            hit = anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
           }
-          return anyWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
+          if (frontNextIsDownRight) {
+            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
+                  anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+          } else {
+            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
+                  anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
+          }
+          return hit;
+        }
+        case CasperSettings::SIDE_BUTTONS_DISABLED:
         default:
           return false;
       }
     }
-    case Button::NavNext:
-      // Logical "next item": Down+Right, flipped with orientation follow.
-      return orientSwap ? (mapButton(Button::Up, fn) || mapButton(Button::Left, fn))
-                        : (mapButton(Button::Down, fn) || mapButton(Button::Right, fn));
-    case Button::NavPrevious:
-      return orientSwap ? (mapButton(Button::Down, fn) || mapButton(Button::Right, fn))
-                        : (mapButton(Button::Up, fn) || mapButton(Button::Left, fn));
+    case Button::NavNext: {
+      // Logical next = Down | Right (Up/Down/Left/Right already apply front orient follow).
+      return mapButton(Button::Down, fn) || mapButton(Button::Right, fn);
+    }
+    case Button::NavPrevious: {
+      return mapButton(Button::Up, fn) || mapButton(Button::Left, fn);
+    }
   }
 
   return false;
@@ -330,19 +389,19 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
 
   // Label each physical front slot by the function assigned to it.
   auto labelForHardware = [&](uint8_t hw) -> const char* {
-    if (hw >= CrossPointSettings::HW_REMAP_BUTTON_COUNT) return "";
+    if (hw >= CasperSettings::HW_REMAP_BUTTON_COUNT) return "";
     switch (SETTINGS.hwButtonFunction[hw]) {
-      case CrossPointSettings::BTN_FUNC_BACK:
+      case CasperSettings::BTN_FUNC_BACK:
         return back;
-      case CrossPointSettings::BTN_FUNC_CONFIRM:
+      case CasperSettings::BTN_FUNC_CONFIRM:
         return confirm;
-      case CrossPointSettings::BTN_FUNC_LEFT:
+      case CasperSettings::BTN_FUNC_LEFT:
         return leftLabel;
-      case CrossPointSettings::BTN_FUNC_RIGHT:
+      case CasperSettings::BTN_FUNC_RIGHT:
         return rightLabel;
-      case CrossPointSettings::BTN_FUNC_UP:
+      case CasperSettings::BTN_FUNC_UP:
         return upLabel;
-      case CrossPointSettings::BTN_FUNC_DOWN:
+      case CasperSettings::BTN_FUNC_DOWN:
         return downLabel;
       default:
         return "";
@@ -355,7 +414,7 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
 
 namespace {
 const char* directionFuncCaption(const uint8_t func, const char* backAction, const char* confirmAction) {
-  using F = CrossPointSettings::BUTTON_FUNCTION;
+  using F = CasperSettings::BUTTON_FUNCTION;
   switch (func) {
     case F::BTN_FUNC_BACK:
       return backAction ? backAction : tr(STR_BACK);
@@ -377,12 +436,31 @@ const char* directionFuncCaption(const uint8_t func, const char* backAction, con
 
 MappedInputManager::Labels MappedInputManager::mapDirectionLabels(const char* backAction,
                                                                   const char* confirmAction) const {
-  // Physical front L→R (hw 0–3): caption matches remapped function exactly.
+  // Physical front L→R (hw 0–3). When orient-follow is active, captions track
+  // logical directions (same mirror as mapButton / mapLabels) so keyboard chrome
+  // stays consistent with Up/Down/Left/Right actions.
+  const bool swap = isNavDirectionSwapped();
+  auto logicalFunc = [swap](uint8_t func) -> uint8_t {
+    if (!swap) return func;
+    using F = CasperSettings::BUTTON_FUNCTION;
+    switch (func) {
+      case F::BTN_FUNC_UP:
+        return F::BTN_FUNC_DOWN;
+      case F::BTN_FUNC_DOWN:
+        return F::BTN_FUNC_UP;
+      case F::BTN_FUNC_LEFT:
+        return F::BTN_FUNC_RIGHT;
+      case F::BTN_FUNC_RIGHT:
+        return F::BTN_FUNC_LEFT;
+      default:
+        return func;
+    }
+  };
   const auto& map = SETTINGS.hwButtonFunction;
-  return {directionFuncCaption(map[CrossPointSettings::FRONT_HW_BACK], backAction, confirmAction),
-          directionFuncCaption(map[CrossPointSettings::FRONT_HW_CONFIRM], backAction, confirmAction),
-          directionFuncCaption(map[CrossPointSettings::FRONT_HW_LEFT], backAction, confirmAction),
-          directionFuncCaption(map[CrossPointSettings::FRONT_HW_RIGHT], backAction, confirmAction)};
+  return {directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_BACK]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_CONFIRM]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_LEFT]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_RIGHT]), backAction, confirmAction)};
 }
 
 void MappedInputManager::mapSideDirectionLabels(const char*& sideA, const char*& sideB) const {

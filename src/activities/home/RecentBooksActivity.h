@@ -30,7 +30,7 @@ class RecentBooksActivity final : public Activity {
   std::vector<RecentBook> recentBooks;
   std::vector<FinishedBooks::FinishedBookEntry> readBooks;
 
-  // Recents row 0 = "Show Read Books" only when move-to-read is on and /read has ≥1 book.
+  // Recents row 0 = "Show Read Books" only when move-to-read is on and /read has ΓëÑ1 book.
   bool showReadBooksRow() const;
 
   void loadRecentBooks();

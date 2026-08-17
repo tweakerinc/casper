@@ -3,8 +3,10 @@
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <cmath>
@@ -12,10 +14,11 @@
 #include <cstring>
 #include <string>
 
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
+#include "activities/reader/ReadingStatsUtils.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
@@ -25,14 +28,14 @@ namespace {
 constexpr int kClockFontId = SOURCESERIF4_72_CLOCK_FONT_ID;
 constexpr int kDayFontId = SOURCESERIF4_12_FONT_ID;
 // All Penumbra home text is Source Serif 4.
-// X3 under-panel title stack: 12 / 18 / 14.
-// X4 upper "Now Reading": caption 12 / title 14 / author 12 (list fonts only on Recents).
-constexpr int kLabelFontId = SOURCESERIF4_12_FONT_ID;
-constexpr int kLabelFontIdX4 = SOURCESERIF4_12_FONT_ID;
+// X3 under-panel title stack: caption 14 / title 18 / author 14.
+// X4 upper "Now Reading": caption 14 / title 18 / author 12 (list fonts only on Recents).
+constexpr int kLabelFontId = SOURCESERIF4_14_FONT_ID;
+constexpr int kLabelFontIdX4 = SOURCESERIF4_14_FONT_ID;
 constexpr int kTitleFontId = SOURCESERIF4_18_FONT_ID;
 constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
-// X4 Now Reading title: slightly larger than list titles (was 14).
-constexpr int kTitleFontIdX4 = SOURCESERIF4_16_FONT_ID;
+// X4 Now Reading title: match X3 book title weight (Source Serif 18 UI face).
+constexpr int kTitleFontIdX4 = SOURCESERIF4_18_FONT_ID;
 constexpr int kAuthorFontIdX4 = SOURCESERIF4_12_FONT_ID;
 // Recents list only: 10 pt title (bold when focused), 8 pt author.
 // (Must stay on SOURCESERIF4_10 / _8 — not UI_10 which aliases 12 pt.)
@@ -268,6 +271,44 @@ void formatCompactDuration(const uint32_t seconds, char* buf, const size_t len) 
   }
 }
 
+// Same ETA model as BookStatsView / Focus / Dashboard (progress + total time).
+bool estimatedTimeLeftFromProgress(const BookReadingStats& stats, const float progressPercent, uint32_t& seconds) {
+  seconds = 0;
+  if (stats.isCompleted) return false;
+  if (stats.estimatedTimeLeftSeconds > 0) {
+    seconds = stats.estimatedTimeLeftSeconds;
+    return true;
+  }
+  if (progressPercent > 0.0f && progressPercent < 100.0f && stats.totalReadingSeconds > 0) {
+    const float remaining = (100.0f - progressPercent) / progressPercent;
+    seconds = static_cast<uint32_t>(static_cast<float>(stats.totalReadingSeconds) * remaining + 0.5f);
+    return seconds > 0;
+  }
+  return false;
+}
+
+// Prefer daily-pace est. finish (Dashboard/Focus/BookStatsView).
+bool estimateFinishDateFromDailyPace(const BookReadingStats& stats, const ReadingStatsDateTime& today,
+                                     const uint32_t estimatedReadingSeconds, ReadingStatsDate& outDate) {
+  outDate = {};
+  if (!today.isValid() || !stats.startDate.isValid() || estimatedReadingSeconds == 0 ||
+      stats.totalReadingSeconds == 0) {
+    return false;
+  }
+  const uint16_t elapsedDays = readingSpanDaysElapsed(stats.startDate, today.date);
+  const uint16_t readingDays = std::max<uint16_t>(1, elapsedDays);
+  const uint64_t estimatedCalendarSeconds =
+      (static_cast<uint64_t>(estimatedReadingSeconds) * static_cast<uint64_t>(readingDays) * 86400ULL +
+       static_cast<uint64_t>(stats.totalReadingSeconds) / 2ULL) /
+      static_cast<uint64_t>(stats.totalReadingSeconds);
+  if (estimatedCalendarSeconds == 0) return false;
+  ReadingStatsDateTime estimatedFinish = today;
+  addSecondsToReadingStatsDateTime(estimatedFinish,
+                                   static_cast<uint32_t>(std::min<uint64_t>(estimatedCalendarSeconds, UINT32_MAX)));
+  outDate = estimatedFinish.date;
+  return outDate.isValid();
+}
+
 struct ContentBand {
   int contentTop = 0;
   int contentBottom = 0;
@@ -288,8 +329,8 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const auto& metrics = PenumbraMetrics::values;
   const int footerH = metrics.buttonHintsHeight;
   b.centerX = pageW / 2;
-  const bool hasChrome = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                         SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
+  const bool hasChrome = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
+                         SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
   b.contentTop =
       hasChrome
           ? (BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)
@@ -533,11 +574,13 @@ int measureX3TitleAuthorBlockH(const GfxRenderer& renderer, const ContentBand& b
 int measureX3StatsStyleBlockH(const GfxRenderer& renderer) {
   const int captionH = renderer.getLineHeight(kLabelFontId);
   const int pairH = statPairHeight(renderer);
-  const int gridH = pairH * 2 + kStatRowGap;
+  // Book stats on X3 is 3 rows when RTC tracking is on (Started + Est. Finish),
+  // matching BookStatsView / Dashboard. Lifetime stays 2 rows but shares this max.
+  const int gridH = pairH * 3 + kStatRowGap * 2;
   // X3 stats: book title + grid + footer caption. Reserve generous title/footer air so
   // equal-gap layout (G ≈ hairline→title) still fits when stats is the tallest page.
   const int titleH = renderer.getLineHeight(kStatsBookTitleFontId);
-  constexpr int kReserveAir = 40;
+  constexpr int kReserveAir = 28;
   return titleH + kReserveAir + gridH + kReserveAir + kReserveAir / 2 + captionH;
 }
 
@@ -739,9 +782,12 @@ void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int 
       }
     }
     if (pct < -900.0f) {
-      pct = BookReadingStats::loadForBook(path).getProgressPercent();
-      ++sdLoads;
-      LOG_DBG("HOME", "Recents progress cache[%d] SD %.1f%% %s", i, static_cast<double>(pct), path.c_str());
+      // Prefer progress embedded in recent.json (CasperStats); one book-dir load only if unknown.
+      pct = books[static_cast<size_t>(i)].progressPercentMilli == 0xFFFF
+                ? BookReadingStats::loadForBook(path).getProgressPercent()
+                : static_cast<float>(books[static_cast<size_t>(i)].progressPercentMilli) / 100.0f;
+      if (books[static_cast<size_t>(i)].progressPercentMilli == 0xFFFF) ++sdLoads;
+      LOG_DBG("HOME", "Recents progress cache[%d] %.1f%% %s", i, static_cast<double>(pct), path.c_str());
     } else {
       LOG_DBG("HOME", "Recents progress cache[%d] reuse %.1f%% %s", i, static_cast<double>(pct), path.c_str());
     }
@@ -978,42 +1024,147 @@ void drawStatsStylePanel(const GfxRenderer& renderer, const ContentBand& band, c
   }
 }
 
-// Book stats — 3×2:
-//   Progress | Reading Time | Time Left
-//   Sessions | Avg. Session | Pages/Min
+// Book stats — match BookStatsView / Dashboard (when it worked with RTC dates):
+//   Sessions | Reading Time | Progress
+//   Avg. Session | Time Left | Pages/Min
+//   Days reading (Started DATE) | Est. Finish / Finished Date   [X3 RTC only]
+// X4: 3×2 without date row (no RTC tracking on home).
 // showBookTitle: X3 under-panel yes.
 void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, const char* bookTitle,
                         const BookReadingStats* stats, const float progressPercent, const bool showBookTitle) {
   const BookReadingStats empty{};
   const BookReadingStats& s = stats != nullptr ? *stats : empty;
+  const bool x4 = isX4Penumbra();
+  // X3 home tracks RTC; X4 under-panel is Recents-only but keep a compact 3×2 if called.
+  const bool showRtcDates = !x4;
 
-  char vProgress[24];
-  char vTime[32];
-  char vLeft[32];
   char vSessions[24];
+  char vTime[32];
+  char vProgress[24];
   char vAvg[32];
+  char vLeft[32];
   char vPace[24];
+  char vDays[32];
+  char vFinish[24];
+  char startedLabel[40];
+  char finishLabel[40];
+
+  snprintf(vSessions, sizeof(vSessions), "%u", static_cast<unsigned>(s.sessionCount));
+  BookReadingStats::formatDuration(s.totalReadingSeconds, vTime, sizeof(vTime));
   if (progressPercent >= 0.0f) {
     snprintf(vProgress, sizeof(vProgress), "%d%%", static_cast<int>(progressPercent + 0.5f));
   } else {
     snprintf(vProgress, sizeof(vProgress), "-");
   }
-  BookReadingStats::formatDuration(s.totalReadingSeconds, vTime, sizeof(vTime));
-  if (!s.isCompleted && s.estimatedTimeLeftSeconds > 0) {
-    formatCompactDuration(s.estimatedTimeLeftSeconds, vLeft, sizeof(vLeft));
+  const uint32_t avgSecs = s.sessionCount > 0 ? s.totalReadingSeconds / s.sessionCount : 0;
+  BookReadingStats::formatDuration(avgSecs, vAvg, sizeof(vAvg));
+
+  uint32_t estimatedSeconds = 0;
+  const bool hasEstimate = estimatedTimeLeftFromProgress(s, progressPercent, estimatedSeconds);
+  if (hasEstimate && !s.isCompleted) {
+    formatCompactDuration(estimatedSeconds, vLeft, sizeof(vLeft));
   } else {
     snprintf(vLeft, sizeof(vLeft), "-");
   }
-  snprintf(vSessions, sizeof(vSessions), "%u", static_cast<unsigned>(s.sessionCount));
-  const uint32_t avgSecs = s.sessionCount > 0 ? s.totalReadingSeconds / s.sessionCount : 0;
-  BookReadingStats::formatDuration(avgSecs, vAvg, sizeof(vAvg));
   snprintf(vPace, sizeof(vPace), "%.1f", pagesPerMinute(s.totalPagesTurned, s.totalReadingSeconds));
 
-  const char* values[6] = {vProgress, vTime, vLeft, vSessions, vAvg, vPace};
-  // Full labels on both devices; X4 uses a smaller label font (see kStatLabelFontIdX4).
-  const char* labels[6] = {tr(STR_STATS_PROGRESS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_TIME_LEFT),
-                           tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_AVG_SESSION_LBL), tr(STR_STATS_PAGES_PER_MIN)};
-  drawStatsStylePanel(renderer, band, bookTitle, tr(STR_STATS), values, labels, showBookTitle);
+  if (!showRtcDates) {
+    // Compact 3×2 (no dates): Progress | Time | Left / Sessions | Avg | Pace
+    const char* values[6] = {vProgress, vTime, vLeft, vSessions, vAvg, vPace};
+    const char* labels[6] = {tr(STR_STATS_PROGRESS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_TIME_LEFT),
+                             tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_AVG_SESSION_LBL), tr(STR_STATS_PAGES_PER_MIN)};
+    drawStatsStylePanel(renderer, band, bookTitle, tr(STR_STATS), values, labels, showBookTitle);
+    return;
+  }
+
+  // RTC date row — same fields as BookStatsView drawPerBookStatsCard row 3.
+  ReadingStatsDateTime today;
+  const bool hasToday = getCurrentLocalReadingStatsDateTime(today);
+  const ReadingStatsDate endDate = s.isCompleted && s.finishedDate.isValid()
+                                       ? s.finishedDate
+                                       : (hasToday ? today.date : ReadingStatsDate{});
+  const bool hasDaySpan = s.startDate.isValid() && endDate.isValid();
+  const uint16_t daysReading = hasDaySpan ? readingSpanDaysElapsed(s.startDate, endDate) : 0;
+  if (hasDaySpan) {
+    snprintf(vDays, sizeof(vDays), "%u %s", static_cast<unsigned>(daysReading), dayCountText(daysReading));
+  } else {
+    snprintf(vDays, sizeof(vDays), "-");
+  }
+  char dateBuf[24];
+  formatReadingStatsShortDate(s.startDate, dateBuf, sizeof(dateBuf));
+  snprintf(startedLabel, sizeof(startedLabel), "%s %s", tr(STR_STATS_STARTED), dateBuf);
+
+  ReadingStatsDate finishDisplayDate;
+  if (s.isCompleted) {
+    finishDisplayDate = s.finishedDate;
+  } else if (hasToday && hasEstimate) {
+    if (!estimateFinishDateFromDailyPace(s, today, estimatedSeconds, finishDisplayDate)) {
+      ReadingStatsDateTime estimatedFinish = today;
+      addSecondsToReadingStatsDateTime(estimatedFinish, estimatedSeconds);
+      finishDisplayDate = estimatedFinish.date;
+    }
+  }
+  formatReadingStatsShortDate(finishDisplayDate, vFinish, sizeof(vFinish));
+  if (!finishDisplayDate.isValid()) {
+    snprintf(vFinish, sizeof(vFinish), "-");
+  }
+  snprintf(finishLabel, sizeof(finishLabel), "%s",
+           s.isCompleted ? tr(STR_STATS_FINISHED_DATE) : tr(STR_STATS_EST_FINISH_DATE));
+
+  // Custom 3-row panel: 3+3+2 cells (dates are half-width), same chrome as StatsStyle.
+  const int rowGap = kStatRowGap;
+  const int titleH = showBookTitle ? measureWrappedHeight(renderer, kStatsBookTitleFontId, band.textMaxW, bookTitle,
+                                                          kStatsTitleMaxLines, EpdFontFamily::BOLD)
+                                   : 0;
+  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int pairH = statPairHeight(renderer);
+  const int gridH = pairH * 3 + rowGap * 2;
+
+  const int zoneTop = band.pinBlocks ? band.lowerTop : (band.midY + kRuleThickness);
+  const int zoneBottom = band.contentBottom - penumbraPageDotsStripH();
+  const int zoneH = std::max(1, zoneBottom - zoneTop);
+  const int pageW = renderer.getScreenWidth();
+  const int gridW = std::max(40, pageW - kStatsSideInset * 2);
+
+  const int hairlineAir =
+      band.pinBlocks ? std::max(kStatsStackGap, band.lowerTop - band.midY - kRuleThickness) : kStatsStackGap;
+  const int titleGap = showBookTitle ? hairlineAir : 0;
+  const int footerMinGap = hairlineAir + hairlineAir / 2;
+  const int footerH = captionH;
+  const int blockH = titleH + titleGap + gridH + footerMinGap + footerH;
+  int y = band.pinBlocks ? zoneTop : (zoneTop + std::max(0, (zoneH - blockH) / 2));
+  if (y < zoneTop + 2) y = zoneTop + 2;
+
+  if (showBookTitle) {
+    y = drawCenteredWrapped(renderer, kStatsBookTitleFontId, band.centerX, y, band.textMaxW, bookTitle,
+                            kStatsTitleMaxLines, EpdFontFamily::BOLD);
+    y += titleGap;
+  }
+
+  // Row 0–1: 3 columns (BookStatsView card layout).
+  const char* topValues[6] = {vSessions, vTime, vProgress, vAvg, vLeft, vPace};
+  const char* topLabels[6] = {tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_STATS_PROGRESS_LBL),
+                              tr(STR_STATS_AVG_SESSION_LBL), tr(STR_TIME_LEFT),          tr(STR_STATS_PAGES_PER_MIN)};
+  const int twoRowH = pairH * 2 + rowGap;
+  drawStatGrid(renderer, band.centerX, y, gridW, twoRowH, /*cols=*/3, /*rows=*/2, topValues, topLabels);
+  y += twoRowH + rowGap;
+
+  // Row 2: half-width Started | Est. Finish
+  const int halfW = gridW / 2;
+  const int usedW = halfW * 2;
+  const int left = band.centerX - usedW / 2;
+  drawStatCell(renderer, left, halfW, y, pairH, vDays, startedLabel);
+  drawStatCell(renderer, left + halfW, halfW, y, pairH, vFinish, finishLabel);
+  y += pairH;
+
+  int footerY = zoneBottom - captionH - 2;
+  if (footerY < y + footerMinGap) {
+    footerY = y + footerMinGap;
+  }
+  if (footerY + captionH > zoneBottom) {
+    footerY = std::max(y + kStatsStackGap, zoneBottom - captionH);
+  }
+  drawSectionLabel(renderer, band.centerX, footerY, tr(STR_STATS));
 }
 
 // Lifetime — 3×2:
@@ -1234,6 +1385,77 @@ void PenumbraThemeUi::invalidateRecentsProgressCache() {
 }
 
 bool PenumbraThemeUi::formatHeroTimeNow(char* buf, size_t bufSize) { return formatHeroTime(buf, bufSize); }
+
+namespace {
+
+// Full-width digit band for greys multipass (includes pad for AA fringe).
+Rect clockDigitBandRect(const GfxRenderer& renderer) {
+  ContentBand band = layoutContentBand(renderer);
+  applyX3EqualSpacingLayout(renderer, band, /*books=*/{});
+  const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
+  const int dayH = renderer.getLineHeight(kDayFontId);
+  const int clockBlockH = clockInkH + kClockToDayGap + dayH;
+  const int groupTop =
+      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  constexpr int kPadY = 4;
+  const int top = std::max(0, groupTop - kPadY);
+  const int h = clockInkH + kPadY * 2;
+  return Rect{0, top, renderer.getScreenWidth(), h};
+}
+
+void paintHeroClockOnly(const GfxRenderer& renderer) {
+  ContentBand band = layoutContentBand(renderer);
+  applyX3EqualSpacingLayout(renderer, band, /*books=*/{});
+  char timeBuf[16];
+  formatHeroTime(timeBuf, sizeof(timeBuf));
+  const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
+  const int dayH = renderer.getLineHeight(kDayFontId);
+  const int clockBlockH = clockInkH + kClockToDayGap + dayH;
+  const int groupTop =
+      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  drawHeroClockCentered(renderer, band.centerX, groupTop, timeBuf);
+}
+
+}  // namespace
+
+bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int baseRefreshMode,
+                                              const Rect* dirtyOverride) {
+  if (!gpio.deviceIsX3()) return false;
+  if (!renderer.storeBwBuffer()) {
+    LOG_DBG("HOME", "penumbra clock AA: storeBw failed — BW only");
+    return false;
+  }
+
+  const Rect band = (dirtyOverride && dirtyOverride->width > 0 && dirtyOverride->height > 0)
+                        ? *dirtyOverride
+                        : clockDigitBandRect(renderer);
+  // Expand dirty to full width so windowed greys stay 8-aligned and prefix
+  // glyphs are not cut when only minutes change.
+  const Rect grayRect{0, band.y, renderer.getScreenWidth(), band.height};
+
+  const auto baseMode =
+      (baseRefreshMode == static_cast<int>(HalDisplay::HALF_REFRESH)) ? HalDisplay::HALF_REFRESH
+                                                                      : HalDisplay::FAST_REFRESH;
+  renderer.displayGrayscaleBase(baseMode);
+
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+  paintHeroClockOnly(renderer);
+  renderer.copyGrayscaleLsbBuffers();
+
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+  paintHeroClockOnly(renderer);
+  renderer.copyGrayscaleMsbBuffers();
+
+  renderer.displayGrayBufferWindow(grayRect.x, grayRect.y, grayRect.width, grayRect.height);
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.restoreBwBuffer();
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  LOG_DBG("HOME", "penumbra clock AA y=%d h=%d base=%s", grayRect.y, grayRect.height,
+          baseMode == HalDisplay::HALF_REFRESH ? "HALF" : "FAST");
+  return true;
+}
 
 Rect PenumbraThemeUi::redrawClockBlock(GfxRenderer& renderer, const char* prevTime, char* outTime, size_t outTimeSize) {
   ContentBand band = layoutContentBand(renderer);

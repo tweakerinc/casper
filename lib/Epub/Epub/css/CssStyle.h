@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// Matches order of PARAGRAPH_ALIGNMENT in CrossPointSettings
+// Matches order of PARAGRAPH_ALIGNMENT in CasperSettings
 enum class CssTextAlign : uint8_t { Justify = 0, Left = 1, Center = 2, Right = 3, None = 4 };
 enum class CssUnit : uint8_t { Pixels = 0, Em = 1, Rem = 2, Points = 3, Percent = 4 };
 enum class CssTextDirection : uint8_t { Ltr = 0, Rtl = 1 };

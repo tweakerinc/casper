@@ -20,15 +20,15 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*) {
 #include "esp_ota_ops.h"
 #include "network/WifiPowerSaveGuard.h"
 
-// Casper OTA: GitHub Releases on the Casper fork only (never CrossPoint stock).
+// Casper OTA: GitHub Releases on the Casper fork only.
 // Override at build time if the repo moves:
 //   -DCASPER_OTA_RELEASE_URL=\"https://api.github.com/repos/OWNER/REPO/releases/latest\"
 #ifndef CASPER_OTA_RELEASE_URL
 #define CASPER_OTA_RELEASE_URL "https://api.github.com/repos/TweakerInc/casper/releases/latest"
 #endif
 
-#ifndef CROSSPOINT_VERSION
-#define CROSSPOINT_VERSION "v0.1.0"
+#ifndef CASPER_VERSION
+#define CASPER_VERSION "v0.1.0"
 #endif
 
 namespace {
@@ -151,7 +151,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // Stream GitHub release JSON via HttpDownloader (wolfSSL when enabled). Do NOT
   // use a separate esp_http_client + mbedTLS session here: a dual TLS stack
   // fragments the ~320KB internal heap and the following firmware download OOMs.
-  LOG_INF("OTA", "Checking for update (current: %s) heap=%u maxAlloc=%u url=%s", CROSSPOINT_VERSION, ESP.getFreeHeap(),
+  LOG_INF("OTA", "Checking for update (current: %s) heap=%u maxAlloc=%u url=%s", CASPER_VERSION, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap(), latestReleaseUrl);
 
   size_t totalBytesReceived = 0;
@@ -196,16 +196,15 @@ bool OtaUpdater::isUpdateNewer() const {
   if (!updateAvailable || latestVersion.empty()) {
     return false;
   }
-  if (latestVersion == CROSSPOINT_VERSION) {
+  if (latestVersion == CASPER_VERSION) {
     return false;
   }
-  const int comparison = compareVersions(latestVersion.c_str(), CROSSPOINT_VERSION);
-  LOG_DBG("OTA", "Version compare latest=%s current=%s result=%d", latestVersion.c_str(), CROSSPOINT_VERSION,
-          comparison);
+  const int comparison = compareVersions(latestVersion.c_str(), CASPER_VERSION);
+  LOG_DBG("OTA", "Version compare latest=%s current=%s result=%d", latestVersion.c_str(), CASPER_VERSION, comparison);
   if (comparison > 0) return true;
-  if (comparison == 0 && latestVersion != CROSSPOINT_VERSION) {
+  if (comparison == 0 && latestVersion != CASPER_VERSION) {
     const ParsedVersion latest = parseVersion(latestVersion.c_str());
-    const ParsedVersion current = parseVersion(CROSSPOINT_VERSION);
+    const ParsedVersion current = parseVersion(CASPER_VERSION);
     if (latest.valid && current.valid) {
       return false;  // truly equal numeric versions
     }

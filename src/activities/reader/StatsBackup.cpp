@@ -16,8 +16,9 @@
 
 namespace {
 constexpr char LOG_TAG[] = "SBACK";
+// Prefer Casper path; fall back to legacy Casper if not migrated yet.
 constexpr char GLOBAL_STATS_PATH[] = "/.crosspoint/global_stats.bin";
-// Casper branding; same idea as CrossInk's /.crossink-stats-backup.
+// Same path as shipped v0.1.8 (optional lifetime-stats copies; not day-to-day stats).
 constexpr char BACKUP_DIR[] = "/.casper-stats-backup";
 constexpr int DEFAULT_BACKUP_KEEP_COUNT = 7;
 
@@ -106,8 +107,9 @@ bool chooseBackupName(const bool manual, char* out, const size_t outLen) {
 bool readStatsFile(std::array<uint8_t, GlobalReadingStats::CURRENT_FILE_SIZE>& buffer, size_t& outSize) {
   outSize = 0;
 
+  const char* path = GLOBAL_STATS_PATH;
   HalFile file;
-  if (!Storage.openFileForRead(LOG_TAG, GLOBAL_STATS_PATH, file)) {
+  if (!Storage.openFileForRead(LOG_TAG, path, file)) {
     LOG_ERR(LOG_TAG, "Could not open stats file for backup: %s", GLOBAL_STATS_PATH);
     return false;
   }

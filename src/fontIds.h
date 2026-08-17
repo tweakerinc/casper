@@ -1,23 +1,24 @@
 // Font family IDs: SHA256-of-headers sum (lib/EpdFont/scripts/build-font-ids.sh style).
-// Built-in UI chrome + Penumbra: Source Serif 4. Alternate reader face: Lexend Deca (OFL).
-// Sizes: both families ship 8/10/12/14/16/18 (UI smallest is 8 pt).
+// Built-in UI chrome + Penumbra: Source Serif 4. Alternate reader face: Literata.
+// Reader body ship sizes: 10/12/14/16. Source Serif 8 = UI chrome only.
 #pragma once
 
-// Lexend Deca (sans, OFL) — alternate built-in reader family.
-#define LEXENDDECA_8_FONT_ID (-537075679)
-#define LEXENDDECA_10_FONT_ID (-1602494176)
-#define LEXENDDECA_12_FONT_ID (-789173636)
-#define LEXENDDECA_14_FONT_ID (300363550)
-#define LEXENDDECA_16_FONT_ID (-940581834)
-#define LEXENDDECA_18_FONT_ID (-2078415541)
-// 8 pt regular — Recents author, battery %, button hints.
-#define SOURCESERIF4_8_FONT_ID (-2097557390)
-// 10 pt regular + bold — Recents titles.
-#define SOURCESERIF4_10_FONT_ID (1970618696)
-#define SOURCESERIF4_12_FONT_ID (386902914)
-#define SOURCESERIF4_14_FONT_ID (-1077864260)
-#define SOURCESERIF4_16_FONT_ID (1231166843)
-#define SOURCESERIF4_18_FONT_ID (326065580)
+// Literata (serif, OFL) — built-in reader family (10–16).
+// Stem-calibrated ppem + gap-fix (iwalton3/cpfont-editor pipeline).
+#define LITERATA_10_FONT_ID (-1128177077)
+#define LITERATA_12_FONT_ID (2090520927)
+#define LITERATA_14_FONT_ID (-847079762)
+#define LITERATA_16_FONT_ID (-209681255)
+// 8 pt regular — Recents author, battery %, button hints (not a reader body size).
+// Stem-calibrated ppem + gap-fix (iwalton3/cpfont-editor pipeline).
+#define SOURCESERIF4_8_FONT_ID (1470095001)
+// 10 pt regular + bold — Recents titles / menu small.
+#define SOURCESERIF4_10_FONT_ID (-324599973)
+#define SOURCESERIF4_12_FONT_ID (876380291)
+#define SOURCESERIF4_14_FONT_ID (426921930)
+#define SOURCESERIF4_16_FONT_ID (1484141743)
+// Home / UI large titles (Source Serif only — not a Literata reader body size).
+#define SOURCESERIF4_18_FONT_ID (652444703)
 // Penumbra large time (digits + colon only; Source Serif Bold 72 pt 2-bit).
 #define SOURCESERIF4_72_CLOCK_FONT_ID (-746347856)
 // Lists / body chrome
@@ -28,12 +29,10 @@
 #define SMALL_FONT_ID (SOURCESERIF4_8_FONT_ID)
 
 // Font ID 0 is reserved as the "not found" sentinel.
-static_assert(LEXENDDECA_8_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(LEXENDDECA_10_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(LEXENDDECA_12_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(LEXENDDECA_14_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(LEXENDDECA_16_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(LEXENDDECA_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LITERATA_10_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LITERATA_12_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LITERATA_14_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(LITERATA_16_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_8_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_10_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SOURCESERIF4_12_FONT_ID != 0, "Font ID collision with sentinel");

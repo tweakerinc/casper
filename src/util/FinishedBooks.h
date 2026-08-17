@@ -5,7 +5,7 @@
 
 // Finished books live in a fixed SD folder "/read".
 // Hidden from Library root listing; browse via Recents → "Show Read Books".
-// Cache dirs stay under /.crosspoint/epub_<hash(fullPath)>; move re-keys by rename.
+// Package + progress/stats: /.crosspoint/epub_<std::hash>/ (same as shipped v0.1.8).
 namespace FinishedBooks {
 
 // Canonical finished-books directory (no trailing slash).

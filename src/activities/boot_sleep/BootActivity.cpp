@@ -20,10 +20,10 @@ void BootActivity::onEnter() {
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
 
   const int wordY = logoY + kLogoSize + 12;
-  renderer.drawCenteredText(UI_12_FONT_ID, wordY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, wordY, tr(STR_CASPER), true, EpdFontFamily::BOLD);
 
   const int versionY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
-  renderer.drawCenteredText(SMALL_FONT_ID, versionY, CROSSPOINT_VERSION, true);
+  renderer.drawCenteredText(SMALL_FONT_ID, versionY, CASPER_VERSION, true);
 
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }

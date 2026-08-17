@@ -132,7 +132,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
   const bool useDithering = ctx->config->useDithering;
-  const bool inkBias = ctx->config->inkBias;
+  const EinkImageTone tone = ctx->config->resolvedTone();
   bool caching = ctx->caching;
   const int32_t fineScaleFPX = ctx->fineScaleFPX;
   const int32_t invScaleFPX = ctx->invScaleFPX;
@@ -208,9 +208,9 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         uint8_t gray = row[dstX - blockX];
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
+          dithered = applyBayerDither4Level(gray, outX, outY, tone);
         } else {
-          dithered = quantizeGray4LevelNoDither(gray, inkBias);
+          dithered = quantizeGray4LevelNoDither(gray, tone);
         }
         if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
@@ -266,9 +266,9 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
+          dithered = applyBayerDither4Level(gray, outX, outY, tone);
         } else {
-          dithered = quantizeGray4LevelNoDither(gray, inkBias);
+          dithered = quantizeGray4LevelNoDither(gray, tone);
         }
         if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
@@ -288,9 +288,9 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
+          dithered = applyBayerDither4Level(gray, outX, outY, tone);
         } else {
-          dithered = quantizeGray4LevelNoDither(gray, inkBias);
+          dithered = quantizeGray4LevelNoDither(gray, tone);
         }
         if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
@@ -313,9 +313,9 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
         uint8_t dithered;
         if (useDithering) {
-          dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
+          dithered = applyBayerDither4Level(gray, outX, outY, tone);
         } else {
-          dithered = quantizeGray4LevelNoDither(gray, inkBias);
+          dithered = quantizeGray4LevelNoDither(gray, tone);
         }
         if (wantFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
@@ -382,9 +382,9 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 
       uint8_t dithered;
       if (useDithering) {
-        dithered = applyBayerDither4Level(gray, outX, outY, inkBias);
+        dithered = applyBayerDither4Level(gray, outX, outY, tone);
       } else {
-        dithered = quantizeGray4LevelNoDither(gray, inkBias);
+        dithered = quantizeGray4LevelNoDither(gray, tone);
       }
       if (wantFb) pw.writePixel(outX, dithered);
       if (caching) cw.writePixel(outX, dithered);

@@ -14,17 +14,20 @@ struct Rect;
 
 class EpubReaderMenuActivity final : public Activity {
  public:
+  bool isReaderMenuActivity() const override { return true; }
+
   // Menu actions available from the reader menu.
   enum class MenuAction {
     DICTIONARY,
     SELECT_CHAPTER,
     FOOTNOTES,
     GO_TO_PERCENT,
-    MANAGE_FONTS,  // Text settings (family/size/layout/style); stays in reader stack
+    MANAGE_READER_UI,  // Status bar / reader chrome; above fonts in menu
+    MANAGE_FONTS,      // Text settings (family/size/layout/style); stays in reader stack
     AUTO_PAGE_TURN,
-    BLUETOOTH,  // BLE page-turner quick connect
     ROTATE_SCREEN,
     ORIENT_FRONT_BUTTONS,  // Nested under Reading Orientation (same as Settings)
+    TOGGLE_DARK_MODE,      // Book-only dark (sets Reader Only; never whole-UI invert)
     READING_STATS,
     TOGGLE_COMPLETED,
     GO_HOME,

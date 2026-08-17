@@ -1,11 +1,14 @@
 #include "BookCacheUtils.h"
 
+#include <BookPathId.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Txt.h>
 #include <Xtc.h>
+
+#include "util/CasperPaths.h"
 
 #include <cstring>
 #include <string>
@@ -17,7 +20,7 @@ constexpr size_t MAX_STATS_FILES_TO_PRESERVE = 8;
 constexpr char STATS_PREFIX[] = "stats";
 constexpr char STATS_SUFFIX[] = ".bin";
 
-// Fixed user-state files that must survive cache clear (CrossInk parity).
+// Fixed user-state files that must survive cache clear (legacy parity).
 struct FixedPreserve {
   const char* name;
   const char* tmpName;
@@ -27,6 +30,7 @@ constexpr FixedPreserve kFixedPreserve[] = {
     {"progress.bin.bak", "clear_preserve_progress.bin.bak"},
     {"reader_settings.bin", "clear_preserve_reader_settings.bin"},
     {"dictionary_history.txt", "clear_preserve_dictionary_history.txt"},
+    {"meta.txt", "clear_preserve_meta.txt"},
 };
 
 bool isStatsFileName(const char* name) {
@@ -78,7 +82,6 @@ bool restoreFile(const std::string& cachePath, const PreservedFile& file, const 
 
 void collectPreservedFiles(const std::string& cachePath, std::vector<PreservedFile>& out) {
   out.clear();
-  // Progress / resume position + per-book reader settings + dict history.
   for (const auto& f : kFixedPreserve) {
     out.push_back({f.name, f.tmpName});
   }
@@ -103,45 +106,114 @@ void collectPreservedFiles(const std::string& cachePath, std::vector<PreservedFi
   dir.close();
 }
 
-}  // namespace
+bool wipeDirBestEffort(const std::string& path) {
+  if (path.empty() || !Storage.exists(path.c_str())) return true;
+  if (!Storage.removeDir(path.c_str())) {
+    LOG_ERR("BookCache", "Failed to remove: %s", path.c_str());
+    return false;
+  }
+  return true;
+}
 
-bool isBookCacheDirectoryName(const char* name) {
-  if (!name) {
+// Unified ownership: /.crosspoint/book_<id>/ — wipe package + rivulet, keep progress/stats.
+bool clearBookOwnershipDir(const std::string& bookRoot) {
+  if (bookRoot.empty()) return false;
+  if (!Storage.exists(bookRoot.c_str())) {
+    LOG_DBG("BookCache", "Book dir does not exist: %s", bookRoot.c_str());
+    return true;
+  }
+
+  std::vector<PreservedFile> files;
+  collectPreservedFiles(bookRoot, files);
+  std::vector<bool> moved(files.size(), false);
+
+  bool preserveOk = true;
+  for (size_t i = 0; i < files.size(); ++i) {
+    bool m = false;
+    if (!preserveFile(bookRoot, files[i], m)) preserveOk = false;
+    moved[i] = m;
+  }
+  if (!preserveOk) {
+    for (size_t i = 0; i < files.size(); ++i) {
+      (void)restoreFile(bookRoot, files[i], moved[i]);
+    }
+    LOG_ERR("BookCache", "Aborted ownership clear; could not preserve state: %s", bookRoot.c_str());
     return false;
   }
 
-  constexpr char EPUB_PREFIX[] = "epub_";
-  constexpr char TXT_PREFIX[] = "txt_";
-  constexpr char XTC_PREFIX[] = "xtc_";
+  // Derived caches only — not the book_ shell (progress restored below).
+  const bool pkgOk = wipeDirBestEffort(bookRoot + "/package");
+  const bool rivOk = wipeDirBestEffort(bookRoot + "/rivulet");
 
-  return strncmp(name, EPUB_PREFIX, sizeof(EPUB_PREFIX) - 1) == 0 ||
-         strncmp(name, TXT_PREFIX, sizeof(TXT_PREFIX) - 1) == 0 ||
-         strncmp(name, XTC_PREFIX, sizeof(XTC_PREFIX) - 1) == 0;
+  // Also drop any loose derived files at book root (not in preserve list).
+  // removeDir of whole book_ would be simpler but risks losing unlisted state;
+  // package + rivulet cover book.bin / IR / HTML / thumbs.
+
+  bool restoreOk = true;
+  for (size_t i = 0; i < files.size(); ++i) {
+    if (!restoreFile(bookRoot, files[i], moved[i])) restoreOk = false;
+  }
+
+  LOG_INF("BookCache", "cleared book ownership pkg=%d rivulet=%d restore=%d path=%s", pkgOk ? 1 : 0, rivOk ? 1 : 0,
+          restoreOk ? 1 : 0, bookRoot.c_str());
+  return pkgOk && rivOk && restoreOk;
+}
+
+bool startsWith(const char* name, const char* prefix) {
+  return name && prefix && strncmp(name, prefix, strlen(prefix)) == 0;
+}
+
+// If path ends with /package, return parent book_ root; else empty.
+std::string bookRootIfPackagePath(const std::string& path) {
+  constexpr const char kSuffix[] = "/package";
+  constexpr size_t kSuffixLen = sizeof(kSuffix) - 1;
+  if (path.size() <= kSuffixLen) return {};
+  if (path.compare(path.size() - kSuffixLen, kSuffixLen, kSuffix) != 0) return {};
+  std::string root = path.substr(0, path.size() - kSuffixLen);
+  // Expect .../book_<16hex>
+  const size_t slash = root.find_last_of('/');
+  if (slash == std::string::npos || slash + 1 >= root.size()) return {};
+  if (!startsWith(root.c_str() + slash + 1, "book_")) return {};
+  return root;
+}
+
+}  // namespace
+
+bool isBookCacheDirectoryName(const char* name) {
+  if (!name) return false;
+  // Unified Casper ownership (Rivulet + package).
+  if (startsWith(name, "book_")) return true;
+  // Legacy path-hash packages.
+  return startsWith(name, "epub_") || startsWith(name, "txt_") || startsWith(name, "xtc_");
 }
 
 void clearBookCache(const std::string& path) {
-  std::string cachePath;
-  if (FsHelpers::hasEpubExtension(path)) {
-    cachePath = Epub(path, "/.crosspoint").getCachePath();
-  } else if (FsHelpers::hasXtcExtension(path)) {
-    cachePath = Xtc(path, "/.crosspoint").getCachePath();
-  } else if (FsHelpers::hasTxtExtension(path)) {
-    cachePath = Txt(path, "/.crosspoint").getCachePath();
-  } else {
-    return;
+  if (path.empty()) return;
+
+  if (FsHelpers::hasEpubExtension(path) || FsHelpers::hasXtcExtension(path) || FsHelpers::hasTxtExtension(path)) {
+    // v0.1.8 primary: epub_/xtc_/txt_<std::hash> under /.crosspoint
+    const char* root = CasperPaths::kPackageCacheRoot;
+    std::string cachePath;
+    if (FsHelpers::hasEpubExtension(path)) {
+      cachePath = root + std::string("/epub_") + std::to_string(std::hash<std::string>{}(path));
+    } else if (FsHelpers::hasXtcExtension(path)) {
+      cachePath = root + std::string("/xtc_") + std::to_string(std::hash<std::string>{}(path));
+    } else {
+      cachePath = root + std::string("/txt_") + std::to_string(std::hash<std::string>{}(path));
+    }
+    if (Storage.exists(cachePath.c_str())) {
+      (void)clearBookCacheDirectoryPreservingStats(cachePath);
+    }
+    // Optional WIP book_<fnv> folder (never created by v0.1.8 / this build).
+    if (BookPathId::isCasperPackageRoot(root)) {
+      const std::string bookRoot = BookPathId::bookRoot(path, root);
+      if (!bookRoot.empty() && Storage.exists(bookRoot.c_str())) {
+        (void)clearBookOwnershipDir(bookRoot);
+      }
+    }
   }
-  if (cachePath.empty()) return;
-  // Prefer stats-preserving clear when the directory exists.
-  if (Storage.exists(cachePath.c_str())) {
-    (void)clearBookCacheDirectoryPreservingStats(cachePath);
-  } else if (FsHelpers::hasEpubExtension(path)) {
-    Epub(path, "/.crosspoint").clearCache();
-  } else if (FsHelpers::hasXtcExtension(path)) {
-    Xtc(path, "/.crosspoint").clearCache();
-  } else if (FsHelpers::hasTxtExtension(path)) {
-    Txt(path, "/.crosspoint").clearCache();
-  }
-  LOG_DBG("BookCache", "Done checking metadata cache for: %s", path.c_str());
+
+  LOG_DBG("BookCache", "Done clearing reading cache for: %s", path.c_str());
 }
 
 bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath) {
@@ -151,6 +223,22 @@ bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath) {
     return true;
   }
 
+  // package/ under book_<id> → clear whole ownership tree (includes rivulet/).
+  const std::string ownershipRoot = bookRootIfPackagePath(cachePath);
+  if (!ownershipRoot.empty()) {
+    return clearBookOwnershipDir(ownershipRoot);
+  }
+
+  // book_<id> itself.
+  {
+    const size_t slash = cachePath.find_last_of('/');
+    const char* base = (slash == std::string::npos) ? cachePath.c_str() : cachePath.c_str() + slash + 1;
+    if (startsWith(base, "book_")) {
+      return clearBookOwnershipDir(cachePath);
+    }
+  }
+
+  // Legacy epub_*/txt_*/xtc_* package dir: wipe tree, restore preserve list.
   std::vector<PreservedFile> files;
   collectPreservedFiles(cachePath, files);
   std::vector<bool> moved(files.size(), false);

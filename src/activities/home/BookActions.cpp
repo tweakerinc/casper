@@ -9,7 +9,8 @@
 #include <Xtc.h>
 
 #include "ClippingStore.h"
-#include "CrossPointSettings.h"
+#include "CasperSettings.h"
+#include "util/CasperPaths.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
@@ -68,7 +69,7 @@ bool hasClearableBookCache(const std::string& path) {
 void clearFileMetadata(const std::string& fullPath) {
   // Drop reading cache + stats when deleting a book from SD.
   ::clearBookCache(fullPath);
-  // Wipe stats under Casper and CrossInk cache hashes (if both exist).
+  // Wipe stats under Casper and legacy cache hashes (if both exist).
   BookReadingStats::removeForBook(fullPath);
   if (FsHelpers::hasEpubExtension(fullPath)) {
     ClippingStore::deleteForFilePath(fullPath, "epub");
@@ -97,7 +98,7 @@ bool resetReadingPace(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  // loadForBook picks up CrossInk FNV stats if present, then we rewrite Casper path.
+  // loadForBook picks up legacy FNV stats if present, then we rewrite Casper path.
   BookReadingStats stats = BookReadingStats::loadForBook(fullPath);
   stats.avgSecondsPerForwardPage = 0;
   stats.paceSampleCount = 0;
@@ -123,8 +124,8 @@ bool toggleBookCompleted(const std::string& fullPath, const std::string& display
     return false;
   }
 
-  Epub epub(fullPath, "/.crosspoint");
-  Xtc xtc(fullPath, "/.crosspoint");
+  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
+  Xtc xtc(fullPath, CasperPaths::kPackageCacheRoot);
   std::string cachePath;
   std::string title = displayName;
   std::string author;
@@ -220,7 +221,7 @@ std::string loadBookDescription(const std::string& fullPath) {
   if (!FsHelpers::hasEpubExtension(fullPath)) {
     return {};
   }
-  Epub epub(fullPath, "/.crosspoint");
+  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
   return epub.getDescription();
 }
 

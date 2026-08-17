@@ -28,7 +28,7 @@
 //   char     text[textBytes]             all words back to back, NUL-terminated
 //
 // Focus split: boundary N > 0 means first N bytes of word i render bold.
-// Guide Dots: guideDotXOffset[i] > 0 means draw · at xpos[i] + offset (CrossInk).
+// Guide Dots: guideDotXOffset[i] > 0 means draw · at xpos[i] + offset (legacy).
 class TextBlock final : public Block {
  private:
   BlockStyle blockStyle;

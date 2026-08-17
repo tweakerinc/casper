@@ -7,7 +7,14 @@
 class FontDecompressor {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  static constexpr uint8_t MAX_PAGE_SLOTS = 4;  // One per font style (R/B/I/BI)
+  // One slot per (font id, style) face prewarmed for the current page. Was 4 —
+  // enough when only a single font id was ever prewarmed — but Rivulet resolves a
+  // distinct font id per size step (body, h1=+2, h2=+1, drop cap), so a page with
+  // a heading legitimately needs more than four. Matches
+  // FontCacheManager::kMaxScanBuckets. A PageSlot is ~16 bytes, so the array
+  // itself costs 128 bytes; the heap cost does NOT scale with slot count, because
+  // each face now caches only the text drawn in it instead of the whole page.
+  static constexpr uint8_t MAX_PAGE_SLOTS = 8;
 
   FontDecompressor() = default;
   ~FontDecompressor();
@@ -47,8 +54,8 @@ class FontDecompressor {
   Stats stats;
   InflateReader inflateReader;
 
-  // Page buffer slots: each style gets its own flat glyph buffer with sorted lookup.
-  // Up to MAX_PAGE_SLOTS (4) styles can be prewarmed simultaneously.
+  // Page buffer slots: each prewarmed face gets its own flat glyph buffer with
+  // sorted lookup. Up to MAX_PAGE_SLOTS faces can be resident simultaneously.
   struct PageGlyphEntry {
     uint32_t glyphIndex;
     uint32_t bufferOffset;

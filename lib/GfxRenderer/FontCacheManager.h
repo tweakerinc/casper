@@ -57,7 +57,34 @@ class FontCacheManager {
 
   enum class ScanMode : uint8_t { None, Scanning };
   ScanMode scanMode_ = ScanMode::None;
-  std::string scanText_;
-  uint32_t scanStyleCounts_[4] = {};
-  int scanFontId_ = -1;
+
+  // Scan-pass text, bucketed by (fontId, base style).
+  //
+  // This used to be ONE string plus a single latched `scanFontId_`, which broke
+  // in two ways:
+  //
+  //   1. Only the FIRST font id seen was ever prewarmed. Under Rivulet every
+  //      size step resolves to its own font id (FontLadder::resolve) and
+  //      PageLayouter forces Heading1=+2 / Heading2=+1, so any page with a
+  //      heading or drop cap left those glyphs entirely uncached — every one of
+  //      them then fell through to FontDecompressor's hot-group path, which
+  //      inflates a whole group per glyph run.
+  //   2. The full page text was prewarmed once PER STYLE, so a single italic
+  //      word bought a second complete page-glyph buffer plus all of its group
+  //      inflates (2-4x the glyph RAM and decompression for a mixed page).
+  //
+  // Bucketing by (fontId, style) prewarms each face with only the text actually
+  // drawn in it. Bucket count is fixed so the scan pass never allocates a
+  // container; overflow folds into an existing bucket, which merely restores the
+  // old over-prewarm behaviour instead of dropping glyphs.
+  static constexpr uint8_t kMaxScanBuckets = 8;
+  struct ScanBucket {
+    int fontId = -1;
+    uint8_t style = 0;  // base style bits (0-3): regular / bold / italic / bold-italic
+    std::string text;
+  };
+  ScanBucket scanBuckets_[kMaxScanBuckets];
+  uint8_t scanBucketCount_ = 0;
+
+  void resetScanBuckets();
 };

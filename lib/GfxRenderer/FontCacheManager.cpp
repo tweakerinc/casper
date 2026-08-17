@@ -61,17 +61,50 @@ void FontCacheManager::resetStats() {
 
 bool FontCacheManager::isScanning() const { return scanMode_ == ScanMode::Scanning; }
 
-void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
-  scanText_ += text;
-  if (scanFontId_ < 0) scanFontId_ = fontId;
-  const uint8_t baseStyle = static_cast<uint8_t>(style) & 0x03;
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
-  uint32_t cpCount = 0;
-  while (*p) {
-    if ((*p & 0xC0) != 0x80) cpCount++;
-    p++;
+void FontCacheManager::resetScanBuckets() {
+  for (uint8_t i = 0; i < kMaxScanBuckets; i++) {
+    scanBuckets_[i].fontId = -1;
+    scanBuckets_[i].style = 0;
+    // clear(), not shrink: the buckets are reused every page, so keeping the
+    // capacity avoids re-growing the same strings on every single turn.
+    scanBuckets_[i].text.clear();
   }
-  scanStyleCounts_[baseStyle] += cpCount;
+  scanBucketCount_ = 0;
+}
+
+void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
+  if (!text || *text == '\0') return;
+  const uint8_t baseStyle = static_cast<uint8_t>(style) & 0x03;
+
+  ScanBucket* bucket = nullptr;
+  for (uint8_t i = 0; i < scanBucketCount_; i++) {
+    if (scanBuckets_[i].fontId == fontId && scanBuckets_[i].style == baseStyle) {
+      bucket = &scanBuckets_[i];
+      break;
+    }
+  }
+  if (!bucket) {
+    if (scanBucketCount_ < kMaxScanBuckets) {
+      bucket = &scanBuckets_[scanBucketCount_++];
+      bucket->fontId = fontId;
+      bucket->style = baseStyle;
+      bucket->text.clear();
+      if (bucket->text.capacity() < 256) bucket->text.reserve(256);
+    } else {
+      // Out of buckets (a page mixing more than 8 face/style combinations).
+      // Fold into a bucket for the same font id when there is one, else the
+      // first bucket. That over-prewarms — exactly what the old single-bucket
+      // code always did — but never drops glyphs, so rendering stays correct.
+      for (uint8_t i = 0; i < scanBucketCount_; i++) {
+        if (scanBuckets_[i].fontId == fontId) {
+          bucket = &scanBuckets_[i];
+          break;
+        }
+      }
+      if (!bucket) bucket = &scanBuckets_[0];
+    }
+  }
+  bucket->text += text;
 }
 
 // --- PrewarmScope implementation ---
@@ -83,28 +116,23 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager, const bo
     manager_->clearCache();
   }
   manager_->resetStats();
-  manager_->scanText_.clear();
-  manager_->scanText_.reserve(2048);  // Pre-allocate to avoid heap fragmentation from repeated concat
-  memset(manager_->scanStyleCounts_, 0, sizeof(manager_->scanStyleCounts_));
-  manager_->scanFontId_ = -1;
+  manager_->resetScanBuckets();
 }
 
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   manager_->scanMode_ = ScanMode::None;
-  if (manager_->scanText_.empty()) return;
 
-  // Build style bitmask from all styles that appeared during the scan
-  uint8_t styleMask = 0;
-  for (uint8_t i = 0; i < 4; i++) {
-    if (manager_->scanStyleCounts_[i] > 0) styleMask |= (1 << i);
+  // Prewarm each (fontId, style) face with only the text drawn in that face.
+  // Buckets are visited in first-seen order, which is reading order, so if the
+  // decompressor runs out of page slots the faces carrying the most text on the
+  // page are the ones that got cached.
+  for (uint8_t i = 0; i < manager_->scanBucketCount_; i++) {
+    ScanBucket& bucket = manager_->scanBuckets_[i];
+    if (bucket.fontId < 0 || bucket.text.empty()) continue;
+    manager_->prewarmCache(bucket.fontId, bucket.text.c_str(), static_cast<uint8_t>(1u << bucket.style));
   }
-  if (styleMask == 0) styleMask = 1;  // default to regular
 
-  manager_->prewarmCache(manager_->scanFontId_, manager_->scanText_.c_str(), styleMask);
-
-  // Free scan string memory
-  manager_->scanText_.clear();
-  manager_->scanText_.shrink_to_fit();
+  manager_->resetScanBuckets();
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {

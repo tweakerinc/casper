@@ -1,0 +1,113 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include "ChapterIr.h"
+#include "IrFormat.h"
+#include "LaidOutPage.h"
+#include "PageMap.h"
+#include "PageLayouter.h"
+
+class GfxRenderer;
+
+namespace rivulet {
+
+// Facade: one chapter open, Tier A page window, Tier B IR on SD, thin page maps.
+//
+// v1: Latin, Source Serif 4 + Literata ladders, no RTL / auto-turn.
+// Paint via GfxRenderer; integration with Casper activities is separate.
+class RivuletEngine {
+ public:
+  // legacy-style look-ahead for the thin page index (not painted pages).
+  static constexpr int kMapAheadPages = 5;
+  // Idle tick budget: a few map pages without monopolizing the main loop.
+  static constexpr int kIdleMapPagesPerTick = 4;
+
+  // When the render key changes, invalidate page map + paint window (F).
+  void setRenderKey(const RenderKey& key);
+  void setLineCompression(const float lc) { lineCompression_ = lc; }
+  [[nodiscard]] const RenderKey& renderKey() const { return key_; }
+
+  // Convert HTML → IR, optionally persist to irPath (.rvir).
+  // imageRendering: 0=Display, 1=Placeholder, 2=Suppress (Settings → Images).
+  bool ingestHtml(const char* html, size_t len, const char* irPathSave, bool armDropCapFirstPara = false,
+                  uint8_t imageRendering = 0);
+  bool ingestHtml(const char* html, const char* irPathSave, bool armDropCapFirstPara = false,
+                  uint8_t imageRendering = 0) {
+    if (!html) return false;
+    size_t n = 0;
+    while (html[n]) ++n;
+    return ingestHtml(html, n, irPathSave, armDropCapFirstPara, imageRendering);
+  }
+
+  // Load Tier B IR from SD.
+  bool loadIr(const char* irPath);
+
+  // Load page map if key matches and cursors fit IR; otherwise false.
+  bool loadPageMap(const char* mapPath);
+  bool savePageMap(const char* mapPath) const;
+  // If a loaded map is marked complete but the last page does not end the
+  // chapter under live layout, clear complete and keep starts as a lower bound.
+  // Call after loadPageMap + setRenderKey (needs renderer metrics).
+  bool scrubStaleCompleteMap(const GfxRenderer& renderer);
+
+  // Build full page map (idle / after open). Requires renderer for metrics.
+  bool buildPageMap(const GfxRenderer& renderer);
+
+  // Extend thin page map by up to maxPages (no paint change). Returns true if work done.
+  bool extendPageMap(const GfxRenderer& renderer, int maxPages);
+  // Ensure map has starts through currentPage + aheadPages (or complete).
+  bool ensureMapAhead(const GfxRenderer& renderer, int aheadPages = kMapAheadPages);
+
+  // Navigation
+  // maxWalkPages caps progressive map fill so interactive calls cannot freeze.
+  // Resume may pass a larger budget (with yield inside).
+  bool goToPage(const GfxRenderer& renderer, int pageIndex, int maxWalkPages = 64);
+  bool nextPage(const GfxRenderer& renderer);
+  bool prevPage(const GfxRenderer& renderer);
+  bool goToStart(const GfxRenderer& renderer);
+  // True last page of this chapter IR (legacy-style full layout walk).
+  // Map-hit only when complete map's last page is verified atChapterEnd.
+  // Otherwise pure layoutPage walk from start — never lands mid-chapter.
+  // Caller should hold Loading UI; yields inside; may take a few seconds.
+  bool goToLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
+
+  // Layout current page into laidOut_ (call before paint).
+  bool ensureLaidOut(const GfxRenderer& renderer);
+
+  // Paint laid-out page at origin (margins applied by caller or via key).
+  void paint(GfxRenderer& renderer, int originX, int originY) const;
+
+  [[nodiscard]] bool hasChapter() const { return !chapter_.empty(); }
+  [[nodiscard]] int currentPage() const { return currentPage_; }
+  // Exact if map complete; else estimate from IR.
+  [[nodiscard]] int chapterPageCount(const GfxRenderer* rendererForEstimate = nullptr) const;
+  [[nodiscard]] const LaidOutPage& page() const { return laidOut_; }
+  [[nodiscard]] const ChapterIr& chapter() const { return chapter_; }
+  // Mutable chapter for post-convert image probe (dims) before first layout.
+  [[nodiscard]] ChapterIr& chapterMutable() { return chapter_; }
+  [[nodiscard]] bool mapComplete() const { return map_.complete(); }
+  [[nodiscard]] int mapKnownPages() const { return map_.knownPages(); }
+
+  void clear();
+
+ private:
+  LayoutParams makeParams(const GfxRenderer& renderer) const;
+  bool layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c);
+  void seedMapIfEmpty();
+  // markComplete only if known page count is plausible vs IR estimate.
+  void markMapCompleteIfPlausible(const GfxRenderer& renderer);
+
+  RenderKey key_{};
+  float lineCompression_ = 1.0f;
+  ChapterIr chapter_{};
+  PageMap map_{};
+  LaidOutPage laidOut_{};
+  LaidOutPage ahead_{};  // Tier A: one page painted ahead (consumed on nextPage)
+  int currentPage_ = 0;
+  bool laidOutValid_ = false;
+  bool aheadValid_ = false;
+};
+
+}  // namespace rivulet

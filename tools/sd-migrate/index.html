@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Casper · Data Migration Tool (Copy Only)</title>
+  <style>
+    :root {
+      --bg:#0f1115;--panel:#171a21;--panel2:#1e2330;--border:#2a3142;--text:#e8ecf4;
+      --muted:#9aa3b5;--accent:#6ea8fe;--accent2:#3d7eff;--ok:#3dd68c;--warn:#f0b429;--err:#ff6b6b;
+      --mono:ui-monospace,Consolas,monospace;--sans:"Segoe UI",system-ui,sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;font-family:var(--sans);color:var(--text);
+      background:radial-gradient(1200px 600px at 10% -10%,#1a2744 0%,transparent 55%),var(--bg);line-height:1.45}
+    .wrap{max-width:920px;margin:0 auto;padding:28px 18px 64px}
+    .brand{display:flex;align-items:center;gap:16px}
+    .brand-logo{width:72px;height:72px;filter:drop-shadow(0 2px 16px rgba(255,255,255,.14))}
+    .brand-logo img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;background:transparent}
+    .product{font-size:.8rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
+    h1{font-size:1.4rem;font-weight:700;margin:0}
+    h1 span{display:block;font-size:.78rem;font-weight:600;letter-spacing:.1em;color:var(--muted);margin-top:6px;text-transform:uppercase}
+    .badge{display:inline-flex;margin-top:10px;font-size:.75rem;color:var(--accent);background:rgba(110,168,254,.1);
+      border:1px solid rgba(110,168,254,.25);border-radius:999px;padding:3px 10px}
+    .lead{margin:10px 0 0;color:var(--muted);max-width:64ch}
+    .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;margin-top:16px}
+    .card h2{margin:0 0 10px;font-size:.95rem;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+    .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .path{flex:1 1 220px;font-family:var(--mono);font-size:.82rem;background:var(--panel2);border:1px solid var(--border);
+      border-radius:8px;padding:10px 12px;min-height:40px;word-break:break-all}
+    .path.empty{color:var(--muted);font-style:italic;font-family:var(--sans)}
+    button{appearance:none;border:0;cursor:pointer;font:inherit;font-weight:600;font-size:.9rem;border-radius:9px;padding:10px 14px;background:var(--accent2);color:#fff}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    button.secondary{background:transparent;color:var(--text);border:1px solid var(--border)}
+    button.primary{background:linear-gradient(180deg,#5b8fff,#3d6fe0);padding:12px 20px;font-size:1rem}
+    .callout{border-radius:10px;padding:12px 14px;margin-top:12px;font-size:.9rem}
+    .callout.warn{background:rgba(240,180,41,.08);border:1px solid rgba(240,180,41,.35);color:#f3d48a}
+    .callout.ok{background:rgba(61,214,140,.08);border:1px solid rgba(61,214,140,.3);color:#9aecc0}
+    .callout.err{background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.35);color:#ffb4b4}
+    .callout.info{background:rgba(110,168,254,.08);border:1px solid rgba(110,168,254,.28);color:#b7d0ff}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+    .stat{background:var(--panel2);border-radius:8px;padding:10px 12px;border:1px solid var(--border)}
+    .stat b{display:block;font-size:1.25rem}.stat span{color:var(--muted);font-size:.78rem}
+    .progress{height:10px;border-radius:999px;background:#0c0e14;border:1px solid var(--border);overflow:hidden;margin:12px 0 4px}
+    .progress>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#3d7eff,#3dd68c)}
+    .log{font-family:var(--mono);font-size:.75rem;background:#0a0c10;border:1px solid var(--border);border-radius:8px;
+      padding:10px 12px;max-height:280px;overflow:auto;white-space:pre-wrap;color:#c5cddc;margin-top:10px}
+    .log .ok{color:var(--ok)}.log .warn{color:var(--warn)}.log .err{color:var(--err)}.log .dim{color:#6b7385}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    .chip{font-size:.75rem;font-family:var(--mono);padding:4px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--border)}
+    .chip.ok{border-color:rgba(61,214,140,.45);color:#9aecc0}
+    table.preview{width:100%;border-collapse:collapse;font-size:.82rem;margin-top:8px}
+    table.preview th,table.preview td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+    table.preview th{color:var(--muted)}
+    ul.tight{margin:8px 0 0;padding-left:1.15rem;color:var(--muted)}
+    footer{margin-top:28px;color:var(--muted);font-size:.8rem;border-top:1px solid var(--border);padding-top:14px}
+    .unsupported{display:none}body.no-fsapi .unsupported{display:block}body.no-fsapi .app{display:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <img alt="" width="128" height="128" id="ghostImg" src="casper-ghost.png" />
+        </div>
+        <div>
+          <p class="product">Casper</p>
+          <h1>Data Migration Tool<span>(Copy Only)</span></h1>
+        </div>
+      </div>
+      <div class="badge">One-time · shared path id with firmware · sources never deleted</div>
+      <p class="lead">
+        Choose your <strong>SD card root</strong>. Book paths are normalized the same way as firmware
+        (drive letters ignored). Each book becomes <code>/.casper/book_&lt;id&gt;/</code> with a
+        <code>package/</code> subfolder. Existing Casper files are never overwritten.
+      </p>
+    </header>
+    <div class="unsupported callout err"><strong>Use Chrome or Edge</strong> (folder access required).</div>
+    <div class="app">
+      <div class="card">
+        <h2>1 · SD card</h2>
+        <div class="row">
+          <button type="button" id="btnRoot" class="primary">Choose SD root…</button>
+          <button type="button" id="btnScan" class="secondary" disabled>Scan &amp; preview</button>
+        </div>
+        <div id="rootPath" class="path empty" style="margin-top:10px">No SD root selected</div>
+        <div id="chips" class="chips" style="margin-top:8px"><span class="chip">pending</span></div>
+        <div id="dstPath" class="path empty" style="margin-top:10px">Destination: —</div>
+        <div id="status" class="callout info" style="display:none"></div>
+      </div>
+      <div class="card">
+        <h2>2 · Preview</h2>
+        <div id="previewEmpty" style="color:var(--muted)">Scan after selecting the SD root.</div>
+        <div id="previewBody" style="display:none">
+          <div class="stats">
+            <div class="stat"><b id="stBooks">0</b><span>books found</span></div>
+            <div class="stat"><b id="stCopy">0</b><span>copy ops</span></div>
+            <div class="stat"><b id="stSkip">0</b><span>already present</span></div>
+          </div>
+          <div style="overflow:auto;max-height:240px">
+            <table class="preview"><thead><tr><th>Normalized path</th><th>book_ id</th><th>Notes</th></tr></thead>
+            <tbody id="tbody"></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>3 · Run</h2>
+        <div class="row">
+          <button type="button" id="btnGo" class="primary" disabled>Start migration</button>
+          <button type="button" id="btnCancel" class="secondary" disabled>Cancel</button>
+        </div>
+        <div class="progress"><i id="bar"></i></div>
+        <div id="prog" style="color:var(--muted);font-size:.85rem">Idle</div>
+        <div id="result" class="callout ok" style="display:none"></div>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="card">
+        <h2>Contract (matches firmware BookPathId)</h2>
+        <ul class="tight">
+          <li><code>normalizePath</code> — strip <code>H:</code>, <code>\</code>→<code>/</code>, leading <code>/</code></li>
+          <li><code>id</code> — FNV-1a 64 of that UTF-8 string → 16 hex</li>
+          <li><code>/.casper/book_&lt;id&gt;/package/</code> — book.bin &amp; thumbs</li>
+          <li>progress/stats at <code>book_&lt;id&gt;/</code></li>
+          <li>Marker: <code>crosspoint_migrate_v2.done</code></li>
+        </ul>
+      </div>
+    </div>
+    <footer>Casper · Data Migration Tool (Copy Only)</footer>
+  </div>
+<script src="migrate.js"></script>
+</body>
+</html>

@@ -16,7 +16,6 @@ build
 /.cache
 .history/
 /.venv
-*.local*
 *.cpfont
 lib/EpdFont/scripts/downloaded_fonts/
 lib/EpdFont/scripts/instanced_fonts/
@@ -47,5 +46,11 @@ _tmp_*.png
 README*.tmp
 README.md.*backup*
 README.from-*
-*.local*
 stock-firmware/
+
+dist/
+_xref_*/
+_xref_*/
+README.md.from-*
+README.md.*backup*
+_read_book_bin_cover.py

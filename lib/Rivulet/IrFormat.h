@@ -6,6 +6,9 @@
 namespace rivulet {
 
 inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
+// v21: table/tr/td/th are parsed — each cell becomes its own block. v20 IR was
+// produced by a parser that did not know these tags, so its cell text is already
+// merged into run-on paragraphs and cannot be recovered without reconverting.
 // v20: RunStyle carries text decorations (underline / strikethrough / sup / sub).
 // Same on-disk layout — RunStyle is still one byte — but v19 IR was produced by a
 // parser that discarded <sup>/<sub>/<u>/<s>/<del>/<ins> entirely, so those runs
@@ -14,10 +17,10 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // (Fourth Wing .orn ornaments, Alice floats). Same on-disk layout as v18.
 // v18: HTML lists/nav (ol/ul/li) each li = paragraph — Contents pages no longer
 // collapse into one run-on paragraph (Isako TOC). Also v17 document-alt text.
-inline constexpr uint16_t kIrFormatVersion = 20;
+inline constexpr uint16_t kIrFormatVersion = 21;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 20;
-inline constexpr uint16_t kIrFormatVersionMax = 20;
+inline constexpr uint16_t kIrFormatVersionMin = 21;
+inline constexpr uint16_t kIrFormatVersionMax = 21;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

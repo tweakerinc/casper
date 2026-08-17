@@ -733,6 +733,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   // Book Style CSS approximation: h2+p, hgroup+p, hr+p, p:first-child → text-indent: 0.
   // Armed when a heading/hgroup/hr ends; consumed by the next body <p>.
   bool noIndentNextParagraph = false;
+  // >0 inside a <table>; >1 means a nested table whose content is discarded.
+  int tableDepth = 0;
 
   // Style stack is block-scoped. Unclosed <span>/<b>/<i> used to leak frames;
   // after 16 silent push failures the stuck face (often Bold from an <h1>) painted
@@ -908,6 +910,39 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "li")) {
         closeBlock();
+        continue;
+      }
+
+      // Tables. Rivulet has no table block kind and building real column layout
+      // on a 480px panel is not worth it, so mirror exactly what the classic
+      // engine did: stream each cell as its own block, no "Row N Cell M" chrome,
+      // and discard nested tables. Without this, table/tr/td/th were simply
+      // unknown tags and every cell ran together into one unreadable paragraph -
+      // many EPUBs use tables purely as layout vehicles for caption/image pairs.
+      if (ieq(tag.name, tag.nameLen, "table")) {
+        if (!tag.closing && !tag.selfClose) {
+          closeBlock();
+          ++tableDepth;
+        } else if (tag.closing && tableDepth > 0) {
+          closeBlock();
+          --tableDepth;
+        }
+        continue;
+      }
+      if (tableDepth > 1) {
+        // Inside a nested table: drop its markup and text entirely (classic parity).
+        continue;
+      }
+      if (tableDepth == 1 &&
+          (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th") ||
+           ieq(tag.name, tag.nameLen, "tr"))) {
+        closeBlock();
+        if (!tag.closing && !tag.selfClose &&
+            (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th"))) {
+          // One cell = one block. Tight stack, no first-line indent, same as <li>.
+          openBlock(BlockKind::Paragraph, Align::Left, kBlockNoIndent);
+          out.setCurrentMarginsEmQ4(0, 2);
+        }
         continue;
       }
 
@@ -1448,7 +1483,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       continue;
     }
 
-    if (inSkip || inHidden) {
+    // tableDepth > 1 = inside a nested table, whose content the classic engine
+    // discarded too. Suppressing only its tags would still let its text leak into
+    // the surrounding block.
+    if (inSkip || inHidden || tableDepth > 1) {
       ++p;
       continue;
     }

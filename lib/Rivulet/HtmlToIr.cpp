@@ -535,17 +535,13 @@ void applyInlineStyle(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOut,
   if (containsI(v, vlen, "font-weight:bold") || containsI(v, vlen, "font-weight: bold") ||
       containsI(v, vlen, "font-weight:700") || containsI(v, vlen, "font-weight: 700") ||
       containsI(v, vlen, "font-weight:600") || containsI(v, vlen, "font-weight:800")) {
-    if (styleInOut == RunStyle::Italic)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Bold;
+    // Bit-set, not value-replace: RunStyle is a bitmask, so the old value tests
+    // dropped any decoration already carried on the run.
+    styleInOut |= RunStyle::Bold;
   }
   if (containsI(v, vlen, "font-style:italic") || containsI(v, vlen, "font-style: italic") ||
       containsI(v, vlen, "font-style:oblique")) {
-    if (styleInOut == RunStyle::Bold)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Italic;
+    styleInOut |= RunStyle::Italic;
   }
   // Size bumps never shrink an already-larger step (h1 Plus2 must stick).
   if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") ||
@@ -578,23 +574,16 @@ void applyClassEmphasis(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOu
   const char* v = attrValue(tag, "class", &vlen);
   if (!v || vlen == 0) return;
   if (containsI(v, vlen, "bold") || containsI(v, vlen, "strong") || containsI(v, vlen, "bolder")) {
-    if (styleInOut == RunStyle::Italic)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Bold;
+    styleInOut |= RunStyle::Bold;
   }
   if (containsI(v, vlen, "italic") || containsI(v, vlen, "oblique") || containsI(v, vlen, "emphasis") ||
       containsI(v, vlen, "emph") || containsI(v, vlen, "cite")) {
-    if (styleInOut == RunStyle::Bold)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Italic;
+    styleInOut |= RunStyle::Italic;
   }
   // Alice .chapter is larger regular, not bold — skip bold promotion.
   if (looksLikeTitleHost(tag) && !classIsChapterLeftTitle(tag)) {
     if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
-    if (styleInOut == RunStyle::Regular) styleInOut = RunStyle::Bold;
-    if (styleInOut == RunStyle::Italic) styleInOut = RunStyle::BoldItalic;
+    styleInOut |= RunStyle::Bold;
   } else if (classIsChapterLeftTitle(tag)) {
     if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
   }
@@ -839,16 +828,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     }
   };
 
-  auto mergeBold = [&](RunStyle base) {
-    if (base == RunStyle::Italic) return RunStyle::BoldItalic;
-    if (base == RunStyle::BoldItalic) return RunStyle::BoldItalic;
-    return RunStyle::Bold;
-  };
-  auto mergeItalic = [&](RunStyle base) {
-    if (base == RunStyle::Bold) return RunStyle::BoldItalic;
-    if (base == RunStyle::BoldItalic) return RunStyle::BoldItalic;
-    return RunStyle::Italic;
-  };
+  // Bit operations, not value comparisons: RunStyle is a bitmask now, so the old
+  // `base == RunStyle::Italic` style tests would have silently dropped any
+  // decoration already on the frame (bold inside underline lost the underline).
+  auto mergeBold = [&](RunStyle base) { return base | RunStyle::Bold; };
+  auto mergeItalic = [&](RunStyle base) { return base | RunStyle::Italic; };
+  auto mergeDecoration = [&](RunStyle base, RunStyle bit) { return base | bit; };
 
   while (p < end && !out.failed()) {
     if (*p == '<') {
@@ -1412,6 +1397,35 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         flushText();
         popStyle();
         continue;
+      }
+
+      // Text decorations and scripts. These were dropped entirely before v20:
+      // <sup> footnote markers rendered full-size on the baseline, and <u>/<s>/
+      // <del>/<ins> passages lost the very thing that gave them meaning.
+      // GfxRenderer::drawText already understands the SUP/SUB bits (it scales the
+      // glyph and halves the advance); underline/strikethrough are painted as
+      // lines by RivuletEngine::paint, matching the classic TextBlock::render.
+      {
+        RunStyle decoration = RunStyle::Regular;
+        if (ieq(tag.name, tag.nameLen, "sup")) {
+          decoration = RunStyle::Superscript;
+        } else if (ieq(tag.name, tag.nameLen, "sub")) {
+          decoration = RunStyle::Subscript;
+        } else if (ieq(tag.name, tag.nameLen, "u") || ieq(tag.name, tag.nameLen, "ins")) {
+          decoration = RunStyle::Underline;
+        } else if (ieq(tag.name, tag.nameLen, "s") || ieq(tag.name, tag.nameLen, "strike") ||
+                   ieq(tag.name, tag.nameLen, "del")) {
+          decoration = RunStyle::Strikethrough;
+        }
+        if (decoration != RunStyle::Regular) {
+          flushText();
+          if (tag.closing) {
+            popStyle();
+          } else if (!tag.selfClose) {
+            pushStyle(mergeDecoration(curStyle().style, decoration), curStyle().size);
+          }
+          continue;
+        }
       }
 
       // span / font: inherit + class/style emphasis

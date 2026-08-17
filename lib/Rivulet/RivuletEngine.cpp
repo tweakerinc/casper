@@ -775,7 +775,35 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
       continue;
     }
 
-    renderer.drawText(sp.fontId, x0, y0, sp.text.c_str(), true, style, BidiUtils::BidiBaseDir::LTR, nn);
+    // Superscript / subscript ride the same baseline offsets the classic engine
+    // used (TextBlock::render). drawText scales the glyph and halves the advance
+    // for these bits; only the vertical shift is the caller's job.
+    const int spanAscender = renderer.getFontAscenderSize(sp.fontId);
+    int textY = y0;
+    if ((sp.epdStyle & static_cast<uint8_t>(EpdFontFamily::SUP)) != 0) {
+      textY -= spanAscender * 2 / 5;
+    } else if ((sp.epdStyle & static_cast<uint8_t>(EpdFontFamily::SUB)) != 0) {
+      textY += spanAscender / 4;
+    }
+
+    renderer.drawText(sp.fontId, x0, textY, sp.text.c_str(), true, style, BidiUtils::BidiBaseDir::LTR, nn);
+
+    // Underline / strikethrough are lines, not glyph bits — drawText does not
+    // paint them. Same geometry as the classic TextBlock::render decorations
+    // (underline just under the baseline, strike at 4/5 of the ascender).
+    if ((sp.epdStyle & static_cast<uint8_t>(EpdFontFamily::TEXT_DECORATION_MASK)) != 0 && !isDrop) {
+      int lineW = renderer.getTextAdvanceX(sp.fontId, sp.text.c_str(), style);
+      if (lineW > 0) {
+        if ((sp.epdStyle & static_cast<uint8_t>(EpdFontFamily::UNDERLINE)) != 0) {
+          const int uy = textY + spanAscender + 2;
+          renderer.drawLine(x0, uy, x0 + lineW, uy, 2, true);
+        }
+        if ((sp.epdStyle & static_cast<uint8_t>(EpdFontFamily::STRIKETHROUGH)) != 0) {
+          const int sy = textY + spanAscender * 4 / 5;
+          renderer.drawLine(x0, sy, x0 + lineW, sy, 2, true);
+        }
+      }
+    }
 
     // Guide without focus: still place dots between words on the span.
     if (guideOn && !isDrop) {

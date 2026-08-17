@@ -6,14 +6,18 @@
 namespace rivulet {
 
 inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
+// v20: RunStyle carries text decorations (underline / strikethrough / sup / sub).
+// Same on-disk layout — RunStyle is still one byte — but v19 IR was produced by a
+// parser that discarded <sup>/<sub>/<u>/<s>/<del>/<ins> entirely, so those runs
+// would stay undecorated forever unless the chapter is reconverted.
 // v19: force reconvert of v18 chapter IR that predates reliable Image blocks
 // (Fourth Wing .orn ornaments, Alice floats). Same on-disk layout as v18.
 // v18: HTML lists/nav (ol/ul/li) each li = paragraph — Contents pages no longer
 // collapse into one run-on paragraph (Isako TOC). Also v17 document-alt text.
-inline constexpr uint16_t kIrFormatVersion = 19;
+inline constexpr uint16_t kIrFormatVersion = 20;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 19;
-inline constexpr uint16_t kIrFormatVersionMax = 19;
+inline constexpr uint16_t kIrFormatVersionMin = 20;
+inline constexpr uint16_t kIrFormatVersionMax = 20;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {
@@ -43,13 +47,41 @@ struct RenderKey {
   bool operator!=(const RenderKey& o) const { return !(*this == o); }
 };
 
-// Per-run face bits (Latin v1 — no BiDi/RTL).
+// Per-run face + decoration bits.
+//
+// These values deliberately mirror EpdFontFamily::Style one-for-one, so
+// FontLadder::epdStyleBits() is a straight cast and the two can never drift
+// (a static_assert in FontLadder.cpp enforces it). Treat this as a BITMASK:
+// decorations compose freely with bold/italic, e.g. Bold|Underline.
+//
+// Before v20 only the low two bits existed and the parser threw away every
+// <sup>/<sub>/<u>/<s>/<del>/<ins>, so footnote markers rendered full-size on the
+// baseline and struck-out text lost its meaning.
 enum class RunStyle : uint8_t {
   Regular = 0,
   Bold = 1,
   Italic = 2,
   BoldItalic = 3,
+  Underline = 4,
+  Strikethrough = 8,
+  Superscript = 16,
+  Subscript = 32,
 };
+
+inline constexpr uint8_t kRunStyleFaceMask = 0x03;        // bold | italic
+inline constexpr uint8_t kRunStyleDecorationMask = 0x0C;  // underline | strikethrough
+inline constexpr uint8_t kRunStyleScriptMask = 0x30;      // sup | sub
+
+inline constexpr RunStyle operator|(RunStyle a, RunStyle b) {
+  return static_cast<RunStyle>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+inline constexpr RunStyle& operator|=(RunStyle& a, RunStyle b) {
+  a = a | b;
+  return a;
+}
+inline constexpr bool hasStyleBit(RunStyle s, RunStyle bit) {
+  return (static_cast<uint8_t>(s) & static_cast<uint8_t>(bit)) != 0;
+}
 
 // Relative size vs user base face. 0 = two steps smaller … 4 = two steps larger.
 // 2 = body (SIZE_STEP_BASE).

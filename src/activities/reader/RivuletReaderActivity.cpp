@@ -3581,6 +3581,15 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     // Footnote markers: underline only (paint-time). Does not reflow Book's Style.
     paintFootnoteMarkers();
   };
+  // Text + overlays only — used by the AA greyscale passes. Images are already
+  // 1-bit dithered plates baked into the BW frame that storeBwBuffer snapshots;
+  // re-decoding them under that ~48 KB hold is what aborted Fourth Wing's dragon
+  // / ornament pages (paintPageImages at free~40KB maxA~24KB → operator new abort).
+  auto paintTextForAa = [this]() {
+    engine_.paint(renderer, marginX_, marginY_);
+    paintClippingHighlights();
+    paintFootnoteMarkers();
+  };
   paintPageContent();
   renderStatusBar();
   // Reader-only dark: displayWithRefreshCycle inverts for the panel push only
@@ -3613,8 +3622,22 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // either vanish (BW threshold) or look speckled (all fringes → black). Match
   // Txt: Text AA on + not dark mode → greys; else BW refresh cycle.
   // Skip AA on fast first-ink (QR/wake preferFast) so open stays snappy.
+  // Skip AA on FORCE_SCRUB (long-press refresh): that path must run HALF via
+  // displayWithRefreshCycle — AA's displayGrayBuffer never consumed FORCE_SCRUB,
+  // so the scrub felt dead with AA on.
+  // Skip AA when maxAlloc cannot hold storeBwBuffer (~48 KB in 8 KB chunks) plus
+  // a little headroom for the paint itself; otherwise we abort mid-greys and the
+  // turn looks like "nothing happened" until Home→reopen.
+  constexpr size_t kAaMinMaxAlloc = 56 * 1024;
+  const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const size_t maxAllocNow = ESP.getMaxAllocHeap();
+  const bool heapOkForAa = maxAllocNow >= kAaMinMaxAlloc;
   const bool aaThisFrame = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled() &&
-                           !(preferFastFirst && hadOpenHints) && !deferAa;
+                           !(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub && heapOkForAa;
+  if (SETTINGS.textAntiAliasing != 0 && !forceScrub && !heapOkForAa) {
+    LOG_DBG("RVR", "skip AA this frame maxAlloc=%u (need >=%u)", static_cast<unsigned>(maxAllocNow),
+            static_cast<unsigned>(kAaMinMaxAlloc));
+  }
 
   const uint32_t tRefresh = millis();
   // The BW page is already painted into the framebuffer above. AA is an optional
@@ -3624,9 +3647,17 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   if (aaThisFrame) {
     aaRan = ReaderUtils::renderAntiAliased(renderer, [&]() {
       renderer.clearScreen(0x00);
-      paintPageContent();
+      paintTextForAa();
       // Status bar stays BW chrome (same as classic — not re-AA'd into greys).
     });
+    if (aaRan) {
+      // AA's displayGrayBuffer bypasses displayWithRefreshCycle — still advance
+      // the anti-ghosting countdown so interval maintenance stays on schedule.
+      const int freq = SETTINGS.getRefreshFrequency();
+      if (freq != CasperSettings::REFRESH_COUNTDOWN_DISABLED && pagesUntilFullRefresh_ > 1) {
+        pagesUntilFullRefresh_--;
+      }
+    }
   }
   if (!aaRan) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);

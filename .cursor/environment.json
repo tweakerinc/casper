@@ -1,0 +1,4 @@
+{
+  "name": "Casper (CrossPoint Reader) firmware",
+  "install": "bash .cursor/install.sh"
+}

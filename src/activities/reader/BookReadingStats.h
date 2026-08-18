@@ -60,4 +60,7 @@ struct BookReadingStats {
   // Formats a duration in seconds into a human-readable string.
   // Output examples: "< 1 min", "45 min", "2h 30 min"
   static void formatDuration(uint32_t seconds, char* buf, size_t len);
+
+  // True when every persisted field matches — used to skip no-op SD writes.
+  bool samePayloadAs(const BookReadingStats& o) const;
 };

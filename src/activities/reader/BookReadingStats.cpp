@@ -467,6 +467,17 @@ void memoUpdateByCachePath(const std::string& cachePath, const BookReadingStats&
   }
 }
 
+bool memoLookupByCachePath(const std::string& cachePath, BookReadingStats& out) {
+  if (cachePath.empty()) return false;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.cachePath[i] == cachePath) {
+      out = g_loadForBookMemo.stats[i];
+      return true;
+    }
+  }
+  return false;
+}
+
 bool memoLookup(const std::string& bookPath, BookReadingStats& out) {
   for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
     if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
@@ -567,7 +578,20 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
     }
   }
 
+  memoUpdateByCachePath(cachePath, stats);
   return stats;
+}
+
+bool BookReadingStats::samePayloadAs(const BookReadingStats& o) const {
+  return sessionCount == o.sessionCount && totalReadingSeconds == o.totalReadingSeconds &&
+         totalPagesTurned == o.totalPagesTurned && isCompleted == o.isCompleted &&
+         avgSecondsPerForwardPage == o.avgSecondsPerForwardPage && paceSampleCount == o.paceSampleCount &&
+         estimatedTimeLeftSeconds == o.estimatedTimeLeftSeconds && progressPercentMilli == o.progressPercentMilli &&
+         startDateManual == o.startDateManual && finishedDateManual == o.finishedDateManual &&
+         startDate.year == o.startDate.year && startDate.month == o.startDate.month && startDate.day == o.startDate.day &&
+         finishedDate.year == o.finishedDate.year && finishedDate.month == o.finishedDate.month &&
+         finishedDate.day == o.finishedDate.day && timeOfDaySeconds == o.timeOfDaySeconds &&
+         dayOfWeekSeconds == o.dayOfWeekSeconds;
 }
 
 float BookReadingStats::getProgressPercent() const {
@@ -649,6 +673,15 @@ void BookReadingStats::save(const std::string& cachePath) const {
   if (cachePath.empty()) {
     LOG_ERR("STATS", "save: empty cache path");
     return;
+  }
+  // Skip the FAT write when the on-disk / memo payload already matches. Reader
+  // exit, Home progress stamps, and menu leaves used to rewrite the same
+  // stats_vN.bin repeatedly — several SD ops for zero change.
+  {
+    BookReadingStats memoed;
+    if (memoLookupByCachePath(cachePath, memoed) && samePayloadAs(memoed)) {
+      return;
+    }
   }
   ensureCacheDir(cachePath);
   const std::string statsFileName = statsFileNameForVersion(STATS_FILE_VERSION);

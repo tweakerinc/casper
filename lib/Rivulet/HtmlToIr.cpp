@@ -737,25 +737,37 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   int tableDepth = 0;
 
   // Style stack is block-scoped. Unclosed <span>/<b>/<i> used to leak frames;
-  // after 16 silent push failures the stuck face (often Bold from an <h1>) painted
+  // after silent push failures the stuck face (often Bold from an <h1>) painted
   // the rest of the chapter bold — classic "OH, MAN," normal then everything bold.
-  StyleFrame stack[16];
+  // 32 frames is cheap (2 bytes each) and covers deeply nested EPUB emphasis
+  // without dropping styles. On overflow we OR the new face onto the top rather
+  // than replacing it, so bold/italic cannot silently vanish mid-chapter.
+  StyleFrame stack[32];
   int stackTop = 0;
   int styleFloor = 0;  // never pop below this (current block's base face)
+  bool styleOverflowLogged = false;
   stack[0] = {};
 
   auto curStyle = [&]() -> StyleFrame& { return stack[stackTop]; };
 
   auto pushStyle = [&](const RunStyle st, const SizeStep sz) {
-    if (stackTop + 1 < 16) {
+    if (stackTop + 1 < 32) {
       ++stackTop;
       stack[stackTop].style = st;
       stack[stackTop].size = sz;
       return;
     }
-    // Stack full: replace top rather than silently keep a leaked Bold/Italic.
-    stack[stackTop].style = st;
-    stack[stackTop].size = sz;
+    // Stack full: merge onto the top. Replacing used to drop the accumulated
+    // face when a deep nest pushed Bold over Italic (or vice versa) and later
+    // pops could not unwind — styles looked like they "stopped working".
+    stack[stackTop].style = stack[stackTop].style | st;
+    if (static_cast<int>(sz) > static_cast<int>(stack[stackTop].size)) {
+      stack[stackTop].size = sz;
+    }
+    if (!styleOverflowLogged) {
+      styleOverflowLogged = true;
+      LOG_DBG("RVIR", "style stack full — merging faces (chapter has deep nesting)");
+    }
   };
   auto popStyle = [&]() {
     // Never pop through the current block's base face (orphan </span> after

@@ -409,18 +409,80 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
                                  const float lineCompression) const {
   if (viewportW < 16 || viewportH < 16 || bodyEmPx < 4) return 1;
   if (textLen_ == 0 && blocks_.empty()) return 1;
+
+  // Heuristic that knows about Rivulet block kinds — not a classic section rebuild,
+  // but far closer than "chars / fixed CPL" for chapters with images, HRs, and
+  // large headings (the old estimate undercounted plate-heavy spines badly).
   const float lc = lineCompression > 0.1f ? lineCompression : 1.0f;
-  const int lineHpx = std::max(bodyEmPx + 2, static_cast<int>(bodyEmPx * 1.2f * lc + 0.5f));
-  const int linesPerPage = std::max(1, viewportH / lineHpx);
-  const int charsPerLine = std::max(12, (viewportW * 10) / std::max(1, bodyEmPx * 5));
-  const size_t chars = textLen_;
-  const int paraBreaks = static_cast<int>(blocks_.size());
-  const int contentLines =
-      static_cast<int>((chars + static_cast<size_t>(charsPerLine) - 1) / static_cast<size_t>(charsPerLine)) +
-      paraBreaks / 2;
-  const int pages = std::max(1, (contentLines + linesPerPage - 1) / linesPerPage);
-  if (pages == 1 && (chars > 400 || blocks_.size() > 3)) {
-    return 2;
+  const int bodyLine = std::max(bodyEmPx + 2, static_cast<int>(bodyEmPx * 1.2f * lc + 0.5f));
+  const int linesPerPage = std::max(1, viewportH / bodyLine);
+  // ~0.5em average glyph width for Latin body — matches Source Serif / Literata feel.
+  const int charsPerLine = std::max(12, (viewportW * 2) / std::max(1, bodyEmPx));
+
+  int contentLines = 0;
+  int paraCount = 0;
+  for (const Block& b : blocks_) {
+    switch (b.kind) {
+      case BlockKind::HorizontalRule:
+        contentLines += 1;
+        break;
+      case BlockKind::Spacer: {
+        // marginBottomEmQ4 is in 1/16 em.
+        const int gap = std::max(1, (static_cast<int>(b.marginBottomEmQ4) * bodyEmPx) / 16);
+        contentLines += std::max(1, (gap + bodyLine - 1) / bodyLine);
+        break;
+      }
+      case BlockKind::Image: {
+        int h = b.imageH > 0 ? static_cast<int>(b.imageH) : bodyEmPx * 4;
+        // Floats share vertical space with wrapping text — charge ~half height.
+        if ((b.flags & (kBlockFloatLeft | kBlockFloatRight)) != 0) {
+          h = std::max(bodyLine, h / 2);
+        }
+        // Cap a single plate at one page so a cover-like image cannot explode ETA.
+        const int imgLines = std::min(linesPerPage, std::max(1, (h + bodyLine - 1) / bodyLine));
+        contentLines += imgLines;
+        break;
+      }
+      default: {
+        // Paragraph / heading: count UTF-8 bytes in the block's runs.
+        size_t bytes = 0;
+        const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+        for (uint16_t ri = b.runBegin; ri < runEnd && ri < runs_.size(); ++ri) {
+          bytes += runs_[ri].textLen;
+        }
+        int stepBoost = 0;
+        if (b.kind == BlockKind::Heading1) stepBoost = bodyLine;  // ~extra line of air
+        else if (b.kind == BlockKind::Heading2)
+          stepBoost = bodyLine / 2;
+        else if (b.kind >= BlockKind::Heading3 && b.kind <= BlockKind::Heading6)
+          stepBoost = bodyLine / 4;
+        // Larger faces use fewer chars per line.
+        int cpl = charsPerLine;
+        if (b.kind == BlockKind::Heading1)
+          cpl = std::max(8, charsPerLine * 2 / 3);
+        else if (b.kind == BlockKind::Heading2)
+          cpl = std::max(10, charsPerLine * 4 / 5);
+        const int textLines =
+            bytes == 0 ? 1
+                       : static_cast<int>((bytes + static_cast<size_t>(cpl) - 1) / static_cast<size_t>(cpl));
+        contentLines += textLines + (stepBoost + bodyLine - 1) / bodyLine;
+        if (b.kind == BlockKind::Paragraph) ++paraCount;
+        break;
+      }
+    }
+  }
+  contentLines += paraCount / 2;
+
+  // Empty-run chapters (image-only): still at least the image lines above.
+  if (contentLines <= 0) {
+    contentLines = static_cast<int>((textLen_ + static_cast<size_t>(charsPerLine) - 1) /
+                                    static_cast<size_t>(charsPerLine)) +
+                   static_cast<int>(blocks_.size()) / 2;
+  }
+
+  int pages = std::max(1, (contentLines + linesPerPage - 1) / linesPerPage);
+  if (pages == 1 && (textLen_ > 400 || blocks_.size() > 3)) {
+    pages = 2;
   }
   return pages;
 }

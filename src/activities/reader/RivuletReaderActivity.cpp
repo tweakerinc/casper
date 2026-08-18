@@ -1996,7 +1996,9 @@ void RivuletReaderActivity::tickIdlePageMap() {
   if (engine_.warmAheadPage(renderer)) return;
 
   if (engine_.mapComplete()) return;
-  if (!engine_.extendPageMap(renderer, rivulet::RivuletEngine::kIdleMapPagesPerTick)) return;
+  const int burst = engine_.idleMapPagesThisTick(&renderer);
+  if (burst <= 0) return;
+  if (!engine_.extendPageMap(renderer, burst)) return;
   pageMapDirty_ = true;
   if (engine_.mapComplete()) {
     persistPageMapIfComplete();

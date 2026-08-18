@@ -22,7 +22,10 @@ class RivuletEngine {
   // legacy-style look-ahead for the thin page index (not painted pages).
   static constexpr int kMapAheadPages = 5;
   // Idle tick budget: a few map pages without monopolizing the main loop.
+  // When the map is far behind the heuristic estimate, tickIdlePageMap asks for
+  // a larger burst so the status-bar "~" settles sooner (classic had a real LUT).
   static constexpr int kIdleMapPagesPerTick = 4;
+  static constexpr int kIdleMapPagesCatchUp = 10;
 
   // When the render key changes, invalidate page map + paint window (F).
   void setRenderKey(const RenderKey& key);
@@ -96,8 +99,11 @@ class RivuletEngine {
 
   [[nodiscard]] bool hasChapter() const { return !chapter_.empty(); }
   [[nodiscard]] int currentPage() const { return currentPage_; }
-  // Exact if map complete; else estimate from IR.
+  // Exact if map complete; else estimate from IR (+ map extrapolation while walking).
   [[nodiscard]] int chapterPageCount(const GfxRenderer* rendererForEstimate = nullptr) const;
+  // How many measure-only pages the idle tick should lay out this pass.
+  // Larger when the map is far behind the estimate so "~N" settles faster.
+  [[nodiscard]] int idleMapPagesThisTick(const GfxRenderer* rendererForEstimate = nullptr) const;
   [[nodiscard]] const LaidOutPage& page() const { return laidOut_; }
   [[nodiscard]] const ChapterIr& chapter() const { return chapter_; }
   // Mutable chapter for post-convert image probe (dims) before first layout.
@@ -126,6 +132,10 @@ class RivuletEngine {
   int currentPage_ = 0;
   bool laidOutValid_ = false;
   bool aheadValid_ = false;
+  // EMA of the incomplete-map estimate so status-bar "~N" does not jump every
+  // idle tick (classic Section::estimatedTotalPages used the same idea).
+  mutable float smoothedEstimate_ = 0.0f;
+  mutable int smoothedAtKnown_ = -1;
 };
 
 }  // namespace rivulet

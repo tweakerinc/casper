@@ -24,6 +24,8 @@ void RivuletEngine::clear() {
   currentPage_ = 0;
   laidOutValid_ = false;
   aheadValid_ = false;
+  smoothedEstimate_ = 0.0f;
+  smoothedAtKnown_ = -1;
 }
 
 void RivuletEngine::setRenderKey(const RenderKey& key) {
@@ -37,6 +39,8 @@ void RivuletEngine::setRenderKey(const RenderKey& key) {
     laidOutValid_ = false;
     aheadValid_ = false;
     ahead_.clear();
+    smoothedEstimate_ = 0.0f;
+    smoothedAtKnown_ = -1;
   } else {
     key_ = key;
     map_.setRenderKey(key_);
@@ -652,7 +656,7 @@ int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) cons
   // IR estimate is always available (no renderer required for the heuristic).
   const int bodyEm =
       rendererForEstimate ? std::max(8, rendererForEstimate->getFontAscenderSize(key_.fontId)) : 14;
-  const int estimate =
+  const int heuristic =
       chapter_.estimatePageCount(key_.viewportW, key_.viewportH, bodyEm, lineCompression_);
 
   const int known = std::max(1, map_.knownPages());
@@ -661,22 +665,77 @@ int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) cons
   // Live layout reached the real chapter end — do not inflate to a loose estimate
   // (that produced "13/31" after walking only 13 pages of partial IR).
   if (laidOutValid_ && laidOut_.atChapterEnd) {
+    smoothedEstimate_ = 0.0f;
+    smoothedAtKnown_ = -1;
     return atLeastCurrent;
   }
 
   // Exact total once fully walked — reject absurdly short "complete" maps.
   if (map_.complete() && map_.knownTotal() > 0) {
     const int total = map_.knownTotal();
-    if (total >= atLeastCurrent && !(estimate >= 6 && total * 2 + 1 < estimate)) {
+    if (total >= atLeastCurrent && !(heuristic >= 6 && total * 2 + 1 < heuristic)) {
+      smoothedEstimate_ = 0.0f;
+      smoothedAtKnown_ = -1;
       return total;
     }
-    // Fall through to estimate when complete total is implausibly small.
+    // Fall through when complete total is implausibly small.
   }
 
-  // knownPages is only a lower bound while incomplete — never *replace* the estimate
-  // with it (that produced "2/3" / "3/3" mid-chapter in the status bar / menu).
-  if (estimate > 0) return std::max(atLeastCurrent, estimate);
-  return atLeastCurrent;
+  // Map-progress extrapolation: once we have a few real page breaks, scale by
+  // how far the last cursor has walked through the chapter's blocks. This is
+  // the Rivulet analogue of classic Section::estimatedTotalPages (bytesConsumed
+  // / totalBytes) — same idea, IR cursors instead of HTML byte offsets.
+  int extrapolated = 0;
+  if (map_.knownPages() >= 3 && !chapter_.blocks().empty()) {
+    const IrCursor& last = map_.pageStart(map_.knownPages() - 1);
+    const int blocks = static_cast<int>(chapter_.blocks().size());
+    const int reached = std::min(blocks, static_cast<int>(last.blockIndex) + 1);
+    if (reached > 0 && reached < blocks) {
+      const uint64_t raw =
+          (static_cast<uint64_t>(map_.knownPages()) * static_cast<uint64_t>(blocks)) / static_cast<uint64_t>(reached);
+      extrapolated = raw > 60000 ? 60000 : static_cast<int>(raw);
+    } else if (reached >= blocks) {
+      // Cursor is in the last block(s) but map not complete — stay near known.
+      extrapolated = map_.knownPages() + 1;
+    }
+  }
+
+  // Blend: prefer extrapolation when available, else heuristic. Never below the
+  // pages already walked / the page the reader is on.
+  int raw = heuristic;
+  if (extrapolated > 0) {
+    // Weight extrapolation higher once we have a decent sample.
+    if (map_.knownPages() >= 8) {
+      raw = extrapolated;
+    } else {
+      raw = (extrapolated * 2 + heuristic) / 3;
+    }
+  }
+  raw = std::max(atLeastCurrent, raw);
+
+  // EMA so the status bar does not jump every idle map tick (classic used ALPHA=0.25).
+  constexpr float kAlpha = 0.25f;
+  if (smoothedEstimate_ <= 0.0f) {
+    smoothedEstimate_ = static_cast<float>(raw);
+  } else if (map_.knownPages() != smoothedAtKnown_) {
+    smoothedEstimate_ += kAlpha * (static_cast<float>(raw) - smoothedEstimate_);
+  }
+  smoothedAtKnown_ = map_.knownPages();
+
+  const int smoothed = static_cast<int>(smoothedEstimate_ + 0.5f);
+  return std::max(atLeastCurrent, smoothed);
+}
+
+int RivuletEngine::idleMapPagesThisTick(const GfxRenderer* rendererForEstimate) const {
+  if (map_.complete() || chapter_.empty()) return 0;
+  const int known = map_.knownPages();
+  const int estimate = chapterPageCount(rendererForEstimate);
+  // Far behind the estimate → catch up faster so "~47" becomes a real number
+  // before the reader has turned many pages. Still capped so one idle tick
+  // cannot monopolize the main loop.
+  if (estimate >= known + 12) return kIdleMapPagesCatchUp;
+  if (estimate >= known + 6) return std::max(kIdleMapPagesPerTick, 6);
+  return kIdleMapPagesPerTick;
 }
 
 void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int originY) const {

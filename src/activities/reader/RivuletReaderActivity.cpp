@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "BookStatsActivity.h"
+#include "ChapterLoader.h"
 #include "ClippingStore.h"
 #include "CasperSettings.h"
 #include "CasperState.h"
@@ -1637,336 +1638,34 @@ bool RivuletReaderActivity::loadTocChapter(const int tocSpineIndex, const int st
 
 bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage, const bool requireCompleteIr) {
   if (!epub_) return false;
-  const int n = epub_->getSpineItemsCount();
-  if (spineIndex < 0 || spineIndex >= n) return false;
 
-  const auto item = epub_->getSpineItem(spineIndex);
-  if (item.href.empty()) {
-    LOG_DBG("RVR", "spine %d empty href — skip", spineIndex);
+  // Chapter IR acquisition lives in ChapterLoader so the Home screen can index
+  // chapters with the same pipeline (see chapterload::loadChapterIr).
+  chapterload::Request req;
+  req.epub = epub_.get();
+  req.engine = &engine_;
+  req.renderer = &renderer;
+  req.irDir = irDir_;
+  req.spineIndex = spineIndex;
+  req.imageRendering = SETTINGS.imageRendering;
+  req.requireCompleteIr = requireCompleteIr;
+  req.bindPageCache = true;
+
+  chapterload::Hooks hooks;
+  hooks.ctx = this;
+  hooks.prepareHeap = [](void* ctx, const bool aggressive) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareHeapForChapterLoad(aggressive);
+  };
+  hooks.prepareImages = [](void* ctx, const char* href) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+
+  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
+  if (!loaded.ok) {
+    ready_ = false;
     return false;
   }
-
-  LOG_INF("RVR", "loadSpine %d href=%s free=%u maxAlloc=%u requireFull=%d", spineIndex, item.href.c_str(),
-          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-          requireCompleteIr ? 1 : 0);
-
-  // setupCacheDir already ran in onEnter; only ensure IR dir (cheap if exists).
-  if (!irDir_.empty()) {
-    Storage.ensureDirectoryExists(irDir_.c_str());
-    // Classic section.bin idea: persist laid-out pages under pages/ so resume
-    // and revisit are deserialize + paint (keeps Rivulet's book look, CrossPoint speed).
-    // MUST be spine-namespaced — see RivuletEngine::pageCachePath.
-    const std::string pagesDir = irDir_ + "/pages";
-    engine_.setPageCacheDir(pagesDir.c_str());
-    engine_.setPageCacheSpine(spineIndex);
-  } else {
-    engine_.clearPageCacheDir();
-    engine_.setPageCacheSpine(-1);
-  }
-
-  char irPath[192];
-  char htmlPath[192];
-  char tmpHtmlPath[200];
-  // IR/map fingerprint includes Images mode (Display/Placeholder/Suppress) so changing
-  // Settings → Images does not reuse IR that still has/omits plates.
-  const unsigned imgMode = static_cast<unsigned>(SETTINGS.imageRendering);
-  std::snprintf(irPath, sizeof(irPath), "%s/s%d_m%u.rvir", irDir_.c_str(), spineIndex, imgMode);
-  std::snprintf(htmlPath, sizeof(htmlPath), "%s/s%d.html", irDir_.c_str(), spineIndex);
-  std::snprintf(tmpHtmlPath, sizeof(tmpHtmlPath), "%s/s%d.html.tmp", irDir_.c_str(), spineIndex);
-
-  // Always free retained chapter + image/font caches before spine load.
-  // First open used to skip this when hasChapter() was false, leaving home-cover
-  // PNG / font cache holding maxAlloc and aborting mid-convert (issue #8).
-  const bool hasCachedIr = Storage.exists(irPath);
-  const bool needAggressive =
-      requireCompleteIr || !hasCachedIr || ESP.getMaxAllocHeap() < 48 * 1024 || ESP.getFreeHeap() < 60 * 1024;
-  if (!hasCachedIr || engine_.hasChapter() || needAggressive) {
-    prepareHeapForChapterLoad(needAggressive || requireCompleteIr);
-  }
-
-  // Prefer cached IR when present (no ZIP/HTML needed).
-  bool ok = false;
-  bool fromIrCache = false;
-  if (Storage.exists(irPath)) {
-    ok = engine_.loadIr(irPath);
-    if (ok) {
-      // Reject truncated IR from old OOM converts (mid-chapter "last page").
-      // If HTML on SD is much larger than IR text, force reconvert.
-      if (Storage.exists(htmlPath)) {
-        HalFile hf;
-        if (Storage.openFileForRead("RVR", htmlPath, hf)) {
-          const size_t htmlSz = hf.size();
-          hf.close();
-          const size_t textSz = engine_.chapter().textSize();
-          // Partial OOM IR left short text vs full XHTML (wrong "last page" mid-chapter).
-          // Prose chapters keep ~40%+ of HTML as text; heavy markup still >25%.
-          // Also reject tiny text against large HTML (classic truncated convert).
-          const bool shortVsHtml =
-              (htmlSz > 8000 && textSz > 0 && textSz * 5 / 2 < htmlSz) ||  // text < 40% of html
-              (htmlSz > 20000 && textSz < 5000);
-          if (shortVsHtml) {
-            LOG_ERR("RVR", "stale short IR spine=%d text=%u html=%u — reconvert", spineIndex,
-                    static_cast<unsigned>(textSz), static_cast<unsigned>(htmlSz));
-            engine_.clear();
-            Storage.remove(irPath);
-            char mapPath[200];
-            std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-            if (Storage.exists(mapPath)) Storage.remove(mapPath);
-            ok = false;
-          }
-        }
-      }
-    }
-    if (ok) {
-      fromIrCache = true;
-      LOG_DBG("RVR", "loaded IR %s", irPath);
-      char mapPath[200];
-      std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-      if (Storage.exists(mapPath) && engine_.loadPageMap(mapPath)) {
-        if (engine_.scrubStaleCompleteMap(renderer)) {
-          LOG_DBG("RVR", "page map %s scrubbed pages=%d complete=%d", mapPath, engine_.mapKnownPages(),
-                  engine_.mapComplete() ? 1 : 0);
-          // Only delete on-disk map if scrub emptied it (false 2–3 page complete).
-          // Incomplete reopen must keep the file so idle/Back can finish the walk.
-          if (engine_.mapKnownPages() <= 1 && Storage.exists(mapPath)) {
-            Storage.remove(mapPath);
-          }
-        } else {
-          LOG_DBG("RVR", "loaded page map %s pages=%d", mapPath, engine_.chapterPageCount(nullptr));
-        }
-      }
-    } else if (Storage.exists(irPath)) {
-      LOG_DBG("RVR", "stale/bad IR %s — reconvert", irPath);
-      Storage.remove(irPath);
-    }
-  }
-
-  if (!ok) {
-    // Never accumulate chapter HTML in a std::string: reserve/append aborts on
-    // OOM under -fno-exceptions (crash was reserve(96KB) with maxAlloc~94KB).
-    // Match classic Section path: ZIP-inflate to SD under a framebuffer loan,
-    // then load with makeUniqueNoThrow (null on OOM, never abort).
-    // Cap HTML RAM: convert also needs headroom (crash: string growth abort on s89).
-    constexpr size_t kMaxHtml = 160 * 1024;
-
-    // Keep FB loan across stream + RAM load + convert so maxAlloc stays high.
-    // Two passes: prefer cached sN.html; on failure delete and re-stream from ZIP
-    // (stale/truncated HTML after cache wipe left chapter permanently unloadable).
-    {
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      LOG_INF("RVR", "html phase free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-              static_cast<unsigned>(ESP.getMaxAllocHeap()));
-
-      for (int pass = 0; pass < 2 && !ok; ++pass) {
-        const bool forceRestream = (pass > 0);
-        if (forceRestream) {
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-          LOG_INF("RVR", "spine %d re-stream HTML from ZIP after convert/read fail", spineIndex);
-        }
-
-        const char* readPath = htmlPath;
-        if (forceRestream || !Storage.exists(htmlPath)) {
-          bool streamed = false;
-          for (int attempt = 0; attempt < 3 && !streamed; ++attempt) {
-            if (attempt > 0) delay(50);
-            if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-            HalFile tmpHtml;
-            if (!Storage.openFileForWrite("RVR", tmpHtmlPath, tmpHtml)) {
-              LOG_ERR("RVR", "spine %d open tmp HTML failed", spineIndex);
-              continue;
-            }
-            streamed = epub_->readItemContentsToStream(item.href, tmpHtml, 8192);
-            const uint32_t fileSize = tmpHtml.size();
-            tmpHtml.close();
-            if (!streamed) {
-              if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-              LOG_ERR("RVR", "spine %d ZIP stream fail free=%u maxAlloc=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              continue;
-            }
-            if (fileSize == 0) {
-              Storage.remove(tmpHtmlPath);
-              LOG_DBG("RVR", "spine %d HTML empty — skip", spineIndex);
-              return false;
-            }
-            if (fileSize > kMaxHtml) {
-              Storage.remove(tmpHtmlPath);
-              LOG_ERR("RVR", "spine %d HTML too large (%u) — skip", spineIndex, static_cast<unsigned>(fileSize));
-              return false;
-            }
-            if (Storage.rename(tmpHtmlPath, htmlPath)) {
-              readPath = htmlPath;
-            } else {
-              readPath = tmpHtmlPath;
-            }
-            LOG_DBG("RVR", "spine %d htmlBytes=%u", spineIndex, static_cast<unsigned>(fileSize));
-          }
-          if (!streamed) {
-            if (forceRestream) return false;
-            continue;
-          }
-        }
-
-        HalFile htmlFile;
-        if (!Storage.openFileForRead("RVR", readPath, htmlFile)) {
-          LOG_ERR("RVR", "spine %d open HTML failed", spineIndex);
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize == 0 || htmlSize > kMaxHtml) {
-          htmlFile.close();
-          LOG_DBG("RVR", "spine %d bad html size %u — discard", spineIndex, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-        if (!htmlBuf) {
-          htmlFile.close();
-          LOG_ERR("RVR", "spine %d HTML OOM size=%u free=%u maxAlloc=%u", spineIndex,
-                  static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
-                  static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          // OOM: do not delete HTML; next open may have more heap.
-          return false;
-        }
-        const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-        htmlFile.close();
-        if (got < 0 || static_cast<size_t>(got) != htmlSize) {
-          LOG_ERR("RVR", "spine %d HTML short read %d/%u", spineIndex, got, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        htmlBuf[htmlSize] = 0;
-
-        // HTML is already allocated — free/maxA here are net of the HTML buffer.
-        // Old check required free >= htmlSize+24KB and double-counted HTML, so
-        // every mid-session convert "skipped low heap" and showed Empty page.
-        const size_t maxA = ESP.getMaxAllocHeap();
-        const size_t freeH = ESP.getFreeHeap();
-        if (maxA < 12 * 1024 || freeH < 14 * 1024) {
-          LOG_ERR("RVR", "spine %d convert skip low heap free=%u maxA=%u html=%u", spineIndex,
-                  static_cast<unsigned>(freeH), static_cast<unsigned>(maxA),
-                  static_cast<unsigned>(htmlSize));
-          htmlBuf.reset();
-          engine_.clear();
-          delay(20);
-          continue;
-        }
-
-        const uint32_t t0 = millis();
-        ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
-                                /*armDropCapFirstPara=*/false, SETTINGS.imageRendering);
-        // Partial OOM: clear IR, yield, retry once (still holding HTML + FB loan).
-        if (ok && engine_.chapter().failed() && pass == 0) {
-          LOG_ERR("RVR", "spine %d partial IR — retry convert free=%u maxA=%u", spineIndex,
-                  static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          engine_.clear();
-          delay(30);
-          yield();
-          if (ESP.getMaxAllocHeap() >= 12 * 1024) {
-            ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
-                                    /*armDropCapFirstPara=*/false, SETTINGS.imageRendering);
-          }
-        }
-        htmlBuf.reset();  // free before layout / FB restore
-        LOG_INF("RVR", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
-                ok ? "ok" : "FAIL", (ok && engine_.chapter().failed()) ? 1 : 0,
-                static_cast<unsigned long>(millis() - t0),
-                static_cast<unsigned>(engine_.chapter().blockCount()),
-                static_cast<unsigned>(engine_.chapter().textSize()), static_cast<unsigned>(htmlSize),
-                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-        if (ok && !engine_.chapter().failed()) {
-          prepareChapterImages(item.href);
-          // Persist only complete IR — partial OOM must not become a permanent short chapter.
-          if (irPath[0]) (void)engine_.chapter().saveToFile(irPath);
-          // Nuke any map built from a prior partial session for this spine.
-          char mapPath[200];
-          std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-        } else if (ok && engine_.chapter().failed()) {
-          // Never keep partial on disk; never keep a map that claims this is the whole chapter.
-          if (Storage.exists(irPath)) Storage.remove(irPath);
-          char mapPath[200];
-          std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-          if (requireCompleteIr) {
-            // Prev-chapter last page MUST be full IR. Drop partial and fail this pass.
-            LOG_ERR("RVR", "spine %d partial IR refused (requireFull) text=%u html=%u", spineIndex,
-                    static_cast<unsigned>(engine_.chapter().textSize()), static_cast<unsigned>(htmlSize));
-            engine_.clear();
-            ok = false;
-            // Exit FB loan loop to allow aggressive heap scrub + one outer retry.
-            break;
-          }
-          prepareChapterImages(item.href);
-          LOG_ERR("RVR", "spine %d using partial IR (not cached) text=%u html=%u", spineIndex,
-                  static_cast<unsigned>(engine_.chapter().textSize()),
-                  static_cast<unsigned>(htmlSize));
-        } else if (Storage.exists(htmlPath)) {
-          // Bad extract / convert — force ZIP re-stream on next pass.
-          Storage.remove(htmlPath);
-        }
-      }
-    }
-
-    // requireComplete: one more attempt after hard font-cache scrub outside the FB loan.
-    if (!ok && requireCompleteIr && Storage.exists(htmlPath)) {
-      prepareHeapForChapterLoad(/*aggressive=*/true);
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      HalFile htmlFile;
-      if (Storage.openFileForRead("RVR", htmlPath, htmlFile)) {
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize > 0 && htmlSize <= kMaxHtml) {
-          auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-          if (htmlBuf) {
-            const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-            htmlFile.close();
-            if (got >= 0 && static_cast<size_t>(got) == htmlSize) {
-              htmlBuf[htmlSize] = 0;
-              LOG_INF("RVR", "spine %d requireFull reconvert free=%u maxA=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()),
-                      static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false,
-                                      SETTINGS.imageRendering);
-              htmlBuf.reset();
-              if (ok && !engine_.chapter().failed()) {
-                prepareChapterImages(item.href);
-                if (irPath[0]) (void)engine_.chapter().saveToFile(irPath);
-                char mapPath[200];
-                std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-                if (Storage.exists(mapPath)) Storage.remove(mapPath);
-                LOG_INF("RVR", "spine %d requireFull OK text=%u", spineIndex,
-                        static_cast<unsigned>(engine_.chapter().textSize()));
-              } else {
-                LOG_ERR("RVR", "spine %d requireFull still partial/fail", spineIndex);
-                engine_.clear();
-                ok = false;
-                if (Storage.exists(irPath)) Storage.remove(irPath);
-              }
-            } else {
-              htmlFile.close();
-            }
-          } else {
-            htmlFile.close();
-          }
-        } else {
-          htmlFile.close();
-        }
-      }
-    }
-  } else if (fromIrCache) {
-    // Always re-size images for the current viewport. Cached IR may hold stale
-    // CSS-40% float widths from an older policy (Illuminae briefings too small).
-    // Probe is cheap (header only); do not rewrite IR every open.
-    prepareChapterImages(item.href);
-  }
-
-  if (!ok) {
-    LOG_ERR("RVR", "spine %d IR convert failed", spineIndex);
-    return false;
-  }
-
+  const bool fromIrCache = loaded.fromCache;
   // Defer spineIndex_ = spineIndex until layout succeeds (see below). A failed
   // chapter-skip used to leave spineIndex_ on the new chapter with ready_=false
   // → blank Loading, then recovery at book start.

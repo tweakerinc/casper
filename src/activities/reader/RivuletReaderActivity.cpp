@@ -3289,11 +3289,24 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
       prepareHeapForChapterLoad(/*aggressive=*/true);
       const uint32_t tLoad = millis();
+      // Prefer a complete convert, but NEVER end up with nothing: requireCompleteIr
+      // makes loadSpine return false for a partial IR, and the old code then
+      // restored chapter 7 without a word — the "Back just refreshes" report.
+      // Order: normal load → complete-IR retry → accept whatever converted.
       bool loaded = loadSpine(targetSpine, /*startPage=*/-1, /*requireCompleteIr=*/false);
-      if (!loaded || engine_.chapter().failed()) {
+      if (loaded && engine_.chapter().failed()) {
         prepareHeapForChapterLoad(/*aggressive=*/true);
-        loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/true);
+        const bool full = loadSpine(targetSpine, -1, /*requireCompleteIr=*/true);
+        if (!full) {
+          // Complete convert did not fit in RAM. Re-load the partial and use it.
+          prepareHeapForChapterLoad(/*aggressive=*/true);
+          loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/false);
+        }
+      } else if (!loaded) {
+        prepareHeapForChapterLoad(/*aggressive=*/true);
+        loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/false);
       }
+      const bool partialIr = loaded && engine_.chapter().failed();
       // These land in /.casper-logs so a user capture shows exactly which step
       // failed — LOG_INF only reaches serial, which is why earlier captures had
       // no evidence for "Back does nothing".
@@ -3302,17 +3315,26 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
                            static_cast<unsigned>(engine_.chapter().textSize()),
                            static_cast<unsigned long>(millis() - tLoad),
                            static_cast<unsigned>(ESP.getFreeHeap()));
-      if (loaded && !engine_.chapter().failed()) {
+      if (loaded) {
         const uint32_t t0 = millis();
         // Full page-map walk (or .rvpm hit). Leaves currentPage_ = last index.
-        bool landed = engine_.goToLastPageNearEnd(renderer, /*maxForwardPages=*/1024);
+        // On a partial IR we still land on the last page we could build.
+        bool landed = engine_.goToLastPageNearEnd(renderer, /*maxForwardPages=*/1024, partialIr);
         if (!landed) {
-          landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
+          landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024, partialIr);
         }
-        // Require either verified chapter end, or a deep page index (>0) so the
-        // next Back stays inside this spine via prevPage().
-        const bool okLand =
-            landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0);
+        if (!landed) {
+          // Last resort: show page 1 of the previous chapter. Not the paper-book
+          // behaviour, but the reader MUST move — silently repainting the page the
+          // user pressed Back on is the single worst outcome.
+          landed = engine_.goToStart(renderer);
+          if (landed) {
+            LOG_ERR("RVR", "pageBack fell back to page 1 of spine=%d", targetSpine);
+            SystemLog::logTiming("BACK", "fallback_page1 spine=%d partial=%d", targetSpine, partialIr ? 1 : 0);
+          }
+        }
+        // Accept a verified end, a deep page, or the page-1 fallback above.
+        const bool okLand = landed;
         LOG_INF("RVR", "pageBack prev-spine=%d page=%d/%d end=%d ok=%d walkMs=%lu", targetSpine,
                 engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()),
                 engine_.page().atChapterEnd ? 1 : 0, okLand ? 1 : 0,
@@ -3340,6 +3362,13 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
         if (!loadSpine(originSpine, originPage)) {
           (void)loadSpine(originSpine, 0);
         }
+      }
+      // Tell the user. A bare repaint of the page they pressed Back on reads as
+      // "the firmware is broken"; naming the reason is honest and debuggable.
+      if (targetSpine >= 0) {
+        GUI.drawPopup(renderer, "Previous chapter unavailable", BaseTheme::kPopupCenterY, true);
+        delay(700);
+        firstPaint_ = true;
       }
       requestUpdate();
       return true;

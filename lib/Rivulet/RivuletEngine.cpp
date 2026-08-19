@@ -791,14 +791,19 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
   return true;
 }
 
-bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkPages) {
+bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkPages, const bool allowPartial) {
   if (chapter_.empty()) return false;
   // Partial OOM IR ends mid-chapter (DCC: "ripping the T'Ghee totem in two").
-  // Caller must require a full convert for prev-chapter; refuse false ends here.
-  if (chapter_.failed()) {
+  // Refusing is right for forward reading, but for PageBack it meant the reader
+  // simply never left the current chapter (silent "nothing happens" refresh).
+  if (chapter_.failed() && !allowPartial) {
     LOG_ERR("RVEN", "goToLastPage refuse partial IR text=%u blocks=%u",
             static_cast<unsigned>(chapter_.textSize()), static_cast<unsigned>(chapter_.blockCount()));
     return false;
+  }
+  if (chapter_.failed()) {
+    LOG_ERR("RVEN", "goToLastPage on PARTIAL IR (allowed) text=%u blocks=%u",
+            static_cast<unsigned>(chapter_.textSize()), static_cast<unsigned>(chapter_.blockCount()));
   }
 
   // Instant path only when a complete map's last page is a verified IR end.
@@ -944,10 +949,12 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   return false;
 }
 
-bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int maxForwardPages) {
+bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int maxForwardPages,
+                                        const bool allowPartial) {
   // Land on REAL last page index with a full page map so next Back is N-1 in-chapter.
   (void)maxForwardPages;
-  if (chapter_.empty() || chapter_.failed()) return false;
+  if (chapter_.empty()) return false;
+  if (chapter_.failed() && !allowPartial) return false;
 
   auto landLast = [&]() -> bool {
     if (!map_.complete() || map_.knownTotal() <= 0) return false;
@@ -963,7 +970,7 @@ bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int m
     return true;
   }
 
-  if (goToLastPage(renderer, /*maxWalkPages=*/1024)) {
+  if (goToLastPage(renderer, /*maxWalkPages=*/1024, allowPartial)) {
     LOG_INF("RVEN", "goToLastPageNearEnd walk page=%d known=%d", currentPage_, map_.knownPages());
     return true;
   }
@@ -975,12 +982,13 @@ bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int m
     return true;
   }
 
-  return goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
+  return goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024, allowPartial);
 }
 
-bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages) {
+bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages,
+                                           const bool allowPartial) {
   if (chapter_.empty()) return false;
-  if (goToLastPage(renderer, maxWalkPages)) return true;
+  if (goToLastPage(renderer, maxWalkPages, allowPartial)) return true;
 
   // Incomplete end-walk still filled map starts — land on the deepest known page.
   const int known = map_.knownPages();

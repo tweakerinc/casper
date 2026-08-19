@@ -83,16 +83,20 @@ class RivuletEngine {
   // Map-hit only when complete map's last page is verified atChapterEnd.
   // Otherwise pure layoutPage walk from start — never lands mid-chapter.
   // Caller should hold Loading UI; yields inside; may take a few seconds.
-  bool goToLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
+  // allowPartial: accept an IR that hit an OOM/cap during convert (failed()).
+  // Normally we refuse — a partial IR's "chapter end" is a lie mid-chapter. But
+  // for PageBack the alternative is doing nothing at all, and the last page of
+  // what we managed to convert is far better than refusing to leave the chapter.
+  bool goToLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024, bool allowPartial = false);
   // Land on the real last page WITH a full page map (CrossInk section.bin).
   // Page index must be last (e.g. 37 of 38) so the next PageBack is 36, not a
   // hop to the previous spine. Cold cache pays for one measure walk; .rvpm after.
-  bool goToLastPageNearEnd(const GfxRenderer& renderer, int maxForwardPages = 1024);
+  bool goToLastPageNearEnd(const GfxRenderer& renderer, int maxForwardPages = 1024, bool allowPartial = false);
   // Prev-chapter landing when a full end-walk fails: prefer a complete map, else
   // the deepest known map page, else an estimate-based goToPage. Always stays
   // inside the already-loaded chapter (never returns false just to force the
   // caller to walk earlier spines back to book start).
-  bool goToBestEffortLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
+  bool goToBestEffortLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024, bool allowPartial = false);
   // When the current page is a verified chapter end, seal the page map so
   // page-back from the next spine can map-hit last page (CrossInk section feel).
   bool sealMapAtChapterEnd();

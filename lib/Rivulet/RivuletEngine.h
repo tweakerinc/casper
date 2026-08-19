@@ -122,6 +122,9 @@ class RivuletEngine {
   // dir = rivulet chapter folder; empty disables. Files: p{N}.rvpg
   void setPageCacheDir(const char* dir);
   void clearPageCacheDir() { pageCacheDir_.clear(); }
+  // Idle: layout one upcoming page and write .rvpg (not kept in RAM). Heap-gated.
+  // Returns true if it did real work this call.
+  bool idlePrefetchPageCache(const GfxRenderer& renderer, int maxForward = 3);
 
   void clear();
 

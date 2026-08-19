@@ -103,6 +103,53 @@ void RivuletEngine::savePageCache(const int pageIndex) const {
   }
 }
 
+bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int maxForward) {
+  if (pageCacheDir_.empty() || !laidOutValid_ || maxForward < 1) return false;
+  // Stricter than turn-path saves: idle work must not risk OOM while the user
+  // is just reading. Fail soft — next idle tick retries.
+  if (ESP.getMaxAllocHeap() < 18 * 1024 || ESP.getFreeHeap() < 32 * 1024) return false;
+
+  for (int d = 1; d <= maxForward; ++d) {
+    const int target = currentPage_ + d;
+    if (target < 0) continue;
+    char path[220];
+    if (!pageCachePath(target, path, sizeof(path))) continue;
+    if (Storage.exists(path)) continue;  // already on SD
+
+    // Need a map start for this page — extend measure-only if needed.
+    int guard = 0;
+    while (!map_.hasPage(target) && !map_.complete() && guard++ < 8) {
+      if (!extendPageMap(renderer, 1)) break;
+    }
+    if (!map_.hasPage(target)) {
+      if (map_.complete()) return false;  // past end of chapter
+      continue;
+    }
+
+    LaidOutPage tmp;
+    if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(target), tmp)) {
+      return false;
+    }
+    Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+    if (!tmp.saveToFile(path, key_, target)) return false;
+
+    if (tmp.atChapterEnd) {
+      markMapCompleteIfPlausible(renderer);
+    } else {
+      const int nextIdx = target + 1;
+      if (!map_.hasPage(nextIdx)) {
+        map_.pushPageStart(tmp.end);
+      } else if (map_.pageStart(nextIdx) != tmp.end) {
+        map_.setPageStart(nextIdx, tmp.end);
+      }
+    }
+    LOG_DBG("RVEN", "idle prefetch SAVE p=%d spans=%u fre=%u", target, static_cast<unsigned>(tmp.spans.size()),
+            static_cast<unsigned>(ESP.getFreeHeap()));
+    return true;  // one page per idle tick
+  }
+  return false;
+}
+
 void RivuletEngine::setRenderKey(const RenderKey& key) {
   // F: map starts are only valid for the render key that produced them.
   if (key_ != key) {

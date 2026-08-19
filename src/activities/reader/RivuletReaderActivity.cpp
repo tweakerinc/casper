@@ -2027,14 +2027,27 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
   const unsigned long now = millis();
-  if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < 40) return;
+  // While the map is still building / pages are missing on SD, tick often.
+  // Once caught up, slow down so we are not spinning the CPU for nothing
+  // (battery — CrossPoint 1.5 raised clocks; we want the opposite when idle).
+  const bool catchUp = !engine_.mapComplete() || !engine_.aheadWarm() || !engine_.behindWarm();
+  const unsigned long intervalMs = catchUp ? 80UL : 250UL;
+  if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < intervalMs) return;
   lastIdleMapMs_ = now;
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  // Paint-ahead / behind first: the pages the next turn will show.
+  // 1) RAM windows for the next turn either way.
   if (engine_.warmAheadPage(renderer)) return;
   if (engine_.warmBehindPage(renderer)) return;
 
+  // 2) SD page-paint cache for pages further ahead (not held in RAM) — so
+  //    turns into the chapter stay deserialize+paint even after ahead_ is spent.
+  if (engine_.idlePrefetchPageCache(renderer, /*maxForward=*/4)) {
+    pageMapDirty_ = true;
+    return;
+  }
+
+  // 3) Thin page-map extension (cursors only) until complete.
   if (engine_.mapComplete()) return;
   const int burst = engine_.idleMapPagesThisTick(&renderer);
   if (burst <= 0) return;

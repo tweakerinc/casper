@@ -75,10 +75,10 @@ class RivuletEngine {
   // Otherwise pure layoutPage walk from start — never lands mid-chapter.
   // Caller should hold Loading UI; yields inside; may take a few seconds.
   bool goToLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
-  // CrossInk page-back: find the last page without walking the whole chapter from
-  // page 0. Probe near the IR end and walk forward a short distance. Falls back
-  // to goToBestEffortLastPage / goToLastPage when probes miss.
-  bool goToLastPageNearEnd(const GfxRenderer& renderer, int maxForwardPages = 64);
+  // Land on the real last page WITH a full page map (CrossInk section.bin).
+  // Page index must be last (e.g. 37 of 38) so the next PageBack is 36, not a
+  // hop to the previous spine. Cold cache pays for one measure walk; .rvpm after.
+  bool goToLastPageNearEnd(const GfxRenderer& renderer, int maxForwardPages = 1024);
   // Prev-chapter landing when a full end-walk fails: prefer a complete map, else
   // the deepest known map page, else an estimate-based goToPage. Always stays
   // inside the already-loaded chapter (never returns false just to force the

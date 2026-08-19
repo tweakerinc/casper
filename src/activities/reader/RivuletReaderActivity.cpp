@@ -262,6 +262,12 @@ void RivuletReaderActivity::persistProgressForSleep() {
   // progress.bin hits SD even if onExit is skipped or fails mid-teardown.
   if (!epub_ || !ready_) return;
   APP_STATE.openEpubPath = epub_->getPath();
+  // Always write on sleep — do not trust the no-op skip cache. A stale
+  // lastSavedPage_ (or an estimate-only pageCount mismatch) must not leave
+  // progress.bin on an older page across Quick Resume.
+  lastSavedSpine_ = -1;
+  lastSavedPage_ = -1;
+  lastSavedPageCount_ = -1;
   (void)saveProgress();
   persistHomeProgress(/*writeToDisk=*/true);
 }
@@ -1908,7 +1914,9 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
     return false;
   }
 
-  spineIndex_ = spineIndex;
+  // Defer spineIndex_ = spineIndex until layout succeeds (see below). A failed
+  // chapter-skip used to leave spineIndex_ on the new chapter with ready_=false
+  // → blank Loading, then recovery at book start.
   error_ = false;
   firstPaint_ = true;
 
@@ -1926,13 +1934,33 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
 
   const uint32_t tLayout = millis();
   // First page only (or resume page). Map extension is idle — same as every open.
+  // IMPORTANT: never silently fall back to page 0 when the user had a deep saved
+  // page (QR resume landed on ch6 p1 after saving p31 — goToPage failed on a
+  // stale/short .rvpm and the old code called goToStart).
   const int wantPage = std::max(0, startPage);
   bool laid = false;
   if (wantPage > 0) {
-    // Cap walk: resume, not full-chapter rebuild.
-    laid = engine_.goToPage(renderer, wantPage, /*maxWalkPages=*/64);
+    // Budget must cover the resume depth — a 64-page cap was only barely enough
+    // for mid-chapter resumes and failed when the map had to be rebuilt.
+    const int budget = std::max(96, wantPage + 64);
+    laid = engine_.goToPage(renderer, wantPage, budget);
     if (!laid) {
-      LOG_DBG("RVR", "spine %d goToPage(%d) failed — fall back to start", spineIndex, wantPage);
+      LOG_ERR("RVR", "spine %d goToPage(%d) failed (known=%d) — invalidate map and retry", spineIndex, wantPage,
+              engine_.mapKnownPages());
+      engine_.invalidatePageMap();
+      laid = engine_.goToPage(renderer, wantPage, budget);
+    }
+    if (!laid) {
+      // Land as close as we got — never wipe the reader back to page 0 of the
+      // chapter when they were dozens of pages in.
+      const int closest = std::max(0, engine_.mapKnownPages() - 1);
+      LOG_ERR("RVR", "spine %d resume %d unreachable — landing closest page=%d", spineIndex, wantPage, closest);
+      if (closest > 0) {
+        laid = engine_.goToPage(renderer, closest, budget);
+      }
+    }
+    if (!laid) {
+      LOG_ERR("RVR", "spine %d goToPage(%d) failed after retry — goToStart last resort", spineIndex, wantPage);
     }
   }
   if (!laid) {
@@ -1941,9 +1969,15 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   }
   if (!laid) {
     // Empty chapter (cover image only etc.) — try next spine.
+    // Do NOT leave spineIndex_/ready_ half-updated: caller may be chapter-skip.
     LOG_DBG("RVR", "spine %d empty layout — skip (%lums)", spineIndex, static_cast<unsigned long>(millis() - tLayout));
+    ready_ = false;
     return false;
   }
+  // Only commit the spine index after layout succeeded — a failed loadSpine
+  // used to leave spineIndex_ on the new chapter with ready_=false (blank
+  // Loading forever), then a later recovery opened spine 0.
+  spineIndex_ = spineIndex;
   ready_ = true;
 
   LOG_INF("RVR", "spine=%d ready page=%d pages~%d spans=%u font=%d layoutMs=%lu free=%u ir=%d", spineIndex,
@@ -3088,7 +3122,10 @@ void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
 void RivuletReaderActivity::chapterSkipNext() {
   if (!epub_) return;
   const int n = epub_->getSpineItemsCount();
+  const int originSpine = spineIndex_;
+  const int originPage = engine_.currentPage();
   for (int i = spineIndex_ + 1; i < n; ++i) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
     if (loadSpine(i)) {
       firstPaint_ = true;
       (void)saveProgress();
@@ -3096,6 +3133,14 @@ void RivuletReaderActivity::chapterSkipNext() {
       updateBookmarkFlag();
       requestUpdate();
       return;
+    }
+  }
+  // All later spines failed — restore the chapter we were reading so we never
+  // leave the reader on a blank Loading screen (ready_=false) or spine 0.
+  if (spineIndex_ != originSpine || !ready_) {
+    prepareHeapForChapterLoad();
+    if (!loadSpine(originSpine, originPage)) {
+      (void)loadSpine(originSpine, 0);
     }
   }
   GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);

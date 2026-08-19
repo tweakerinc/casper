@@ -28,6 +28,16 @@ void RivuletEngine::clear() {
   smoothedAtKnown_ = -1;
 }
 
+void RivuletEngine::invalidatePageMap() {
+  map_.clear();
+  map_.setRenderKey(key_);
+  aheadValid_ = false;
+  ahead_.clear();
+  // Keep laidOut_/currentPage_ — caller will goToPage/goToStart next.
+  smoothedEstimate_ = 0.0f;
+  smoothedAtKnown_ = -1;
+}
+
 void RivuletEngine::setRenderKey(const RenderKey& key) {
   // F: map starts are only valid for the render key that produced them.
   if (key_ != key) {

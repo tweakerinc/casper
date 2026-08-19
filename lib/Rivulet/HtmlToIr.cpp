@@ -1530,6 +1530,19 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     // Chunk long text runs; flush before textAcc needs a large reallocation.
     size_t remain = static_cast<size_t>(p - t0);
     const char* chunk = t0;
+    // After </i>/</b>/<span>, HTML whitespace is often the ONLY separator before
+    // the next word. appendCollapsedText drops leading spaces when dst is empty,
+    // which glued "Vampire"+"skill". If this block already has runs, keep one
+    // leading space when the chunk starts with whitespace.
+    if (remain > 0 && textAcc.empty() && inBlock && !out.blocks().empty() && out.blocks().back().runCount > 0) {
+      const char c0 = *chunk;
+      if (c0 == ' ' || c0 == '\n' || c0 == '\t' || c0 == '\r') {
+        if (!safePushChar(textAcc, ' ')) {
+          out.markFailed();
+          break;
+        }
+      }
+    }
     while (remain > 0 && !out.failed()) {
       if (textAcc.size() > 1536) flushText();
       const size_t take = std::min(remain, size_t(400));

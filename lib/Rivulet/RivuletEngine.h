@@ -110,6 +110,9 @@ class RivuletEngine {
   [[nodiscard]] ChapterIr& chapterMutable() { return chapter_; }
   [[nodiscard]] bool mapComplete() const { return map_.complete(); }
   [[nodiscard]] int mapKnownPages() const { return map_.knownPages(); }
+  // Drop the thin page map only (keep chapter IR). Used when a stale/incomplete
+  // .rvpm makes deep resume fail and would otherwise fall back to page 0.
+  void invalidatePageMap();
 
   void clear();
 

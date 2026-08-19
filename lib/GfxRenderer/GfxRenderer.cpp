@@ -23,6 +23,35 @@ namespace {
 uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style style) {
   return font.resolveStyle(static_cast<uint8_t>(style));
 }
+
+// 2-bit glyph sample: returns draw-pipeline value (0 black … 3 white).
+inline uint8_t sample2BitBmpVal(const uint8_t* bitmap, const int width, const int height, const int x,
+                                const int y) {
+  if (x < 0 || y < 0 || x >= width || y >= height) return 3;
+  const int pos = y * width + x;
+  const uint8_t byte = bitmap[pos >> 2];
+  const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+  return static_cast<uint8_t>(3 - raw);
+}
+
+// Whether a 2-bit pixel should be inked in the BW pass for the given weight.
+// Mild inks light fringe (bmpVal==2) only when ≥2 orthogonal neighbors are
+// already dark/black — fills AA holes without expanding flat stem edges (the
+// thing that made capitals read bold under Dense).
+inline bool inkBw2Bit(const uint8_t bmpVal, const GfxRenderer::BwGlyphWeight weight, const uint8_t* bitmap,
+                      const int width, const int height, const int x, const int y) {
+  if (bmpVal >= 3) return false;       // white
+  if (bmpVal < 2) return true;         // solid + dark fringe — all weights
+  // bmpVal == 2: light fringe
+  if (weight == GfxRenderer::BwGlyphWeight::Normal) return false;
+  if (weight == GfxRenderer::BwGlyphWeight::Dense) return true;
+  int darkN = 0;
+  if (sample2BitBmpVal(bitmap, width, height, x - 1, y) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x + 1, y) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x, y - 1) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x, y + 1) < 2) ++darkN;
+  return darkN >= 2;
+}
 }  // namespace
 
 namespace {
@@ -336,8 +365,10 @@ static void renderCharScaledNx(const GfxRenderer& renderer, GfxRenderer::RenderM
         const uint8_t byte = bitmap[pos >> 2];
         const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
         const uint8_t bmpVal = static_cast<uint8_t>(3 - raw);
-        // Dense BW only when no grayscale pass follows (see setBwLightFringe).
-        if (renderMode == GfxRenderer::BW && bmpVal >= (renderer.bwLightFringe() ? 3 : 2)) continue;
+        if (renderMode == GfxRenderer::BW &&
+            !inkBw2Bit(bmpVal, renderer.bwGlyphWeight(), bitmap, srcW, srcH, srcX, srcY)) {
+          continue;
+        }
         if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal != 1 && bmpVal != 2) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal != 1) continue;
         const bool state = (renderMode == GfxRenderer::BW) ? pixelState : false;
@@ -511,10 +542,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 black / 1 dark grey / 2 light grey / 3 white.
           const uint8_t bmpVal = static_cast<uint8_t>(3 - ((byte >> bit_index) & 0x3));
 
-          if (renderMode == GfxRenderer::BW && bmpVal < (renderer.bwLightFringe() ? 3 : 2)) {
-            // Dense BW (light fringe inked) only when no grayscale pass follows —
-            // otherwise the multipass has no light fringe left to shade and AA is
-            // lost. See GfxRenderer::setBwLightFringe.
+          if (renderMode == GfxRenderer::BW &&
+              inkBw2Bit(bmpVal, renderer.bwGlyphWeight(), bitmap, width, height, glyphX, glyphY)) {
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
             // Both AA fringes on MSB (historical default "Dark" look).

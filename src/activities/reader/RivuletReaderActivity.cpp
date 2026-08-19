@@ -3762,8 +3762,11 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
                      : aaCatchUp    ? 'c'   // heap-recovery catch-up
                                     : '-';  // ran (or will run)
 
-  // Never ink the light AA fringe in the BW pass — solid + dark fringe only.
-  renderer.setBwLightFringe(false);
+  // BW glyph weight: Mild when AA is off (heavier without bolding capitals),
+  // Normal when AA is on so the greyscale multipass still has light fringe to
+  // shade. Home never sets this — it stays at the renderer default (Normal).
+  renderer.setBwGlyphWeight(aaWanted ? GfxRenderer::BwGlyphWeight::Normal
+                                      : GfxRenderer::BwGlyphWeight::Mild);
   paintPageContent();
   renderStatusBar();
 

@@ -29,6 +29,9 @@ class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
+  // How much of a 2-bit glyph the BW pass inks. See setBwGlyphWeight().
+  enum class BwGlyphWeight : uint8_t { Normal = 0, Mild = 1, Dense = 2 };
+
   // Logical screen orientation from the perspective of callers
   enum Orientation {
     Portrait,                  // 480x800 logical coordinates (current default)
@@ -42,8 +45,8 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
-  // See setBwLightFringe(). Default matches the pre-"denser glyphs" behaviour.
-  bool bwLightFringe_ = false;
+  // See setBwGlyphWeight(). Default = Normal (solid + dark fringe only).
+  BwGlyphWeight bwGlyphWeight_ = BwGlyphWeight::Normal;
   Orientation orientation;
   bool fadingFix;
   // System-wide Dark Mode: invert FB → push panel → restore FB so paint stays light-space.
@@ -289,15 +292,24 @@ class GfxRenderer {
 
   // How much of a 2-bit glyph the BW pass inks.
   //
-  //   false (default): black + dark fringe only. This is the correct look in both
-  //                    modes — with AA on, the light fringe must stay white so the
-  //                    grayscale multipass can shade it; with AA off, inking it
-  //                    fattens straight vertical stems by a pixel and capitals
-  //                    read as bold.
-  //   true:            also ink the light fringe. Kept for UI surfaces that want
-  //                    maximum weight and never run a grayscale pass.
-  void setBwLightFringe(const bool on) { bwLightFringe_ = on; }
-  [[nodiscard]] bool bwLightFringe() const { return bwLightFringe_; }
+  //   Normal: black + dark fringe only. Safe under AA (light fringe stays for
+  //           the greyscale multipass to shade).
+  //   Mild:   also ink light-fringe pixels that sit against ≥2 already-dark
+  //           neighbors. Fills AA holes and softens stairsteps without growing
+  //           the outline — inking the whole light fringe (Dense) is what
+  //           fattened capitals by a pixel on every stem.
+  //   Dense:  ink every light-fringe pixel. Maximum weight; bolds H/I/L. Avoid
+  //           for body text; kept for UI that never runs a grayscale pass.
+  //
+  // With AA on, prefer Normal so the multipass has fringes left to shade. Mild
+  // is for AA-off reading weight. setBwLightFringe(true) maps to Dense for the
+  // one historical call site that used that name.
+  void setBwGlyphWeight(const BwGlyphWeight w) { bwGlyphWeight_ = w; }
+  [[nodiscard]] BwGlyphWeight bwGlyphWeight() const { return bwGlyphWeight_; }
+  void setBwLightFringe(const bool on) {
+    bwGlyphWeight_ = on ? BwGlyphWeight::Dense : BwGlyphWeight::Normal;
+  }
+  [[nodiscard]] bool bwLightFringe() const { return bwGlyphWeight_ == BwGlyphWeight::Dense; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
   // panel; the no-arg overload settles the full frame. Call after the BW base

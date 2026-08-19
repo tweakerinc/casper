@@ -416,8 +416,11 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
   const float lc = lineCompression > 0.1f ? lineCompression : 1.0f;
   const int bodyLine = std::max(bodyEmPx + 2, static_cast<int>(bodyEmPx * 1.2f * lc + 0.5f));
   const int linesPerPage = std::max(1, viewportH / bodyLine);
-  // ~0.5em average glyph width for Latin body — matches Source Serif / Literata feel.
-  const int charsPerLine = std::max(12, (viewportW * 2) / std::max(1, bodyEmPx));
+  // Typical Latin serif advance is ~0.5–0.55em; the old 0.5em (2*W/em) CPL was still
+  // too optimistic on e-ink margins and produced first-load ETAs like "7 pages" for
+  // a 40-page DCC chapter. Use ~0.62em and floor CPL so we over-estimate slightly
+  // (status "~" is better high than low until the idle map catches up).
+  const int charsPerLine = std::max(28, (viewportW * 100) / std::max(1, bodyEmPx * 62));
 
   int contentLines = 0;
   int paraCount = 0;
@@ -481,8 +484,19 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
   }
 
   int pages = std::max(1, (contentLines + linesPerPage - 1) / linesPerPage);
+  // Floor from raw text length so a sparse block list cannot under-count a prose chapter.
+  if (textLen_ > 0 && charsPerLine > 0 && linesPerPage > 0) {
+    const int charsPerPage = charsPerLine * linesPerPage;
+    const int fromText =
+        static_cast<int>((textLen_ + static_cast<size_t>(charsPerPage) - 1) / static_cast<size_t>(charsPerPage));
+    pages = std::max(pages, fromText);
+  }
   if (pages == 1 && (textLen_ > 400 || blocks_.size() > 3)) {
     pages = 2;
+  }
+  // Slight padding while the map is still cold — UI shows "~N"; idle map replaces it.
+  if (pages >= 4) {
+    pages = pages + std::max(1, pages / 12);
   }
   return pages;
 }

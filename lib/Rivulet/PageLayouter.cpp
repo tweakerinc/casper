@@ -968,7 +968,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         out.end = cur;
         out.contentH = static_cast<int16_t>(y);
         out.atChapterEnd = false;
-        return !out.spans.empty() || !out.images.empty();
+        // Must use the SAME success test as the normal return below. A measure-only
+        // pass never emits spans, so testing spans/images alone reported "failed"
+        // for every page that fills mid-block — even though out.end advanced. Page
+        // maps therefore truncated, chapter page counts came out short, and the
+        // last-page walk had to skip whole blocks (99 of 158 on one chapter).
+        // Headings tripped it hardest: probeLineH uses the h1/h2 size floor, so a
+        // heading near the bottom of a page always overflows the probe.
+        return !out.spans.empty() || !out.images.empty() || (out.end != from);
       }
 
       const int xLeft = xBase(y) + (firstLine ? indent : 0);

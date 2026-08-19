@@ -727,23 +727,29 @@ void setup() {
         if (QrTimingLog::active()) QrTimingLog::line("after loadSleepFrameBuffer");
         // Re-seed controller "previous" plane from the restored FB (X3 DTM1 / X4 RED).
         renderer.cleanupGrayscaleWithFrameBuffer();
-        // QR→book: keep moon/page on glass — do NOT FAST the panel before first
-        // ink (was a full ~0.5–1s X3 wait on every wake vs 0.1.5). First page
-        // paint replaces the frame. Non-book wakes still show moon→dots feedback.
-        if (!qrOpenBook) {
+        // Moon → dots on EVERY wake, including QR→book (YACP behaviour). Book
+        // wakes used to skip this to save the refresh before first ink, but that
+        // left the moon frozen on glass for ~3s with no sign the press registered.
+        // On X3 a windowed update costs about the same as a full FAST (~430ms,
+        // waveform-bound not area-bound), so the swap is cheap relative to the
+        // confidence it gives: something happened the moment you pressed power.
+        {
           const bool readerOnlyDarkWake =
               SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0;
           SleepChromeIcon::replaceAtTopChrome(renderer, LoadingIcon, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
+          const int dotsX = SleepChromeIcon::leftX(renderer);
+          const int dotsY = SleepChromeIcon::topY(renderer);
+          const int dotsSize = SleepChromeIcon::iconSize(renderer);
           if (readerOnlyDarkWake) {
             renderer.invertScreen();
-            renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
             renderer.invertScreen();
           } else {
-            renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
           }
-          if (QrTimingLog::active()) QrTimingLog::line("after moon→dots (non-book QR)");
-        } else if (QrTimingLog::active()) {
-          QrTimingLog::line("QR→book: skip pre-ink panel FAST (glass kept)");
+          if (QrTimingLog::active()) {
+            QrTimingLog::line("after moon→dots (openBook=%d)", qrOpenBook ? 1 : 0);
+          }
         }
       } else {
         // Never show BootActivity here — glass already holds wallpaper/moon through

@@ -76,6 +76,10 @@ class HomeActivity final : public Activity {
   bool menuLongPressFired = false;
   // Stats: side Left/Right toggled under-box title ↔ lifetime.
   bool forceStatsUnderBoxRepaint = false;
+  // Resume path: paint the shell FAST, then run the anti-ghost HALF just after,
+  // so Home is visible while it scrubs instead of the user staring at the old
+  // frame for the whole refresh.
+  bool deferScrubAfterFirstPaint_ = false;
   // Penumbra (X3): windowed digit-only (or clock-block) refresh — no full-frame flash.
   bool forcePenumbraClockRepaint = false;
   // Last hero time string drawn on panel ("H:MM"); used for minute-change detect.

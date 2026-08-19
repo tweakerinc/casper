@@ -676,6 +676,12 @@ void HomeActivity::onResume() {
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
   penumbraHalfBaselineDone = false;
   UiGhostPolicy::requestHardScrub();
+  // ...but show content FIRST. Returning from the reader / settings / the book
+  // quick-menu used to run the scrub as the first paint, so the user waited
+  // ~2s of SD work plus a ~3–4s HALF before anything appeared. Paint the shell
+  // with a FAST (~0.4s) and let the anti-ghost HALF land right after: same
+  // cleanliness, but Home is on glass while the flash happens instead of before it.
+  deferScrubAfterFirstPaint_ = true;
   suppressMenuBackUntilMs = millis() + 900UL;
   // Cover themes: multipass greys on the *first* home paint when thumbs exist
   // (one HALF greys-base). Deferred "shell HALF → wait → greys HALF" felt like
@@ -713,12 +719,18 @@ void HomeActivity::onResume() {
     globalStats = GlobalReadingStats{};
   }
 
+  // Penumbra paints no cover art, so probing hero thumbs is pure dead work — it
+  // constructs an Epub per recent book (SD open + parse each) on the return-to-home
+  // path, which is a large part of the 2s of "nothing happens" before the paint.
   const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
-  if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
-                                    HomeCoverMetrics::homeShelfThumbHeight)) {
+  if (isPenumbraTheme()) {
+    recentsLoaded = true;
+    LOG_DBG("HOME", "onResume: penumbra text home — no thumb probe");
+  } else if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
+                                           HomeCoverMetrics::homeShelfThumbHeight)) {
     recentsLoaded = true;
     LOG_DBG("HOME", "onResume: thumbs ready — HALF shell then multipass");
-  } else if (isPenumbraTheme() || !usesHomeCoverMultipass()) {
+  } else if (!usesHomeCoverMultipass()) {
     recentsLoaded = true;
     // First paint honors hardScrubArmed → HALF (baseline set after that paint).
     LOG_DBG("HOME", "onResume: text home — HALF scrub on first paint");
@@ -1790,7 +1802,16 @@ void HomeActivity::render(RenderLock&& lock) {
     // Back→Home arms hard scrub in onResume → HALF cleans residual. Other full
     // paints stay FAST when scrub is not armed. X3: greyscale multipass on the
     // 72pt clock band so 2-bit AA fringes land (BW-only looked jagged).
-    const bool hard = UiGhostPolicy::hardScrubArmed();
+    // Resume: downgrade this paint to FAST and queue the HALF right behind it.
+    // The scrub still happens (same anti-ghosting), it just happens with Home
+    // already on glass rather than making the user wait ~4s for first pixels.
+    bool hard = UiGhostPolicy::hardScrubArmed();
+    bool scrubRightAfter = false;
+    if (hard && deferScrubAfterFirstPaint_) {
+      hard = false;
+      scrubRightAfter = true;
+    }
+    deferScrubAfterFirstPaint_ = false;
     const int baseMode =
         hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
     SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=%s theme=%u fre=%u", hard ? "HALF" : "FAST",
@@ -1814,6 +1835,14 @@ void HomeActivity::render(RenderLock&& lock) {
       penumbraHalfBaselineDone = true;
       SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=FAST theme=%u fre=%u",
                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+    }
+    if (scrubRightAfter) {
+      // Home is on glass now; run the anti-ghost HALF on the next loop tick.
+      // Keep the scrub armed until it actually lands so an interrupted resume
+      // (user immediately opens a book) does not leave a dirty panel marked clean.
+      deferredHalfScrubOnly = true;
+      deferredHalfScrubAtMs = millis() + 120UL;
+      penumbraHalfBaselineDone = false;
     }
     coverGrayOnPanel = true;
     paintedUiTheme = clockTheme;

@@ -1111,12 +1111,31 @@ bool HomeActivity::handleForcedRefresh() {
 
 // Index the most recently read book's page maps while Home is untouched.
 //
-// Gated hard, because this is optional work competing with a UI the user may
-// touch at any moment: only after first paint, only when nothing is mid-flight,
-// only when no control is held, only after kIndexIdleMs of quiet, and only one
-// chapter per kIndexGapMs so input is sampled between chapters. HomeBookIndexer
-// applies its own heap floors and releases the Epub as soon as it finishes.
+// DISABLED (kBookIndexerEnabled = false). Kept, not deleted, because the pieces
+// that work are worth keeping and the remaining blocker is already scheduled
+// work.
+//
+// What was fixed and does work: the page-map walk is properly sliced, a device
+// capture shows `HIDX | spine=9 pages=12 ms=6779 bursts=3` — twelve pages
+// measured across three short bursts with input sampled between them. The maps
+// it writes are also valid now that the render key is shared with the reader.
+//
+// What still does not: loading the chapter is one indivisible step and it costs
+// 5-15 seconds, which is most of the total. From the same capture:
+//
+//   HIDX | spine=13 loaded cache=0 ms=12950
+//   LOOP | activity_slow 13936ms
+//   HIDX | spine=14 loaded cache=0 ms=14712
+//   LOOP | activity_slow 15710ms
+//
+// Home stops sampling input for that whole window, which reads as a freeze, and
+// free heap decays across passes (106K -> 59K) until the indexer starves below
+// its own floor and abandons chapters half-done. Slicing the load needs
+// HtmlToIr to convert incrementally, which is the streaming-converter work still
+// outstanding. Until then this costs the user a frozen home screen and buys
+// nothing they can perceive, so it stays off.
 void HomeActivity::tickBookIndexer() {
+  if constexpr (!kBookIndexerEnabled) return;
   if (!homeUiReady || recentsLoading || minimalMenuOpen) return;
   if (deferredHalfScrubOnly || deferredGreysOnly || coverGrayNeedsRetry || coverNeedsRetry) return;
   if (activityManager.hasPendingActivityChange() || cancelBackgroundPaint) return;

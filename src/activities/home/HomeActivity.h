@@ -90,6 +90,9 @@ class HomeActivity final : public Activity {
   unsigned long lastIndexStepMs_ = 0;
   // Home must be untouched this long before indexing may take the bus, and this
   // long between chapters so input is always sampled in between.
+  // Background whole-book indexing. Off until HtmlToIr can convert a chapter
+  // incrementally — see tickBookIndexer for the measurements that closed it.
+  static constexpr bool kBookIndexerEnabled = false;
   static constexpr unsigned long kIndexIdleMs = 8000;
   static constexpr unsigned long kIndexGapMs = 600;
   void tickBookIndexer();

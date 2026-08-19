@@ -1787,11 +1787,32 @@ void RivuletReaderActivity::paintTextLayerForAa() {
 }
 
 void RivuletReaderActivity::scheduleAaCatchUp() {
+  // The try counter is deliberately NOT reset here: it is what bounds a page
+  // whose heap never recovers, and the render that schedules the next attempt is
+  // the same render that failed the last one. It resets when AA actually runs,
+  // or when we move to a different page (which gets its own budget).
+  const int spine = spineIndex_;
+  const int page = engine_.currentPage();
+  if (spine != aaCatchUpSpine_ || page != aaCatchUpPage_) {
+    aaCatchUpSpine_ = spine;
+    aaCatchUpPage_ = page;
+    aaCatchUpTries_ = 0;
+  }
+  if (aaCatchUpTries_ >= kAaCatchUpMaxTries) return;
   aaCatchUpPending_ = true;
-  aaCatchUpTries_ = 0;
   aaCatchUpAtMs_ = millis() + kAaCatchUpDelayMs;
 }
 
+// Ask for a repaint that is allowed to run AA. Deliberately does NOT paint here.
+//
+// The first version did the greyscale passes inline, and it never once fired on
+// device — no AACU line of any kind in a full capture. Two reasons it could not
+// work: loop() runs on the main task while render() runs on the render task, so
+// painting from here is the wrong task for the job; and it guarded itself with
+// eight early returns, seven of them silent, so there was no way to see which
+// one was eating it. Requesting a render instead removes both problems — the
+// paint happens where every other paint happens, under the lock the render task
+// already holds, and the outcome shows up on the normal PAGE line as why=c.
 void RivuletReaderActivity::tickAaCatchUp() {
   if (!aaCatchUpPending_) return;
 
@@ -1800,10 +1821,8 @@ void RivuletReaderActivity::tickAaCatchUp() {
     aaCatchUpPending_ = false;
     return;
   }
-  // Anything that owns the panel or the chapter wins; a page turn repaints
-  // anyway and will schedule its own catch-up if it needs one.
-  if (!ready_ || chapterNavBusy_ || warmingAdjacent_ || heavyReleasedForUi_) return;
-  if (activityManager.hasPendingActivityChange() || RenderLock::peek()) return;
+  if (!ready_ || chapterNavBusy_ || warmingAdjacent_) return;
+  // A held control means a turn is coming; that repaint supersedes this one.
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
       mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
@@ -1811,36 +1830,13 @@ void RivuletReaderActivity::tickAaCatchUp() {
   }
   if (static_cast<long>(millis() - aaCatchUpAtMs_) < 0) return;
 
-  constexpr size_t kAaPaintHeadroom = 12 * 1024;
-  if (!renderer.canStoreBwBuffer(kAaPaintHeadroom)) {
-    if (++aaCatchUpTries_ >= kAaCatchUpMaxTries) {
-      SystemLog::logTiming("AACU", "spine=%d page=%d gave_up fre=%u maxA=%u", spineIndex_,
-                           engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
-                           static_cast<unsigned>(ESP.getMaxAllocHeap()));
-      aaCatchUpPending_ = false;
-      return;
-    }
-    aaCatchUpAtMs_ = millis() + kAaCatchUpDelayMs;
-    return;
-  }
-
-  // The BW page (and its status bar) is still in the framebuffer, which is what
-  // storeBwBuffer snapshots and restores around the two greyscale passes.
-  if (engine_.page().spans.empty() && engine_.page().images.empty()) {
-    aaCatchUpPending_ = false;
-    return;
-  }
-
   aaCatchUpPending_ = false;
-  const uint32_t t0 = millis();
-  RenderLock lock;
-  const bool ran = ReaderUtils::renderAntiAliased(renderer, [this]() {
-    renderer.clearScreen(0x00);
-    paintTextLayerForAa();
-  });
-  SystemLog::logTiming("AACU", "spine=%d page=%d ran=%d ms=%lu fre=%u maxA=%u", spineIndex_,
-                       engine_.currentPage() + 1, ran ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+  ++aaCatchUpTries_;
+  forceAaThisRender_ = true;
+  SystemLog::logTiming("AACU", "request spine=%d page=%d try=%u fre=%u maxA=%u", spineIndex_,
+                       engine_.currentPage() + 1, static_cast<unsigned>(aaCatchUpTries_),
                        static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  requestUpdate();
 }
 
 void RivuletReaderActivity::persistPageMapIfComplete() {
@@ -3762,16 +3758,22 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
   const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
+  // A catch-up repaint exists solely to anti-alias a page that was painted flat,
+  // so it overrides the reasons AA was declined the first time. Heap still rules.
+  const bool aaCatchUp = forceAaThisRender_;
+  forceAaThisRender_ = false;
   const bool aaThisFrame =
-      aaWanted && !(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub && heapOkForAa;
+      aaWanted && heapOkForAa &&
+      (aaCatchUp || (!(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub));
   // Why AA was declined, for the PAGE line below. A silent skip logged only at
   // LOG_DBG is how this stayed invisible in every capture: devices log at level 1.
-  const char aaWhy = !aaWanted            ? 'o'   // off in settings (or dark mode)
-                     : forceScrub         ? 's'   // long-press / interval scrub owns this frame
-                     : deferAa            ? 'd'   // first ink is BW; AA catch-up follows
+  const char aaWhy = !aaWanted      ? 'o'   // off in settings (or dark mode)
+                     : !heapOkForAa ? 'h'   // storeBwBuffer would not fit
+                     : aaCatchUp    ? 'c'   // catch-up repaint: AA forced on
+                     : forceScrub   ? 's'   // long-press / interval scrub owns this frame
+                     : deferAa      ? 'd'   // first ink is BW; catch-up follows
                      : (preferFastFirst && hadOpenHints) ? 'f'  // fast first ink on open/wake
-                     : !heapOkForAa       ? 'h'   // storeBwBuffer would not fit
-                                          : '-';  // ran
+                                    : '-';  // ran
 
   // Never ink the light AA fringe in the BW pass.
   //
@@ -3816,10 +3818,13 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // a clean BW panel, so never undo that. Without this the page stays flat until
   // the next turn, which is the "text used to sharpen a moment after it appeared,
   // now it never does" report.
-  if (aaWanted && !forceScrub && !aaRan) {
-    scheduleAaCatchUp();
-  } else if (aaRan) {
+  if (aaRan) {
     aaCatchUpPending_ = false;
+    aaCatchUpTries_ = 0;
+  } else if (aaWanted && !forceScrub) {
+    // Still flat and AA was wanted: ask for a repaint that is allowed to
+    // anti-alias. scheduleAaCatchUp owns the retry budget.
+    scheduleAaCatchUp();
   }
   if (hadOpenHints || preferFastFirst) {
     LOG_INF("RVR", "first_ink refresh=%lums preferFast=%d aa=%d wall=%lums",

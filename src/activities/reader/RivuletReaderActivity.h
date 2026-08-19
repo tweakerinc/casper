@@ -194,8 +194,15 @@ class RivuletReaderActivity final : public Activity {
   // Deferred/declined AA owes the current page a greyscale pass — see
   // tickAaCatchUp. Cleared as soon as AA actually runs for that page.
   bool aaCatchUpPending_ = false;
+  // Set by the catch-up tick, consumed by the next render: overrides the
+  // first-ink/scrub terms that declined AA, so the repaint it asked for is
+  // actually allowed to anti-alias.
+  bool forceAaThisRender_ = false;
   unsigned long aaCatchUpAtMs_ = 0;
   uint8_t aaCatchUpTries_ = 0;
+  // Page the retry budget belongs to; moving to another page refills it.
+  int aaCatchUpSpine_ = -1;
+  int aaCatchUpPage_ = -1;
   // Long enough that the BW page is unambiguously on glass first (the point of
   // deferring), short enough to read as the same action.
   static constexpr unsigned long kAaCatchUpDelayMs = 350;

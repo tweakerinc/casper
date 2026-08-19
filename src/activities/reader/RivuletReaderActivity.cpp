@@ -3349,11 +3349,12 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
                 engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()),
                 engine_.page().atChapterEnd ? 1 : 0, okLand ? 1 : 0,
                 static_cast<unsigned long>(millis() - t0));
-        SystemLog::logTiming("BACK", "land spine=%d page=%d/%d end=%d ok=%d walk=%lums fre=%u", targetSpine,
-                             engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()),
-                             engine_.page().atChapterEnd ? 1 : 0, okLand ? 1 : 0,
-                             static_cast<unsigned long>(millis() - t0),
-                             static_cast<unsigned>(ESP.getFreeHeap()));
+        SystemLog::logTiming(
+            "BACK", "land spine=%d page=%d/%d end=%d ok=%d walkPages=%d block=%d/%u stop=%u walk=%lums fre=%u",
+            targetSpine, engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()),
+            engine_.page().atChapterEnd ? 1 : 0, okLand ? 1 : 0, engine_.lastWalkPages(), engine_.lastWalkBlock(),
+            static_cast<unsigned>(engine_.chapter().blockCount()), static_cast<unsigned>(engine_.lastWalkStop()),
+            static_cast<unsigned long>(millis() - t0), static_cast<unsigned>(ESP.getFreeHeap()));
         if (okLand) {
           persistPageMapIfComplete();
           // Warm page N-1 in RAM so the next Back is instant (ch6 38→37).

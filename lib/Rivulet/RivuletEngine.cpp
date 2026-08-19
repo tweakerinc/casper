@@ -855,6 +855,11 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   // Bounded so a pathological chapter cannot spin block-by-block forever.
   int skips = 0;
   constexpr int kMaxBlockSkips = 64;
+  // Telemetry so a user log can say how far the walk actually got and why it
+  // stopped — guessing at this from the outside has cost several rounds.
+  lastWalkPages_ = 0;
+  lastWalkBlock_ = 0;
+  lastWalkStop_ = kWalkStopBudget;
 
   for (int guard = 0; guard < budget; ++guard) {
     if ((guard & 7) == 0) {
@@ -888,8 +893,18 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
           const IrCursor lastStart = map_.pageStart(lastIdx);
           laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, lastStart, laidOut_);
         }
-        if (laidOutValid_ && laidOut_.atChapterEnd) {
+        if (laidOutValid_) {
+          // We are here because laying out FROM `cur` reported atEnd — the cursor
+          // is past the last block, so the page before it IS the last page even if
+          // its own atChapterEnd flag came back false (page filled exactly at the
+          // final block boundary). Requiring that flag rejected a perfectly good
+          // last page and dropped us into the fallback, which is how PageBack kept
+          // landing mid-chapter.
+          laidOut_.atChapterEnd = true;
           map_.markComplete(map_.knownPages());
+          lastWalkPages_ = map_.knownPages();
+          lastWalkBlock_ = static_cast<int>(cur.blockIndex);
+          lastWalkStop_ = kWalkStopOvershoot;
           LOG_INF("RVEN", "goToLastPage overshot-land page=%d known=%d", currentPage_, map_.knownPages());
           return true;
         }
@@ -916,6 +931,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
       }
       LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d skips=%d", walked, walked,
               map_.knownPages(), skips);
+      lastWalkStop_ = (skips > kMaxBlockSkips) ? kWalkStopSkipsExhausted : kWalkStopLayoutFail;
       break;
     }
 
@@ -931,6 +947,9 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         break;
       }
       map_.markComplete(map_.knownPages() > 0 ? map_.knownPages() : walked + 1);
+      lastWalkPages_ = map_.knownPages();
+      lastWalkBlock_ = static_cast<int>(page.end.blockIndex);
+      lastWalkStop_ = kWalkStopReachedEnd;
       LOG_INF("RVEN", "goToLastPage pure-walk page=%d walked=%d known=%d complete=1", currentPage_, walked,
               map_.knownPages());
       return true;
@@ -957,6 +976,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         continue;
       }
       LOG_ERR("RVEN", "goToLastPage stuck at last block page=%d", walked);
+      lastWalkStop_ = kWalkStopStuckLastBlock;
       break;
     }
 
@@ -970,8 +990,11 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
     ++walked;
   }
 
-  LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d (not chapter end)", walked, walked,
-          budget, map_.knownPages());
+  lastWalkPages_ = map_.knownPages();
+  lastWalkBlock_ = static_cast<int>(cur.blockIndex);
+  LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d block=%u/%u stop=%u", walked,
+          walked, budget, map_.knownPages(), static_cast<unsigned>(cur.blockIndex),
+          static_cast<unsigned>(chapter_.blocks().size()), static_cast<unsigned>(lastWalkStop_));
   // Do not paint a mid-chapter page as verified "last" — clear paint state.
   // Keep the walked map so goToBestEffortLastPage can land on known-1.
   // Do NOT reset currentPage_ to 0: a caller that ignores the false return then

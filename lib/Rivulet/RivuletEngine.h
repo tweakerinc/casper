@@ -78,6 +78,18 @@ class RivuletEngine {
   };
   [[nodiscard]] TurnFail lastTurnFail() const { return lastTurnFail_; }
   [[nodiscard]] bool atChapterStart() const { return currentPage_ <= 0; }
+
+  // Why the last goToLastPage walk stopped. Logged by the reader so a device
+  // capture shows how far the walk got instead of leaving us to guess.
+  static constexpr uint8_t kWalkStopReachedEnd = 0;
+  static constexpr uint8_t kWalkStopOvershoot = 1;
+  static constexpr uint8_t kWalkStopLayoutFail = 2;
+  static constexpr uint8_t kWalkStopSkipsExhausted = 3;
+  static constexpr uint8_t kWalkStopStuckLastBlock = 4;
+  static constexpr uint8_t kWalkStopBudget = 5;
+  [[nodiscard]] int lastWalkPages() const { return lastWalkPages_; }
+  [[nodiscard]] int lastWalkBlock() const { return lastWalkBlock_; }
+  [[nodiscard]] uint8_t lastWalkStop() const { return lastWalkStop_; }
   bool goToStart(const GfxRenderer& renderer);
   // True last page of this chapter IR (legacy-style full layout walk).
   // Map-hit only when complete map's last page is verified atChapterEnd.
@@ -188,6 +200,9 @@ class RivuletEngine {
   std::string pageCacheDir_;
   int pageCacheSpine_ = -1;  // namespaces .rvpg files; -1 disables cache I/O
   TurnFail lastTurnFail_ = TurnFail::None;
+  int lastWalkPages_ = 0;
+  int lastWalkBlock_ = 0;
+  uint8_t lastWalkStop_ = kWalkStopReachedEnd;
 };
 
 }  // namespace rivulet

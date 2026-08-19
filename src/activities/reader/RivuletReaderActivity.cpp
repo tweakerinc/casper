@@ -2174,28 +2174,20 @@ bool RivuletReaderActivity::indexSpinePageMap(const int spine) {
   return indexed;
 }
 
-// INX-style: index the rest of the book while the reader sits idle, one chapter
-// per pass, persisted to SD. Never runs before first ink, while a control is
-// held, or when heap is tight — reading always wins.
-void RivuletReaderActivity::tickBackgroundIndexer() {
-  if (bookIndexComplete_ || !firstInkDone_ || warmingAdjacent_ || chapterNavBusy_) return;
-  if (!ready_ || !epub_ || irDir_.empty()) return;
-  const unsigned long now = millis();
-  if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) < kBackgroundIndexIdleMs) return;
-  if (lastIndexPassMs_ != 0UL && (now - lastIndexPassMs_) < kBackgroundIndexGapMs) return;
-  if (ESP.getFreeHeap() < 90 * 1024 || ESP.getMaxAllocHeap() < 56 * 1024) return;
-
-  const int target = nearestSpineWithoutMap(/*preferBackward=*/true, /*adjacentOnly=*/false);
-  if (target < 0) {
-    bookIndexComplete_ = true;
-    SystemLog::logTiming("INDEX", "book complete spines=%d", epub_->getSpineItemsCount());
-    LOG_INF("RVR", "background index complete");
-    return;
-  }
-  lastIndexPassMs_ = millis();
-  (void)indexSpinePageMap(target);
-  lastIndexPassMs_ = millis();
-}
+// Whole-book background indexing is DISABLED.
+//
+// It swapped the resident chapter out from under the reader: each pass loads
+// another spine, walks it, then reloads the current one. A pass costs seconds
+// (a cold convert measured ~4s), the loop is blocking, and it re-armed every
+// 1.5s — so once the reader sat still for 6s the device spent most of its time
+// indexing and page turns stopped painting. It also could not terminate: a spine
+// whose IR converts partial never gets a saved map, so nearestSpineWithoutMap
+// kept handing back the same spine forever.
+//
+// Only the adjacent (previous) chapter is warmed now, from tickIdlePageMap,
+// because that is the one PageBack actually needs. Whole-book indexing needs to
+// happen without evicting the reader's chapter before it can come back.
+void RivuletReaderActivity::tickBackgroundIndexer() {}
 
 void RivuletReaderActivity::persistPageMapIfComplete() {
   // Never persist a map built on partial OOM IR — that froze "last page" mid-chapter
@@ -2242,11 +2234,15 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // 3) Sitting on page 1 of a spine with no map for the previous one: build it
   //    first — that is the chapter PageBack is about to need. Never before first
   //    ink (that turned book open into a 30 s white screen).
+  // Try each spine at most once per session: a chapter whose IR converts partial
+  // never produces a saved map, so without this the same spine is re-indexed
+  // (multi-second, blocking) on every idle tick and the reader stops responding.
   if (firstInkDone_ && !chapterNavBusy_ && !warmingAdjacent_ && engine_.currentPage() == 0 && spineIndex_ > 0 &&
-      !irDir_.empty() && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) > 2500UL &&
+      !irDir_.empty() && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) > 4000UL &&
       ESP.getFreeHeap() > 90 * 1024 && ESP.getMaxAllocHeap() > 56 * 1024) {
     const int prevSpine = nearestSpineWithoutMap(/*preferBackward=*/true, /*adjacentOnly=*/true);
-    if (prevSpine >= 0 && prevSpine < spineIndex_) {
+    if (prevSpine >= 0 && prevSpine < spineIndex_ && prevSpine != lastIndexAttemptSpine_) {
+      lastIndexAttemptSpine_ = prevSpine;
       (void)indexSpinePageMap(prevSpine);
       return;
     }

@@ -1810,6 +1810,12 @@ void HomeActivity::render(RenderLock&& lock) {
     if (hard && deferScrubAfterFirstPaint_) {
       hard = false;
       scrubRightAfter = true;
+      // Disarm NOW. Leaving it armed meant any repaint before the deferred scrub
+      // landed (clock tick, under-panel change) took the HALF path and did a full
+      // penumbra_full HALF+clockAA — a second ~4s paint on top of the FAST one,
+      // which is the "hard flash plus soft pulls" on return to Home. The deferred
+      // scrub below owns the clean from here.
+      UiGhostPolicy::clearHardScrub();
     }
     deferScrubAfterFirstPaint_ = false;
     const int baseMode =
@@ -2135,7 +2141,11 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // never HALF a clean home just because the theme multipasses covers.
   const bool greysDirty = coverTheme && !greysSettled;
   const bool preferFast = bookIndexReady && !greysDirty;
-  if (!bookIndexReady && SETTINGS.readerDarkMode == 0) {
+  // Show "Opening" for EVERY book open, not only uncached ones. A warm open is
+  // still ~3s (container + IR + first layout + paint), so suppressing the cue
+  // there just made the device look dead — the corner status is the only
+  // feedback between the button press and first ink.
+  if (SETTINGS.readerDarkMode == 0) {
     GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
   }
 

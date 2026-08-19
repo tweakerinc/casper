@@ -105,10 +105,17 @@ std::string openBook(const std::string& bookPath, const std::string& /*title*/, 
   if (bookPath.empty()) return {};
   const std::string folder = cacheFolderName(bookPath);
   const std::string dir = bookDir(folder);
-  Storage.ensureDirectoryExists(kRoot);
-  Storage.ensureDirectoryExists(dir.c_str());
-  Storage.ensureDirectoryExists((dir + "/rivulet").c_str());
-  LOG_DBG("CBOOK", "open cache %s", dir.c_str());
+  // Each ensureDirectoryExists is a directory scan (~120ms measured on a full SD),
+  // and this runs on every book open — 372ms of the pre-load path for three calls
+  // that only matter the first time a given book is opened this session.
+  static std::string lastFolder;
+  if (lastFolder != folder) {
+    Storage.ensureDirectoryExists(kRoot);
+    Storage.ensureDirectoryExists(dir.c_str());
+    Storage.ensureDirectoryExists((dir + "/rivulet").c_str());
+    lastFolder = folder;
+    LOG_DBG("CBOOK", "open cache %s", dir.c_str());
+  }
   return folder;
 }
 

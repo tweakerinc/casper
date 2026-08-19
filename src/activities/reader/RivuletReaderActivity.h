@@ -178,6 +178,10 @@ class RivuletReaderActivity final : public Activity {
   // Every readable spine has a .rvpm — background indexer can stop.
   bool bookIndexComplete_ = false;
   unsigned long lastIndexPassMs_ = 0;
+  // Spine we last tried to index. A partial-IR chapter never yields a saved map,
+  // so without this guard the idle tick re-indexes it forever (blocking, seconds
+  // per attempt) and page turns appear frozen.
+  int lastIndexAttemptSpine_ = -1;
   // Reader must be settled this long before the indexer may take the bus, and
   // this long between chapters so input stays responsive.
   static constexpr unsigned long kBackgroundIndexIdleMs = 6000;

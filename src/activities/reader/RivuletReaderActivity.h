@@ -123,6 +123,22 @@ class RivuletReaderActivity final : public Activity {
   // Idle: index the remaining chapters one at a time so the whole book ends up
   // mapped on SD (INX-style), without ever blocking a page turn or first ink.
   void tickBackgroundIndexer();
+
+  // Text + overlays only, in whatever render mode is active. Shared by the BW
+  // paint and the greyscale AA passes (images are already 1-bit plates baked
+  // into the BW frame, so re-decoding them under the ~48 KB AA hold is what
+  // aborted image-heavy pages).
+  void paintTextLayerForAa();
+  // Re-run the AA passes over the page already on glass.
+  //
+  // First ink deliberately paints BW so the page appears fast, and a transient
+  // heap dip can decline AA mid-book as well. ReaderActivity.h has advertised
+  // "first ink is BW only; AA catch-up render follows" since deferFirstPageTextAa
+  // was introduced, but nothing ever performed that follow-up — the page just
+  // stayed un-smoothed until the next turn. This is the missing render, and it
+  // is what produces the "text appears, then sharpens a moment later" behaviour.
+  void tickAaCatchUp();
+  void scheduleAaCatchUp();
   // Keep page glyph buffers only when free/maxAlloc leave room for next turn/UI.
   static bool canRetainGlyphCache();
 
@@ -175,6 +191,17 @@ class RivuletReaderActivity final : public Activity {
   // Set once the first page is on glass: only then may the idle tick spend time
   // indexing the adjacent chapter. Never index before first ink.
   bool firstInkDone_ = false;
+  // Deferred/declined AA owes the current page a greyscale pass — see
+  // tickAaCatchUp. Cleared as soon as AA actually runs for that page.
+  bool aaCatchUpPending_ = false;
+  unsigned long aaCatchUpAtMs_ = 0;
+  uint8_t aaCatchUpTries_ = 0;
+  // Long enough that the BW page is unambiguously on glass first (the point of
+  // deferring), short enough to read as the same action.
+  static constexpr unsigned long kAaCatchUpDelayMs = 350;
+  // Heap may still refuse; retry a couple of times, then leave the page BW
+  // rather than spin a full-screen greyscale attempt forever.
+  static constexpr uint8_t kAaCatchUpMaxTries = 3;
   // Every readable spine has a .rvpm — background indexer can stop.
   bool bookIndexComplete_ = false;
   unsigned long lastIndexPassMs_ = 0;

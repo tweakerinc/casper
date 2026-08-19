@@ -1716,6 +1716,12 @@ bool RivuletReaderActivity::indexSpinePageMap(const int spine) {
   GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
   const uint32_t t0 = millis();
 
+  // Bank the reader's own map before the eviction below throws it away.
+  // prepareHeapForChapterLoad() calls engine_.clear(), so without this a map the
+  // idle tick had just finished for the chapter the user is actually reading is
+  // discarded and has to be rebuilt after the swap.
+  persistPageMapIfComplete();
+
   prepareHeapForChapterLoad(/*aggressive=*/true);
   bool ok = loadSpine(spine, /*startPage=*/-1, /*requireCompleteIr=*/false);
   if (!ok || engine_.chapter().failed()) {
@@ -1769,6 +1775,73 @@ bool RivuletReaderActivity::indexSpinePageMap(const int spine) {
 // because that is the one PageBack actually needs. Whole-book indexing needs to
 // happen without evicting the reader's chapter before it can come back.
 void RivuletReaderActivity::tickBackgroundIndexer() {}
+
+// Images are deliberately absent: they are already 1-bit dithered plates baked
+// into the BW frame that storeBwBuffer snapshots, and re-decoding them under
+// that ~48 KB hold is what aborted image-heavy pages (Fourth Wing's dragon /
+// ornament pages at free~40KB maxA~24KB → operator new abort).
+void RivuletReaderActivity::paintTextLayerForAa() {
+  engine_.paint(renderer, marginX_, marginY_);
+  paintClippingHighlights();
+  paintFootnoteMarkers();
+}
+
+void RivuletReaderActivity::scheduleAaCatchUp() {
+  aaCatchUpPending_ = true;
+  aaCatchUpTries_ = 0;
+  aaCatchUpAtMs_ = millis() + kAaCatchUpDelayMs;
+}
+
+void RivuletReaderActivity::tickAaCatchUp() {
+  if (!aaCatchUpPending_) return;
+
+  // Settings can change between scheduling and firing.
+  if (SETTINGS.textAntiAliasing == 0 || ReaderUtils::readerDarkModeEnabled()) {
+    aaCatchUpPending_ = false;
+    return;
+  }
+  // Anything that owns the panel or the chapter wins; a page turn repaints
+  // anyway and will schedule its own catch-up if it needs one.
+  if (!ready_ || chapterNavBusy_ || warmingAdjacent_ || heavyReleasedForUi_) return;
+  if (activityManager.hasPendingActivityChange() || RenderLock::peek()) return;
+  if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Back)) {
+    return;
+  }
+  if (static_cast<long>(millis() - aaCatchUpAtMs_) < 0) return;
+
+  constexpr size_t kAaPaintHeadroom = 12 * 1024;
+  if (!renderer.canStoreBwBuffer(kAaPaintHeadroom)) {
+    if (++aaCatchUpTries_ >= kAaCatchUpMaxTries) {
+      SystemLog::logTiming("AACU", "spine=%d page=%d gave_up fre=%u maxA=%u", spineIndex_,
+                           engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
+                           static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      aaCatchUpPending_ = false;
+      return;
+    }
+    aaCatchUpAtMs_ = millis() + kAaCatchUpDelayMs;
+    return;
+  }
+
+  // The BW page (and its status bar) is still in the framebuffer, which is what
+  // storeBwBuffer snapshots and restores around the two greyscale passes.
+  if (engine_.page().spans.empty() && engine_.page().images.empty()) {
+    aaCatchUpPending_ = false;
+    return;
+  }
+
+  aaCatchUpPending_ = false;
+  const uint32_t t0 = millis();
+  RenderLock lock;
+  const bool ran = ReaderUtils::renderAntiAliased(renderer, [this]() {
+    renderer.clearScreen(0x00);
+    paintTextLayerForAa();
+  });
+  SystemLog::logTiming("AACU", "spine=%d page=%d ran=%d ms=%lu fre=%u maxA=%u", spineIndex_,
+                       engine_.currentPage() + 1, ran ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+                       static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+}
 
 void RivuletReaderActivity::persistPageMapIfComplete() {
   // Never persist a map built on partial OOM IR — that froze "last page" mid-chapter
@@ -3379,6 +3452,10 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
+  // A: pay off any greyscale pass owed to the page already on glass. Before the
+  //    map work so a deferred first ink sharpens promptly rather than queueing
+  //    behind SD I/O.
+  tickAaCatchUp();
   // B: idle progressive map for the current chapter + adjacent-chapter warm.
   tickIdlePageMap();
   // C: once settled, index the rest of the book chapter by chapter onto SD so a
@@ -3637,15 +3714,9 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     // Footnote markers: underline only (paint-time). Does not reflow Book's Style.
     paintFootnoteMarkers();
   };
-  // Text + overlays only — used by the AA greyscale passes. Images are already
-  // 1-bit dithered plates baked into the BW frame that storeBwBuffer snapshots;
-  // re-decoding them under that ~48 KB hold is what aborted Fourth Wing's dragon
-  // / ornament pages (paintPageImages at free~40KB maxA~24KB → operator new abort).
-  auto paintTextForAa = [this]() {
-    engine_.paint(renderer, marginX_, marginY_);
-    paintClippingHighlights();
-    paintFootnoteMarkers();
-  };
+  // Text + overlays only — used by the AA greyscale passes. See
+  // paintTextLayerForAa for why images are excluded.
+  auto paintTextForAa = [this]() { paintTextLayerForAa(); };
   // Reader-only dark: displayWithRefreshCycle inverts for the panel push only
   // (FB stays light paint-space so home / sleep never inherit inverted bits).
 
@@ -3736,6 +3807,19 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   }
   if (!aaRan) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);
+  }
+
+  // Owe this page a greyscale pass?
+  //
+  // Only when AA was wanted and something transient refused it: a deliberately
+  // BW first ink, or a heap dip. A force-scrub is the user explicitly asking for
+  // a clean BW panel, so never undo that. Without this the page stays flat until
+  // the next turn, which is the "text used to sharpen a moment after it appeared,
+  // now it never does" report.
+  if (aaWanted && !forceScrub && !aaRan) {
+    scheduleAaCatchUp();
+  } else if (aaRan) {
+    aaCatchUpPending_ = false;
   }
   if (hadOpenHints || preferFastFirst) {
     LOG_INF("RVR", "first_ink refresh=%lums preferFast=%d aa=%d wall=%lums",

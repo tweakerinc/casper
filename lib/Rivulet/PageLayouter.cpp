@@ -464,6 +464,50 @@ bool glyphInkMetrics(const GfxRenderer& renderer, const int fontId, const EpdFon
   return true;
 }
 
+// Publisher scene-break fallback: EPUBs pair a decorative separator (usually an
+// inline <svg>, sometimes an unsupported raster) with a plain-text alternative
+// like "* * *" or "· · ·" for readers that cannot draw it. We deliberately skip
+// SVG (HtmlToIr) and 0x0 images (below), so that fallback is what the reader
+// actually sees — it is book content, not a rendering failure. Treat it as a real
+// thematic break (centred, with air) instead of a stray left-aligned body line.
+bool isSceneBreakRun(const ChapterIr& ch, const Block& b) {
+  if (b.kind != BlockKind::Paragraph || b.runCount == 0) return false;
+  int glyphs = 0;
+  const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+  for (uint16_t ri = b.runBegin; ri < runEnd && ri < ch.runs().size(); ++ri) {
+    const Run& r = ch.runs()[ri];
+    const char* text = ch.runText(r);
+    if (!text) return false;
+    const char* p = text;
+    const char* end = text + r.textLen;
+    while (p < end) {
+      const uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&p));
+      if (cp == 0) break;
+      if (cp == ' ' || cp == '\t' || cp == 0x00A0) continue;
+      switch (cp) {
+        case '*':
+        case '.':
+        case '-':
+        case '_':
+        case '~':
+        case 0x00B7:  // ·
+        case 0x2013:  // –
+        case 0x2014:  // —
+        case 0x2022:  // •
+        case 0x2042:  // ⁂
+        case 0x2043:  // ⁃
+        case 0x2731:  // ✱
+        case 0x273B:  // ❋
+          if (++glyphs > 12) return false;  // a real sentence, not a separator
+          continue;
+        default:
+          return false;
+      }
+    }
+  }
+  return glyphs > 0;
+}
+
 bool atEnd(const ChapterIr& ch, const IrCursor& c) { return c.blockIndex >= ch.blocks().size(); }
 
 void advancePastBlock(const ChapterIr& ch, IrCursor& c) {
@@ -601,6 +645,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         (block.kind == BlockKind::Paragraph || isHeading)) {
       blockAlign = userAlign;
     }
+    // Scene-break fallback text always centres, in every align mode — a forced
+    // Left/Justify setting must not leave "* * *" hanging off the left margin.
+    const bool sceneBreak = isSceneBreakRun(chapter, block);
+    if (sceneBreak) blockAlign = Align::Center;
 
     if ((block.flags & kBlockForcePageBreak) != 0 && y > 0 && atBlockStart) {
       break;
@@ -613,6 +661,12 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
     int marginTop = (block.marginTopEmQ4 * bodyEm) / 16;
     int marginBottom = (block.marginBottomEmQ4 * bodyEm) / 16;
+    if (sceneBreak) {
+      // Give it the air a drawn separator would have had, so it reads as a break
+      // in the prose rather than a short orphan line.
+      marginTop = std::max(marginTop, (y > 0) ? bodyLine : 0);
+      marginBottom = std::max(marginBottom, bodyLine);
+    }
     if (forceUserAlign) {
       // Plain modes: ignore CSS/book vertical rhythm; uniform simple gaps.
       if (block.kind == BlockKind::Spacer) {

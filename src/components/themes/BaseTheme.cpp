@@ -1155,7 +1155,19 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   const int x = viewLeft + kPadX;
   const int y = viewTop + kPadY;
   // White wipe under the label so residual home/reader ink does not dirty the word.
-  const int wipeW = textW + 4;
+  //
+  // Size the wipe to the WIDEST corner status, not to this message. Sizing per
+  // message meant a short word left whatever sat in the left status slot poking
+  // out to its right: "Loading" covered the battery %, but "Saving" on book exit
+  // did not. A constant box also stops the wipe jittering as the word changes.
+  int statusW = textW;
+  for (const StrId id : {StrId::STR_LOADING_POPUP, StrId::STR_STATUS_SAVING_STATS, StrId::STR_STATUS_OPENING,
+                         StrId::STR_STATUS_DELETING}) {
+    statusW = std::max(statusW, renderer.getTextWidth(kFont, I18N.get(id)));
+  }
+  // Never eat into the middle slot — clamp to just short of centre.
+  const int maxWipeW = std::max(textW + 4, (renderer.getScreenWidth() / 2) - x);
+  const int wipeW = std::min(statusW + 4, maxWipeW);
   const int wipeH = textH + 2;
   renderer.fillRect(x - 1, y - 1, wipeW + 2, wipeH + 2, false);
   renderer.drawText(kFont, x, y, message, /*black=*/true);

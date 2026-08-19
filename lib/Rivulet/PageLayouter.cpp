@@ -1238,8 +1238,9 @@ bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer&
     if (page.atChapterEnd) {
       const int est = chapter.estimatePageCount(params.key.viewportW, params.key.viewportH, params.bodyEmPx,
                                                 params.lineCompression);
-      // Refuse absurdly short completes (same guard as RivuletEngine).
-      if (!(est >= 6 && map.knownPages() * 2 + 1 < est)) {
+      // Only refuse absurd 1–3 page "completes" for large chapters — not honest maps
+      // that are merely shorter than a padded estimate.
+      if (!(est >= 10 && map.knownPages() <= 3)) {
         map.markComplete(map.knownPages());
       }
       return true;

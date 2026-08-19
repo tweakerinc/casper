@@ -1723,9 +1723,13 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
       std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
       if (Storage.exists(mapPath) && engine_.loadPageMap(mapPath)) {
         if (engine_.scrubStaleCompleteMap(renderer)) {
-          LOG_DBG("RVR", "page map %s was stale-complete — reopened pages=%d", mapPath,
-                  engine_.mapKnownPages());
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
+          LOG_DBG("RVR", "page map %s scrubbed pages=%d complete=%d", mapPath, engine_.mapKnownPages(),
+                  engine_.mapComplete() ? 1 : 0);
+          // Only delete on-disk map if scrub emptied it (false 2–3 page complete).
+          // Incomplete reopen must keep the file so idle/Back can finish the walk.
+          if (engine_.mapKnownPages() <= 1 && Storage.exists(mapPath)) {
+            Storage.remove(mapPath);
+          }
         } else {
           LOG_DBG("RVR", "loaded page map %s pages=%d", mapPath, engine_.chapterPageCount(nullptr));
         }
@@ -2124,12 +2128,17 @@ void RivuletReaderActivity::warmPreviousSpinePageMap() {
     ok = loadSpine(prevSpine, -1, /*requireCompleteIr=*/true);
   }
   if (ok && !engine_.chapter().failed()) {
-    if (engine_.goToLastPage(renderer, /*maxWalkPages=*/1024)) {
+    bool landed = engine_.goToLastPage(renderer, /*maxWalkPages=*/1024);
+    if (!landed) {
+      landed = engine_.goToLastPageNearEnd(renderer, /*maxForwardPages=*/1024);
+    }
+    if (landed) {
       persistPageMapIfComplete();
-      LOG_INF("RVR", "warmed prev spine %d lastPage=%d known=%d ms=%lu", prevSpine, engine_.currentPage(),
-              engine_.mapKnownPages(), static_cast<unsigned long>(millis() - t0));
+      LOG_INF("RVR", "warmed prev spine %d lastPage=%d known=%d complete=%d ms=%lu", prevSpine,
+              engine_.currentPage(), engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
+              static_cast<unsigned long>(millis() - t0));
     } else {
-      LOG_ERR("RVR", "warm prev spine %d goToLastPage failed ms=%lu", prevSpine,
+      LOG_ERR("RVR", "warm prev spine %d last-page failed known=%d ms=%lu", prevSpine, engine_.mapKnownPages(),
               static_cast<unsigned long>(millis() - t0));
     }
   }

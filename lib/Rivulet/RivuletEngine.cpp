@@ -338,26 +338,29 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
     map_.markIncomplete();
     return true;
   }
-  const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
-                                             lineCompression_);
-  // Last page ends chapter, but page count is absurdly low vs IR size (false
-  // complete from stuck layout / old end==start bug). Discard and rebuild.
+  // If the recorded last page really ends the IR, trust the map. Do NOT compare
+  // against estimatePageCount — that heuristic is padded and was deleting honest
+  // 30–40 page maps on PageBack (known*2+1 < est), which made Back a no-op.
   if (tmp.atChapterEnd) {
-    if (est >= 6 && map_.knownPages() * 2 + 1 < est) {
-      LOG_ERR("RVEN", "scrubStaleCompleteMap: complete too short known=%d est=%d — reset",
-              map_.knownPages(), est);
-      IrCursor start{};
-      if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;
-      map_.resetWithStart(start);
-      return true;
+    const int known = map_.knownPages();
+    // Only catch the classic false-complete bug (2–3 page "whole chapter").
+    if (known <= 3) {
+      const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
+                                                 lineCompression_);
+      if (est >= 10) {
+        LOG_ERR("RVEN", "scrubStaleCompleteMap: tiny complete known=%d est=%d — reset", known, est);
+        IrCursor start{};
+        if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;
+        map_.resetWithStart(start);
+        return true;
+      }
     }
-    return false;  // complete flag looks honest
+    return false;  // honest complete map — keep it
   }
 
   LOG_DBG("RVEN", "scrubStaleCompleteMap: last page not chapter end (known=%d) — reopening",
           map_.knownPages());
   map_.markIncomplete();
-  // Seed continuation so idle/next can extend from the true end of the last start.
   if (tmp.end != map_.pageStart(last) && !map_.hasPage(last + 1)) {
     map_.pushPageStart(tmp.end);
   }
@@ -881,33 +884,37 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
 }
 
 bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int maxForwardPages) {
-  // User-required UX (CrossInk): land on REAL last page index (e.g. 37 of 38) with a
-  // full page map so the next PageBack is page 36, then 35 — never "page 0 of this
-  // spine" again (that re-triggered previous-spine navigation → chapter hopping).
-  //
-  // An earlier shortcut painted only the last page as map page 0 / complete(1).
-  // That looked like the end once, then every Back hopped to the prior chapter.
-  //
-  // Cold cache after Delete Cache must pay for a full measure walk once (same as
-  // CrossInk rebuilding section.bin), then .rvpm makes later Backs instant.
+  // Land on REAL last page index with a full page map so next Back is N-1 in-chapter.
   (void)maxForwardPages;
   if (chapter_.empty() || chapter_.failed()) return false;
 
-  if (map_.complete() && map_.knownTotal() > 0) {
+  auto landLast = [&]() -> bool {
+    if (!map_.complete() || map_.knownTotal() <= 0) return false;
     const int last = map_.knownTotal() - 1;
-    if (goToPage(renderer, last, /*maxWalkPages=*/8) && laidOutValid_ && laidOut_.atChapterEnd) {
-      LOG_INF("RVEN", "goToLastPageNearEnd map-hit page=%d total=%d", currentPage_, map_.knownTotal());
-      return true;
-    }
-    map_.markIncomplete();
+    if (!goToPage(renderer, last, /*maxWalkPages=*/32)) return false;
+    if (!laidOutValid_) return false;
+    // Prefer verified end; still accept last index if paint succeeded (map was sealed).
+    return laidOut_.atChapterEnd || last >= 0;
+  };
+
+  if (map_.complete() && landLast()) {
+    LOG_INF("RVEN", "goToLastPageNearEnd map-hit page=%d total=%d", currentPage_, map_.knownTotal());
+    return true;
   }
 
-  const bool ok = goToLastPage(renderer, /*maxWalkPages=*/1024);
-  if (ok) {
-    LOG_INF("RVEN", "goToLastPageNearEnd full-map page=%d known=%d complete=%d", currentPage_,
-            map_.knownPages(), map_.complete() ? 1 : 0);
+  if (goToLastPage(renderer, /*maxWalkPages=*/1024)) {
+    LOG_INF("RVEN", "goToLastPageNearEnd walk page=%d known=%d", currentPage_, map_.knownPages());
+    return true;
   }
-  return ok;
+
+  // Stronger rebuild (same as classic section rebuild) then land last.
+  LOG_ERR("RVEN", "goToLastPage failed — buildFullPageMap fallback");
+  if (buildPageMap(renderer) && landLast()) {
+    LOG_INF("RVEN", "goToLastPageNearEnd buildFull page=%d known=%d", currentPage_, map_.knownPages());
+    return true;
+  }
+
+  return goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
 }
 
 bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages) {

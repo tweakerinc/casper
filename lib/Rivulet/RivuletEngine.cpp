@@ -29,6 +29,7 @@ void RivuletEngine::clear() {
   behindValid_ = false;
   smoothedEstimate_ = 0.0f;
   smoothedAtKnown_ = -1;
+  // Keep pageCacheDir_/pageCacheSpine_ — loadSpine resets spine before layout.
 }
 
 void RivuletEngine::invalidatePageMap() {
@@ -51,13 +52,27 @@ void RivuletEngine::setPageCacheDir(const char* dir) {
   pageCacheDir_ = dir;
 }
 
+void RivuletEngine::setPageCacheSpine(const int spineIndex) {
+  if (pageCacheSpine_ == spineIndex) return;
+  pageCacheSpine_ = spineIndex;
+  // Never keep ahead/behind paint from another spine — those are full glyph
+  // pages and would flash the wrong chapter under the new status label.
+  aheadValid_ = false;
+  ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
+  laidOutValid_ = false;
+}
+
 bool RivuletEngine::pageCachePath(const int pageIndex, char* out, const size_t outSz) const {
-  if (pageCacheDir_.empty() || !out || outSz < 32 || pageIndex < 0) return false;
-  // Filename embeds a compact key fingerprint so font/margin/viewport changes miss.
+  if (pageCacheDir_.empty() || pageCacheSpine_ < 0 || !out || outSz < 32 || pageIndex < 0) return false;
+  // Filename embeds spine + key fingerprint. Older shared p{N}_{key}.rvpg files
+  // are ignored (different name) so chapter 5 page-0 cache cannot paint on ch7.
   const uint32_t keyFp = static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
                          (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
                          (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
-  const int n = std::snprintf(out, outSz, "%s/p%d_%08x.rvpg", pageCacheDir_.c_str(), pageIndex, keyFp);
+  const int n = std::snprintf(out, outSz, "%s/s%d_p%d_%08x.rvpg", pageCacheDir_.c_str(), pageCacheSpine_, pageIndex,
+                              keyFp);
   return n > 0 && static_cast<size_t>(n) < outSz;
 }
 
@@ -66,6 +81,13 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
   if (!pageCachePath(pageIndex, path, sizeof(path))) return false;
   LaidOutPage tmp;
   if (!tmp.loadFromFile(path, key_, pageIndex)) return false;
+  // Reject caches whose IR cursors cannot belong to the loaded chapter (defense
+  // in depth if a path ever collides again).
+  const uint32_t blocks = static_cast<uint32_t>(chapter_.blockCount());
+  if (blocks > 0 && (tmp.start.blockIndex >= blocks || tmp.end.blockIndex > blocks)) {
+    Storage.remove(path);
+    return false;
+  }
   // Must agree with the page-map cursor when present — stale IR/map would skip text.
   if (map_.hasPage(pageIndex) && tmp.start != map_.pageStart(pageIndex)) {
     Storage.remove(path);
@@ -863,13 +885,14 @@ bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const in
   if (goToLastPage(renderer, maxWalkPages)) return true;
 
   // Incomplete end-walk still filled map starts — land on the deepest known page.
-  // This is what "page back from chapter N into chapter N-1" needs when a long
-  // chapter cannot finish a full walk under heap pressure (DCC-sized chapters).
   const int known = map_.knownPages();
-  if (known > 0) {
+  if (known > 1) {
     const int land = known - 1;
     LOG_ERR("RVEN", "goToBestEffortLastPage land known-1=%d known=%d", land, known);
     if (goToPage(renderer, land, std::max(32, land + 16))) return true;
+  } else if (known == 1) {
+    // Only a page-0 start exists — if that page is already the true end, accept it.
+    if (goToPage(renderer, 0, 8) && laidOutValid_ && laidOut_.atChapterEnd) return true;
   }
 
   const int est = std::max(1, chapterPageCount(&renderer));
@@ -879,8 +902,10 @@ bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const in
     if (goToPage(renderer, guess, std::max(96, guess + 64))) return true;
   }
 
-  LOG_ERR("RVEN", "goToBestEffortLastPage fallback goToStart (still in this chapter)");
-  return goToStart(renderer);
+  // Do NOT fall back to goToStart. Returning true from page 0 of the previous
+  // spine made every PageBack hop chapter→chapter (ch7→ch6 p0→ch5 p0…).
+  LOG_ERR("RVEN", "goToBestEffortLastPage failed known=%d est=%d", known, est);
+  return false;
 }
 
 bool RivuletEngine::sealMapAtChapterEnd() {

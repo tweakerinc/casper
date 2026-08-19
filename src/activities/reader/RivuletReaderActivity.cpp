@@ -1654,10 +1654,13 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
     Storage.ensureDirectoryExists(irDir_.c_str());
     // Classic section.bin idea: persist laid-out pages under pages/ so resume
     // and revisit are deserialize + paint (keeps Rivulet's book look, CrossPoint speed).
+    // MUST be spine-namespaced — see RivuletEngine::pageCachePath.
     const std::string pagesDir = irDir_ + "/pages";
     engine_.setPageCacheDir(pagesDir.c_str());
+    engine_.setPageCacheSpine(spineIndex);
   } else {
     engine_.clearPageCacheDir();
+    engine_.setPageCacheSpine(-1);
   }
 
   char irPath[192];
@@ -2972,6 +2975,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
         engine_.setPageCacheDir(pagesDir.c_str());
       } else {
         engine_.clearPageCacheDir();
+        engine_.setPageCacheSpine(-1);
       }
       bool loaded = loadSpine(keepSpine, keepPage);
       if (!loaded) loaded = loadSpine(keepSpine, 0);
@@ -3065,11 +3069,12 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
 bool RivuletReaderActivity::turnPrev(const int skipPages) {
   int remaining = std::max(1, skipPages);
   while (remaining-- > 0) {
+    // In-chapter page back — normal case (pages 2..N of this spine).
     if (engine_.prevPage(renderer)) continue;
-    // CrossInk/CrossPoint: at page 0 of this spine, one PageBack opens the
-    // previous spine's last page. That is a section/spine step — NOT a TOC
-    // chapter skip (TOC prev jumped to ch6's first file and skipped the real
-    // previous XHTML, or scanned older chapters when the end-walk failed).
+
+    // Only when already on page 0 of this spine: open the previous spine's LAST
+    // page (CrossInk section back). Never stay on previous spine page 0 unless
+    // that spine is a single-page section — that caused chapter-hopping.
     const int originSpine = spineIndex_;
     const int originPage = engine_.currentPage();
     const int n = epub_->getSpineItemsCount();
@@ -3087,7 +3092,6 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       chapterNavBusy_ = true;
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
       prepareHeapForChapterLoad(/*aggressive=*/true);
-      // Prefer a normal load so a cached complete .rvpm can map-hit last page.
       bool loaded = loadSpine(targetSpine, /*startPage=*/0, /*requireCompleteIr=*/false);
       if (!loaded || engine_.chapter().failed()) {
         prepareHeapForChapterLoad(/*aggressive=*/true);
@@ -3095,22 +3099,23 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       }
       if (loaded && !engine_.chapter().failed()) {
         const uint32_t t0 = millis();
-        // Fast path: complete map from when we left this spine forward.
         bool landed = false;
         if (engine_.mapComplete() && engine_.mapKnownPages() > 0) {
           const int last = engine_.mapKnownPages() - 1;
           landed = engine_.goToPage(renderer, last, /*maxWalkPages=*/16) && engine_.page().atChapterEnd;
-          if (!landed) {
-            engine_.invalidatePageMap();
-          }
+          if (!landed) engine_.invalidatePageMap();
         }
         if (!landed) {
           landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
         }
-        LOG_INF("RVR", "pageBack prev-spine=%d lastPage=%d known=%d land=%d walkMs=%lu", targetSpine,
-                engine_.currentPage(), engine_.mapKnownPages(), landed ? 1 : 0,
-                static_cast<unsigned long>(millis() - t0));
-        if (landed) {
+        // Accept only a real end (or deep page). Page 0 without atChapterEnd is a
+        // failed end-walk — restore origin so the next Back does not hop chapters.
+        const bool okLand =
+            landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0);
+        LOG_INF("RVR", "pageBack prev-spine=%d page=%d known=%d end=%d ok=%d walkMs=%lu", targetSpine,
+                engine_.currentPage(), engine_.mapKnownPages(), engine_.page().atChapterEnd ? 1 : 0,
+                okLand ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+        if (okLand) {
           if (engine_.sealMapAtChapterEnd()) persistPageMapIfComplete();
           advanced = true;
         }
@@ -3129,12 +3134,10 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       return true;
     }
   }
-  lastPageTurnTime_ = millis();  // backward turns reset dwell baseline only
+  lastPageTurnTime_ = millis();
   (void)saveProgress();
   persistHomeProgress(true);
   updateBookmarkFlag();
-  // Do NOT set firstPaint_ here — that armed FORCE_SCRUB and made every Back
-  // page a full HALF flash (v0.1.5 stayed FAST on in-chapter prev).
   requestUpdate();
   return true;
 }
@@ -3340,10 +3343,8 @@ void RivuletReaderActivity::chapterSkipPrev() {
     }
     if (loaded && !engine_.chapter().failed()) {
       const bool landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
-      if (landed && engine_.mapComplete() && engine_.page().atChapterEnd) {
-        persistPageMapIfComplete();
-      }
-      if (landed || engine_.goToStart(renderer)) {
+      if (landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0)) {
+        if (engine_.sealMapAtChapterEnd()) persistPageMapIfComplete();
         advanced = true;
       }
     }

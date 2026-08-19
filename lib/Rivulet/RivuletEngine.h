@@ -127,9 +127,13 @@ class RivuletEngine {
   void invalidatePageMap();
 
   // Classic-style page paint cache on SD (deserialize + paint on revisit).
-  // dir = rivulet chapter folder; empty disables. Files: p{N}.rvpg
+  // dir = rivulet book pages folder; empty disables.
+  // Files are namespaced by spine: s{spine}_p{page}_{key}.rvpg — a shared
+  // p{page}_{key}.rvpg across spines painted chapter 5 text under a chapter 7
+  // status label (CrossInk never shared section paint caches).
   void setPageCacheDir(const char* dir);
   void clearPageCacheDir() { pageCacheDir_.clear(); }
+  void setPageCacheSpine(int spineIndex);
   // Idle: layout one upcoming page and write .rvpg (not kept in RAM). Heap-gated.
   // Returns true if it did real work this call.
   bool idlePrefetchPageCache(const GfxRenderer& renderer, int maxForward = 3);
@@ -165,6 +169,7 @@ class RivuletEngine {
   mutable float smoothedEstimate_ = 0.0f;
   mutable int smoothedAtKnown_ = -1;
   std::string pageCacheDir_;
+  int pageCacheSpine_ = -1;  // namespaces .rvpg files; -1 disables cache I/O
 };
 
 }  // namespace rivulet

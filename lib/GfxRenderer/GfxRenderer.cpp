@@ -334,8 +334,8 @@ static void renderCharScaledNx(const GfxRenderer& renderer, GfxRenderer::RenderM
         const uint8_t byte = bitmap[pos >> 2];
         const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
         const uint8_t bmpVal = static_cast<uint8_t>(3 - raw);
-        // BW: all non-white (denser glyphs — light fringe skipped looked whispy).
-        if (renderMode == GfxRenderer::BW && bmpVal >= 3) continue;
+        // Dense BW only when no grayscale pass follows (see setBwLightFringe).
+        if (renderMode == GfxRenderer::BW && bmpVal >= (renderer.bwLightFringe() ? 3 : 2)) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal != 1 && bmpVal != 2) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal != 1) continue;
         const bool state = (renderMode == GfxRenderer::BW) ? pixelState : false;
@@ -509,10 +509,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 black / 1 dark grey / 2 light grey / 3 white.
           const uint8_t bmpVal = static_cast<uint8_t>(3 - ((byte >> bit_index) & 0x3));
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-            // All non-white ink on BW. Skipping light fringe (bmpVal==2) made
-            // glyphs look whispy/faded when Text AA was off or the greys pass
-            // was skipped under heap pressure — denser BW matches CrossInk feel.
+          if (renderMode == GfxRenderer::BW && bmpVal < (renderer.bwLightFringe() ? 3 : 2)) {
+            // Dense BW (light fringe inked) only when no grayscale pass follows —
+            // otherwise the multipass has no light fringe left to shade and AA is
+            // lost. See GfxRenderer::setBwLightFringe.
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
             // Both AA fringes on MSB (historical default "Dark" look).

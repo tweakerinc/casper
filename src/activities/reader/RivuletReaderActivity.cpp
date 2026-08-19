@@ -4053,8 +4053,6 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     paintClippingHighlights();
     paintFootnoteMarkers();
   };
-  paintPageContent();
-  renderStatusBar();
   // Reader-only dark: displayWithRefreshCycle inverts for the panel push only
   // (FB stays light paint-space so home / sleep never inherit inverted bits).
 
@@ -4101,6 +4099,17 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("RVR", "skip AA this frame maxAlloc=%u (need >=%u)", static_cast<unsigned>(maxAllocNow),
             static_cast<unsigned>(kAaMinMaxAlloc));
   }
+
+  // The BW base must be painted differently depending on whether the grayscale
+  // passes will run. With AA on, the light fringe has to stay white so the
+  // multipass can shade it; inking it black here (the "denser glyphs" change)
+  // left nothing to anti-alias and made text heavier and blobbier — which is
+  // exactly the "AA is not rendering, fonts look worse" report. With AA off we
+  // still want the dense look, otherwise glyphs read as whispy.
+  renderer.setBwLightFringe(!aaThisFrame);
+  paintPageContent();
+  renderStatusBar();
+  renderer.setBwLightFringe(true);  // default for Home / menus / other activities
 
   const uint32_t tRefresh = millis();
   // The BW page is already painted into the framebuffer above. AA is an optional

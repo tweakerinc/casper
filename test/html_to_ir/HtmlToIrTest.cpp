@@ -1,0 +1,247 @@
+// Host tests for HtmlToIr — the XHTML → ChapterIr converter.
+//
+// Why these exist: the converter is the one place in the reader where a subtle
+// mistake corrupts text silently instead of crashing, and it is about to be
+// reworked to stream its input in chunks (so the whole chapter no longer has to
+// be resident in RAM). Streaming is only safe if we can prove a chunked parse
+// produces byte-identical IR to the one-shot parse, so these tests pin the
+// current behaviour first and give the streaming work something to diff against.
+//
+// The device build gates on heap; on the host we report a large heap so parsing
+// runs to completion and the tests measure PARSE correctness, not OOM handling.
+
+#include <gtest/gtest.h>
+
+#include <string>
+#include <vector>
+
+#include "Esp.h"  // host stub — must define ESP before ChapterIr uses it
+#include "ChapterIr.h"
+#include "HtmlToIr.h"
+
+// The firmware links against Arduino's global ESP object; on the host we own it.
+EspStub ESP;
+
+namespace {
+
+using rivulet::BlockKind;
+using rivulet::ChapterIr;
+using rivulet::HtmlToIr;
+using rivulet::RunStyle;
+
+ChapterIr convertOrDie(const std::string& html) {
+  ChapterIr ir;
+  EXPECT_TRUE(HtmlToIr::convert(html.data(), html.size(), ir));
+  EXPECT_FALSE(ir.failed()) << "converter reported partial IR on the host (heap is not the limit here)";
+  return ir;
+}
+
+// Whole-chapter visible text, blocks separated by '\n'. This is the comparison
+// used by the boundary sweep: if a chunked parse ever splits a word, drops an
+// entity, or duplicates a run, this string changes.
+std::string flattenText(const ChapterIr& ir) {
+  std::string out;
+  for (const auto& b : ir.blocks()) {
+    const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+    for (uint16_t ri = b.runBegin; ri < runEnd && ri < ir.runs().size(); ++ri) {
+      out += ir.runString(ir.runs()[ri]);
+    }
+    out.push_back('\n');
+  }
+  return out;
+}
+
+// Per-run style signature, so a sweep also catches bold/italic leaking across a
+// chunk boundary (text can match while styling silently shifts).
+std::string flattenStyles(const ChapterIr& ir) {
+  std::string out;
+  for (const auto& b : ir.blocks()) {
+    out += std::to_string(static_cast<int>(b.kind));
+    out.push_back(':');
+    const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+    for (uint16_t ri = b.runBegin; ri < runEnd && ri < ir.runs().size(); ++ri) {
+      out += std::to_string(static_cast<int>(ir.runs()[ri].style));
+      out.push_back(',');
+    }
+    out.push_back(';');
+  }
+  return out;
+}
+
+int countBlocks(const ChapterIr& ir, const BlockKind kind) {
+  int n = 0;
+  for (const auto& b : ir.blocks()) {
+    if (b.kind == kind) ++n;
+  }
+  return n;
+}
+
+// Representative chapter: prose, styling, nesting, entities, multi-byte UTF-8, a
+// heading, a thematic break and a list. Used as the fixture for the sweep.
+const char* kSampleChapter =
+    "<html><body>"
+    "<h1>Chapter One</h1>"
+    "<p>The <b>quick</b> brown <i>fox</i> jumps over the lazy dog.</p>"
+    "<p>Entities: &amp; &lt; &gt; &quot; &#8212; &#x2014; and &nbsp;spacing.</p>"
+    "<p>Unicode: caf\xC3\xA9 na\xC3\xAF ve \xE2\x80\x94 em dash \xE2\x80\xA6 ellipsis.</p>"
+    "<p>Nested <b>bold with <i>italic inside</i> still bold</b> then plain.</p>"
+    "<hr/>"
+    "<ul><li>First item</li><li>Second item</li></ul>"
+    "<p>A closing paragraph that is deliberately long enough to span more than a "
+    "single internal flush of the text accumulator, so that chunked input has a "
+    "realistic chance of splitting it somewhere awkward.</p>"
+    "</body></html>";
+
+TEST(HtmlToIr, ParsesParagraphsAndText) {
+  const ChapterIr ir = convertOrDie("<p>Hello world.</p><p>Second paragraph.</p>");
+  EXPECT_EQ(countBlocks(ir, BlockKind::Paragraph), 2);
+  EXPECT_EQ(flattenText(ir), "Hello world.\nSecond paragraph.\n");
+}
+
+TEST(HtmlToIr, KeepsSpaceAroundStyleRuns) {
+  // Regression: "</i> skill" lost its separator and glued words together.
+  const ChapterIr ir = convertOrDie("<p>The <i>Vampire</i> skill fired.</p>");
+  EXPECT_EQ(flattenText(ir), "The Vampire skill fired.\n");
+}
+
+TEST(HtmlToIr, MarksBoldAndItalicRuns) {
+  const ChapterIr ir = convertOrDie("<p>plain <b>bold</b> <i>italic</i></p>");
+  bool sawBold = false;
+  bool sawItalic = false;
+  for (const auto& r : ir.runs()) {
+    const auto s = static_cast<uint8_t>(r.style);
+    if (s & static_cast<uint8_t>(RunStyle::Bold)) sawBold = true;
+    if (s & static_cast<uint8_t>(RunStyle::Italic)) sawItalic = true;
+  }
+  EXPECT_TRUE(sawBold);
+  EXPECT_TRUE(sawItalic);
+}
+
+TEST(HtmlToIr, StyleDoesNotLeakPastClosingTag) {
+  const ChapterIr ir = convertOrDie("<p><b>bold</b>plain</p>");
+  ASSERT_GE(ir.runs().size(), 2u);
+  const auto last = static_cast<uint8_t>(ir.runs().back().style);
+  EXPECT_EQ(last & static_cast<uint8_t>(RunStyle::Bold), 0)
+      << "bold leaked past </b> — deep nesting or stack overflow can cause this";
+}
+
+TEST(HtmlToIr, DecodesEntities) {
+  const ChapterIr ir = convertOrDie("<p>a&amp;b &lt;tag&gt; &#8212; end</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("a&b"), std::string::npos);
+  EXPECT_NE(text.find("<tag>"), std::string::npos);
+  EXPECT_NE(text.find("\xE2\x80\x94"), std::string::npos) << "&#8212; must decode to a real em dash";
+}
+
+TEST(HtmlToIr, PreservesMultiByteUtf8) {
+  const ChapterIr ir = convertOrDie("<p>caf\xC3\xA9 \xE2\x80\x94 \xE2\x80\xA6</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("caf\xC3\xA9"), std::string::npos);
+  EXPECT_NE(text.find("\xE2\x80\x94"), std::string::npos);
+  EXPECT_NE(text.find("\xE2\x80\xA6"), std::string::npos);
+}
+
+// Book typography must survive the converter. These characters were previously
+// flattened to ASCII ("avoid tofu"), which is what made pages read like a text
+// dump; the builtin faces carry all of them.
+TEST(HtmlToIr, KeepsBookTypography) {
+  const ChapterIr ir = convertOrDie(
+      "<p>\xE2\x80\x9CQuoted,\xE2\x80\x9D she said\xE2\x80\x94sharply\xE2\x80\xA6 "
+      "it\xE2\x80\x99s fine \xE2\x80\x93 really.</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("\xE2\x80\x9C"), std::string::npos) << "left double quote";
+  EXPECT_NE(text.find("\xE2\x80\x9D"), std::string::npos) << "right double quote";
+  EXPECT_NE(text.find("\xE2\x80\x99"), std::string::npos) << "apostrophe";
+  EXPECT_NE(text.find("\xE2\x80\x94"), std::string::npos) << "em dash";
+  EXPECT_NE(text.find("\xE2\x80\x93"), std::string::npos) << "en dash";
+  EXPECT_NE(text.find("\xE2\x80\xA6"), std::string::npos) << "ellipsis";
+  EXPECT_EQ(text.find("..."), std::string::npos) << "ellipsis must not be expanded to three periods";
+}
+
+// Characters that break layout rather than merely look different are still
+// removed / folded.
+TEST(HtmlToIr, StripsZeroWidthAndFoldsNoBreakSpace) {
+  // Escapes are split with adjacent literals: a following [a-f] digit would
+  // otherwise be swallowed into the hex escape (\xADb is not a byte).
+  const ChapterIr ir = convertOrDie(
+      "<p>a\xC2\xAD" "b\xE2\x80\x8B" "c\xEF\xBB\xBF" "d no\xC2\xA0" "break</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("abcd"), std::string::npos) << "soft hyphen / ZWSP / BOM should be dropped";
+  EXPECT_NE(text.find("no break"), std::string::npos) << "nbsp should fold to a plain space";
+}
+
+TEST(HtmlToIr, EmitsHorizontalRuleBlock) {
+  const ChapterIr ir = convertOrDie("<p>before</p><hr/><p>after</p>");
+  EXPECT_EQ(countBlocks(ir, BlockKind::HorizontalRule), 1);
+}
+
+TEST(HtmlToIr, EmitsHeadings) {
+  const ChapterIr ir = convertOrDie("<h1>Title</h1><h2>Sub</h2><p>Body</p>");
+  EXPECT_EQ(countBlocks(ir, BlockKind::Heading1), 1);
+  EXPECT_EQ(countBlocks(ir, BlockKind::Heading2), 1);
+}
+
+TEST(HtmlToIr, SkipsScriptStyleAndSvg) {
+  const ChapterIr ir = convertOrDie(
+      "<p>keep</p><script>var x = 'drop';</script><style>p{color:red}</style>"
+      "<svg><path d='M0 0'/></svg><p>keep2</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_EQ(text.find("drop"), std::string::npos);
+  EXPECT_EQ(text.find("color"), std::string::npos);
+  EXPECT_EQ(text.find("M0 0"), std::string::npos);
+  EXPECT_NE(text.find("keep"), std::string::npos);
+  EXPECT_NE(text.find("keep2"), std::string::npos);
+}
+
+TEST(HtmlToIr, EachListItemIsItsOwnBlock) {
+  const ChapterIr ir = convertOrDie("<ul><li>one</li><li>two</li><li>three</li></ul>");
+  EXPECT_GE(ir.blockCount(), 3u);
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("one"), std::string::npos);
+  EXPECT_NE(text.find("two"), std::string::npos);
+  EXPECT_NE(text.find("three"), std::string::npos);
+}
+
+TEST(HtmlToIr, SampleChapterIsStable) {
+  const ChapterIr ir = convertOrDie(kSampleChapter);
+  EXPECT_GT(ir.blockCount(), 5u);
+  EXPECT_GT(ir.textSize(), 200u);
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("Chapter One"), std::string::npos);
+  EXPECT_NE(text.find("quick"), std::string::npos);
+  EXPECT_NE(text.find("closing paragraph"), std::string::npos);
+}
+
+// Converting the same input twice must produce identical IR. This is the
+// invariant the streaming boundary sweep will assert against, so prove the
+// baseline is deterministic before relying on it.
+TEST(HtmlToIr, ConversionIsDeterministic) {
+  const ChapterIr a = convertOrDie(kSampleChapter);
+  const ChapterIr b = convertOrDie(kSampleChapter);
+  EXPECT_EQ(flattenText(a), flattenText(b));
+  EXPECT_EQ(flattenStyles(a), flattenStyles(b));
+  EXPECT_EQ(a.blockCount(), b.blockCount());
+  EXPECT_EQ(a.textSize(), b.textSize());
+}
+
+// Feeding the converter a truncated document must not hang, crash, or invent
+// text — the streaming version will hit this shape whenever a refill lands mid
+// document, so the one-shot parser's behaviour here is the reference.
+TEST(HtmlToIr, HandlesTruncatedInputCleanly) {
+  const std::string full = kSampleChapter;
+  for (size_t cut : {size_t{1}, full.size() / 3, full.size() / 2, full.size() - 1}) {
+    ChapterIr ir;
+    (void)HtmlToIr::convert(full.data(), cut, ir);
+    // Whatever survives must be a prefix-consistent parse: never more text than
+    // the full document produced.
+    EXPECT_LE(ir.textSize(), convertOrDie(full).textSize()) << "truncated at " << cut;
+  }
+}
+
+TEST(HtmlToIr, EmptyAndNullInput) {
+  ChapterIr ir;
+  EXPECT_FALSE(HtmlToIr::convert(nullptr, 10, ir));
+  EXPECT_FALSE(HtmlToIr::convert("", 0, ir));
+}
+
+}  // namespace

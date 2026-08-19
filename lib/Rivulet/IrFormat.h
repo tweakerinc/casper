@@ -14,10 +14,13 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // produced by a parser that did not know these tags, so its cell text is already
 // merged into run-on paragraphs and cannot be recovered without reconverting.
 // v20: RunStyle carries text decorations (underline / strikethrough / sup / sub).
-inline constexpr uint16_t kIrFormatVersion = 22;
+// v23: real typography preserved. v22 and earlier flattened curly quotes to ' ",
+// en/em dashes to -, and the ellipsis to "..." while building the IR, so cached
+// chapters hold the flattened text and must be reconverted to get it back.
+inline constexpr uint16_t kIrFormatVersion = 23;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 22;
-inline constexpr uint16_t kIrFormatVersionMax = 22;
+inline constexpr uint16_t kIrFormatVersionMin = 23;
+inline constexpr uint16_t kIrFormatVersionMax = 23;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

@@ -84,28 +84,21 @@ bool safeAppendLit(std::string& dst, const char* lit) {
   return true;
 }
 
-// Map fancy punctuation to glyphs every builtin face has (avoids tofu / "missing glyphs").
+// Normalize only what we must; keep real book typography.
+//
+// This used to flatten curly quotes to ' and ", en/em dashes to -, and the
+// ellipsis to "...", on the grounds of avoiding tofu. The builtin faces carry
+// all of those (see builtinFonts/literata_*: U+2014, U+2018/19, U+201C/D/E),
+// so the mapping bought nothing and cost the thing that makes a page look
+// typeset rather than like a plain-text dump — which is precisely the "feels
+// cheap, not book-like" complaint. Zero-width and formatting characters are
+// still dropped, and no-break spaces still become spaces, because those DO
+// break layout rather than merely look different.
 bool appendNormalizedUtf8(std::string& dst, uint32_t cp) {
   switch (cp) {
     case 0x00A0:  // nbsp
     case 0x202F:  // narrow nbsp
       return safePushChar(dst, ' ');
-    case 0x2018:
-    case 0x2019:
-    case 0x201A:
-    case 0x2032:
-      return safePushChar(dst, '\'');
-    case 0x201C:
-    case 0x201D:
-    case 0x201E:
-    case 0x2033:
-      return safePushChar(dst, '"');
-    case 0x2013:
-    case 0x2014:
-    case 0x2212:
-      return safePushChar(dst, '-');
-    case 0x2026:
-      return safeAppendLit(dst, "...");
     case 0x00AD:  // soft hyphen
     case 0x200B:  // zwsp
     case 0x200C:

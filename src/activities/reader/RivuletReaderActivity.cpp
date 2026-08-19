@@ -1613,7 +1613,15 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
           requireCompleteIr ? 1 : 0);
 
   // setupCacheDir already ran in onEnter; only ensure IR dir (cheap if exists).
-  if (!irDir_.empty()) Storage.ensureDirectoryExists(irDir_.c_str());
+  if (!irDir_.empty()) {
+    Storage.ensureDirectoryExists(irDir_.c_str());
+    // Classic section.bin idea: persist laid-out pages under pages/ so resume
+    // and revisit are deserialize + paint (keeps Rivulet's book look, CrossPoint speed).
+    const std::string pagesDir = irDir_ + "/pages";
+    engine_.setPageCacheDir(pagesDir.c_str());
+  } else {
+    engine_.clearPageCacheDir();
+  }
 
   char irPath[192];
   char htmlPath[192];

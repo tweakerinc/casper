@@ -9,6 +9,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "FontLadder.h"
@@ -40,6 +41,66 @@ void RivuletEngine::invalidatePageMap() {
   // Keep laidOut_/currentPage_ — caller will goToPage/goToStart next.
   smoothedEstimate_ = 0.0f;
   smoothedAtKnown_ = -1;
+}
+
+void RivuletEngine::setPageCacheDir(const char* dir) {
+  if (!dir || !*dir) {
+    pageCacheDir_.clear();
+    return;
+  }
+  pageCacheDir_ = dir;
+}
+
+bool RivuletEngine::pageCachePath(const int pageIndex, char* out, const size_t outSz) const {
+  if (pageCacheDir_.empty() || !out || outSz < 32 || pageIndex < 0) return false;
+  // Filename embeds a compact key fingerprint so font/margin/viewport changes miss.
+  const uint32_t keyFp = static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
+                         (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
+                         (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
+  const int n = std::snprintf(out, outSz, "%s/p%d_%08x.rvpg", pageCacheDir_.c_str(), pageIndex, keyFp);
+  return n > 0 && static_cast<size_t>(n) < outSz;
+}
+
+bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
+  char path[220];
+  if (!pageCachePath(pageIndex, path, sizeof(path))) return false;
+  LaidOutPage tmp;
+  if (!tmp.loadFromFile(path, key_, pageIndex)) return false;
+  // Must agree with the page-map cursor when present — stale IR/map would skip text.
+  if (map_.hasPage(pageIndex) && tmp.start != map_.pageStart(pageIndex)) {
+    Storage.remove(path);
+    return false;
+  }
+  if (!map_.hasPage(pageIndex)) {
+    // Only accept orphan cache for page 0 into an empty map (seed continuity).
+    if (!(pageIndex == 0 && map_.empty())) return false;
+    map_.setRenderKey(key_);
+    map_.resetWithStart(tmp.start);
+  }
+  laidOut_ = std::move(tmp);
+  laidOutValid_ = true;
+  currentPage_ = pageIndex;
+  if (!laidOut_.atChapterEnd) {
+    const int nextIdx = pageIndex + 1;
+    if (!map_.hasPage(nextIdx)) {
+      map_.pushPageStart(laidOut_.end);
+    } else if (map_.pageStart(nextIdx) != laidOut_.end) {
+      map_.setPageStart(nextIdx, laidOut_.end);
+    }
+  }
+  LOG_DBG("RVEN", "page cache HIT p=%d spans=%u", pageIndex, static_cast<unsigned>(laidOut_.spans.size()));
+  return true;
+}
+
+void RivuletEngine::savePageCache(const int pageIndex) const {
+  if (!laidOutValid_ || pageIndex < 0 || pageCacheDir_.empty()) return;
+  if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
+  Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+  char path[220];
+  if (!pageCachePath(pageIndex, path, sizeof(path))) return;
+  if (laidOut_.saveToFile(path, key_, pageIndex)) {
+    LOG_DBG("RVEN", "page cache SAVE p=%d spans=%u", pageIndex, static_cast<unsigned>(laidOut_.spans.size()));
+  }
 }
 
 void RivuletEngine::setRenderKey(const RenderKey& key) {
@@ -302,6 +363,7 @@ bool RivuletEngine::ensureMapAhead(const GfxRenderer& renderer, const int aheadP
 
 bool RivuletEngine::layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c) {
   laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), c, laidOut_);
+  if (laidOutValid_) savePageCache(currentPage_);
   return laidOutValid_;
 }
 
@@ -310,24 +372,60 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
   if (!laidOutValid_) return false;           // nothing to be ahead OF yet
   if (laidOut_.atChapterEnd) return false;    // no next page in this chapter
   aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
-  if (!aheadValid_) ahead_.clear();
-  return aheadValid_;
+  if (!aheadValid_) {
+    ahead_.clear();
+    return false;
+  }
+  // Persist ahead page under its index for QR / revisit (classic page-cache idea).
+  if (!pageCacheDir_.empty() && ESP.getMaxAllocHeap() >= 12 * 1024) {
+    char path[220];
+    const int aheadIdx = currentPage_ + 1;
+    if (pageCachePath(aheadIdx, path, sizeof(path))) {
+      Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+      (void)ahead_.saveToFile(path, key_, aheadIdx);
+    }
+  }
+  return true;
 }
 
 bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
   if (behindValid_) return false;
   if (!laidOutValid_ || currentPage_ <= 0) return false;
+  // Prefer SD page cache (instant) before re-layout.
+  {
+    char path[220];
+    const int behindIdx = currentPage_ - 1;
+    if (pageCachePath(behindIdx, path, sizeof(path))) {
+      LaidOutPage tmp;
+      if (tmp.loadFromFile(path, key_, behindIdx)) {
+        if (!map_.hasPage(behindIdx) || tmp.start == map_.pageStart(behindIdx)) {
+          behind_ = std::move(tmp);
+          behindValid_ = true;
+          return true;
+        }
+      }
+    }
+  }
   if (!map_.hasPage(currentPage_ - 1)) return false;
   // Full paint layout (not measure-only) — this page may be shown on prevPage.
   behindValid_ =
       PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
   if (!behindValid_) behind_.clear();
+  else if (!pageCacheDir_.empty()) {
+    char path[220];
+    const int behindIdx = currentPage_ - 1;
+    if (pageCachePath(behindIdx, path, sizeof(path))) {
+      Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+      (void)behind_.saveToFile(path, key_, behindIdx);
+    }
+  }
   return behindValid_;
 }
 
 bool RivuletEngine::ensureLaidOut(const GfxRenderer& renderer) {
   if (laidOutValid_) return true;
   if (chapter_.empty()) return false;
+  if (tryLoadPageCache(currentPage_)) return true;
   IrCursor c{};
   if (map_.hasPage(currentPage_)) {
     c = map_.pageStart(currentPage_);
@@ -368,6 +466,10 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
   if (map_.hasPage(pageIndex)) {
     currentPage_ = pageIndex;
     laidOutValid_ = false;
+    // Classic section.bin path: deserialize a finished page when we have one.
+    if (tryLoadPageCache(pageIndex)) {
+      return true;
+    }
     if (!ensureLaidOut(renderer)) return false;
     if (!laidOut_.atChapterEnd) {
       // Live end is ground truth; correct map tail if a loaded .rvpm disagrees.

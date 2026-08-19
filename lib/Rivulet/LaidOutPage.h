@@ -52,6 +52,12 @@ struct LaidOutPage {
     dropZoneH = 0;
     hasDropZone = false;
   }
+
+  // Classic section.bin idea, Rivulet data: persist a fully laid-out page so
+  // resume / revisit is deserialize + paint instead of re-layout. Key mismatch
+  // (font, margins, viewport) → load fails and caller re-layouts.
+  bool saveToFile(const char* path, const RenderKey& key, int pageIndex) const;
+  bool loadFromFile(const char* path, const RenderKey& expectedKey, int expectedPage);
 };
 
 }  // namespace rivulet

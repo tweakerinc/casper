@@ -118,6 +118,11 @@ class RivuletEngine {
   // .rvpm makes deep resume fail and would otherwise fall back to page 0.
   void invalidatePageMap();
 
+  // Classic-style page paint cache on SD (deserialize + paint on revisit).
+  // dir = rivulet chapter folder; empty disables. Files: p{N}.rvpg
+  void setPageCacheDir(const char* dir);
+  void clearPageCacheDir() { pageCacheDir_.clear(); }
+
   void clear();
 
  private:
@@ -129,6 +134,9 @@ class RivuletEngine {
   void seedMapIfEmpty();
   // markComplete only if known page count is plausible vs IR estimate.
   void markMapCompleteIfPlausible(const GfxRenderer& renderer);
+  bool tryLoadPageCache(int pageIndex);
+  void savePageCache(int pageIndex) const;
+  bool pageCachePath(int pageIndex, char* out, size_t outSz) const;
 
   RenderKey key_{};
   float lineCompression_ = 1.0f;
@@ -145,6 +153,7 @@ class RivuletEngine {
   // idle tick (classic Section::estimatedTotalPages used the same idea).
   mutable float smoothedEstimate_ = 0.0f;
   mutable int smoothedAtKnown_ = -1;
+  std::string pageCacheDir_;
 };
 
 }  // namespace rivulet

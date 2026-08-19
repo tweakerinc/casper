@@ -3788,19 +3788,28 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // Skip AA on FORCE_SCRUB (long-press refresh): that path must run HALF via
   // displayWithRefreshCycle — AA's displayGrayBuffer never consumed FORCE_SCRUB,
   // so the scrub felt dead with AA on.
-  // Skip AA when maxAlloc cannot hold storeBwBuffer (~48 KB in 8 KB chunks) plus
-  // a little headroom for the paint itself; otherwise we abort mid-greys and the
-  // turn looks like "nothing happened" until Home→reopen.
-  constexpr size_t kAaMinMaxAlloc = 56 * 1024;
+  // Skip AA only when storeBwBuffer() genuinely cannot fit; aborting mid-greys
+  // makes a turn look like "nothing happened" until Home→reopen.
+  //
+  // This used to read `getMaxAllocHeap() >= 56 KB`, which asks for a contiguous
+  // block that storeBwBuffer() never wants — it takes the 48 KB snapshot in 8 KB
+  // chunks specifically to survive a fragmented heap. Measured in-reader maxAlloc
+  // is 49-53 KB, so the gate failed on most page turns and AA appeared to be
+  // broken while the chunks would have fitted with ~30 KB to spare.
+  constexpr size_t kAaPaintHeadroom = 12 * 1024;  // glyph cache/decompress during the two greys passes
   const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
-  const size_t maxAllocNow = ESP.getMaxAllocHeap();
-  const bool heapOkForAa = maxAllocNow >= kAaMinMaxAlloc;
-  const bool aaThisFrame = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled() &&
-                           !(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub && heapOkForAa;
-  if (SETTINGS.textAntiAliasing != 0 && !forceScrub && !heapOkForAa) {
-    LOG_DBG("RVR", "skip AA this frame maxAlloc=%u (need >=%u)", static_cast<unsigned>(maxAllocNow),
-            static_cast<unsigned>(kAaMinMaxAlloc));
-  }
+  const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
+  const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
+  const bool aaThisFrame =
+      aaWanted && !(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub && heapOkForAa;
+  // Why AA was declined, for the PAGE line below. A silent skip logged only at
+  // LOG_DBG is how this stayed invisible in every capture: devices log at level 1.
+  const char aaWhy = !aaWanted            ? 'o'   // off in settings (or dark mode)
+                     : forceScrub         ? 's'   // long-press / interval scrub owns this frame
+                     : deferAa            ? 'd'   // first ink is BW; AA catch-up follows
+                     : (preferFastFirst && hadOpenHints) ? 'f'  // fast first ink on open/wake
+                     : !heapOkForAa       ? 'h'   // storeBwBuffer would not fit
+                                          : '-';  // ran
 
   // Never ink the light AA fringe in the BW pass.
   //
@@ -3847,9 +3856,9 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // PAGE/ERS lines belonged to the classic reader and went away with it. That is
   // why a report of "pages do not load" could not be checked against a capture.
   // One line per painted page: which page, whether AA ran, and the heap it ran on.
-  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d aa=%d ran=%d refresh=%lums fre=%u maxA=%u", spineIndex_,
+  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d aa=%d ran=%d why=%c refresh=%lums fre=%u maxA=%u", spineIndex_,
                        engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)),
-                       aaThisFrame ? 1 : 0, aaRan ? 1 : 0,
+                       aaThisFrame ? 1 : 0, aaRan ? 1 : 0, aaWhy,
                        static_cast<unsigned long>(millis() - tRefresh),
                        static_cast<unsigned>(ESP.getFreeHeap()),
                        static_cast<unsigned>(ESP.getMaxAllocHeap()));

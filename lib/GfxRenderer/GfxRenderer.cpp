@@ -2,6 +2,7 @@
 
 #include <BidiUtils.h>
 #include <BuildScratch.h>
+#include <Esp.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
@@ -158,7 +159,8 @@ bool GfxRenderer::restoreFrameBufferAfterBuild() {
   return frameBuffer != nullptr;
 }
 
-GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer) : renderer_(renderer) {
+GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer, bool enabled) : renderer_(renderer) {
+  if (!enabled) return;  // caller's screen still owns the pixels
   // Nesting guard: if the framebuffer is already lent out (an outer loan),
   // stay inert so this end() cannot return storage the outer loan still owns.
   if (!renderer_.hasFrameBuffer()) return;
@@ -2443,6 +2445,14 @@ void GfxRenderer::freeBwBufferChunks() {
  * Uses chunked allocation to avoid needing 48KB of contiguous memory.
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
+bool GfxRenderer::canStoreBwBuffer(const size_t headroomBytes) const {
+  if (!frameBuffer) return false;
+  // Total free heap must cover the whole snapshot plus the caller's headroom...
+  if (ESP.getFreeHeap() < static_cast<size_t>(frameBufferSize) + headroomBytes) return false;
+  // ...but contiguity is only ever needed one chunk at a time.
+  return ESP.getMaxAllocHeap() >= BW_BUFFER_CHUNK_SIZE;
+}
+
 bool GfxRenderer::storeBwBuffer() {
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {

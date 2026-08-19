@@ -322,6 +322,16 @@ class GfxRenderer {
   bool supportsStripGrayscale() const;
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
   void restoreBwBuffer();  // Restore and free the stored buffer
+
+  // Whether storeBwBuffer() can plausibly succeed right now, plus headroom for
+  // whatever the caller still has to paint.
+  //
+  // Callers used to gate greyscale passes on getMaxAllocHeap() >= ~56 KB, which
+  // is the wrong question: storeBwBuffer() splits the snapshot into
+  // BW_BUFFER_CHUNK_SIZE pieces exactly so it never needs a contiguous block.
+  // In-reader maxAlloc sits around 49-53 KB, so that gate rejected frames whose
+  // chunks would have fitted with ~30 KB to spare, and AA silently did nothing.
+  [[nodiscard]] bool canStoreBwBuffer(size_t headroomBytes = 0) const;
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Font helpers
@@ -342,9 +352,15 @@ class GfxRenderer {
   // error paths: restores on scope exit (or explicitly via end()). Display the
   // popup/screen the panel should hold BEFORE constructing one. Constructing
   // while the framebuffer is already lent yields an inert loan (nesting-safe).
+  //
+  // `enabled=false` yields an inert loan too. That is for callers that run while
+  // a screen the user is still looking at owns the framebuffer: the loan restores
+  // the buffer WHITE, so anything that repaints a window afterwards (a clock
+  // digit band, a footer) would blit blank pixels over live UI. Those callers
+  // trade the extra 48 KB of contiguous heap for not corrupting the screen.
   class FrameBufferLoan {
    public:
-    explicit FrameBufferLoan(GfxRenderer& renderer);
+    explicit FrameBufferLoan(GfxRenderer& renderer, bool enabled = true);
     ~FrameBufferLoan() { end(); }
     void end();
     FrameBufferLoan(const FrameBufferLoan&) = delete;

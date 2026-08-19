@@ -2050,8 +2050,6 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
           static_cast<unsigned>(engine_.page().spans.size()), engine_.renderKey().fontId,
           static_cast<unsigned long>(millis() - tLayout), static_cast<unsigned>(ESP.getFreeHeap()),
           fromIrCache ? 1 : 0);
-  // Map-ahead / page-map SD save run on idle after first ink — not on the open path.
-  // ensureMapAhead layouts several pages and was a large chunk of "press → first page".
   updateBookmarkFlag();
   // New spine → invalidate footnote cache; scan HTML lazily on first paint that needs it.
   if (footnoteCacheSpine_ != spineIndex) {
@@ -2059,7 +2057,91 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
     chapterFootnotes_.clear();
     currentPageFootnotes_.clear();
   }
+
+  // Slightly longer open, fast in-book turns: index a window around the land page,
+  // and if we landed on page 0, pre-build the previous spine's page map so Back
+  // goes to last page then N-1 (not a no-op / chapter hop).
+  if (!warmingAdjacent_) {
+    warmOpenNavigationWindow();
+    if (engine_.currentPage() == 0) {
+      warmPreviousSpinePageMap();
+    }
+  }
   return true;
+}
+
+void RivuletReaderActivity::warmOpenNavigationWindow() {
+  if (!ready_ || !epub_) return;
+  constexpr int kWindow = 10;
+  // Forward page-map cursors (measure-only) so next/next/… stays cheap.
+  (void)engine_.ensureMapAhead(renderer, kWindow);
+  (void)engine_.warmAheadPage(renderer);
+  if (engine_.currentPage() > 0) {
+    (void)engine_.warmBehindPage(renderer);
+  }
+  if (engine_.mapComplete()) {
+    persistPageMapIfComplete();
+  } else if (pageMapDirty_ || engine_.mapKnownPages() > 1) {
+    // Partial progress is still useful on SD if we later seal.
+    pageMapDirty_ = true;
+  }
+  LOG_INF("RVR", "open window map known=%d complete=%d ahead=%d behind=%d", engine_.mapKnownPages(),
+          engine_.mapComplete() ? 1 : 0, engine_.aheadWarm() ? 1 : 0, engine_.behindWarm() ? 1 : 0);
+}
+
+void RivuletReaderActivity::warmPreviousSpinePageMap() {
+  if (warmingAdjacent_ || !ready_ || !epub_ || spineIndex_ <= 0) return;
+  if (engine_.currentPage() != 0) return;
+
+  int prevSpine = -1;
+  for (int i = spineIndex_ - 1; i >= 0; --i) {
+    if (!epub_->getSpineItem(i).href.empty()) {
+      prevSpine = i;
+      break;
+    }
+  }
+  if (prevSpine < 0) return;
+
+  char mapPath[200];
+  std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), prevSpine,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  if (!irDir_.empty() && Storage.exists(mapPath)) {
+    LOG_INF("RVR", "prev spine %d map already on SD — skip warm", prevSpine);
+    return;
+  }
+
+  warmingAdjacent_ = true;
+  chapterNavBusy_ = true;
+  const int curSpine = spineIndex_;
+  const int curPage = engine_.currentPage();
+  GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+  const uint32_t t0 = millis();
+
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  bool ok = loadSpine(prevSpine, /*startPage=*/-1, /*requireCompleteIr=*/false);
+  if (!ok || engine_.chapter().failed()) {
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    ok = loadSpine(prevSpine, -1, /*requireCompleteIr=*/true);
+  }
+  if (ok && !engine_.chapter().failed()) {
+    if (engine_.goToLastPage(renderer, /*maxWalkPages=*/1024)) {
+      persistPageMapIfComplete();
+      LOG_INF("RVR", "warmed prev spine %d lastPage=%d known=%d ms=%lu", prevSpine, engine_.currentPage(),
+              engine_.mapKnownPages(), static_cast<unsigned long>(millis() - t0));
+    } else {
+      LOG_ERR("RVR", "warm prev spine %d goToLastPage failed ms=%lu", prevSpine,
+              static_cast<unsigned long>(millis() - t0));
+    }
+  }
+
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (!loadSpine(curSpine, curPage)) {
+    (void)loadSpine(curSpine, 0);
+  }
+  chapterNavBusy_ = false;
+  warmingAdjacent_ = false;
+  // Restore path skipped open-window warm (guard was set) — do it now.
+  warmOpenNavigationWindow();
 }
 
 void RivuletReaderActivity::persistPageMapIfComplete() {

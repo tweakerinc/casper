@@ -112,6 +112,12 @@ class RivuletReaderActivity final : public Activity {
   void persistPageMapIfComplete();
   // Idle: extend current-spine page map a few pages (B). No full-book map (D).
   void tickIdlePageMap();
+  // After open/spine land: index ~10 pages ahead (+ behind RAM) for fast turns.
+  void warmOpenNavigationWindow();
+  // When on page 0 of a spine, build+save previous spine's full page map so
+  // PageBack → last page → page N-1 works (CrossInk section.bin feel). Slightly
+  // longer open; in-book Back stays fast.
+  void warmPreviousSpinePageMap();
   // Keep page glyph buffers only when free/maxAlloc leave room for next turn/UI.
   static bool canRetainGlyphCache();
 
@@ -159,6 +165,8 @@ class RivuletReaderActivity final : public Activity {
   // True while walking prev-chapter to true last page — render shows Loading only
   // (yield mid-walk must not paint intermediate pages onto the glass).
   bool chapterNavBusy_ = false;
+  // Guard re-entry while warmPreviousSpinePageMap temporarily loads another spine.
+  bool warmingAdjacent_ = false;
   bool currentPageBookmarked_ = false;
   bool clippingsLoaded_ = false;
   bool pendingScreenshot_ = false;

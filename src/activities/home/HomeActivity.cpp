@@ -676,11 +676,15 @@ void HomeActivity::onResume() {
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
   penumbraHalfBaselineDone = false;
   UiGhostPolicy::requestHardScrub();
-  // ...but show content FIRST. Returning from the reader / settings / the book
-  // quick-menu used to run the scrub as the first paint, so the user waited
-  // ~2s of SD work plus a ~3–4s HALF before anything appeared. Paint the shell
-  // with a FAST (~0.4s) and let the anti-ghost HALF land right after: same
-  // cleanliness, but Home is on glass while the flash happens instead of before it.
+  // ...but get content on glass sooner. Returning from the reader / settings /
+  // the book quick-menu used to wait ~2s of SD work plus a ~4s HALF+clockAA
+  // before anything appeared.
+  //
+  // The first attempt deferred the *scrub* (FAST now, HALF a tick later) and
+  // that ghosted: a FAST pass settles the previous frame's residual into the
+  // panel, and a later HALF cannot fully lift it. What is actually slow is the
+  // full-screen greyscale clock multipass, not the HALF — so the HALF stays as
+  // the single first paint and the clock's AA is what gets deferred.
   deferScrubAfterFirstPaint_ = true;
   suppressMenuBackUntilMs = millis() + 900UL;
   // Cover themes: multipass greys on the *first* home paint when thumbs exist
@@ -1857,18 +1861,19 @@ void HomeActivity::render(RenderLock&& lock) {
     // Resume: downgrade this paint to FAST and queue the HALF right behind it.
     // The scrub still happens (same anti-ghosting), it just happens with Home
     // already on glass rather than making the user wait ~4s for first pixels.
-    bool hard = UiGhostPolicy::hardScrubArmed();
-    bool scrubRightAfter = false;
-    if (hard && deferScrubAfterFirstPaint_) {
-      hard = false;
-      scrubRightAfter = true;
-      // Disarm NOW. Leaving it armed meant any repaint before the deferred scrub
-      // landed (clock tick, under-panel change) took the HALF path and did a full
-      // penumbra_full HALF+clockAA — a second ~4s paint on top of the FAST one,
-      // which is the "hard flash plus soft pulls" on return to Home. The deferred
-      // scrub below owns the clean from here.
-      UiGhostPolicy::clearHardScrub();
-    }
+    const bool hard = UiGhostPolicy::hardScrubArmed();
+    // Snappy return to Home used to defer the *scrub*: paint FAST now, HALF a
+    // tick later. That produced ghosted words. On e-ink a FAST pass is a weak
+    // differential update, so it settles the previous frame's residual into the
+    // panel; a HALF afterwards then has to clear both the book page and the FAST
+    // pass, and does not fully manage it. HALF applied directly does.
+    //
+    // So keep the HALF as the first and only paint, and defer the expensive part
+    // instead: the full-screen greyscale clock multipass, which is what made this
+    // ~4s (penumbra_full mode=HALF+clockAA took=4145ms). The clock re-renders
+    // anti-aliased on the next tick through the windowed clock path, which is
+    // both cheaper and invisible to someone waiting for Home to appear.
+    const bool deferClockAa = hard && deferScrubAfterFirstPaint_;
     deferScrubAfterFirstPaint_ = false;
     const int baseMode =
         hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
@@ -1876,7 +1881,7 @@ void HomeActivity::render(RenderLock&& lock) {
                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     // Clock greys can take 400–900ms — skip if user already navigated away.
     const bool leave = cancelBackgroundPaint || activityManager.hasPendingActivityChange();
-    if (!leave && gpio.deviceIsX3() &&
+    if (!leave && gpio.deviceIsX3() && !deferClockAa &&
         PenumbraThemeUi::displayClockAntiAliased(renderer, baseMode, /*dirtyOverride=*/nullptr)) {
       if (hard) UiGhostPolicy::noteHalf();
       penumbraHalfBaselineDone = true;
@@ -1886,36 +1891,31 @@ void HomeActivity::render(RenderLock&& lock) {
     } else if (hard) {
       UiGhostPolicy::displayHalf(renderer);
       penumbraHalfBaselineDone = true;
-      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF theme=%u fre=%u",
-                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
-    } else if (scrubRightAfter) {
-      // A HALF scrub lands in a moment, so the soft grayscale pull that
-      // displayFastFull adds is wasted panel time — it is the extra "soft pull"
-      // felt either side of the flash on return to Home. One plain FAST here.
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-      penumbraHalfBaselineDone = true;
-      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=FASTonly theme=%u fre=%u",
-                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF%s theme=%u fre=%u",
+                          deferClockAa ? "+deferAA" : "", static_cast<unsigned>(SETTINGS.uiTheme),
+                          static_cast<unsigned>(ESP.getFreeHeap()));
     } else {
       UiGhostPolicy::displayFastFull(renderer);
       penumbraHalfBaselineDone = true;
       SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=FAST theme=%u fre=%u",
                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     }
-    if (scrubRightAfter) {
-      // Home is on glass now; run the anti-ghost HALF on the very next loop tick.
-      // No delay: the FAST-only paint above deliberately skipped the soft pull, so
-      // until this lands the panel still carries the previous frame's residual.
-      deferredHalfScrubOnly = true;
-      deferredHalfScrubAtMs = millis();
-      penumbraHalfBaselineDone = false;
-    }
     coverGrayOnPanel = true;
     paintedUiTheme = clockTheme;
     recentsLoaded = true;
     homeUiReady = true;
-    PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
-    forcePenumbraClockRepaint = false;
+    if (deferClockAa) {
+      // Hand the clock's greyscale pass to the windowed clock path on the next
+      // tick. Clearing the remembered time makes redrawClockBlock treat the whole
+      // band as dirty, so it re-renders anti-aliased over a Home that is already
+      // on glass — the same pixels, without the multi-second wait for first ink.
+      penumbraLastDrawnTime[0] = '\0';
+      forcePenumbraClockRepaint = true;
+      requestUpdate();
+    } else {
+      PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
+      forcePenumbraClockRepaint = false;
+    }
     return;
   }
 

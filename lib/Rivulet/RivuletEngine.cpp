@@ -47,9 +47,23 @@ void RivuletEngine::invalidatePageMap() {
 void RivuletEngine::setPageCacheDir(const char* dir) {
   if (!dir || !*dir) {
     pageCacheDir_.clear();
+    pageCacheDirReady_ = false;
     return;
   }
-  pageCacheDir_ = dir;
+  if (pageCacheDir_ != dir) {
+    pageCacheDir_ = dir;
+    pageCacheDirReady_ = false;
+  }
+}
+
+// ensureDirectoryExists scans the parent directory, and the page-cache folder is
+// touched on every page save / idle prefetch. Doing it once per directory keeps
+// that off the page-turn path (the folder fills up with .rvpg files, so the scan
+// gets slower the more we cache).
+void RivuletEngine::ensurePageCacheDir() const {
+  if (pageCacheDir_.empty() || pageCacheDirReady_) return;
+  Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+  pageCacheDirReady_ = true;
 }
 
 void RivuletEngine::setPageCacheSpine(const int spineIndex) {
@@ -117,7 +131,7 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
 void RivuletEngine::savePageCache(const int pageIndex) const {
   if (!laidOutValid_ || pageIndex < 0 || pageCacheDir_.empty()) return;
   if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
-  Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+  ensurePageCacheDir();
   char path[220];
   if (!pageCachePath(pageIndex, path, sizeof(path))) return;
   if (laidOut_.saveToFile(path, key_, pageIndex)) {
@@ -155,7 +169,7 @@ bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int
     if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(target), tmp)) {
       return false;
     }
-    Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+    ensurePageCacheDir();
     if (!tmp.saveToFile(path, key_, target)) return false;
 
     if (tmp.atChapterEnd) {
@@ -474,7 +488,7 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
     char path[220];
     const int aheadIdx = currentPage_ + 1;
     if (pageCachePath(aheadIdx, path, sizeof(path))) {
-      Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+      ensurePageCacheDir();
       (void)ahead_.saveToFile(path, key_, aheadIdx);
     }
   }
@@ -515,7 +529,7 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
     char path[220];
     const int behindIdx = currentPage_ - 1;
     if (pageCachePath(behindIdx, path, sizeof(path))) {
-      Storage.ensureDirectoryExists(pageCacheDir_.c_str());
+      ensurePageCacheDir();
       (void)behind_.saveToFile(path, key_, behindIdx);
     }
   }

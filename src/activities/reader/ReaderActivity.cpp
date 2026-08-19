@@ -127,14 +127,21 @@ void importLegacyPackageIfNeeded(const std::string& path) {
 }  // namespace
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
+  // Step timing: on a warm open the gap between "open start" and the EPUB line
+  // was ~3.2s while epub->load itself reported 132ms, so the cost is in the
+  // pre-load SD work. Log each step so it is measured, not guessed at.
+  const uint32_t tStep0 = millis();
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
+  const uint32_t tExists = millis();
 
   // Unified /.crosspoint/book_<pathId>/package. Import classic epub_* once if needed.
   importLegacyPackageIfNeeded(path);
+  const uint32_t tImport = millis();
   (void)CasperBook::openBook(path, "", "");  // ensure epub_<hash> + rivulet dirs
+  const uint32_t tOpenBook = millis();
 
   const char* cacheRoot = CasperPaths::kPackageCacheRoot;
   auto epub = makeUniqueNoThrow<Epub>(path, cacheRoot);
@@ -142,12 +149,18 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     LOG_ERR("READER", "Failed to allocate EPUB object");
     return nullptr;
   }
+  SystemLog::logTiming("OPEN", "pre exists=%lu import=%lu openBook=%lu",
+                       static_cast<unsigned long>(tExists - tStep0),
+                       static_cast<unsigned long>(tImport - tExists),
+                       static_cast<unsigned long>(tOpenBook - tImport));
   // First open: building the spine/TOC index (book.bin) takes a couple of seconds.
   // Upper-left status (not center pill). Cached open → no cue.
+  const uint32_t tBeforeProbe = millis();
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
   if (uncached && !hasOpenHints()) {
     GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
   }
+  const uint32_t tProbe = millis();
   bool loaded;
   {
     // Lend the framebuffer's 48 KB to the container parse (expat + spine/TOC
@@ -165,6 +178,10 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
                         uncached ? "MISS" : "HIT");
     }
     SystemLog::logTimed("EPUB", millis() - t0, "load book.bin=%s", uncached ? "MISS" : "HIT");
+    SystemLog::logTiming("OPEN", "probe=%lu loan+load=%lu total=%lu",
+                         static_cast<unsigned long>(tProbe - tBeforeProbe),
+                         static_cast<unsigned long>(millis() - tProbe),
+                         static_cast<unsigned long>(millis() - tStep0));
   }
   if (loaded) {
     return epub;

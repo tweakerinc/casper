@@ -184,6 +184,8 @@ class RivuletEngine {
   bool tryLoadPageCache(int pageIndex);
   void savePageCache(int pageIndex) const;
   bool pageCachePath(int pageIndex, char* out, size_t outSz) const;
+  // mkdir-if-missing once per page-cache directory (see definition).
+  void ensurePageCacheDir() const;
 
   RenderKey key_{};
   float lineCompression_ = 1.0f;
@@ -201,6 +203,7 @@ class RivuletEngine {
   mutable float smoothedEstimate_ = 0.0f;
   mutable int smoothedAtKnown_ = -1;
   std::string pageCacheDir_;
+  mutable bool pageCacheDirReady_ = false;  // dir created/verified this session
   int pageCacheSpine_ = -1;  // namespaces .rvpg files; -1 disables cache I/O
   TurnFail lastTurnFail_ = TurnFail::None;
   int lastWalkPages_ = 0;

@@ -3871,10 +3871,13 @@ void RivuletReaderActivity::renderStatusBar() const {
   const int chapterPage = engine_.currentPage() + 1;
   const int chapterPageCount = std::max(chapterPage, engine_.chapterPageCount(&renderer));
   const float bookProgress = bookProgress01() * 100.0f;
-  // Classic: chapter "~" only while indexing (isBuilding). Book pages always estimated.
-  // Do not invent extra ETA markers — status bar already uses this single ~.
+  // Chapter "~" is meaningful: it clears once this chapter's page map completes.
+  // Book "~" was hardcoded true, so it could never clear — a permanent marker
+  // conveys nothing and is what reads as "the ~ never goes away". Book pages are
+  // derived from byte progress and are always approximate; that is understood
+  // without decorating every single frame with it.
   const bool pageCountEstimated = !engine_.mapComplete();
-  const bool bookPageEstimated = true;
+  constexpr bool bookPageEstimated = false;
 
   // Single call — same path as classic EpubReader. Do NOT also draw
   // drawSystemStatusBar / drawTopStatusBarClock (those are Home chrome and
@@ -4100,13 +4103,14 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
             static_cast<unsigned>(kAaMinMaxAlloc));
   }
 
-  // The BW base must be painted differently depending on whether the grayscale
-  // passes will run. With AA on, the light fringe has to stay white so the
-  // multipass can shade it; inking it black here (the "denser glyphs" change)
-  // left nothing to anti-alias and made text heavier and blobbier — which is
-  // exactly the "AA is not rendering, fonts look worse" report. With AA off we
-  // still want the dense look, otherwise glyphs read as whispy.
-  renderer.setBwLightFringe(!aaThisFrame);
+  // Key off the SETTING, not this frame's AA outcome. aaThisFrame also goes false
+  // for transient reasons (low heap, forced scrub, fast first ink); keying on it
+  // would flip glyph weight between page turns, so text would visibly thicken and
+  // thin as you read. With AA enabled the base always leaves the light fringe for
+  // the multipass to shade — a frame that skips the greys is merely a touch
+  // lighter, not a different weight. Inking that fringe black is what made
+  // capitals (H, I, N — straight vertical stems) look bold for no reason.
+  renderer.setBwLightFringe(SETTINGS.textAntiAliasing == 0);
   paintPageContent();
   renderStatusBar();
   renderer.setBwLightFringe(true);  // default for Home / menus / other activities

@@ -645,10 +645,9 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         (block.kind == BlockKind::Paragraph || isHeading)) {
       blockAlign = userAlign;
     }
-    // Scene-break fallback text always centres, in every align mode — a forced
-    // Left/Justify setting must not leave "* * *" hanging off the left margin.
+    // Its text is never drawn (a rule replaces it below); we only need the flag
+    // here so the margin block can give the rule its air.
     const bool sceneBreak = isSceneBreakRun(chapter, block);
-    if (sceneBreak) blockAlign = Align::Center;
 
     if ((block.flags & kBlockForcePageBreak) != 0 && y > 0 && atBlockStart) {
       break;
@@ -715,7 +714,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       if (y >= viewH && block.kind != BlockKind::Spacer) break;
     }
 
-    if (block.kind == BlockKind::HorizontalRule) {
+    // A scene-break fallback ("* * *") is the publisher's stand-in for a graphic
+    // we do not draw. Print sets that as a rule, not as typed asterisks, so paint
+    // our own rule and drop the characters entirely — same treatment as <hr>.
+    if (block.kind == BlockKind::HorizontalRule || sceneBreak) {
       trailingCollapsePx = 0;
       if (y + bodyLine > viewH && y > 0) break;
       // Typeset rule: a short centred hairline with air either side, the way a

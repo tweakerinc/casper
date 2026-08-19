@@ -2951,10 +2951,14 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
           keepPage = std::max(0, progPage);
         }
       }
+      // Upper-left cue like Opening / Saving — wipe + rebuild can take seconds.
+      GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/false);
+      ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
       if (epub_) {
         clearBookCache(epub_->getPath());
         LOG_INF("RVR", "cleared book cache path=%s — restore spine=%d page=%d", epub_->getPath().c_str(), keepSpine,
                 keepPage);
+        GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
         // Package dir may have been removed — recreate before reload.
         epub_->setupCacheDir();
         // book.bin may be gone; reload spine/TOC from the epub.
@@ -2965,6 +2969,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       } else if (!irDir_.empty() && Storage.exists(irDir_.c_str())) {
         Storage.removeDir(irDir_.c_str());
         LOG_INF("RVR", "cleared rivulet cache %s", irDir_.c_str());
+        GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
       }
       if (!irDir_.empty()) Storage.ensureDirectoryExists(irDir_.c_str());
       // Reset engine render caches; then reopen at the saved place.

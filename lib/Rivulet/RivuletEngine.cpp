@@ -880,6 +880,116 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   return false;
 }
 
+bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int maxForwardPages) {
+  if (chapter_.empty() || chapter_.failed()) return false;
+
+  // Instant CrossInk path: complete .rvpm → last page index.
+  if (map_.complete() && map_.knownTotal() > 0) {
+    const int last = map_.knownTotal() - 1;
+    if (goToPage(renderer, last, /*maxWalkPages=*/8) && laidOutValid_ && laidOut_.atChapterEnd) {
+      LOG_INF("RVEN", "goToLastPageNearEnd map-hit page=%d total=%d", currentPage_, map_.knownTotal());
+      return true;
+    }
+    map_.markIncomplete();
+  }
+
+  const auto& blocks = chapter_.blocks();
+  if (blocks.empty()) return goToLastPage(renderer, maxForwardPages);
+
+  const LayoutParams params = makeMeasureParams(renderer);
+  const LayoutParams paintParams = makeParams(renderer);
+  const int nBlocks = static_cast<int>(blocks.size());
+  const int budget = maxForwardPages > 0 ? maxForwardPages : 64;
+  // Start near the end (CrossInk feel: don't rebuild the whole prior section
+  // from page 0). Fall back to earlier probes, then a full goToLastPage.
+  const int probesPct[] = {92, 80, 65, 40, 0};
+
+  for (const int pct : probesPct) {
+    IrCursor cur{};
+    if (pct <= 0) {
+      cur.runIndex = blocks[0].runBegin;
+    } else {
+      int bi = (nBlocks * pct) / 100;
+      if (bi >= nBlocks) bi = nBlocks - 1;
+      if (bi < 0) bi = 0;
+      // Prefer a paragraph/heading start so we don't begin mid-word.
+      cur.blockIndex = static_cast<uint16_t>(bi);
+      cur.runIndex = blocks[static_cast<size_t>(bi)].runBegin;
+      cur.byteInRun = 0;
+    }
+
+    IrCursor lastStart = cur;
+    IrCursor walk = cur;
+    LaidOutPage page;
+    int walked = 0;
+    bool foundEnd = false;
+    for (int g = 0; g < budget; ++g) {
+      if ((g & 7) == 0) yield();
+      page.clear();
+      if (!PageLayouter::layoutPage(chapter_, renderer, params, walk, page)) {
+        if (page.atChapterEnd && walked > 0) {
+          foundEnd = true;
+          break;
+        }
+        // Stuck — skip a block like goToLastPage.
+        if (walk.blockIndex + 1 < blocks.size()) {
+          ++walk.blockIndex;
+          walk.runIndex = blocks[walk.blockIndex].runBegin;
+          walk.byteInRun = 0;
+          continue;
+        }
+        break;
+      }
+      lastStart = page.start;
+      const IrCursor prevWalk = walk;
+      walk = page.end;
+      ++walked;
+      if (page.atChapterEnd) {
+        foundEnd = true;
+        break;
+      }
+      if (walk == prevWalk) {
+        // Zero-progress page — skip ahead one block.
+        if (walk.blockIndex + 1 < blocks.size()) {
+          ++walk.blockIndex;
+          walk.runIndex = blocks[walk.blockIndex].runBegin;
+          walk.byteInRun = 0;
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (!foundEnd || walked <= 0) {
+      LOG_DBG("RVEN", "goToLastPageNearEnd probe %d%% miss walked=%d", pct, walked);
+      continue;
+    }
+
+    // Paint only the last page. Map holds that single page (status bar treats
+    // atChapterEnd as "on the last page" via estimate — see reader render).
+    aheadValid_ = false;
+    ahead_.clear();
+    behindValid_ = false;
+    behind_.clear();
+    map_.setRenderKey(key_);
+    map_.resetWithStart(lastStart);
+    map_.markComplete(1);
+    currentPage_ = 0;
+    laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, lastStart, laidOut_);
+    if (!laidOutValid_ || !laidOut_.atChapterEnd) {
+      LOG_ERR("RVEN", "goToLastPageNearEnd paint fail probe=%d%%", pct);
+      laidOutValid_ = false;
+      continue;
+    }
+    LOG_INF("RVEN", "goToLastPageNearEnd ok probe=%d%% walked=%d text=%u", pct, walked,
+            static_cast<unsigned>(chapter_.textSize()));
+    return true;
+  }
+
+  LOG_ERR("RVEN", "goToLastPageNearEnd probes exhausted — full walk");
+  return goToLastPage(renderer, std::max(256, maxForwardPages));
+}
+
 bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages) {
   if (chapter_.empty()) return false;
   if (goToLastPage(renderer, maxWalkPages)) return true;

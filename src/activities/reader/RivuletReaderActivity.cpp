@@ -1981,6 +1981,23 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   }
 
   const uint32_t tLayout = millis();
+  // startPage < 0: load IR (+ optional .rvpm) only — used by PageBack so we can
+  // goToLastPageNearEnd without first painting page 0 of the previous spine.
+  if (startPage < 0) {
+    spineIndex_ = spineIndex;
+    ready_ = true;
+    LOG_INF("RVR", "spine=%d ir-only text=%u blocks=%u map=%d free=%u ir=%d", spineIndex,
+            static_cast<unsigned>(engine_.chapter().textSize()),
+            static_cast<unsigned>(engine_.chapter().blockCount()), engine_.mapKnownPages(),
+            static_cast<unsigned>(ESP.getFreeHeap()), fromIrCache ? 1 : 0);
+    if (footnoteCacheSpine_ != spineIndex) {
+      footnoteCacheSpine_ = -1;
+      chapterFootnotes_.clear();
+      currentPageFootnotes_.clear();
+    }
+    return true;
+  }
+
   // First page only (or resume page). Map extension is idle — same as every open.
   // IMPORTANT: never silently fall back to page 0 when the user had a deep saved
   // page (QR resume landed on ch6 p1 after saving p31 — goToPage failed on a
@@ -3077,9 +3094,11 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     // In-chapter page back — normal case (pages 2..N of this spine).
     if (engine_.prevPage(renderer)) continue;
 
-    // Only when already on page 0 of this spine: open the previous spine's LAST
-    // page (CrossInk section back). Never stay on previous spine page 0 unless
-    // that spine is a single-page section — that caused chapter-hopping.
+    // Page 0 of this spine → previous spine's LAST page (CrossInk section back).
+    // CrossInk was fast because section.bin already had a page LUT. After Delete
+    // Cache we have no .rvpm, so we load IR only and land near the IR end instead
+    // of walking the whole prior chapter from page 0 (that failed and restored
+    // origin — looked like a no-op refresh on chapter 7).
     const int originSpine = spineIndex_;
     const int originPage = engine_.currentPage();
     const int n = epub_->getSpineItemsCount();
@@ -3097,24 +3116,18 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       chapterNavBusy_ = true;
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
       prepareHeapForChapterLoad(/*aggressive=*/true);
-      bool loaded = loadSpine(targetSpine, /*startPage=*/0, /*requireCompleteIr=*/false);
+      // startPage=-1: IR + map only — do not paint page 0 before seeking the end.
+      bool loaded = loadSpine(targetSpine, /*startPage=*/-1, /*requireCompleteIr=*/false);
       if (!loaded || engine_.chapter().failed()) {
         prepareHeapForChapterLoad(/*aggressive=*/true);
-        loaded = loadSpine(targetSpine, 0, /*requireCompleteIr=*/true);
+        loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/true);
       }
       if (loaded && !engine_.chapter().failed()) {
         const uint32_t t0 = millis();
-        bool landed = false;
-        if (engine_.mapComplete() && engine_.mapKnownPages() > 0) {
-          const int last = engine_.mapKnownPages() - 1;
-          landed = engine_.goToPage(renderer, last, /*maxWalkPages=*/16) && engine_.page().atChapterEnd;
-          if (!landed) engine_.invalidatePageMap();
-        }
+        bool landed = engine_.goToLastPageNearEnd(renderer, /*maxForwardPages=*/64);
         if (!landed) {
-          landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
+          landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/512);
         }
-        // Accept only a real end (or deep page). Page 0 without atChapterEnd is a
-        // failed end-walk — restore origin so the next Back does not hop chapters.
         const bool okLand =
             landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0);
         LOG_INF("RVR", "pageBack prev-spine=%d page=%d known=%d end=%d ok=%d walkMs=%lu", targetSpine,
@@ -3129,7 +3142,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     }
 
     if (!advanced) {
-      if (spineIndex_ != originSpine || engine_.currentPage() != originPage) {
+      if (spineIndex_ != originSpine || engine_.currentPage() != originPage || !ready_) {
         prepareHeapForChapterLoad();
         if (!loadSpine(originSpine, originPage)) {
           (void)loadSpine(originSpine, 0);
@@ -3629,8 +3642,15 @@ bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, con
 void RivuletReaderActivity::renderStatusBar() const {
   if (!epub_ || !ready_) return;
 
-  const int chapterPage = engine_.currentPage() + 1;
-  const int chapterPageCount = std::max(chapterPage, engine_.chapterPageCount(&renderer));
+  int chapterPage = engine_.currentPage() + 1;
+  int chapterPageCount = std::max(chapterPage, engine_.chapterPageCount(&renderer));
+  // Near-end last-page land stores a 1-page map at index 0 with atChapterEnd.
+  // Show as last-of-estimate (CrossInk showed exact N/N from section.bin).
+  if (engine_.page().atChapterEnd) {
+    const int est = std::max(chapterPageCount, engine_.chapterPageCount(&renderer));
+    chapterPageCount = std::max(est, chapterPage);
+    chapterPage = chapterPageCount;
+  }
   const float bookProgress = bookProgress01() * 100.0f;
   // Classic: chapter "~" only while indexing (isBuilding). Book pages always estimated.
   // Do not invent extra ETA markers — status bar already uses this single ~.

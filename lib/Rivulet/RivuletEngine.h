@@ -69,6 +69,15 @@ class RivuletEngine {
   bool goToPage(const GfxRenderer& renderer, int pageIndex, int maxWalkPages = 64);
   bool nextPage(const GfxRenderer& renderer);
   bool prevPage(const GfxRenderer& renderer);
+  // Why a turn failed. Callers MUST distinguish these: treating a layout failure
+  // as "at chapter start" made a single PageBack jump to the previous chapter.
+  enum class TurnFail : uint8_t {
+    None = 0,      // turn succeeded
+    AtBoundary,    // genuinely at page 0 / chapter end — caller may change spine
+    LayoutFailed,  // transient layout/heap failure — caller must stay put
+  };
+  [[nodiscard]] TurnFail lastTurnFail() const { return lastTurnFail_; }
+  [[nodiscard]] bool atChapterStart() const { return currentPage_ <= 0; }
   bool goToStart(const GfxRenderer& renderer);
   // True last page of this chapter IR (legacy-style full layout walk).
   // Map-hit only when complete map's last page is verified atChapterEnd.
@@ -174,6 +183,7 @@ class RivuletEngine {
   mutable int smoothedAtKnown_ = -1;
   std::string pageCacheDir_;
   int pageCacheSpine_ = -1;  // namespaces .rvpg files; -1 disables cache I/O
+  TurnFail lastTurnFail_ = TurnFail::None;
 };
 
 }  // namespace rivulet

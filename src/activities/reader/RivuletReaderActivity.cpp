@@ -2062,13 +2062,18 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
     currentPageFootnotes_.clear();
   }
 
-  // Slightly longer open, fast in-book turns: index a window around the land page,
-  // and if we landed on page 0, pre-build the previous spine's page map so Back
-  // goes to last page then N-1 (not a no-op / chapter hop).
+  // Slightly longer open, fast in-book turns: index a window around the land page.
+  // The previous-spine map is NOT built here. Doing it on every page-0 land meant
+  // forward chapter turns, TOC jumps and even turnPrev's own failure-restore each
+  // paid a full extra chapter walk (multi-second stall, then still no page turn).
+  // Book open sets wantAdjacentWarm_; everything else lets the idle tick do it.
   if (!warmingAdjacent_) {
     warmOpenNavigationWindow();
-    if (engine_.currentPage() == 0) {
-      warmPreviousSpinePageMap();
+    if (wantAdjacentWarm_) {
+      wantAdjacentWarm_ = false;
+      if (engine_.currentPage() == 0) {
+        warmPreviousSpinePageMap();
+      }
     }
   }
   return true;
@@ -2195,7 +2200,31 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
 
-  // 3) Thin page-map extension (cursors only) until complete.
+  // 3) Sitting on page 1 of a spine with no map for the previous one: build it in
+  //    the background so the next PageBack lands on that chapter's last page
+  //    instantly. This is the non-blocking half of the CrossInk section.bin idea —
+  //    page turns never pay for it, idle time does.
+  if (engine_.currentPage() == 0 && spineIndex_ > 0 && !irDir_.empty() &&
+      ESP.getFreeHeap() > 90 * 1024 && ESP.getMaxAllocHeap() > 56 * 1024) {
+    int prevSpine = -1;
+    for (int i = spineIndex_ - 1; i >= 0; --i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        prevSpine = i;
+        break;
+      }
+    }
+    if (prevSpine >= 0) {
+      char prevMap[200];
+      std::snprintf(prevMap, sizeof(prevMap), "%s/s%d_m%u.rvpm", irDir_.c_str(), prevSpine,
+                    static_cast<unsigned>(SETTINGS.imageRendering));
+      if (!Storage.exists(prevMap)) {
+        warmPreviousSpinePageMap();
+        return;
+      }
+    }
+  }
+
+  // 4) Thin page-map extension (cursors only) until complete.
   if (engine_.mapComplete()) return;
   const int burst = engine_.idleMapPagesThisTick(&renderer);
   if (burst <= 0) return;
@@ -2715,6 +2744,10 @@ void RivuletReaderActivity::onEnter() {
     resumePage = 0;
   }
 
+  // Book open is allowed one inline previous-spine map build (user accepted a
+  // slightly longer open in exchange for fast in-book Back). Consumed by loadSpine.
+  wantAdjacentWarm_ = true;
+
   bool loaded = false;
   // Cap attempts + yield so a bad book cannot soft-lock the UI for minutes.
   constexpr int kMaxSpineAttempts = 24;
@@ -3148,7 +3181,8 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     // Only leave the chapter when live layout says the chapter is finished.
     // nextPage also fails on mid-chapter layout stuck — advancing the spine
     // there made chapter 1 look like it was only 2–3 pages long.
-    if (!engine_.page().atChapterEnd) {
+    if (engine_.lastTurnFail() == rivulet::RivuletEngine::TurnFail::LayoutFailed ||
+        !engine_.page().atChapterEnd) {
       LOG_ERR("RVR", "nextPage stuck mid-chapter spine=%d page=%d known=%d — not advancing spine",
               spineIndex_, engine_.currentPage(), engine_.mapKnownPages());
       // Try one more progressive walk step before giving up on this turn.
@@ -3194,6 +3228,18 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
   while (remaining-- > 0) {
     // In-chapter: page N → N-1 (must work after landing on ch6 page 38).
     if (engine_.prevPage(renderer)) continue;
+
+    // prevPage() failing does NOT mean "chapter start". A transient layout/heap
+    // failure mid-chapter used to fall through here and open the previous spine,
+    // which is why one Back could jump a whole chapter. Only a real boundary may
+    // change spine; anything else stays on the current page.
+    if (engine_.lastTurnFail() == rivulet::RivuletEngine::TurnFail::LayoutFailed ||
+        !engine_.atChapterStart()) {
+      LOG_ERR("RVR", "pageBack layout failed mid-chapter spine=%d page=%d — staying", spineIndex_,
+              engine_.currentPage());
+      requestUpdate();
+      return true;
+    }
 
     // Only at page 0 of this spine: open previous spine at its REAL last page
     // with a full page map (CrossInk section.bin). Goal:

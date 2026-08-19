@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <cstdio>
 #include <cstring>
 
 namespace rivulet {
@@ -30,8 +31,15 @@ bool readCursor(HalFile& f, IrCursor& c) {
 
 bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int pageIndex) const {
   if (!path || !*path || pageIndex < 0) return false;
+  // Atomic: .tmp + rename so a power loss cannot leave a half-written page that
+  // later deserializes into a partly-blank page.
+  char tmpPath[240];
+  const int wrote = std::snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", path);
+  const bool useTmp = wrote > 0 && static_cast<size_t>(wrote) < sizeof(tmpPath);
+  const char* writePath = useTmp ? tmpPath : path;
+  if (useTmp && Storage.exists(tmpPath)) Storage.remove(tmpPath);
   HalFile f;
-  if (!Storage.openFileForWrite("RVPG", path, f)) return false;
+  if (!Storage.openFileForWrite("RVPG", writePath, f)) return false;
 
   bool ok = serialization::tryWritePod(f, kPageMagic);
   ok = ok && serialization::tryWritePod(f, kPageFormatVersion);
@@ -68,10 +76,18 @@ bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int p
 
   f.close();
   if (!ok) {
-    Storage.remove(path);
-    LOG_DBG("RVPG", "save failed %s — removed", path);
+    Storage.remove(writePath);
+    LOG_DBG("RVPG", "save failed %s — removed", writePath);
+    return false;
   }
-  return ok;
+  if (useTmp) {
+    if (Storage.exists(path)) Storage.remove(path);
+    if (!Storage.rename(tmpPath, path)) {
+      Storage.remove(tmpPath);
+      return false;
+    }
+  }
+  return true;
 }
 
 bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, const int expectedPage) {

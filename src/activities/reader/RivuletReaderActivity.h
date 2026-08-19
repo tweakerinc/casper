@@ -167,6 +167,10 @@ class RivuletReaderActivity final : public Activity {
   bool chapterNavBusy_ = false;
   // Guard re-entry while warmPreviousSpinePageMap temporarily loads another spine.
   bool warmingAdjacent_ = false;
+  // Set by the book-open path only: allow one inline previous-spine map build on
+  // the next successful spine land. Page turns / TOC jumps leave it false and let
+  // tickIdlePageMap do the work instead of stalling the turn.
+  bool wantAdjacentWarm_ = false;
   bool currentPageBookmarked_ = false;
   bool clippingsLoaded_ = false;
   bool pendingScreenshot_ = false;

@@ -139,8 +139,11 @@ bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int
     if (Storage.exists(path)) continue;  // already on SD
 
     // Need a map start for this page — extend measure-only if needed.
+    // Keep this small: this runs on the idle tick, and 8 extends × 4 targets was
+    // up to 32 layouts per tick (CPU burn while "idle" = battery, the opposite of
+    // the goal). Anything deeper belongs to the normal map-extension step below.
     int guard = 0;
-    while (!map_.hasPage(target) && !map_.complete() && guard++ < 8) {
+    while (!map_.hasPage(target) && !map_.complete() && guard++ < 2) {
       if (!extendPageMap(renderer, 1)) break;
     }
     if (!map_.hasPage(target)) {
@@ -368,14 +371,21 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
 }
 
 // Mark complete only when live end matches IR size and page count is plausible.
+// The caller has already verified atChapterEnd, so this guard exists ONLY to catch
+// the classic false-complete bug (a stuck break reporting a 2–3 page novel chapter).
+// It must not be strict: estimatePageCount is a padded heuristic, and comparing a
+// real page count against it (known*2+1 < est) refused to seal honest maps, which
+// left the status bar on "~" forever and forced every PageBack to re-walk.
 void RivuletEngine::markMapCompleteIfPlausible(const GfxRenderer& renderer) {
   const int known = map_.knownPages();
   if (known <= 0) return;
-  const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
-                                             lineCompression_);
-  if (est >= 6 && known * 2 + 1 < est) {
-    LOG_ERR("RVEN", "refuse markComplete known=%d est=%d (too short)", known, est);
-    return;
+  if (known <= 3) {
+    const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
+                                               lineCompression_);
+    if (est >= 10) {
+      LOG_ERR("RVEN", "refuse markComplete known=%d est=%d (implausibly short)", known, est);
+      return;
+    }
   }
   map_.markComplete(known);
 }
@@ -470,11 +480,18 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
     if (pageCachePath(behindIdx, path, sizeof(path))) {
       LaidOutPage tmp;
       if (tmp.loadFromFile(path, key_, behindIdx)) {
-        if (!map_.hasPage(behindIdx) || tmp.start == map_.pageStart(behindIdx)) {
+        // start must match the map AND end must flow into the page we are on —
+        // otherwise page-back shows duplicated or skipped lines.
+        const bool startOk = !map_.hasPage(behindIdx) || tmp.start == map_.pageStart(behindIdx);
+        const bool endOk = !laidOutValid_ || tmp.end == laidOut_.start;
+        if (startOk && endOk) {
           behind_ = std::move(tmp);
           behindValid_ = true;
           return true;
         }
+        LOG_DBG("RVEN", "behind cache p=%d rejected (start=%d end=%d)", behindIdx, startOk ? 1 : 0,
+                endOk ? 1 : 0);
+        Storage.remove(path);
       }
     }
   }
@@ -606,8 +623,15 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
 }
 
 bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
-  if (!ensureLaidOut(renderer)) return false;
-  if (laidOut_.atChapterEnd) return false;
+  if (!ensureLaidOut(renderer)) {
+    lastTurnFail_ = TurnFail::LayoutFailed;
+    return false;
+  }
+  if (laidOut_.atChapterEnd) {
+    lastTurnFail_ = TurnFail::AtBoundary;
+    return false;
+  }
+  lastTurnFail_ = TurnFail::None;
 
   // Live layout says more content remains. A "complete" map that claims we are
   // on the last page is stale (false markComplete / old .rvpm) — reopen the map.
@@ -623,6 +647,7 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
   // No forward progress (layout stuck) — do not claim chapter end or spin.
   if (nextStart == map_.pageStart(currentPage_) && map_.hasPage(currentPage_)) {
     LOG_DBG("RVEN", "nextPage: no progress at page=%d", currentPage_);
+    lastTurnFail_ = TurnFail::LayoutFailed;
     return false;
   }
   if (!map_.hasPage(currentPage_ + 1)) {
@@ -658,6 +683,9 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
 
   // Slow path: layout from the corrected map start (must equal nextStart).
   // Keep the page we leave so page-back is instant (bidirectional index).
+  // NOTE: laidOut_ is moved out here. Every failure path below MUST move it back
+  // — otherwise a failed forward turn leaves laidOut_ empty and paint() draws a
+  // blank content area (paint() early-returns on !laidOutValid_).
   behind_ = std::move(laidOut_);
   behindValid_ = true;
   laidOutValid_ = false;
@@ -692,12 +720,27 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
     }
     return true;
   }
+  // Both layout attempts failed: restore the page we were on so the reader keeps
+  // showing real text instead of a blank frame, and report a transient failure
+  // (NOT a chapter boundary — the caller must not advance the spine).
   --currentPage_;
+  laidOut_ = std::move(behind_);
+  behindValid_ = false;
+  behind_.clear();
+  laidOutValid_ = true;
+  aheadValid_ = false;
+  ahead_.clear();
+  lastTurnFail_ = TurnFail::LayoutFailed;
+  LOG_ERR("RVEN", "nextPage: layout failed at page=%d — restored current page", currentPage_);
   return false;
 }
 
 bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
-  if (currentPage_ <= 0) return false;
+  if (currentPage_ <= 0) {
+    lastTurnFail_ = TurnFail::AtBoundary;
+    return false;
+  }
+  lastTurnFail_ = TurnFail::None;
   // Fast path: bidirectional behind_ cache (idle-warmed or left by nextPage).
   if (behindValid_ && currentPage_ >= 1) {
     // ahead_ becomes the page we leave so forward turn-back is also instant.
@@ -710,12 +753,21 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
     --currentPage_;
     return true;
   }
+  const int fromPage = currentPage_;
   --currentPage_;
   laidOutValid_ = false;
   aheadValid_ = false;  // ahead is only valid for forward direction
   behindValid_ = false;
   behind_.clear();
-  if (!ensureLaidOut(renderer)) return false;
+  if (!ensureLaidOut(renderer)) {
+    // Transient failure (heap / bad cursor). Restore the page index so the reader
+    // does not think we reached page 0 and jump into the previous chapter.
+    currentPage_ = fromPage;
+    laidOutValid_ = false;
+    lastTurnFail_ = TurnFail::LayoutFailed;
+    LOG_ERR("RVEN", "prevPage: layout failed going %d→%d — position restored", fromPage, fromPage - 1);
+    return false;
+  }
   // Re-layout may produce a different exclusive end than a stale map[next].
   // Keep forward continuity: next map start must equal this page's end.
   if (!laidOut_.atChapterEnd) {
@@ -723,8 +775,16 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
     if (!map_.hasPage(nextIdx)) {
       map_.pushPageStart(laidOut_.end);
     } else if (map_.pageStart(nextIdx) != laidOut_.end) {
-      LOG_DBG("RVEN", "prevPage: re-break page %d end; truncate stale tail", currentPage_);
-      map_.setPageStart(nextIdx, laidOut_.end);
+      // A sealed map came from a verified end-to-end walk. Overwriting one entry
+      // truncates the whole tail and drops `complete` (PageMap::setPageStart), so
+      // reading backwards through a chapter used to destroy the index we just
+      // spent seconds building. Trust the sealed map; only correct while building.
+      if (map_.complete()) {
+        LOG_DBG("RVEN", "prevPage: page %d end differs from sealed map — keeping map", currentPage_);
+      } else {
+        LOG_DBG("RVEN", "prevPage: re-break page %d end; truncate stale tail", currentPage_);
+        map_.setPageStart(nextIdx, laidOut_.end);
+      }
     }
     // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
@@ -874,12 +934,13 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
           budget, map_.knownPages());
   // Do not paint a mid-chapter page as verified "last" — clear paint state.
   // Keep the walked map so goToBestEffortLastPage can land on known-1.
+  // Do NOT reset currentPage_ to 0: a caller that ignores the false return then
+  // painted page 0 of this chapter under the previous chapter's status label.
   laidOut_.clear();
   laidOutValid_ = false;
   aheadValid_ = false;
   behindValid_ = false;
   behind_.clear();
-  currentPage_ = 0;
   return false;
 }
 

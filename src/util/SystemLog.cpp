@@ -243,12 +243,20 @@ void begin() {
   char hdr[256];
   snprintf(hdr, sizeof(hdr),
            "\n==== SYSTEM LOG SESSION ====\n"
-           "t0=%lu device=%s level=%u aa=%u anti_ghost=%d theme=%u(%s) ver=%s file=%s\n",
+           "t0=%lu device=%s level=%u aa=%u anti_ghost=%d theme=%u(%s) ver=%s build=%s file=%s\n",
            static_cast<unsigned long>(gSessionT0), gpio.deviceIsX3() ? "X3" : "X4", static_cast<unsigned>(gLevel),
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
            static_cast<unsigned>(SETTINGS.uiTheme), themeNameForId(SETTINGS.uiTheme),
 #ifdef CASPER_VERSION
            CASPER_VERSION,
+#else
+           "?",
+#endif
+           // ver= is the product version and repeats across builds; build= is the
+           // commit that produced this firmware. Without it a capture cannot be
+           // matched to a build, which cost several rounds of guesswork.
+#ifdef CASPER_BUILD_ID
+           CASPER_BUILD_ID,
 #else
            "?",
 #endif

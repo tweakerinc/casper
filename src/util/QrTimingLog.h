@@ -61,11 +61,17 @@ inline void begin(const char* reason) {
   char header[256];
   snprintf(header, sizeof(header),
            "\n==== QR timing session ====\n"
-           "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s\n",
+           "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s build=%s\n",
            static_cast<unsigned long>(gT0), reason ? reason : "?", gpio.deviceIsX3() ? "X3" : "X4",
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
 #ifdef CASPER_VERSION
-           CASPER_VERSION
+           CASPER_VERSION,
+#else
+           "?",
+#endif
+           // See SystemLog: ver= repeats across builds, build= pins the commit.
+#ifdef CASPER_BUILD_ID
+           CASPER_BUILD_ID
 #else
            "?"
 #endif

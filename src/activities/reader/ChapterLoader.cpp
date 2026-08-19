@@ -28,6 +28,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
   const std::string& irDir = req.irDir;
   const uint8_t imageRendering = req.imageRendering;
   const bool requireCompleteIr = req.requireCompleteIr;
+  const bool lendFb = req.lendFrameBuffer;
 
   const auto prepHeap = [&](const bool aggressive) { hooks.prepareHeap(hooks.ctx, aggressive); };
   const auto prepImages = [&](const std::string& href) {
@@ -136,9 +137,9 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
     // Hold the framebuffer loan across stream + load + convert so maxAlloc stays
     // high for the whole sequence.
     {
-      GfxRenderer::FrameBufferLoan loan(rend);
-      LOG_INF("CHLOAD", "html phase free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-              static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      GfxRenderer::FrameBufferLoan loan(rend, lendFb);
+      LOG_INF("CHLOAD", "html phase loan=%d free=%u maxAlloc=%u", lendFb ? 1 : 0,
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
       // Two passes: prefer the cached sN.html; on failure delete and re-stream
       // (a stale/truncated extract left chapters permanently unloadable).
@@ -286,7 +287,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
     // requireComplete: one more attempt after a hard scrub, outside the loan.
     if (!ok && requireCompleteIr && Storage.exists(htmlPath)) {
       prepHeap(/*aggressive=*/true);
-      GfxRenderer::FrameBufferLoan loan(rend);
+      GfxRenderer::FrameBufferLoan loan(rend, lendFb);
       HalFile htmlFile;
       if (Storage.openFileForRead("CHLOAD", htmlPath, htmlFile)) {
         const size_t htmlSize = htmlFile.size();

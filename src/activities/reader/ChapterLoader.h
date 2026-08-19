@@ -47,6 +47,12 @@ struct Request {
   // Bind the engine's laid-out-page cache to this spine. Off for indexing, which
   // never paints and so would only write files nobody reads.
   bool bindPageCache = true;
+  // Lend the framebuffer's 48 KB to the convert (see GfxRenderer::FrameBufferLoan).
+  // MUST be false when the caller's screen is still on the panel and will do
+  // windowed repaints afterwards: the loan hands the buffer back white, so a
+  // later partial update paints blank over live UI. Costs contiguous heap, so a
+  // caller that turns it off needs a correspondingly higher heap floor.
+  bool lendFrameBuffer = true;
 };
 
 struct Result {

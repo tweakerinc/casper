@@ -1305,6 +1305,11 @@ bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer&
   // a flat cap truncated long chapters partway through (see goToLastPage).
   const int kMaxBlockSkips = static_cast<int>(chapter.blocks().size()) + 8;
   for (int guard = 0; guard < 20000; ++guard) {
+    // A long chapter is thousands of layoutPage() calls. Without a yield the
+    // whole walk is one uninterruptible block: the caller's loop stops sampling
+    // input for many seconds (indistinguishable from a hang) and the task
+    // watchdog is in play. extendPageMap() already yields on the same cadence.
+    if ((guard & 3) == 3) yield();
     if (!layoutPage(chapter, renderer, params, cur, page)) {
       if (!page.atChapterEnd && cur.blockIndex + 1 < chapter.blocks().size() && ++skips <= kMaxBlockSkips) {
         ++cur.blockIndex;

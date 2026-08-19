@@ -1,9 +1,19 @@
 """
-PlatformIO pre-build script: inject git branch and short SHA into
-CASPER_VERSION for the default (dev) environment.
+PlatformIO pre-build script.
 
-Results in a version string like:  v0.1.9-dev-feature-branch-05c6cf8
-Release environments are unaffected; they set CASPER_VERSION in the ini.
+Two jobs:
+
+1. CASPER_VERSION -- the *product* version, e.g. "v0.1.9". Injected here for the
+   default (dev) environment; release environments set it in platformio.ini.
+
+2. CASPER_BUILD_ID -- the *build* fingerprint, e.g. "05c6cf8" or "05c6cf8-dirty".
+   Injected for every environment.
+
+The distinction matters for support. CASPER_VERSION only changes when the
+product version is bumped, so consecutive test builds all report the same
+string: a device log reading "ver=v0.1.9" could have come from any of them, and
+there was no way to tell which firmware produced a capture. CASPER_BUILD_ID
+pins a log to a commit, and matches the short SHA in dist/Casper-NNNN-<sha>.bin.
 """
 
 import configparser
@@ -84,15 +94,42 @@ def get_base_version(project_dir):
     return '0.0.0'
 
 
+def get_build_id(project_dir):
+    """Short SHA, suffixed '-dirty' when the tree has uncommitted changes.
+
+    A dirty build is not reproducible from the SHA alone, so say so rather than
+    let a capture claim to be a commit it is not.
+    """
+    sha = get_git_short_sha(project_dir)
+    try:
+        subprocess.check_call(
+            ['git', 'diff', '--quiet', 'HEAD'],
+            cwd=project_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return f'{sha}-dirty'
+    except (FileNotFoundError, OSError):
+        return sha
+    return sha
+
+
 def inject_version(env):
-    # Only applies to the dev (default) environment; release envs set the
-    # version via build_flags in platformio.ini and are unaffected.
+    project_dir = env['PROJECT_DIR']
+
+    # Build fingerprint: every environment, so any capture identifies its build.
+    build_id = get_build_id(project_dir)
+    env.Append(CPPDEFINES=[
+        ('CASPER_BUILD_ID', f'\\"{build_id}\\"'),
+    ])
+    print(f'Casper build id: {build_id}')
+
+    # Product version: dev only; release envs set it via build_flags.
     if env['PIOENV'] != 'default':
         return
 
-    project_dir = env['PROJECT_DIR']
     version_string = get_base_version(project_dir)
-
     env.Append(CPPDEFINES=[
         ('CASPER_VERSION', f'\\"{version_string}\\"'),
     ])

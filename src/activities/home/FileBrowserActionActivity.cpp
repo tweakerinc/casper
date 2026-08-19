@@ -213,6 +213,9 @@ void FileBrowserActionActivity::activateSelected() {
               renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
+              // Upper-left cue while SD work runs — the toast only appears after,
+              // so without this the device looked frozen (same fix as the reader).
+              GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
               if (BookActions::deleteBookStats(bookPath)) {
                 BookActions::drawToast(renderer, tr(STR_BOOK_STATS_DELETED));
                 delay(800);
@@ -229,6 +232,9 @@ void FileBrowserActionActivity::activateSelected() {
               renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
+              // Wiping IR + page maps for a large book is seconds of SD work.
+              // Show "Deleting" before it starts, not just a toast afterwards.
+              GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
               if (BookActions::clearBookCache(bookPath)) {
                 BookActions::drawToast(renderer, tr(STR_DELETE_CACHE));
                 delay(800);

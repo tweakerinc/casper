@@ -114,10 +114,15 @@ class RivuletReaderActivity final : public Activity {
   void tickIdlePageMap();
   // After open/spine land: index ~10 pages ahead (+ behind RAM) for fast turns.
   void warmOpenNavigationWindow();
-  // When on page 0 of a spine, build+save previous spine's full page map so
-  // PageBack → last page → page N-1 works (CrossInk section.bin feel). Slightly
-  // longer open; in-book Back stays fast.
-  void warmPreviousSpinePageMap();
+  // Build + persist one spine's page map, restoring the reader's place after.
+  // This is what makes PageBack into the previous chapter land on its real last
+  // page (CrossInk section.bin feel).
+  bool indexSpinePageMap(int spine);
+  [[nodiscard]] bool spineHasPageMap(int spine) const;
+  [[nodiscard]] int nearestSpineWithoutMap(bool preferBackward, bool adjacentOnly) const;
+  // Idle: index the remaining chapters one at a time so the whole book ends up
+  // mapped on SD (INX-style), without ever blocking a page turn or first ink.
+  void tickBackgroundIndexer();
   // Keep page glyph buffers only when free/maxAlloc leave room for next turn/UI.
   static bool canRetainGlyphCache();
 
@@ -167,10 +172,16 @@ class RivuletReaderActivity final : public Activity {
   bool chapterNavBusy_ = false;
   // Guard re-entry while warmPreviousSpinePageMap temporarily loads another spine.
   bool warmingAdjacent_ = false;
-  // Set by the book-open path only: allow one inline previous-spine map build on
-  // the next successful spine land. Page turns / TOC jumps leave it false and let
-  // tickIdlePageMap do the work instead of stalling the turn.
-  bool wantAdjacentWarm_ = false;
+  // Set once the first page is on glass: only then may the idle tick spend time
+  // indexing the adjacent chapter. Never index before first ink.
+  bool firstInkDone_ = false;
+  // Every readable spine has a .rvpm — background indexer can stop.
+  bool bookIndexComplete_ = false;
+  unsigned long lastIndexPassMs_ = 0;
+  // Reader must be settled this long before the indexer may take the bus, and
+  // this long between chapters so input stays responsive.
+  static constexpr unsigned long kBackgroundIndexIdleMs = 6000;
+  static constexpr unsigned long kBackgroundIndexGapMs = 1500;
   bool currentPageBookmarked_ = false;
   bool clippingsLoaded_ = false;
   bool pendingScreenshot_ = false;

@@ -1230,8 +1230,19 @@ bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer&
   map.resetWithStart(cur);
 
   LaidOutPage page;
+  // A single unlayoutable block (broken image, empty cell) must not truncate the
+  // whole map — skip past it instead of returning an incomplete 1-2 page map.
+  int skips = 0;
+  constexpr int kMaxBlockSkips = 64;
   for (int guard = 0; guard < 20000; ++guard) {
     if (!layoutPage(chapter, renderer, params, cur, page)) {
+      if (!page.atChapterEnd && cur.blockIndex + 1 < chapter.blocks().size() && ++skips <= kMaxBlockSkips) {
+        ++cur.blockIndex;
+        cur.runIndex = chapter.blocks()[cur.blockIndex].runBegin;
+        cur.byteInRun = 0;
+        map.setPageStart(map.knownPages() > 0 ? map.knownPages() - 1 : 0, cur);
+        continue;
+      }
       // Failed layout is not a chapter end — leave incomplete.
       return map.knownPages() > 0;
     }

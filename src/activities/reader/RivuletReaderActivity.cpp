@@ -3319,9 +3319,10 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       // These land in /.casper-logs so a user capture shows exactly which step
       // failed — LOG_INF only reaches serial, which is why earlier captures had
       // no evidence for "Back does nothing".
-      SystemLog::logTiming("BACK", "load spine=%d ok=%d partial=%d text=%u ms=%lu fre=%u", targetSpine,
+      SystemLog::logTiming("BACK", "load spine=%d ok=%d partial=%d text=%u blocks=%u ms=%lu fre=%u", targetSpine,
                            loaded ? 1 : 0, engine_.chapter().failed() ? 1 : 0,
                            static_cast<unsigned>(engine_.chapter().textSize()),
+                           static_cast<unsigned>(engine_.chapter().blockCount()),
                            static_cast<unsigned long>(millis() - tLoad),
                            static_cast<unsigned>(ESP.getFreeHeap()));
       if (loaded) {

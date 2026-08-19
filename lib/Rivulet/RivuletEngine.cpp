@@ -410,8 +410,19 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     if (last < 0) break;
     LaidOutPage tmp;
     if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
-      // Layout failed mid-map (e.g. empty image-only transient). Do NOT mark
-      // complete — that froze chapters at 2–3 pages after a stuck break.
+      // Layout failed mid-map (broken image, empty cell). Skip that block rather
+      // than freezing the map here — a stuck map also freezes the page count and
+      // makes every later last-page walk fail.
+      const IrCursor at = map_.pageStart(last);
+      if (!tmp.atChapterEnd && at.blockIndex + 1 < chapter_.blocks().size()) {
+        IrCursor skip = at;
+        ++skip.blockIndex;
+        skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
+        skip.byteInRun = 0;
+        map_.setPageStart(last, skip);
+        progressed = true;
+        continue;
+      }
       break;
     }
     progressed = true;
@@ -841,6 +852,9 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   LaidOutPage page;
   const int budget = maxWalkPages > 0 ? maxWalkPages : 1024;
   int walked = 0;
+  // Bounded so a pathological chapter cannot spin block-by-block forever.
+  int skips = 0;
+  constexpr int kMaxBlockSkips = 64;
 
   for (int guard = 0; guard < budget; ++guard) {
     if ((guard & 7) == 0) {
@@ -880,7 +894,28 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
           return true;
         }
       }
-      LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d", walked, walked, map_.knownPages());
+      // Layout failed and we are NOT at the chapter end: one unlayoutable block
+      // (broken image, empty cell, zero-progress spacer) must not end the walk.
+      // Aborting here is why PageBack landed on page 1 of a 23 KB chapter — the
+      // walk died ~1 page in, so "last page" was never found. Skip the block and
+      // keep going, exactly as this function's comment always claimed to do.
+      if (cur.blockIndex + 1 < chapter_.blocks().size() && ++skips <= kMaxBlockSkips) {
+        IrCursor skip = cur;
+        ++skip.blockIndex;
+        skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
+        skip.byteInRun = 0;
+        LOG_ERR("RVEN", "goToLastPage layout fail at block %u — skipping to %u (page=%d)",
+                static_cast<unsigned>(cur.blockIndex), static_cast<unsigned>(skip.blockIndex), walked);
+        cur = skip;
+        if (!map_.hasPage(walked)) {
+          map_.pushPageStart(cur);
+        } else {
+          map_.setPageStart(walked, cur);
+        }
+        continue;
+      }
+      LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d skips=%d", walked, walked,
+              map_.knownPages(), skips);
       break;
     }
 

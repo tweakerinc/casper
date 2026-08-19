@@ -1068,6 +1068,14 @@ void HomeActivity::cancelHomeBackgroundPaint() {
   // Drop deferred greys / deferred HALF so we do not flash after leaving Home.
   coverGrayNeedsRetry = false;
   deferredGreysOnly = false;
+  // A pending HALF means the panel is still holding a FAST-only paint over
+  // whatever was there before (a dense book page, typically). Cancelling it
+  // without re-arming left that residual on glass — the "huge amount of ghosting
+  // when exiting to menu". Hand the scrub back to whoever paints next.
+  if (deferredHalfScrubOnly) {
+    UiGhostPolicy::requestHardScrub();
+    penumbraHalfBaselineDone = false;
+  }
   deferredHalfScrubOnly = false;
   softGrayscaleBase = false;
   // Abort multipass between stages (checked in multipassHomeCoverGrayscale).
@@ -1895,11 +1903,11 @@ void HomeActivity::render(RenderLock&& lock) {
                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     }
     if (scrubRightAfter) {
-      // Home is on glass now; run the anti-ghost HALF on the next loop tick.
-      // Keep the scrub armed until it actually lands so an interrupted resume
-      // (user immediately opens a book) does not leave a dirty panel marked clean.
+      // Home is on glass now; run the anti-ghost HALF on the very next loop tick.
+      // No delay: the FAST-only paint above deliberately skipped the soft pull, so
+      // until this lands the panel still carries the previous frame's residual.
       deferredHalfScrubOnly = true;
-      deferredHalfScrubAtMs = millis() + 120UL;
+      deferredHalfScrubAtMs = millis();
       penumbraHalfBaselineDone = false;
     }
     coverGrayOnPanel = true;

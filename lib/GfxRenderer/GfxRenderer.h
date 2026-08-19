@@ -42,9 +42,8 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
-  // See setBwLightFringe(): dense BW when nothing follows, lighter base when a
-  // grayscale multipass is going to shade the fringe itself.
-  bool bwLightFringe_ = true;
+  // See setBwLightFringe(). Default matches the pre-"denser glyphs" behaviour.
+  bool bwLightFringe_ = false;
   Orientation orientation;
   bool fadingFix;
   // System-wide Dark Mode: invert FB → push panel → restore FB so paint stays light-space.
@@ -290,14 +289,13 @@ class GfxRenderer {
 
   // How much of a 2-bit glyph the BW pass inks.
   //
-  //   true  (default): black + dark fringe + LIGHT fringe -> denser text. Correct
-  //                    when nothing else will run: dropping the light fringe on a
-  //                    pure BW page makes glyphs look whispy and faded.
-  //   false:           black + dark fringe only, light fringe left white. REQUIRED
-  //                    when a grayscale multipass follows, because that pass paints
-  //                    the light fringe as an actual grey level — if BW already
-  //                    inked it solid black there is nothing left to shade, and the
-  //                    result is heavier, blobbier text with no anti-aliasing.
+  //   false (default): black + dark fringe only. This is the correct look in both
+  //                    modes — with AA on, the light fringe must stay white so the
+  //                    grayscale multipass can shade it; with AA off, inking it
+  //                    fattens straight vertical stems by a pixel and capitals
+  //                    read as bold.
+  //   true:            also ink the light fringe. Kept for UI surfaces that want
+  //                    maximum weight and never run a grayscale pass.
   void setBwLightFringe(const bool on) { bwLightFringe_ = on; }
   [[nodiscard]] bool bwLightFringe() const { return bwLightFringe_; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload

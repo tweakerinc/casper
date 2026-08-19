@@ -3802,17 +3802,17 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
             static_cast<unsigned>(kAaMinMaxAlloc));
   }
 
-  // Key off the SETTING, not this frame's AA outcome. aaThisFrame also goes false
-  // for transient reasons (low heap, forced scrub, fast first ink); keying on it
-  // would flip glyph weight between page turns, so text would visibly thicken and
-  // thin as you read. With AA enabled the base always leaves the light fringe for
-  // the multipass to shade — a frame that skips the greys is merely a touch
-  // lighter, not a different weight. Inking that fringe black is what made
-  // capitals (H, I, N — straight vertical stems) look bold for no reason.
-  renderer.setBwLightFringe(SETTINGS.textAntiAliasing == 0);
+  // Never ink the light AA fringe in the BW pass.
+  //
+  // I introduced "dense BW" (fringe inked black) to answer a report of whispy
+  // text, but it was the wrong lever twice over: with AA on it left the greys
+  // pass nothing to shade, and with AA off it fattens every straight vertical
+  // stem by a pixel, which is why capitals read as bold for no reason. The
+  // original behaviour — solid + dark fringe only — is correct in both modes, so
+  // this is a straight revert to it.
+  renderer.setBwLightFringe(false);
   paintPageContent();
   renderStatusBar();
-  renderer.setBwLightFringe(true);  // default for Home / menus / other activities
 
   const uint32_t tRefresh = millis();
   // The BW page is already painted into the framebuffer above. AA is an optional
@@ -3842,6 +3842,17 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
             static_cast<unsigned long>(millis() - tRefresh), preferFastFirst ? 1 : 0, aaRan ? 1 : 0,
             openWallMs != 0 ? static_cast<unsigned long>(millis() - openWallMs) : 0UL);
   }
+
+  // The Rivulet reader had no render-path entry in /.casper-logs at all — the old
+  // PAGE/ERS lines belonged to the classic reader and went away with it. That is
+  // why a report of "pages do not load" could not be checked against a capture.
+  // One line per painted page: which page, whether AA ran, and the heap it ran on.
+  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d aa=%d ran=%d refresh=%lums fre=%u maxA=%u", spineIndex_,
+                       engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)),
+                       aaThisFrame ? 1 : 0, aaRan ? 1 : 0,
+                       static_cast<unsigned long>(millis() - tRefresh),
+                       static_cast<unsigned>(ESP.getFreeHeap()),
+                       static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   // Page is on glass — adjacent-chapter indexing may now run on the idle tick.
   firstInkDone_ = true;

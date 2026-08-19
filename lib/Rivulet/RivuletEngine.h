@@ -92,7 +92,11 @@ class RivuletEngine {
   //
   // Returns true if it laid a page out (i.e. did real work this tick).
   bool warmAheadPage(const GfxRenderer& renderer);
+  // Bidirectional indexing: keep the previous page's layout in RAM so page-back
+  // is a move (same idea as ahead_ for forward). Warmed on idle.
+  bool warmBehindPage(const GfxRenderer& renderer);
   [[nodiscard]] bool aheadWarm() const { return aheadValid_; }
+  [[nodiscard]] bool behindWarm() const { return behindValid_; }
 
   // Paint laid-out page at origin (margins applied by caller or via key).
   void paint(GfxRenderer& renderer, int originX, int originY) const;
@@ -131,10 +135,12 @@ class RivuletEngine {
   ChapterIr chapter_{};
   PageMap map_{};
   LaidOutPage laidOut_{};
-  LaidOutPage ahead_{};  // Tier A: one page painted ahead (consumed on nextPage)
+  LaidOutPage ahead_{};   // Tier A: one page painted ahead (consumed on nextPage)
+  LaidOutPage behind_{};  // Tier A: one page behind (consumed on prevPage)
   int currentPage_ = 0;
   bool laidOutValid_ = false;
   bool aheadValid_ = false;
+  bool behindValid_ = false;
   // EMA of the incomplete-map estimate so status-bar "~N" does not jump every
   // idle tick (classic Section::estimatedTotalPages used the same idea).
   mutable float smoothedEstimate_ = 0.0f;

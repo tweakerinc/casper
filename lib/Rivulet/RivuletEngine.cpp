@@ -21,9 +21,11 @@ void RivuletEngine::clear() {
   map_.clear();
   laidOut_.clear();
   ahead_.clear();
+  behind_.clear();
   currentPage_ = 0;
   laidOutValid_ = false;
   aheadValid_ = false;
+  behindValid_ = false;
   smoothedEstimate_ = 0.0f;
   smoothedAtKnown_ = -1;
 }
@@ -33,6 +35,8 @@ void RivuletEngine::invalidatePageMap() {
   map_.setRenderKey(key_);
   aheadValid_ = false;
   ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
   // Keep laidOut_/currentPage_ — caller will goToPage/goToStart next.
   smoothedEstimate_ = 0.0f;
   smoothedAtKnown_ = -1;
@@ -49,6 +53,8 @@ void RivuletEngine::setRenderKey(const RenderKey& key) {
     laidOutValid_ = false;
     aheadValid_ = false;
     ahead_.clear();
+    behindValid_ = false;
+    behind_.clear();
     smoothedEstimate_ = 0.0f;
     smoothedAtKnown_ = -1;
   } else {
@@ -308,6 +314,17 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
   return aheadValid_;
 }
 
+bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
+  if (behindValid_) return false;
+  if (!laidOutValid_ || currentPage_ <= 0) return false;
+  if (!map_.hasPage(currentPage_ - 1)) return false;
+  // Full paint layout (not measure-only) — this page may be shown on prevPage.
+  behindValid_ =
+      PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
+  if (!behindValid_) behind_.clear();
+  return behindValid_;
+}
+
 bool RivuletEngine::ensureLaidOut(const GfxRenderer& renderer) {
   if (laidOutValid_) return true;
   if (chapter_.empty()) return false;
@@ -324,6 +341,9 @@ bool RivuletEngine::goToStart(const GfxRenderer& renderer) {
   currentPage_ = 0;
   laidOutValid_ = false;
   aheadValid_ = false;
+  ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
   seedMapIfEmpty();
   if (!ensureLaidOut(renderer)) return false;
   // Warm exactly 1 page ahead for free next-turn (paint path). Deeper map-ahead
@@ -342,6 +362,9 @@ bool RivuletEngine::goToStart(const GfxRenderer& renderer) {
 bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, const int maxWalkPages) {
   if (pageIndex < 0) return false;
   aheadValid_ = false;
+  ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
   if (map_.hasPage(pageIndex)) {
     currentPage_ = pageIndex;
     laidOutValid_ = false;
@@ -439,6 +462,9 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
 
   // Fast path: consume pre-warmed next page (saves a full layout on every turn).
   if (aheadValid_ && ahead_.start == nextStart) {
+    // Bidirectional: keep the page we leave as behind_ for instant page-back.
+    behind_ = std::move(laidOut_);
+    behindValid_ = true;
     laidOut_ = std::move(ahead_);
     laidOutValid_ = true;
     aheadValid_ = false;
@@ -457,6 +483,9 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
   }
 
   // Slow path: layout from the corrected map start (must equal nextStart).
+  // Keep the page we leave so page-back is instant (bidirectional index).
+  behind_ = std::move(laidOut_);
+  behindValid_ = true;
   laidOutValid_ = false;
   aheadValid_ = false;
   if (ensureLaidOut(renderer)) {
@@ -495,9 +524,23 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
 
 bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
   if (currentPage_ <= 0) return false;
+  // Fast path: bidirectional behind_ cache (idle-warmed or left by nextPage).
+  if (behindValid_ && currentPage_ >= 1) {
+    // ahead_ becomes the page we leave so forward turn-back is also instant.
+    ahead_ = std::move(laidOut_);
+    aheadValid_ = true;
+    laidOut_ = std::move(behind_);
+    laidOutValid_ = true;
+    behindValid_ = false;
+    behind_.clear();
+    --currentPage_;
+    return true;
+  }
   --currentPage_;
   laidOutValid_ = false;
   aheadValid_ = false;  // ahead is only valid for forward direction
+  behindValid_ = false;
+  behind_.clear();
   if (!ensureLaidOut(renderer)) return false;
   // Re-layout may produce a different exclusive end than a stale map[next].
   // Keep forward continuity: next map start must equal this page's end.
@@ -546,6 +589,8 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   map_.resetWithStart(start);
   aheadValid_ = false;
   ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
 
   // The walk below can cover up to `budget` pages (1024 by default) and only
   // ever inspects `page.end` / `page.atChapterEnd`, so it runs measure-only:

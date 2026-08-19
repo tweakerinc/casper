@@ -287,21 +287,68 @@ void waitForPowerRelease() {
 }
 
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
+constexpr char SLEEP_FRAME_FP_FILE[] = "/.crosspoint/sleep_frame.fp";
+
+// Cheap fingerprint of the framebuffer so we skip rewriting 48 KB to SD when
+// the sleep image has not changed (every QR sleep used to rewrite + every wake
+// deleted the file, forcing a full rewrite next time).
+static uint32_t sleepFrameFingerprint(const uint8_t* fb, size_t n) {
+  uint32_t h = 2166136261u;
+  // Sample every 64th byte — enough to catch page/moon changes, ~750 XORs on X3.
+  for (size_t i = 0; i < n; i += 64) {
+    h ^= fb[i];
+    h *= 16777619u;
+  }
+  h ^= static_cast<uint32_t>(n);
+  return h;
+}
 
 static void saveSleepFrameBuffer() {
   Storage.ensureDirectoryExists("/.crosspoint");
+  const size_t bufferSize = renderer.getBufferSize();
+  const uint8_t* fb = renderer.getFrameBuffer();
+  if (!fb || bufferSize == 0) return;
+  const uint32_t fp = sleepFrameFingerprint(fb, bufferSize);
+
+  // Skip write when the on-disk frame matches (same moon-on-page / wallpaper).
+  {
+    HalFile fpFile;
+    if (Storage.openFileForRead("SLP", SLEEP_FRAME_FP_FILE, fpFile)) {
+      uint32_t oldFp = 0;
+      const int n = fpFile.read(reinterpret_cast<uint8_t*>(&oldFp), sizeof(oldFp));
+      fpFile.close();
+      if (n == static_cast<int>(sizeof(oldFp)) && oldFp == fp && Storage.exists(SLEEP_FRAME_FILE)) {
+        HalFile chk;
+        if (Storage.openFileForRead("SLP", SLEEP_FRAME_FILE, chk)) {
+          const size_t sz = chk.size();
+          chk.close();
+          if (sz == bufferSize) {
+            LOG_DBG("MAIN", "sleep_frame unchanged — skip %u byte rewrite", static_cast<unsigned>(bufferSize));
+            return;
+          }
+        }
+      }
+    }
+  }
+
   HalFile file;
   if (!Storage.openFileForWrite("SLP", SLEEP_FRAME_FILE, file)) {
     LOG_ERR("MAIN", "sleep_frame save: open failed");
     return;
   }
-  const size_t bufferSize = renderer.getBufferSize();
-  const size_t written = file.write(renderer.getFrameBuffer(), bufferSize);
+  const size_t written = file.write(fb, bufferSize);
   file.close();
   if (written != bufferSize) {
     LOG_ERR("MAIN", "sleep_frame save: wrote %u/%u", static_cast<unsigned>(written), static_cast<unsigned>(bufferSize));
     Storage.remove(SLEEP_FRAME_FILE);
     return;
+  }
+  {
+    HalFile fpFile;
+    if (Storage.openFileForWrite("SLP", SLEEP_FRAME_FP_FILE, fpFile)) {
+      fpFile.write(reinterpret_cast<const uint8_t*>(&fp), sizeof(fp));
+      fpFile.close();
+    }
   }
   LOG_DBG("MAIN", "sleep_frame saved %u bytes", static_cast<unsigned>(bufferSize));
 }
@@ -317,12 +364,11 @@ static bool loadSleepFrameBuffer() {
     LOG_ERR("MAIN", "sleep_frame load: read %u/%u", static_cast<unsigned>(bytesRead),
             static_cast<unsigned>(bufferSize));
     Storage.remove(path);
+    Storage.remove(SLEEP_FRAME_FP_FILE);
     return false;
   }
-  Storage.remove(path);
-  if (path != SLEEP_FRAME_FILE && Storage.exists(SLEEP_FRAME_FILE)) {
-    Storage.remove(SLEEP_FRAME_FILE);
-  }
+  // Keep the file on SD — next sleep can skip the 48 KB rewrite when unchanged.
+  // (Old code deleted it every wake, guaranteeing a full rewrite on every sleep.)
   return true;
 }
 
@@ -355,23 +401,15 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  // Instant feedback: moon on the retained page *before* heavy SD / teardown so
-  // the user sees the device reacted the moment they pressed power.
+  // Instant feedback without a panel wait: draw the moon into the framebuffer
+  // for sleep_frame re-seed, but do NOT FAST-refresh the glass (YACP-style).
+  // A full FAST here cost ~0.5–1s on every QR sleep; the last page stays on
+  // glass through deep sleep, and wake loads sleep_frame (with moon) into FB.
   if (isQuickResumeSleep) {
-    // System-wide: keep invertOnDisplay so light paint-space FB stays dark on glass.
-    // Reader-only: FB is light; temporary invert so the moon lands on a dark page
-    // without permanently flipping bits (home must stay light paint-space).
     const bool sysWideDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
-    const bool readerOnlyDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0;
     renderer.setInvertOnDisplay(sysWideDark);
     SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
-    if (readerOnlyDark && APP_STATE.lastSleepFromReader) {
-      renderer.invertScreen();
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-      renderer.invertScreen();
-    } else {
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    }
+    // No displayBuffer — panel keeps showing the last page until sleep.
   }
 
   // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.

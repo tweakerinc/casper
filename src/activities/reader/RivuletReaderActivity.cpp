@@ -2023,11 +2023,9 @@ void RivuletReaderActivity::tickIdlePageMap() {
   lastIdleMapMs_ = now;
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  // Paint-ahead first: this is the page the very next forward turn will show, so
-  // warming it here is what keeps that turn free of a layout. Page turns used to
-  // do this synchronously, blocking the reader on a layout for a page they had
-  // not asked for yet. One layout per tick, then yield back to the loop.
+  // Paint-ahead / behind first: the pages the next turn will show.
   if (engine_.warmAheadPage(renderer)) return;
+  if (engine_.warmBehindPage(renderer)) return;
 
   if (engine_.mapComplete()) return;
   const int burst = engine_.idleMapPagesThisTick(&renderer);

@@ -80,6 +80,9 @@ class RivuletEngine {
   // inside the already-loaded chapter (never returns false just to force the
   // caller to walk earlier spines back to book start).
   bool goToBestEffortLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
+  // When the current page is a verified chapter end, seal the page map so
+  // page-back from the next spine can map-hit last page (CrossInk section feel).
+  bool sealMapAtChapterEnd();
 
   // Layout current page into laidOut_ (call before paint).
   bool ensureLaidOut(const GfxRenderer& renderer);

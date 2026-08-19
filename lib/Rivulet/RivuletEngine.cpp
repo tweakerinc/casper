@@ -883,6 +883,25 @@ bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const in
   return goToStart(renderer);
 }
 
+bool RivuletEngine::sealMapAtChapterEnd() {
+  if (!laidOutValid_ || !laidOut_.atChapterEnd || chapter_.empty() || chapter_.failed()) return false;
+  const int total = currentPage_ + 1;
+  if (total <= 0) return false;
+  // Ensure map has a start for the last page we are on.
+  if (!map_.hasPage(currentPage_)) {
+    map_.resetWithStart(laidOut_.start);
+    // Can't reconstruct full map here — at least mark single-page complete chapters.
+    if (currentPage_ == 0) {
+      map_.markComplete(1);
+      return map_.complete();
+    }
+    return false;
+  }
+  map_.markComplete(total);
+  LOG_DBG("RVEN", "sealMapAtChapterEnd total=%d", total);
+  return map_.complete();
+}
+
 int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) const {
   // IR estimate is always available (no renderer required for the heuristic).
   const int bodyEm =

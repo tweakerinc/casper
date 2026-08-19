@@ -28,9 +28,20 @@ struct ImagePlate {
   std::string href;  // EPUB package-relative path
 };
 
+// A drawn hairline (thematic break / <hr>). Painting this as a real rule instead
+// of a row of em-dash glyphs makes section breaks look typeset rather than typed,
+// and removes the dependency on the active font actually having U+2014.
+struct RulePlate {
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t w = 0;
+  int16_t h = 1;
+};
+
 struct LaidOutPage {
   std::vector<GlyphSpan> spans;
   std::vector<ImagePlate> images;
+  std::vector<RulePlate> rules;
   IrCursor start{};
   IrCursor end{};     // exclusive end cursor (start of next page)
   int16_t contentH = 0;
@@ -44,6 +55,7 @@ struct LaidOutPage {
   void clear() {
     spans.clear();
     images.clear();
+    rules.clear();
     start = {};
     end = {};
     contentH = 0;

@@ -11,10 +11,12 @@ namespace rivulet {
 namespace {
 
 constexpr char kPageMagic[4] = {'R', 'V', 'P', 'G'};
-constexpr uint16_t kPageFormatVersion = 1;
+// v2: page carries drawn thematic-break rules (RulePlate) as well as spans/images.
+constexpr uint16_t kPageFormatVersion = 2;
 // Soft caps — a pathological page should not allocate unbounded on load.
 constexpr uint32_t kMaxSpans = 2000;
 constexpr uint32_t kMaxImages = 64;
+constexpr uint32_t kMaxRules = 64;
 constexpr uint32_t kMaxTextBytes = 4096;
 
 bool writeCursor(HalFile& f, const IrCursor& c) {
@@ -72,6 +74,15 @@ bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int p
     ok = ok && serialization::tryWritePod(f, im.w);
     ok = ok && serialization::tryWritePod(f, im.h);
     ok = ok && serialization::tryWriteString(f, im.href);
+  }
+
+  const uint32_t nRules = static_cast<uint32_t>(rules.size());
+  ok = ok && serialization::tryWritePod(f, nRules);
+  for (const RulePlate& r : rules) {
+    ok = ok && serialization::tryWritePod(f, r.x);
+    ok = ok && serialization::tryWritePod(f, r.y);
+    ok = ok && serialization::tryWritePod(f, r.w);
+    ok = ok && serialization::tryWritePod(f, r.h);
   }
 
   f.close();
@@ -175,6 +186,24 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
       return false;
     }
     images.push_back(std::move(im));
+  }
+
+  uint32_t nRules = 0;
+  if (!serialization::tryReadPod(f, nRules) || nRules > kMaxRules) {
+    f.close();
+    clear();
+    return false;
+  }
+  rules.reserve(nRules);
+  for (uint32_t i = 0; i < nRules; ++i) {
+    RulePlate r;
+    if (!serialization::tryReadPod(f, r.x) || !serialization::tryReadPod(f, r.y) ||
+        !serialization::tryReadPod(f, r.w) || !serialization::tryReadPod(f, r.h)) {
+      f.close();
+      clear();
+      return false;
+    }
+    rules.push_back(r);
   }
 
   f.close();

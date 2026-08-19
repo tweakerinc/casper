@@ -718,13 +718,18 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     if (block.kind == BlockKind::HorizontalRule) {
       trailingCollapsePx = 0;
       if (y + bodyLine > viewH && y > 0) break;
-      GlyphSpan sp;
-      sp.x = 0;
-      sp.y = static_cast<int16_t>(y);
-      sp.fontId = FontLadder::resolve(baseFontId, SizeStep::Body);
-      sp.epdStyle = FontLadder::epdStyleBits(RunStyle::Regular);
-      sp.text = "————————";
-      out.spans.push_back(std::move(sp));
+      // Typeset rule: a short centred hairline with air either side, the way a
+      // print book sets a section break. This used to be a literal row of em-dash
+      // glyphs, which reads as typed-out punctuation and disappears entirely on a
+      // font without U+2014.
+      if (!params.measureOnly) {
+        RulePlate rule;
+        rule.w = static_cast<int16_t>(std::max(24, (viewW * 22) / 100));
+        rule.x = static_cast<int16_t>((viewW - rule.w) / 2);
+        rule.y = static_cast<int16_t>(y + bodyLine / 2);
+        rule.h = static_cast<int16_t>(std::max(1, bodyEm / 12));
+        out.rules.push_back(rule);
+      }
       y += bodyLine + marginBottom;
       advancePastBlock(chapter, cur);
       continue;

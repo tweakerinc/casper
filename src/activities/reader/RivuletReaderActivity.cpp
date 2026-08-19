@@ -2076,22 +2076,13 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
 }
 
 void RivuletReaderActivity::warmOpenNavigationWindow() {
-  if (!ready_ || !epub_) return;
-  constexpr int kWindow = 10;
-  // Forward page-map cursors (measure-only) so next/next/… stays cheap.
-  (void)engine_.ensureMapAhead(renderer, kWindow);
-  (void)engine_.warmAheadPage(renderer);
-  if (engine_.currentPage() > 0) {
-    (void)engine_.warmBehindPage(renderer);
-  }
-  if (engine_.mapComplete()) {
-    persistPageMapIfComplete();
-  } else if (pageMapDirty_ || engine_.mapKnownPages() > 1) {
-    // Partial progress is still useful on SD if we later seal.
-    pageMapDirty_ = true;
-  }
-  LOG_INF("RVR", "open window map known=%d complete=%d ahead=%d behind=%d", engine_.mapKnownPages(),
-          engine_.mapComplete() ? 1 : 0, engine_.aheadWarm() ? 1 : 0, engine_.behindWarm() ? 1 : 0);
+  // Deliberately does nothing on the open path.
+  //
+  // This used to run ensureMapAhead(10) — ten measure-layout passes — plus an
+  // ahead/behind paint, all before first ink. That is dead weight between the
+  // button press and the page appearing, and it runs again on every chapter
+  // change. tickIdlePageMap builds exactly the same window starting ~80ms after
+  // the page is on glass, where the user never feels it.
 }
 
 bool RivuletReaderActivity::spineHasPageMap(const int spine) const {

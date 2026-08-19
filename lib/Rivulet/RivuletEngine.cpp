@@ -1212,6 +1212,13 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
   const bool guideOn = !bookStyle && (key_.flags & 0x40) != 0;
   static constexpr char kGuideDot[] = "\xc2\xb7";  // U+00B7
 
+  // Thematic breaks first: they sit behind nothing, and drawing them before text
+  // keeps the ordering stable if a rule ever shares a line box with a span.
+  for (const RulePlate& rule : laidOut_.rules) {
+    if (rule.w <= 0 || rule.h <= 0) continue;
+    renderer.fillRect(originX + rule.x, originY + rule.y, rule.w, rule.h, true);
+  }
+
   for (size_t si = 0; si < laidOut_.spans.size(); ++si) {
     const GlyphSpan& sp = laidOut_.spans[si];
     if (sp.text.empty()) continue;

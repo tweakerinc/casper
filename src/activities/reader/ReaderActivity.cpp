@@ -104,6 +104,15 @@ bool copyFileIfMissing(const std::string& src, const std::string& dst) {
 
 // Import classic epub_<std::hash> package into book_<pathId>/package once.
 void importLegacyPackageIfNeeded(const std::string& path) {
+  // One shot per book per session. The early-out below only fires when the
+  // v0.1.8 package dir holds book.bin; the active layout is epub_<hash>, so for
+  // most books this ran the full legacy probe (several deep Storage::exists, each
+  // ~70ms) on EVERY open, and after a cache wipe it re-copied files — one capture
+  // measured import=2589ms. Nothing here can change while the book stays open.
+  static std::string lastImported;
+  if (lastImported == path) return;
+  lastImported = path;
+
   const std::string pkg = BookPathId::packageDir(path);
   if (Storage.exists((pkg + "/book.bin").c_str())) return;
 

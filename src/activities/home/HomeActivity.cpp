@@ -1836,6 +1836,14 @@ void HomeActivity::render(RenderLock&& lock) {
       penumbraHalfBaselineDone = true;
       SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF theme=%u fre=%u",
                           static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+    } else if (scrubRightAfter) {
+      // A HALF scrub lands in a moment, so the soft grayscale pull that
+      // displayFastFull adds is wasted panel time — it is the extra "soft pull"
+      // felt either side of the flash on return to Home. One plain FAST here.
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      penumbraHalfBaselineDone = true;
+      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=FASTonly theme=%u fre=%u",
+                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     } else {
       UiGhostPolicy::displayFastFull(renderer);
       penumbraHalfBaselineDone = true;

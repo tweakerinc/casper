@@ -1097,6 +1097,46 @@ bool HomeActivity::handleForcedRefresh() {
   return true;
 }
 
+// Index the most recently read book's page maps while Home is untouched.
+//
+// Gated hard, because this is optional work competing with a UI the user may
+// touch at any moment: only after first paint, only when nothing is mid-flight,
+// only when no control is held, only after kIndexIdleMs of quiet, and only one
+// chapter per kIndexGapMs so input is sampled between chapters. HomeBookIndexer
+// applies its own heap floors and releases the Epub as soon as it finishes.
+void HomeActivity::tickBookIndexer() {
+  if (!homeUiReady || recentsLoading || minimalMenuOpen) return;
+  if (deferredHalfScrubOnly || deferredGreysOnly || coverGrayNeedsRetry || coverNeedsRetry) return;
+  if (activityManager.hasPendingActivityChange() || cancelBackgroundPaint) return;
+  if (recentBooks.empty()) return;
+
+  // Any control held → not idle. Reset the timer so a scroll never gets
+  // interrupted by a multi-second chapter convert starting underneath it.
+  if (isAnyFrontButtonPressed(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Left) ||
+      mappedInput.isPressed(MappedInputManager::Button::Right) ||
+      mappedInput.isPressed(MappedInputManager::Button::Up) ||
+      mappedInput.isPressed(MappedInputManager::Button::Down)) {
+    indexerIdleSinceMs_ = millis();
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (indexerIdleSinceMs_ == 0) {
+    indexerIdleSinceMs_ = now;
+    return;
+  }
+  if (now - indexerIdleSinceMs_ < kIndexIdleMs) return;
+  if (lastIndexStepMs_ != 0 && (now - lastIndexStepMs_) < kIndexGapMs) return;
+
+  // Last-read book: the one most likely to be continued.
+  bookIndexer_.begin(recentBooks[0].path);
+  lastIndexStepMs_ = millis();
+  (void)bookIndexer_.step(renderer);
+  lastIndexStepMs_ = millis();
+}
+
 void HomeActivity::loop() {
   // Home menu owns the panel — do not gen covers, multipass greys, or partial
   // home updates under it. (Deferred greys used to requestUpdate() even when
@@ -1192,6 +1232,10 @@ void HomeActivity::loop() {
       }
     }
   }
+
+  // Idle background work. Runs before input handling so a step that decides to
+  // act still leaves this frame's edges to be sampled next loop.
+  tickBookIndexer();
 
   // All minimal homes: Menu · Library · Recents · Read.
   if (usesMinimalHomeInteraction()) {

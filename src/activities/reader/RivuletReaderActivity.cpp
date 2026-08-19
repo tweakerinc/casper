@@ -3307,6 +3307,15 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
         loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/false);
       }
       const bool partialIr = loaded && engine_.chapter().failed();
+      if (partialIr) {
+        // A partial convert is why a chapter can look like it has a single page —
+        // and why Back then lands on its first page instead of its last.
+        SystemLog::logTiming("IR", "partial spine=%d blocks=%u text=%u free=%u maxA=%u", targetSpine,
+                             static_cast<unsigned>(engine_.chapter().blockCount()),
+                             static_cast<unsigned>(engine_.chapter().textSize()),
+                             static_cast<unsigned>(ESP.getFreeHeap()),
+                             static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      }
       // These land in /.casper-logs so a user capture shows exactly which step
       // failed — LOG_INF only reaches serial, which is why earlier captures had
       // no evidence for "Back does nothing".

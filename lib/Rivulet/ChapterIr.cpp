@@ -100,10 +100,25 @@ void ChapterIr::reserveForConvert(const size_t htmlLen) {
 
   size_t textGuess = htmlLen > 0 ? (htmlLen * 3 / 5) + 1024 : 4096;
   if (textGuess > kMaxTextBlob) textGuess = kMaxTextBlob;
-  // Cap text pre-size to ~half of max contiguous so vectors still fit.
-  const size_t textCap = std::min(textGuess, maxA / 2);
+  // Take the WHOLE guess when it fits. The old `min(guess, maxA/2)` cap meant a
+  // chapter needing 50 KB of text got a 30 KB blob, then had to realloc mid-convert
+  // while the HTML was still resident — the realloc failed, failed_ was set, and the
+  // chapter became a 1-page stub. That stub is what PageBack landed on ("chapter 6
+  // page 1"). Growing here is free: this runs under the caller's framebuffer loan,
+  // before any per-block allocation, so a failure now costs nothing.
+  size_t textCap = textGuess;
   if (textCap >= 2048 && (!textData_ || textCap_ < textCap)) {
     char* p = static_cast<char*>(std::realloc(textData_, textCap));
+    if (!p) {
+      // Full guess did not fit — fall back to the old conservative half-heap size
+      // so we at least avoid starting with the default 4 KB.
+      textCap = std::min(textGuess, maxA / 2);
+      p = textCap >= 2048 ? static_cast<char*>(std::realloc(textData_, textCap)) : nullptr;
+      if (p) {
+        LOG_ERR("RVIR", "text pre-size fell back to %u (guess %u, maxA %u)", static_cast<unsigned>(textCap),
+                static_cast<unsigned>(textGuess), static_cast<unsigned>(maxA));
+      }
+    }
     if (p) {
       textData_ = p;
       textCap_ = textCap;

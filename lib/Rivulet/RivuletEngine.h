@@ -90,6 +90,9 @@ class RivuletEngine {
   [[nodiscard]] int lastWalkPages() const { return lastWalkPages_; }
   [[nodiscard]] int lastWalkBlock() const { return lastWalkBlock_; }
   [[nodiscard]] uint8_t lastWalkStop() const { return lastWalkStop_; }
+  [[nodiscard]] int lastWalkSkips() const { return lastWalkSkips_; }
+  // BlockKind of the first block that refused to lay out (-1 = none).
+  [[nodiscard]] int lastWalkStallKind() const { return lastWalkStallKind_; }
   bool goToStart(const GfxRenderer& renderer);
   // True last page of this chapter IR (legacy-style full layout walk).
   // Map-hit only when complete map's last page is verified atChapterEnd.
@@ -202,6 +205,8 @@ class RivuletEngine {
   TurnFail lastTurnFail_ = TurnFail::None;
   int lastWalkPages_ = 0;
   int lastWalkBlock_ = 0;
+  int lastWalkSkips_ = 0;
+  int lastWalkStallKind_ = -1;
   uint8_t lastWalkStop_ = kWalkStopReachedEnd;
 };
 

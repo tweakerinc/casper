@@ -852,13 +852,18 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   LaidOutPage page;
   const int budget = maxWalkPages > 0 ? maxWalkPages : 1024;
   int walked = 0;
-  // Bounded so a pathological chapter cannot spin block-by-block forever.
+  // Skip budget must scale with the chapter. A flat 64 stopped a 158-block
+  // chapter at block 80 (log: stop=3 block=80/158) even though the walk was
+  // still advancing — the reader then landed mid-chapter. One skip per block is
+  // the natural bound: the walk can never revisit a block, so it still cannot spin.
   int skips = 0;
-  constexpr int kMaxBlockSkips = 64;
+  const int kMaxBlockSkips = std::max(64, static_cast<int>(chapter_.blocks().size()) + 8);
   // Telemetry so a user log can say how far the walk actually got and why it
   // stopped — guessing at this from the outside has cost several rounds.
   lastWalkPages_ = 0;
   lastWalkBlock_ = 0;
+  lastWalkSkips_ = 0;
+  lastWalkStallKind_ = -1;
   lastWalkStop_ = kWalkStopBudget;
 
   for (int guard = 0; guard < budget; ++guard) {
@@ -916,12 +921,20 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
       // keep going, exactly as this function's comment always claimed to do.
       if (cur.blockIndex + 1 < chapter_.blocks().size() && ++skips <= kMaxBlockSkips) {
         IrCursor skip = cur;
+        if (lastWalkStallKind_ < 0) {
+          // Record what kind of block first refuses to lay out — a long run of
+          // these is the real content bug behind the short maps.
+          lastWalkStallKind_ = static_cast<int>(chapter_.blocks()[cur.blockIndex].kind);
+        }
         ++skip.blockIndex;
         skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
         skip.byteInRun = 0;
-        LOG_ERR("RVEN", "goToLastPage layout fail at block %u — skipping to %u (page=%d)",
-                static_cast<unsigned>(cur.blockIndex), static_cast<unsigned>(skip.blockIndex), walked);
+        LOG_ERR("RVEN", "goToLastPage layout fail at block %u kind=%d — skipping to %u (page=%d)",
+                static_cast<unsigned>(cur.blockIndex),
+                static_cast<int>(chapter_.blocks()[cur.blockIndex].kind),
+                static_cast<unsigned>(skip.blockIndex), walked);
         cur = skip;
+        lastWalkSkips_ = skips;
         if (!map_.hasPage(walked)) {
           map_.pushPageStart(cur);
         } else {

@@ -1233,7 +1233,9 @@ bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer&
   // A single unlayoutable block (broken image, empty cell) must not truncate the
   // whole map — skip past it instead of returning an incomplete 1-2 page map.
   int skips = 0;
-  constexpr int kMaxBlockSkips = 64;
+  // One skip per block: the walk never revisits a block, so this cannot spin, and
+  // a flat cap truncated long chapters partway through (see goToLastPage).
+  const int kMaxBlockSkips = static_cast<int>(chapter.blocks().size()) + 8;
   for (int guard = 0; guard < 20000; ++guard) {
     if (!layoutPage(chapter, renderer, params, cur, page)) {
       if (!page.atChapterEnd && cur.blockIndex + 1 < chapter.blocks().size() && ++skips <= kMaxBlockSkips) {

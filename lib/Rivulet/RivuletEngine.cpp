@@ -847,13 +847,40 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
 
   LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d (not chapter end)", walked, walked,
           budget, map_.knownPages());
-  // Do not paint a mid-chapter page as "last" — invalidate paint state so caller
-  // rejects the land (turnPrev restores origin spine).
+  // Do not paint a mid-chapter page as verified "last" — clear paint state.
+  // Keep the walked map so goToBestEffortLastPage can land on known-1.
   laidOut_.clear();
   laidOutValid_ = false;
   aheadValid_ = false;
+  behindValid_ = false;
+  behind_.clear();
   currentPage_ = 0;
   return false;
+}
+
+bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages) {
+  if (chapter_.empty()) return false;
+  if (goToLastPage(renderer, maxWalkPages)) return true;
+
+  // Incomplete end-walk still filled map starts — land on the deepest known page.
+  // This is what "page back from chapter N into chapter N-1" needs when a long
+  // chapter cannot finish a full walk under heap pressure (DCC-sized chapters).
+  const int known = map_.knownPages();
+  if (known > 0) {
+    const int land = known - 1;
+    LOG_ERR("RVEN", "goToBestEffortLastPage land known-1=%d known=%d", land, known);
+    if (goToPage(renderer, land, std::max(32, land + 16))) return true;
+  }
+
+  const int est = std::max(1, chapterPageCount(&renderer));
+  const int guess = std::max(0, est - 1);
+  if (guess > 0) {
+    LOG_ERR("RVEN", "goToBestEffortLastPage land estimate=%d", guess);
+    if (goToPage(renderer, guess, std::max(96, guess + 64))) return true;
+  }
+
+  LOG_ERR("RVEN", "goToBestEffortLastPage fallback goToStart (still in this chapter)");
+  return goToStart(renderer);
 }
 
 int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) const {

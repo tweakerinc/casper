@@ -75,6 +75,11 @@ class RivuletEngine {
   // Otherwise pure layoutPage walk from start — never lands mid-chapter.
   // Caller should hold Loading UI; yields inside; may take a few seconds.
   bool goToLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
+  // Prev-chapter landing when a full end-walk fails: prefer a complete map, else
+  // the deepest known map page, else an estimate-based goToPage. Always stays
+  // inside the already-loaded chapter (never returns false just to force the
+  // caller to walk earlier spines back to book start).
+  bool goToBestEffortLastPage(const GfxRenderer& renderer, int maxWalkPages = 1024);
 
   // Layout current page into laidOut_ (call before paint).
   bool ensureLaidOut(const GfxRenderer& renderer);

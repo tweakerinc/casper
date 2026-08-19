@@ -3740,67 +3740,44 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   }
 
   // 2-bit fonts need greys multipass for smooth edges. Without it, AA fringes
-  // either vanish (BW threshold) or look speckled (all fringes → black). Match
-  // Txt: Text AA on + not dark mode → greys; else BW refresh cycle.
-  // Skip AA on fast first-ink (QR/wake preferFast) so open stays snappy.
-  // Skip AA on FORCE_SCRUB (long-press refresh): that path must run HALF via
-  // displayWithRefreshCycle — AA's displayGrayBuffer never consumed FORCE_SCRUB,
-  // so the scrub felt dead with AA on.
-  // Skip AA only when storeBwBuffer() genuinely cannot fit; aborting mid-greys
-  // makes a turn look like "nothing happened" until Home→reopen.
+  // either vanish (BW threshold) or look speckled (all fringes → black).
   //
-  // This used to read `getMaxAllocHeap() >= 56 KB`, which asks for a contiguous
-  // block that storeBwBuffer() never wants — it takes the 48 KB snapshot in 8 KB
-  // chunks specifically to survive a fragmented heap. Measured in-reader maxAlloc
-  // is 49-53 KB, so the gate failed on most page turns and AA appeared to be
-  // broken while the chunks would have fitted with ~30 KB to spare.
-  constexpr size_t kAaPaintHeadroom = 12 * 1024;  // glyph cache/decompress during the two greys passes
+  // Force scrub stays BW HALF: AA's gray nudge never consumed FORCE_SCRUB, so a
+  // long-press refresh with AA on used to feel dead. Everything else that wants
+  // AA goes through renderAntiAliased, which now pushes the BW page onto the
+  // panel (displayGrayscaleBase) before the greys — that was the missing step
+  // that made every AA-on turn look like "page did not load" until a scrub.
+  constexpr size_t kAaPaintHeadroom = 12 * 1024;
   const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
   const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
-  // A catch-up repaint exists solely to anti-alias a page that was painted flat,
-  // so it overrides the reasons AA was declined the first time. Heap still rules.
+  // Catch-up flag kept for a heap-recovery retry; it no longer has to paper over
+  // a preferFast/defer skip, because those no longer decline AA.
   const bool aaCatchUp = forceAaThisRender_;
   forceAaThisRender_ = false;
-  const bool aaThisFrame =
-      aaWanted && heapOkForAa &&
-      (aaCatchUp || (!(preferFastFirst && hadOpenHints) && !deferAa && !forceScrub));
-  // Why AA was declined, for the PAGE line below. A silent skip logged only at
-  // LOG_DBG is how this stayed invisible in every capture: devices log at level 1.
+  const bool aaThisFrame = aaWanted && heapOkForAa && !forceScrub;
   const char aaWhy = !aaWanted      ? 'o'   // off in settings (or dark mode)
-                     : !heapOkForAa ? 'h'   // storeBwBuffer would not fit
-                     : aaCatchUp    ? 'c'   // catch-up repaint: AA forced on
                      : forceScrub   ? 's'   // long-press / interval scrub owns this frame
-                     : deferAa      ? 'd'   // first ink is BW; catch-up follows
-                     : (preferFastFirst && hadOpenHints) ? 'f'  // fast first ink on open/wake
-                                    : '-';  // ran
+                     : !heapOkForAa ? 'h'   // storeBwBuffer would not fit
+                     : aaCatchUp    ? 'c'   // heap-recovery catch-up
+                                    : '-';  // ran (or will run)
 
-  // Never ink the light AA fringe in the BW pass.
-  //
-  // I introduced "dense BW" (fringe inked black) to answer a report of whispy
-  // text, but it was the wrong lever twice over: with AA on it left the greys
-  // pass nothing to shade, and with AA off it fattens every straight vertical
-  // stem by a pixel, which is why capitals read as bold for no reason. The
-  // original behaviour — solid + dark fringe only — is correct in both modes, so
-  // this is a straight revert to it.
+  // Never ink the light AA fringe in the BW pass — solid + dark fringe only.
   renderer.setBwLightFringe(false);
   paintPageContent();
   renderStatusBar();
 
   const uint32_t tRefresh = millis();
-  // The BW page is already painted into the framebuffer above. AA is an optional
-  // enhancement on top of it: if the pass cannot allocate its 48 KB BW snapshot we
-  // must still push the BW frame, or the turn silently shows the previous page.
+  // The BW page is already painted into the framebuffer above. AA puts it on
+  // glass (base) then enhances; if AA cannot run we must still push the BW frame
+  // or the turn silently shows the previous page.
   bool aaRan = false;
   if (aaThisFrame) {
-    aaRan = ReaderUtils::renderAntiAliased(renderer, [&]() {
-      renderer.clearScreen(0x00);
-      paintTextForAa();
-      // Status bar stays BW chrome (same as classic — not re-AA'd into greys).
-    });
+    // FAST base keeps open/turn snappy; the gray nudge is the "smooths a moment
+    // later" the user remembers. Half scrub stays on the non-AA path above.
+    aaRan = ReaderUtils::renderAntiAliased(
+        renderer, [&]() { paintTextForAa(); }, HalDisplay::FAST_REFRESH);
     if (aaRan) {
-      // AA's displayGrayBuffer bypasses displayWithRefreshCycle — still advance
-      // the anti-ghosting countdown so interval maintenance stays on schedule.
       const int freq = SETTINGS.getRefreshFrequency();
       if (freq != CasperSettings::REFRESH_COUNTDOWN_DISABLED && pagesUntilFullRefresh_ > 1) {
         pagesUntilFullRefresh_--;
@@ -3811,20 +3788,15 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);
   }
 
-  // Owe this page a greyscale pass?
-  //
-  // Only when AA was wanted and something transient refused it: a deliberately
-  // BW first ink, or a heap dip. A force-scrub is the user explicitly asking for
-  // a clean BW panel, so never undo that. Without this the page stays flat until
-  // the next turn, which is the "text used to sharpen a moment after it appeared,
-  // now it never does" report.
+  // Heap refused AA this frame: ask for a recovery pass once the page is on
+  // glass in BW. PreferFast/defer no longer need this — they go through AA.
   if (aaRan) {
     aaCatchUpPending_ = false;
     aaCatchUpTries_ = 0;
-  } else if (aaWanted && !forceScrub) {
-    // Still flat and AA was wanted: ask for a repaint that is allowed to
-    // anti-alias. scheduleAaCatchUp owns the retry budget.
+  } else if (aaWanted && !forceScrub && !heapOkForAa) {
     scheduleAaCatchUp();
+  } else {
+    aaCatchUpPending_ = false;
   }
   if (hadOpenHints || preferFastFirst) {
     LOG_INF("RVR", "first_ink refresh=%lums preferFast=%d aa=%d wall=%lums",

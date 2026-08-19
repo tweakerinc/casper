@@ -294,10 +294,19 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   if (tempInvert) renderer.invertScreen();
 }
 
-// Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
-// the grayscale buffer. Only the content callback is re-rendered — status bars
-// and other overlays should be drawn before calling this.
-// Kept as a template to avoid std::function overhead; instantiated once per reader type.
+// Push the BW page already painted into the framebuffer, then enhance it with
+// the 2-bit greyscale multipass.
+//
+// On X3, displayGray() is the OEM 4-level *nudge* bank. It does not replace
+// the panel contents — it expects the new BW frame to already be on glass
+// (and the controller RAM to be in the state displayGrayscaleBase leaves).
+// Without that base step, the nudge runs against the *previous* page and the
+// turn looks like nothing happened until a HALF scrub. That is exactly the
+// "I have to hold power to load the next page" report, and the PAGE lines that
+// said ran=1 refresh=408ms while the panel still showed the prior page.
+//
+// Penumbra's clock AA has always done base → greys → cleanup. This helper did
+// not, and every AA-on reader path (Rivulet, Txt) went through it.
 //
 // Returns false when the pass could not run (storeBwBuffer needs ~48 KB in 8 KB
 // chunks and fails under heap pressure). On false NOTHING has been pushed to the
@@ -305,11 +314,16 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // an ordinary refresh — otherwise the page the caller already painted never
 // reaches the glass and the turn looks like it did nothing.
 template <typename RenderFn>
-[[nodiscard]] bool renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
+[[nodiscard]] bool renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn,
+                                       const HalDisplay::RefreshMode baseMode = HalDisplay::FAST_REFRESH) {
   if (!renderer.storeBwBuffer()) {
     LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing; falling back to BW refresh");
     return false;
   }
+
+  // Page appears here. OEM AA-pre-BW mid settle leaves particles receptive to
+  // the gray nudge that follows.
+  renderer.displayGrayscaleBase(baseMode);
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
@@ -325,6 +339,9 @@ template <typename RenderFn>
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();
+  // Rebase DTM planes from the restored BW frame and clear _inGrayscaleMode so
+  // the next turn's differential BW/AA path is not fighting leftover gray RAM.
+  renderer.cleanupGrayscaleWithFrameBuffer();
   return true;
 }
 

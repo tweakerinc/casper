@@ -2760,6 +2760,13 @@ void RivuletReaderActivity::openReaderMenu() {
           return;
         }
 
+        // Delete cache paints its own Deleting/Opening chrome and full reload —
+        // do not requestUpdate() afterward (that raced the status off the glass).
+        if (action == static_cast<int>(MA::DELETE_CACHE)) {
+          onReaderMenuAction(action);
+          return;
+        }
+
         // Back to reading (cancel) or any action that needs the page.
         if (heavyReleasedForUi_) {
           (void)restoreAfterUi();
@@ -2968,9 +2975,12 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
           keepPage = std::max(0, progPage);
         }
       }
-      // Upper-left cue like Opening / Saving — wipe + rebuild can take seconds.
-      GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/false);
-      ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+      // Upper-left "Deleting" like Home "Opening" / exit "Saving".
+      // Menu dismiss leaves the menu still in the FB — wipe paper first so an
+      // 8pt corner label is not lost on busy menu ink, then FAST-refresh.
+      activityManager.waitForRenderIdle();
+      renderer.clearScreen();  // white paper — menu ink must not hide the label
+      GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
       if (epub_) {
         clearBookCache(epub_->getPath());
         LOG_INF("RVR", "cleared book cache path=%s — restore spine=%d page=%d", epub_->getPath().c_str(), keepSpine,

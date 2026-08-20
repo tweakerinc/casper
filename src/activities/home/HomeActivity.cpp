@@ -1119,6 +1119,12 @@ void HomeActivity::cancelHomeBackgroundPaint() {
   }
   deferredHalfScrubOnly = false;
   softGrayscaleBase = false;
+  // A queued minute-tick must not start clock AA after we leave — that pass
+  // displayGrayscaleBase + clearScreen(0x00) on the render task while Opening
+  // displayWindow runs on main, hangs UC8253 BUSY for 30s, and leaves the
+  // panel black (FAST first page then ghosts that black under the text).
+  forcePenumbraClockRepaint = false;
+  forceStatsUnderBoxRepaint = false;
   // Abort multipass between stages (checked in multipassHomeCoverGrayscale).
   cancelBackgroundPaint = true;
 }
@@ -1830,19 +1836,21 @@ void HomeActivity::render(RenderLock&& lock) {
         }
         if (dirty.width > 0 && dirty.height > 0) {
           const uint32_t tClock = millis();
-          // Skip greys multipass when user is leaving (long-press Settings etc.) —
-          // AA is multi-hundred ms and blocked waitForRenderIdle.
+          // Skip every panel write when leaving. Clock AA does a full-frame
+          // greyscale base then clearScreen(0x00); even a tiny displayWindow
+          // here races Opening's corner FAST and can wedge BUSY for 30s.
           const bool leave =
               cancelBackgroundPaint || activityManager.hasPendingActivityChange();
-          if (!leave &&
-              PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
-                                                      &dirty)) {
-            // AA ok
+          if (leave) {
+            SystemLog::logTiming("HOME", "penumbra_clock_digits skip (leave)");
           } else {
-            renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+            if (!PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
+                                                          &dirty)) {
+              renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+            }
+            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_digits x=%d y=%d w=%d h=%d fre=%u", dirty.x,
+                                dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
           }
-          SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_digits x=%d y=%d w=%d h=%d fre=%u", dirty.x,
-                              dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
         }
         homeUiReady = true;
         recentsLoaded = true;
@@ -2259,17 +2267,21 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // never HALF a clean home just because the theme multipasses covers.
   const bool greysDirty = coverTheme && !greysSettled;
   const bool preferFast = bookIndexReady && !greysDirty;
-  // Show "Opening" for EVERY book open. Do not gate on Dark Mode — the cue is the
-  // only feedback between Confirm and first ink, and windowed refresh keeps it
-  // visible through the activity swap.
-  GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
-  SystemLog::logTiming("HOME", "opening_status painted dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
-
+  // Wait out any in-flight Home paint BEFORE touching the panel. Opening's
+  // windowed FAST on the main task raced the render-task clock AA (log:
+  // opening_status then penumbra_clock_digits 30048ms = BUSY timeout) and
+  // left the plate black; FAST first page then ghosted that black under text.
   const uint32_t t0 = millis();
   activityManager.waitForRenderIdle();
   LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d bookIndex=%d preferFast=%d penumbra=%d coverTheme=%d",
           static_cast<unsigned long>(millis() - t0), greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, preferFast ? 1 : 0,
           isPenumbraTheme() ? 1 : 0, coverTheme ? 1 : 0);
+
+  // Show "Opening" for EVERY book open. Do not gate on Dark Mode — the cue is the
+  // only feedback between Confirm and first ink, and windowed refresh keeps it
+  // visible through the activity swap.
+  GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
+  SystemLog::logTiming("HOME", "opening_status painted dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
   cancelBackgroundPaint = false;
 
   // Defer AA only when we scrubbed or cold-opened; warm FAST open can AA next turn.

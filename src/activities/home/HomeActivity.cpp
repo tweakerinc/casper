@@ -511,8 +511,15 @@ void HomeActivity::onEnter() {
   backPressSeen = false;
   backResumeArmed = false;
   minimalMenuIndex = 0;
-  // Cold/first Home: HALF scrub (boot logo residual / first shell).
-  UiGhostPolicy::requestHardScrub();
+  // Cold/first Home: FAST so the shell appears over splash (~1s), then idle
+  // HALF. Previous frame is splash/moon, not a dense book page, so
+  // FAST-then-HALF does not settle reader residual the way Back-from-book did.
+  // Skip clock AA on that first FAST (deferScrubAfterFirstPaint_) — idle gate
+  // runs it after the HALF.
+  UiGhostPolicy::clearHardScrub();
+  deferredHalfScrubOnly = true;
+  deferredHalfScrubAtMs = millis() + kClockAaIdleMs;
+  deferScrubAfterFirstPaint_ = true;
   lastHomeInputMs_ = millis();
   // Allow cover pass to run again after leaving reader / changing theme.
   // Clear settled multipass so a theme switch always redraws and re-multipasses.

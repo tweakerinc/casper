@@ -25,9 +25,6 @@
 #include "util/QrTimingLog.h"
 #include "util/SystemLog.h"
 
-#include <BookPathId.h>
-#include <functional>
-
 bool ReaderActivity::s_preferFastFirstRefresh = false;
 bool ReaderActivity::s_deferFirstPageTextAa = false;
 uint32_t ReaderActivity::s_openWallStartMs = 0;
@@ -63,78 +60,6 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
-namespace {
-
-// Best-effort copy of a single file if dest missing.
-bool copyFileIfMissing(const std::string& src, const std::string& dst) {
-  if (!Storage.exists(src.c_str()) || Storage.exists(dst.c_str())) return false;
-  // Ensure parent of dst
-  const size_t slash = dst.find_last_of('/');
-  if (slash != std::string::npos && slash > 0) {
-    Storage.ensureDirectoryExists(dst.substr(0, slash).c_str());
-  }
-  HalFile in, out;
-  if (!Storage.openFileForRead("EPUB", src, in)) return false;
-  if (!Storage.openFileForWrite("EPUB", dst, out)) {
-    in.close();
-    return false;
-  }
-  uint8_t buf[512];
-  for (;;) {
-    const int n = in.read(buf, sizeof(buf));
-    if (n < 0) {
-      in.close();
-      out.close();
-      Storage.remove(dst.c_str());
-      return false;
-    }
-    if (n == 0) break;
-    if (out.write(buf, static_cast<size_t>(n)) != static_cast<size_t>(n)) {
-      in.close();
-      out.close();
-      Storage.remove(dst.c_str());
-      return false;
-    }
-  }
-  out.flush();
-  out.close();
-  in.close();
-  return true;
-}
-
-// Import classic epub_<std::hash> package into book_<pathId>/package once.
-void importLegacyPackageIfNeeded(const std::string& path) {
-  // One shot per book per session. The early-out below only fires when the
-  // v0.1.8 package dir holds book.bin; the active layout is epub_<hash>, so for
-  // most books this ran the full legacy probe (several deep Storage::exists, each
-  // ~70ms) on EVERY open, and after a cache wipe it re-copied files — one capture
-  // measured import=2589ms. Nothing here can change while the book stays open.
-  static std::string lastImported;
-  if (lastImported == path) return;
-  lastImported = path;
-
-  const std::string pkg = BookPathId::packageDir(path);
-  if (Storage.exists((pkg + "/book.bin").c_str())) return;
-
-  // Only rekey within /.casper (epub_<hash> → book_<id>/package). No /.casper.
-  const std::string legacyCasper = BookPathId::legacyEpubHashDir(path, CasperPaths::kPackageCacheRoot);
-  if (!Storage.exists((legacyCasper + "/book.bin").c_str())) return;
-
-  Storage.ensureDirectoryExists(pkg.c_str());
-  if (copyFileIfMissing(legacyCasper + "/book.bin", pkg + "/book.bin")) {
-    LOG_INF("READER", "imported package book.bin → %s", pkg.c_str());
-  }
-  for (const char* name : {"cover.bmp", "thumb.bmp", "progress.bin", "progress.bin.bak"}) {
-    (void)copyFileIfMissing(legacyCasper + "/" + name, pkg + "/" + name);
-  }
-  const std::string bookRoot = BookPathId::bookRoot(path);
-  Storage.ensureDirectoryExists(bookRoot.c_str());
-  (void)copyFileIfMissing(legacyCasper + "/progress.bin", bookRoot + "/progress.bin");
-  (void)copyFileIfMissing(legacyCasper + "/stats_v6.bin", bookRoot + "/stats_v6.bin");
-}
-
-}  // namespace
-
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // Step timing: on a warm open the gap between "open start" and the EPUB line
   // was ~3.2s while epub->load itself reported 132ms, so the cost is in the
@@ -146,11 +71,14 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   }
   const uint32_t tExists = millis();
 
-  // Unified /.crosspoint/book_<pathId>/package. Import classic epub_* once if needed.
-  importLegacyPackageIfNeeded(path);
-  const uint32_t tImport = millis();
-  (void)CasperBook::openBook(path, "", "");  // ensure epub_<hash> + rivulet dirs
-  const uint32_t tOpenBook = millis();
+  // Live layout is CrossPoint/CrossInk `epub_<hash>` (same as Epub::getCachePath).
+  // The book_<id>/package import was abandoned — do not probe that tree.
+  // Warm HIT: book.bin already on disk, so skip mkdir (three ~120ms scans).
+  const std::string bookBin = CasperBook::packageDirForPath(path) + "/book.bin";
+  if (!Storage.exists(bookBin.c_str())) {
+    (void)CasperBook::openBook(path, "", "");
+  }
+  const uint32_t tMkdir = millis();
 
   const char* cacheRoot = CasperPaths::kPackageCacheRoot;
   auto epub = makeUniqueNoThrow<Epub>(path, cacheRoot);
@@ -158,10 +86,8 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     LOG_ERR("READER", "Failed to allocate EPUB object");
     return nullptr;
   }
-  SystemLog::logTiming("OPEN", "pre exists=%lu import=%lu openBook=%lu",
-                       static_cast<unsigned long>(tExists - tStep0),
-                       static_cast<unsigned long>(tImport - tExists),
-                       static_cast<unsigned long>(tOpenBook - tImport));
+  SystemLog::logTiming("OPEN", "pre exists=%lu mkdir=%lu", static_cast<unsigned long>(tExists - tStep0),
+                       static_cast<unsigned long>(tMkdir - tExists));
   // First open: building the spine/TOC index (book.bin) takes a couple of seconds.
   // Upper-left status (not center pill). Cached open → no cue.
   const uint32_t tBeforeProbe = millis();

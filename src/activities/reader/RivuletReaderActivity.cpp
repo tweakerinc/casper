@@ -3967,6 +3967,21 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
                        aaRan ? 1 : 0, aaWhy, static_cast<unsigned long>(millis() - tRefresh),
                        static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
+  // Layout geometry: how much of the viewport the page actually used, and whether
+  // one more body line would have fitted. slack >= bodyLine means we are leaving a
+  // usable line on the table (reserve too generous or a block margin blocked it).
+  {
+    const auto& rk = engine_.renderKey();
+    const int bodyLine = std::max(1, renderer.getLineHeight(rk.fontId, SETTINGS.getReaderLineCompression()));
+    const int contentH = engine_.page().contentH;
+    const int slack = static_cast<int>(rk.viewportH) - contentH;
+    SystemLog::logTiming("FIT", "vpH=%u used=%d slack=%d bodyLine=%d spare_lines=%d mT=%d mB=%d statusH=%d menuF=%u",
+                         static_cast<unsigned>(rk.viewportH), contentH, slack, bodyLine,
+                         bodyLine > 0 ? slack / bodyLine : 0, marginY_, marginB_,
+                         UITheme::getInstance().getStatusBarHeight(),
+                         static_cast<unsigned>(SETTINGS.menuFontSize));
+  }
+
   // Page is on glass — adjacent-chapter indexing may now run on the idle tick.
   firstInkDone_ = true;
 

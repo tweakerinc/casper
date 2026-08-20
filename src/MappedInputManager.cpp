@@ -88,61 +88,45 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
     case Button::PageBack: {
-      // Page turn uses Up/Down + Left/Right. Side layout sets base polarity;
-      // orientSwap applies to front only so Portrait 180 / Landscape CCW keep
-      // front "forward" correct without flipping side prev/next feel.
-      const bool frontPrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT) != orientSwap;
-      const bool sidePrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT);
-      switch (sideLayout) {
-        case CasperSettings::PREV_NEXT:
-        case CasperSettings::NEXT_PREV: {
-          bool hit = false;
-          if (sidePrevIsUpLeft) {
-            hit = anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
-          } else {
-            hit = anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
-          }
-          if (frontPrevIsUpLeft) {
-            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
-                  anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
-          } else {
-            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
-                  anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
-          }
-          return hit;
-        }
-        case CasperSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          // Still allow remapped front Up/Down/Left/Right for page turn when "sides disabled"
-          // only meant the side-layout enum; keep prior behavior (no page from layout).
-          return false;
+      // Page turn uses front Up/Down/Left/Right + optional side keys.
+      // Side Button Layout (Prev/Next / disabled) MUST only affect the side
+      // cluster — front polarity is Orient Front Buttons (orientSwap) alone.
+      // (A prior formula mixed sideLayout into frontPrev and made NEXT_PREV
+      // reverse the front keys; DISABLED also killed front page-turn entirely.)
+      bool hit = false;
+      const bool frontPrevIsUpLeft = !orientSwap;
+      if (frontPrevIsUpLeft) {
+        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) || anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
+      } else {
+        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
       }
+      if (sideLayout == CasperSettings::PREV_NEXT || sideLayout == CasperSettings::NEXT_PREV) {
+        const bool sidePrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT);
+        if (sidePrevIsUpLeft) {
+          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+        } else {
+          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+        }
+      }
+      return hit;
     }
     case Button::PageForward: {
-      const bool frontNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT) != orientSwap;
-      const bool sideNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT);
-      switch (sideLayout) {
-        case CasperSettings::PREV_NEXT:
-        case CasperSettings::NEXT_PREV: {
-          bool hit = false;
-          if (sideNextIsDownRight) {
-            hit = anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
-          } else {
-            hit = anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
-          }
-          if (frontNextIsDownRight) {
-            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
-                  anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
-          } else {
-            hit = hit || anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
-                  anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
-          }
-          return hit;
-        }
-        case CasperSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
+      bool hit = false;
+      const bool frontNextIsDownRight = !orientSwap;
+      if (frontNextIsDownRight) {
+        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+      } else {
+        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) || anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
       }
+      if (sideLayout == CasperSettings::PREV_NEXT || sideLayout == CasperSettings::NEXT_PREV) {
+        const bool sideNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT);
+        if (sideNextIsDownRight) {
+          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+        } else {
+          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+        }
+      }
+      return hit;
     }
     case Button::NavNext: {
       // Logical next = Down | Right (Up/Down/Left/Right already apply front orient follow).

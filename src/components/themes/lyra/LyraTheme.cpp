@@ -390,14 +390,15 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight = centered ? renderer.getLineHeight(UI_12_FONT_ID) * 3
+                                   : lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     // Stop if this taller row would leave the list area (keep at least one row).
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
 
     const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kLyraTitleSubtitleGap + subtitleLineH));
-    const int textDrawY = itemY + std::max(0, (rowHeight - blockH) / 2);
+    const int textDrawY = itemY + (centered ? 0 : std::max(0, (rowHeight - blockH) / 2));
     const int subtitleDrawY = textDrawY + titleBlockH + kLyraTitleSubtitleGap;
 
     const auto focusStyle = (isSelected && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;

@@ -624,6 +624,10 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // If selection is below what a dense pack from pageStart can show, slide start up.
   auto measureRowH = [&](int i) -> int {
+    // Section headers: tab-bar font (UI_12) + two blank lines of air underneath.
+    if (rowCentered && rowCentered(i)) {
+      return renderer.getLineHeight(UI_12_FONT_ID) * 3;
+    }
     int rowTextWidth = contentWidth - BaseMetrics::values.contentSidePadding * 2;
     const auto itemName = rowTitle(i);
     std::vector<std::string> titleLines =
@@ -702,20 +706,22 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight = centered ? renderer.getLineHeight(UI_12_FONT_ID) * 3
+                                   : computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb,
+                                                                  nTitleLines);
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
 
     // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
-    // Section headers stay regular and centered; they are never the focus row.
+    // Section headers: same size as Settings tab labels (UI_12 bold), with two
+    // blank lines of air below so the next control is not cramped.
     const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
-    int textY = itemY + std::max(0, (rowHeight - blockH) / 2);
+    int textY = itemY + (centered ? 0 : std::max(0, (rowHeight - blockH) / 2));
     const int textX = rect.x + BaseMetrics::values.contentSidePadding;
     const auto focusStyle = (focused && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 
     if (centered) {
-      // Section headers: slightly larger + bold so they read as labels, not rows.
       const int headerFont = UI_12_FONT_ID;
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textY + static_cast<int>(li) * lineStep;

@@ -563,13 +563,13 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
 }
 
 int BaseTheme::listSectionHeaderHeight(const GfxRenderer& renderer) {
-  // Match Settings chrome: UI_12 title between two 1px rules (same air as the
-  // tab bar content band), then verticalSpacing so the next row sits like
-  // Manage Reader UI under the tab rule — not two blank lines below a flush
-  // title (that is why Long-Press Left sat too far down).
+  // Slot = chrome + verticalSpacing. Chrome is centered in that slot so the
+  // gap above the first rule equals the gap below the second (the previous
+  // paint sat the top rule flush on Anti-Ghosting and dumped all the air
+  // under the bottom rule, which is why Long-Press Left felt dropped).
   constexpr int kRuleThickness = 1;
   constexpr int kBandExtraPad = 10;
-  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
   const int gap = UITheme::getInstance().getMetrics().verticalSpacing;
   return kRuleThickness + lineH + kBandExtraPad + kRuleThickness + gap;
 }
@@ -577,15 +577,18 @@ int BaseTheme::listSectionHeaderHeight(const GfxRenderer& renderer) {
 void BaseTheme::drawListSectionHeader(const GfxRenderer& renderer, int x, int width, int y, const char* title) {
   constexpr int kRuleThickness = 1;
   constexpr int kBandExtraPad = 10;
-  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+  const int chromeH = kRuleThickness + lineH + kBandExtraPad + kRuleThickness;
+  const int totalH = listSectionHeaderHeight(renderer);
+  const int y0 = y + std::max(0, (totalH - chromeH) / 2);
   const int sidePad = UITheme::getInstance().getMetrics().contentSidePadding;
   const int maxTitleW = std::max(40, width - sidePad * 2);
-  renderer.drawLine(x, y, x + width - 1, y, kRuleThickness, true);
-  const int titleY = y + kRuleThickness + kBandExtraPad / 2;
+  renderer.drawLine(x, y0, x + width - 1, y0, kRuleThickness, true);
+  const int titleY = y0 + kRuleThickness + kBandExtraPad / 2;
   const char* label = (title != nullptr) ? title : "";
-  const auto truncated = renderer.truncatedText(UI_12_FONT_ID, label, maxTitleW, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_12_FONT_ID, titleY, truncated.c_str(), true, EpdFontFamily::BOLD);
-  const int bottomRuleY = y + kRuleThickness + lineH + kBandExtraPad;
+  const auto truncated = renderer.truncatedText(UI_10_FONT_ID, label, maxTitleW, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, titleY, truncated.c_str(), true, EpdFontFamily::BOLD);
+  const int bottomRuleY = y0 + kRuleThickness + lineH + kBandExtraPad;
   renderer.drawLine(x, bottomRuleY, x + width - 1, bottomRuleY, kRuleThickness, true);
 }
 

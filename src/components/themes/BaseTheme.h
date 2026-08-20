@@ -227,8 +227,9 @@ class BaseTheme {
                         const std::function<bool(int index)>& rowApplied = nullptr,
                         const std::function<bool(int index)>& rowCentered = nullptr) const;
   // In-list section title (Settings → Reader → "Reader Controls"):
-  // UI_12 bold like the Settings / Reader chrome, two 1px rules, then the same
-  // air the first list row has under the tab bar (verticalSpacing).
+  // UI_10 bold (same face as the Display/Reader/Controls/System tabs when
+  // four labels force the step-down), two 1px rules, centered in the slot
+  // so Anti-Ghosting↔top rule matches bottom rule↔first item.
   static int listSectionHeaderHeight(const GfxRenderer& renderer);
   static void drawListSectionHeader(const GfxRenderer& renderer, int x, int width, int y, const char* title);
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,

@@ -1907,121 +1907,70 @@ void RivuletReaderActivity::persistPageMapIfComplete() {
 }
 
 void RivuletReaderActivity::tickIdlePageMap() {
-  if (!ready_ || !epub_) return;
-  // Never run heavy idle work before the page is on glass.
-  if (!firstInkDone_) return;
-  // Don't steal the bus while any page-turn control is held.
+  if (!ready_ || !epub_ || !firstInkDone_) return;
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
       mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
     return;
   }
   const unsigned long now = millis();
-  // Stay out of the way right after open / a turn — cold opens were freezing
-  // because idle immediately ran multi-page extend + prefetch on the main loop
-  // (0027: MAP 9→21 then prefetch within 1s of first ink; force-refresh felt dead).
-  if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 1500UL) return;
+  // Hard quiet window — buttons must work after open/turn.
+  if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 3000UL) return;
 
-  const bool mapDone = engine_.mapComplete();
-  // Gentle cadence: one small bite every 300ms while catching up, else 500ms.
-  const unsigned long intervalMs = mapDone ? 500UL : 300UL;
-  if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < intervalMs) return;
-  lastIdleMapMs_ = now;
-
+  // Absolute max: one map page per second. 0028 did ~1 page/300ms and felt locked.
+  static unsigned long s_lastMapWorkMs = 0;
   static int s_lastLoggedKnown = -1;
   static int s_lastLoggedSpine = -1;
   static unsigned long s_lastMapLogMs = 0;
-  static unsigned long s_lastHeapSkipLogMs = 0;
-  static unsigned long s_lastPrefetchMs = 0;
   static int s_stallTicks = 0;
   static int s_idleGaveUpSpine = -1;
+  if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1000UL) return;
+  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) {
-    if (now - s_lastHeapSkipLogMs >= 10000UL) {
-      s_lastHeapSkipLogMs = now;
-      SystemLog::logTiming("MAP", "idle_skip_heap spine=%d known=%d complete=%d fre=%u maxA=%u", spineIndex_,
-                           engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
-                           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    }
-    return;
-  }
+  // Sole idle job: extend chapter map one page, then return to the main loop.
+  // Prefetch / warm-ahead / next-spine warm disabled — each caused multi-second
+  // freezes on device while sitting at chapter start.
+  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
 
-  // 1) Finish the chapter page map — one page per tick so input stays responsive.
-  if (!engine_.mapComplete() && s_idleGaveUpSpine != spineIndex_) {
-    const int knownBefore = engine_.mapKnownPages();
-    const int est = engine_.chapterPageCount(&renderer);
-    const bool progressed = engine_.extendPageMap(renderer, /*maxPages=*/1);
-    const int knownAfter = engine_.mapKnownPages();
-    if (progressed) {
-      pageMapDirty_ = true;
-      s_stallTicks = 0;
-    } else {
-      ++s_stallTicks;
-      if (s_stallTicks >= 3 && knownAfter > 0) {
-        if (engine_.tryCompleteMapAtEnd(renderer)) {
-          pageMapDirty_ = true;
-          s_stallTicks = 0;
-          SystemLog::logTiming("MAP", "try_complete spine=%d known=%d complete=%d", spineIndex_,
-                               engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0);
-        } else if (s_stallTicks >= 8) {
-          s_idleGaveUpSpine = spineIndex_;
-          SystemLog::logTiming("MAP", "idle_give_up spine=%d known=%d est=%d stall=%d", spineIndex_, knownAfter, est,
-                               s_stallTicks);
-        }
+  s_lastMapWorkMs = now;
+  lastIdleMapMs_ = now;
+  const int knownBefore = engine_.mapKnownPages();
+  const int est = engine_.chapterPageCount(&renderer);
+  const bool progressed = engine_.extendPageMap(renderer, /*maxPages=*/1);
+  const int knownAfter = engine_.mapKnownPages();
+  if (progressed) {
+    pageMapDirty_ = true;
+    s_stallTicks = 0;
+  } else {
+    ++s_stallTicks;
+    if (s_stallTicks >= 3 && knownAfter > 0) {
+      if (engine_.tryCompleteMapAtEnd(renderer)) {
+        pageMapDirty_ = true;
+        s_stallTicks = 0;
+        SystemLog::logTiming("MAP", "try_complete spine=%d known=%d complete=%d", spineIndex_,
+                             engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0);
+      } else if (s_stallTicks >= 8) {
+        s_idleGaveUpSpine = spineIndex_;
+        SystemLog::logTiming("MAP", "idle_give_up spine=%d known=%d est=%d stall=%d", spineIndex_, knownAfter, est,
+                             s_stallTicks);
       }
     }
-
-    const bool nowComplete = engine_.mapComplete();
-    if (nowComplete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
-        (now - s_lastMapLogMs) >= 5000UL) {
-      s_lastLoggedKnown = knownAfter;
-      s_lastLoggedSpine = spineIndex_;
-      s_lastMapLogMs = now;
-      SystemLog::logTiming(
-          "MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d burst=1 stall=%d page=%d fre=%u maxA=%u", spineIndex_,
-          knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0, s_stallTicks,
-          engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
-          static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    }
-
-    if (nowComplete) {
-      persistPageMapIfComplete();
-      // Do NOT requestUpdate() here — forcing a repaint mid-idle caused a second
-      // multi-hundred-ms refresh right after open. "~" clears on the next turn.
-      s_stallTicks = 0;
-    }
-    return;
   }
 
-  // 2) RAM ahead only (cheap if already warm). Skip behind — less critical and
-  //    can SD-load. Skip entirely until map is done so we don't compete with seal.
-  if (engine_.mapComplete() && engine_.warmAheadPage(renderer)) {
-    if (now - s_lastMapLogMs >= 5000UL) {
-      s_lastMapLogMs = now;
-      SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
-    }
-    return;
+  const bool nowComplete = engine_.mapComplete();
+  if (nowComplete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
+      (now - s_lastMapLogMs) >= 5000UL) {
+    s_lastLoggedKnown = knownAfter;
+    s_lastLoggedSpine = spineIndex_;
+    s_lastMapLogMs = now;
+    SystemLog::logTiming("MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d stall=%d page=%d fre=%u maxA=%u",
+                         spineIndex_, knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0,
+                         s_stallTicks, engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
+                         static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
-
-  // 3) SD prefetch is expensive (full layout + file write). At most one page
-  //    every 5s, and only when truly idle after map complete.
-  if (engine_.mapComplete() && (now - s_lastPrefetchMs) >= 5000UL && (now - lastPageTurnTime_) >= 5000UL) {
-    if (engine_.idlePrefetchPageCache(renderer, /*maxForward=*/2)) {
-      s_lastPrefetchMs = now;
-      pageMapDirty_ = true;
-      SystemLog::logTiming("MAP", "prefetch spine=%d page=%d fre=%u", spineIndex_, engine_.currentPage() + 1,
-                           static_cast<unsigned>(ESP.getFreeHeap()));
-      return;
-    }
-  }
-
-  // 4) Next-spine prefix — full chapter swap; only after long quiet idle.
-  if (engine_.mapComplete() && !chapterNavBusy_ && !warmingAdjacent_ && (now - lastPageTurnTime_) > 10000UL &&
-      ESP.getFreeHeap() > 100 * 1024 && ESP.getMaxAllocHeap() > 56 * 1024) {
-    if (lastNextSpineWarmFrom_ != spineIndex_) {
-      lastNextSpineWarmFrom_ = spineIndex_;
-      (void)warmNextSpinePrefix(/*pages=*/2);
-    }
+  if (nowComplete) {
+    persistPageMapIfComplete();
+    s_stallTicks = 0;
   }
 }
 

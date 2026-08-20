@@ -464,8 +464,15 @@ void TextSettingsActivity::render(RenderLock&&) {
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
   // Unboxed full-width preview: double-line "Preview" header + reader-accurate sample.
+  // Builtin AA-off reading inks Mild (same extra stem weight as the page). SD
+  // faces stay Normal — their files already carry the weight the user installed.
+  const bool builtinPreview = SETTINGS.sdFontFamilyName[0] == '\0';
+  const GfxRenderer::BwGlyphWeight prevWeight = renderer.bwGlyphWeight();
+  renderer.setBwGlyphWeight(builtinPreview && SETTINGS.textAntiAliasing == 0 ? GfxRenderer::BwGlyphWeight::Mild
+                                                                            : GfxRenderer::BwGlyphWeight::Normal);
   const textsettings::PreviewPaint previewPaint =
       textsettings::renderPreview(renderer, previewLayout_, geo.previewTop, geo.previewHeight, familyName, sizeName);
+  renderer.setBwGlyphWeight(prevWeight);
 
   // Front Up/Down: list. Side: switch tabs. Confirm on tab bar also advances tab.
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));

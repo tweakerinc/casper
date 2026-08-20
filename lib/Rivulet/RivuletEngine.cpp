@@ -483,15 +483,8 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
     ahead_.clear();
     return false;
   }
-  // Persist ahead page under its index for QR / revisit (classic page-cache idea).
-  if (!pageCacheDir_.empty() && ESP.getMaxAllocHeap() >= 12 * 1024) {
-    char path[220];
-    const int aheadIdx = currentPage_ + 1;
-    if (pageCachePath(aheadIdx, path, sizeof(path))) {
-      ensurePageCacheDir();
-      (void)ahead_.saveToFile(path, key_, aheadIdx);
-    }
-  }
+  // Do not SD-save here. Idle warm used to write .rvpg every time and hitch the
+  // UI; ensureLaidOut/savePageCache persists when the page is actually shown.
   return true;
 }
 

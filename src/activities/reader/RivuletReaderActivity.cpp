@@ -1914,29 +1914,36 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
   const unsigned long now = millis();
-  // Hard quiet window — buttons must work after open/turn.
-  if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 3000UL) return;
+  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  // Absolute max: one map page per second. 0028 did ~1 page/300ms and felt locked.
   static unsigned long s_lastMapWorkMs = 0;
   static int s_lastLoggedKnown = -1;
   static int s_lastLoggedSpine = -1;
   static unsigned long s_lastMapLogMs = 0;
   static int s_stallTicks = 0;
   static int s_idleGaveUpSpine = -1;
-  if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1000UL) return;
-  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  // Sole idle job: extend chapter map one page, then return to the main loop.
-  // Prefetch / warm-ahead / next-spine warm disabled — each caused multi-second
-  // freezes on device while sitting at chapter start.
+  // Turn speed first: warm next page in RAM ASAP (no SD). Only 50ms after a turn.
+  // 0029 disabled this and every forward turn paid a full layout — felt unusable.
+  if (!engine_.aheadWarm() && (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
+    if (engine_.warmAheadPage(renderer)) {
+      if (now - s_lastMapLogMs >= 5000UL) {
+        s_lastMapLogMs = now;
+        SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+      }
+      return;
+    }
+  }
+
+  // Map seal ("~"): slower background. Quiet 2s after turn; 1.5s after each bite.
+  if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 2000UL) return;
+  if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1500UL) return;
   if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
 
-  s_lastMapWorkMs = now;
-  lastIdleMapMs_ = now;
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);
   const bool progressed = engine_.extendPageMap(renderer, /*maxPages=*/1);
+  s_lastMapWorkMs = millis();
   const int knownAfter = engine_.mapKnownPages();
   if (progressed) {
     pageMapDirty_ = true;

@@ -54,10 +54,12 @@ Layout compute(const GfxRenderer& renderer) {
   const int screenMargin = static_cast<int>(SETTINGS.screenMargin);
   const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Half-paragraph air between chrome and body text (top and bottom match).
+  // Air between chrome and body text. A third of a line reads as a clean gap
+  // without spending a line of text on padding (half a line was visibly loose
+  // on device photos). Same value top and bottom so the page looks balanced.
   const float lcForLine = SETTINGS.getReaderLineCompression();
   const int bodyLine = std::max(12, renderer.getLineHeight(key.fontId, lcForLine));
-  const int clearance = std::max(6, bodyLine / 2);
+  const int clearance = std::max(8, bodyLine / 3);
 
   // Landscape front-key chrome is a *side* strip (CCW right / CW left). Keep body
   // text clear of it so dictionary/clip can still see edge words.

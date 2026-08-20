@@ -1868,7 +1868,23 @@ void RivuletReaderActivity::tickIdlePageMap() {
   const unsigned long intervalMs = catchUp ? 80UL : 250UL;
   if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < intervalMs) return;
   lastIdleMapMs_ = now;
-  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
+
+  // Rate-limited field diagnostics (SystemLog no-ops when Enable Logging is Off).
+  static int s_lastLoggedKnown = -1;
+  static int s_lastLoggedSpine = -1;
+  static unsigned long s_lastMapLogMs = 0;
+  static unsigned long s_lastHeapSkipLogMs = 0;
+  static int s_stallTicks = 0;
+
+  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) {
+    if (now - s_lastHeapSkipLogMs >= 10000UL) {
+      s_lastHeapSkipLogMs = now;
+      SystemLog::logTiming("MAP", "idle_skip_heap spine=%d known=%d complete=%d fre=%u maxA=%u", spineIndex_,
+                           engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
+                           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    }
+    return;
+  }
 
   // 1) RAM windows for the next turn either way.
   if (engine_.warmAheadPage(renderer)) return;
@@ -1893,6 +1909,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
     const int prevSpine = nearestSpineWithoutMap(/*preferBackward=*/true, /*adjacentOnly=*/true);
     if (prevSpine >= 0 && prevSpine < spineIndex_ && prevSpine != lastIndexAttemptSpine_) {
       lastIndexAttemptSpine_ = prevSpine;
+      SystemLog::logTiming("MAP", "warm_prev_spine=%d from=%d", prevSpine, spineIndex_);
       (void)indexSpinePageMap(prevSpine);
       return;
     }
@@ -1900,11 +1917,34 @@ void RivuletReaderActivity::tickIdlePageMap() {
 
   // 4) Thin page-map extension (cursors only) until complete.
   if (engine_.mapComplete()) return;
+  const int knownBefore = engine_.mapKnownPages();
+  const int est = engine_.chapterPageCount(&renderer);
   const int burst = engine_.idleMapPagesThisTick(&renderer);
   if (burst <= 0) return;
-  if (!engine_.extendPageMap(renderer, burst)) return;
-  pageMapDirty_ = true;
-  if (engine_.mapComplete()) {
+  const bool progressed = engine_.extendPageMap(renderer, burst);
+  const int knownAfter = engine_.mapKnownPages();
+  const bool complete = engine_.mapComplete();
+  if (progressed) {
+    pageMapDirty_ = true;
+    s_stallTicks = 0;
+  } else {
+    ++s_stallTicks;
+  }
+
+  // Log on progress, stall, complete, spine change, or every 5s while incomplete.
+  if (complete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
+      (now - s_lastMapLogMs) >= 5000UL) {
+    s_lastLoggedKnown = knownAfter;
+    s_lastLoggedSpine = spineIndex_;
+    s_lastMapLogMs = now;
+    SystemLog::logTiming(
+        "MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d burst=%d stall=%d page=%d fre=%u maxA=%u",
+        spineIndex_, knownBefore, knownAfter, est, complete ? 1 : 0, progressed ? 1 : 0, burst, s_stallTicks,
+        engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
+        static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  }
+
+  if (complete) {
     persistPageMapIfComplete();
     // Drop the chapter "~" once — one full refresh, not every idle tick.
     requestUpdate();
@@ -3869,12 +3909,11 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // PAGE/ERS lines belonged to the classic reader and went away with it. That is
   // why a report of "pages do not load" could not be checked against a capture.
   // One line per painted page: which page, whether AA ran, and the heap it ran on.
-  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d aa=%d ran=%d why=%c refresh=%lums fre=%u maxA=%u", spineIndex_,
-                       engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)),
-                       aaThisFrame ? 1 : 0, aaRan ? 1 : 0, aaWhy,
-                       static_cast<unsigned long>(millis() - tRefresh),
-                       static_cast<unsigned>(ESP.getFreeHeap()),
-                       static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d map=%d/%s aa=%d ran=%d why=%c refresh=%lums fre=%u maxA=%u",
+                       spineIndex_, engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)),
+                       engine_.mapKnownPages(), engine_.mapComplete() ? "done" : "est", aaThisFrame ? 1 : 0,
+                       aaRan ? 1 : 0, aaWhy, static_cast<unsigned long>(millis() - tRefresh),
+                       static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   // Page is on glass — adjacent-chapter indexing may now run on the idle tick.
   firstInkDone_ = true;

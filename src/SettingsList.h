@@ -467,7 +467,7 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
                           {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
                            StrId::STR_PAGES_30, StrId::STR_PAGES_60, StrId::STR_NEVER},
                           "refreshFrequency", StrId::STR_CAT_READER),
-        // Reader Controls: shared shortcut list for sides + Confirm long/double.
+        // Reader Controls: section chrome (same face/rules as Settings / Reader).
         SettingInfo::Header(StrId::STR_READER_CONTROLS_HEADING, StrId::STR_CAT_READER),
         buildReaderShortcutSetting(StrId::STR_LONG_PRESS_SIDE_A_X3, &CasperSettings::longPressSideA, "longPressSideA"),
         buildReaderShortcutSetting(StrId::STR_LONG_PRESS_SIDE_B_X3, &CasperSettings::longPressSideB, "longPressSideB"),

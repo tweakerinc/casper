@@ -562,6 +562,33 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return std::max(1, contentHeight / rowStep);
 }
 
+int BaseTheme::listSectionHeaderHeight(const GfxRenderer& renderer) {
+  // Match Settings chrome: UI_12 title between two 1px rules (same air as the
+  // tab bar content band), then verticalSpacing so the next row sits like
+  // Manage Reader UI under the tab rule — not two blank lines below a flush
+  // title (that is why Long-Press Left sat too far down).
+  constexpr int kRuleThickness = 1;
+  constexpr int kBandExtraPad = 10;
+  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int gap = UITheme::getInstance().getMetrics().verticalSpacing;
+  return kRuleThickness + lineH + kBandExtraPad + kRuleThickness + gap;
+}
+
+void BaseTheme::drawListSectionHeader(const GfxRenderer& renderer, int x, int width, int y, const char* title) {
+  constexpr int kRuleThickness = 1;
+  constexpr int kBandExtraPad = 10;
+  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
+  const int sidePad = UITheme::getInstance().getMetrics().contentSidePadding;
+  const int maxTitleW = std::max(40, width - sidePad * 2);
+  renderer.drawLine(x, y, x + width - 1, y, kRuleThickness, true);
+  const int titleY = y + kRuleThickness + kBandExtraPad / 2;
+  const char* label = (title != nullptr) ? title : "";
+  const auto truncated = renderer.truncatedText(UI_12_FONT_ID, label, maxTitleW, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, titleY, truncated.c_str(), true, EpdFontFamily::BOLD);
+  const int bottomRuleY = y + kRuleThickness + lineH + kBandExtraPad;
+  renderer.drawLine(x, bottomRuleY, x + width - 1, bottomRuleY, kRuleThickness, true);
+}
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
@@ -624,9 +651,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // If selection is below what a dense pack from pageStart can show, slide start up.
   auto measureRowH = [&](int i) -> int {
-    // Section headers: tab-bar font (UI_12) + two blank lines of air underneath.
     if (rowCentered && rowCentered(i)) {
-      return renderer.getLineHeight(UI_12_FONT_ID) * 3;
+      return listSectionHeaderHeight(renderer);
     }
     int rowTextWidth = contentWidth - BaseMetrics::values.contentSidePadding * 2;
     const auto itemName = rowTitle(i);
@@ -706,32 +732,28 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = centered ? renderer.getLineHeight(UI_12_FONT_ID) * 3
+    const int rowHeight = centered ? listSectionHeaderHeight(renderer)
                                    : computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb,
                                                                   nTitleLines);
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
 
-    // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
-    // Section headers: same size as Settings tab labels (UI_12 bold), with two
-    // blank lines of air below so the next control is not cramped.
-    const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
-    int textY = itemY + (centered ? 0 : std::max(0, (rowHeight - blockH) / 2));
-    const int textX = rect.x + BaseMetrics::values.contentSidePadding;
-    const auto focusStyle = (focused && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-
     if (centered) {
-      const int headerFont = UI_12_FONT_ID;
-      for (size_t li = 0; li < titleLines.size(); ++li) {
-        const int ly = textY + static_cast<int>(li) * lineStep;
-        renderer.drawCenteredText(headerFont, ly, titleLines[li].c_str(), /*black=*/true, EpdFontFamily::BOLD);
-      }
-    } else {
-      for (size_t li = 0; li < titleLines.size(); ++li) {
-        const int ly = textY + static_cast<int>(li) * lineStep;
-        renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
-      }
+      drawListSectionHeader(renderer, rect.x, contentWidth, itemY, itemName.c_str());
+      itemY += rowHeight;
+      continue;
+    }
+
+    // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
+    const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
+    int textY = itemY + std::max(0, (rowHeight - blockH) / 2);
+    const int textX = rect.x + BaseMetrics::values.contentSidePadding;
+    const auto focusStyle = focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+
+    for (size_t li = 0; li < titleLines.size(); ++li) {
+      const int ly = textY + static_cast<int>(li) * lineStep;
+      renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
     }
 
     // Apply checkerboard dither to create gray text effect for dimmed items

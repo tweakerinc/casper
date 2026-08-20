@@ -108,7 +108,8 @@ struct SettingInfo {
     return s;
   }
 
-  // Non-interactive centered section label (skipped by Up/Down navigation).
+  // Non-interactive section title (skipped by Up/Down). Painted as a Settings
+  // chrome replica: UI_12 bold between two rules, then verticalSpacing.
   static SettingInfo Header(StrId nameId, StrId category) {
     SettingInfo s;
     s.nameId = nameId;

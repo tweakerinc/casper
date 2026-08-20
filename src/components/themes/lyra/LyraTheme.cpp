@@ -390,29 +390,28 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = centered ? renderer.getLineHeight(UI_12_FONT_ID) * 3
-                                   : lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight =
+        centered ? listSectionHeaderHeight(renderer)
+                 : lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     // Stop if this taller row would leave the list area (keep at least one row).
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
 
+    if (centered) {
+      drawListSectionHeader(renderer, rect.x, contentWidth, itemY, itemName.c_str());
+      itemY += rowHeight;
+      continue;
+    }
+
     const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kLyraTitleSubtitleGap + subtitleLineH));
-    const int textDrawY = itemY + (centered ? 0 : std::max(0, (rowHeight - blockH) / 2));
+    const int textDrawY = itemY + std::max(0, (rowHeight - blockH) / 2);
     const int subtitleDrawY = textDrawY + titleBlockH + kLyraTitleSubtitleGap;
 
-    const auto focusStyle = (isSelected && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-    if (centered) {
-      const int headerFont = UI_12_FONT_ID;
-      for (size_t li = 0; li < titleLines.size(); ++li) {
-        const int ly = textDrawY + static_cast<int>(li) * lineStep;
-        renderer.drawCenteredText(headerFont, ly, titleLines[li].c_str(), /*black=*/true, EpdFontFamily::BOLD);
-      }
-    } else {
-      for (size_t li = 0; li < titleLines.size(); ++li) {
-        const int ly = textDrawY + static_cast<int>(li) * lineStep;
-        renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
-      }
+    const auto focusStyle = isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    for (size_t li = 0; li < titleLines.size(); ++li) {
+      const int ly = textDrawY + static_cast<int>(li) * lineStep;
+      renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
     }
 
     if (rowDimmed && rowDimmed(i) && !isSelected && !centered) {

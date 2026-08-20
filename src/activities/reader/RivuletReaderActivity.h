@@ -77,6 +77,7 @@ class RivuletReaderActivity final : public Activity {
   static bool extractEpubItem(void* ctx, const char* srcPath, const char* destPath);
   bool fireMenuShortcut(uint8_t function);
   bool tryLongPressShortcut(uint8_t function, bool& suppressRelease);
+  bool trySideLongPressShortcut();
   // Side long-press: cycle all orientations, or flip Portrait ↔ Flip With.
   void cycleReadingOrientation(bool nextTriggered);
   void flipReadingOrientation();
@@ -182,6 +183,9 @@ class RivuletReaderActivity final : public Activity {
   bool error_ = false;
   bool firstPaint_ = true;
   bool ignoreNextConfirmRelease_ = false;
+  // After a side long-press shortcut fires while held, ignore that key's release
+  // so it does not also page-turn (same pattern as Confirm).
+  bool ignoreNextSideRelease_ = false;
   bool pendingConfirmMenuOpen_ = false;
   bool pageMapDirty_ = false;  // map grew since last SD save
   // True while walking prev-chapter to true last page — render shows Loading only

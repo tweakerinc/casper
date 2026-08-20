@@ -3322,6 +3322,47 @@ bool RivuletReaderActivity::tryLongPressShortcut(const uint8_t function, bool& s
   return true;
 }
 
+// Fire side long-press while the key is still held (Confirm-style). Must not wait
+// for release: on release isPressed is false, so the old path always fell through
+// to turnPrev/turnNext ("assigned Dark Mode, release went to previous page").
+bool RivuletReaderActivity::trySideLongPressShortcut() {
+  if (ignoreNextSideRelease_) return false;
+  const bool sideA = gpio.isPressed(HalGPIO::BTN_UP);    // X3 Left / X4 Up
+  const bool sideB = gpio.isPressed(HalGPIO::BTN_DOWN);  // X3 Right / X4 Down
+  if (!sideA && !sideB) return false;
+
+  const uint8_t action = sideA ? SETTINGS.longPressSideA : SETTINGS.longPressSideB;
+  if (action == CasperSettings::LP_MENU_DISABLED) return false;
+
+  const unsigned long needHold =
+      (action == CasperSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+  if (mappedInput.getHeldTime() < needHold) return false;
+
+  bool ok = false;
+  if (action == CasperSettings::LP_MENU_CHAPTER_SKIP) {
+    // Physical side A (left/up) = back; side B (right/down) = forward.
+    if (sideA) {
+      chapterSkipPrev();
+    } else {
+      chapterSkipNext();
+    }
+    ok = true;
+  } else if (action == CasperSettings::LP_MENU_ORIENTATION_CHANGE) {
+    cycleReadingOrientation(/*nextTriggered=*/sideB);
+    ok = true;
+  } else {
+    ok = fireMenuShortcut(action);
+  }
+  if (!ok) return false;
+
+  ignoreNextSideRelease_ = true;
+  // Latch must wait for release too, or a residual edge can still turn the page.
+  pageTurnLatch_.waitingRelease = true;
+  pendingConfirmMenuOpen_ = false;
+  LOG_INF("RVR", "side long-press hw=%s action=%u", sideA ? "A" : "B", static_cast<unsigned>(action));
+  return true;
+}
+
 void RivuletReaderActivity::loop() {
   if (error_) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
@@ -3386,6 +3427,22 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
+  // Side long-press: fire while held (before page-turn latch eats the release).
+  if (trySideLongPressShortcut()) {
+    return;
+  }
+  if (ignoreNextSideRelease_) {
+    if (!gpio.isPressed(HalGPIO::BTN_UP) && !gpio.isPressed(HalGPIO::BTN_DOWN)) {
+      ignoreNextSideRelease_ = false;
+      // Drain page-turn edges from this release so Home/reader don't double-act.
+      (void)mappedInput.wasPressed(MappedInputManager::Button::PageBack);
+      (void)mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+      (void)mappedInput.wasPressed(MappedInputManager::Button::PageForward);
+      (void)mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+    }
+    return;
+  }
+
   // Long-press Confirm must run before page-turn latch so hold is not eaten.
   if (!ignoreNextConfirmRelease_ && mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
     if (tryLongPressShortcut(SETTINGS.longPressMenuFunction, ignoreNextConfirmRelease_)) {
@@ -3434,32 +3491,11 @@ void RivuletReaderActivity::loop() {
   }
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
-  const bool longPress = !fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS;
+  (void)heldMs;
 
-  // Per-side long-press (hw 4 = X3 Left / X4 Up, hw 5 = X3 Right / X4 Down).
-  // Same action enum as Long-Press / Double-Press Menu.
-  if (longPress && (prevTriggered || nextTriggered)) {
-    const bool sideA = gpio.isPressed(HalGPIO::BTN_UP);
-    const bool sideB = gpio.isPressed(HalGPIO::BTN_DOWN);
-    const uint8_t sideAction = sideA   ? SETTINGS.longPressSideA
-                               : sideB ? SETTINGS.longPressSideB
-                                       : CasperSettings::LP_MENU_DISABLED;
-    if (sideAction == CasperSettings::LP_MENU_CHAPTER_SKIP) {
-      if (nextTriggered) {
-        chapterSkipNext();
-        return;
-      }
-      if (prevTriggered) {
-        chapterSkipPrev();
-        return;
-      }
-    } else if (sideAction == CasperSettings::LP_MENU_ORIENTATION_CHANGE) {
-      cycleReadingOrientation(nextTriggered);
-      return;
-    } else if (sideAction != CasperSettings::LP_MENU_DISABLED) {
-      if (fireMenuShortcut(sideAction)) return;
-    }
-  }
+  // Side long-press is handled while held (trySideLongPressShortcut above). Do not
+  // re-interpret the release edge here — isPressed is false on release, so that
+  // path always fell through to turnPrev/turnNext.
 
   if (prevTriggered) {
     (void)turnPrev(1);

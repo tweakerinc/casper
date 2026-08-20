@@ -88,6 +88,9 @@ class HomeActivity final : public Activity {
   // so Home is visible while it scrubs instead of the user staring at the old
   // frame for the whole refresh.
   bool deferScrubAfterFirstPaint_ = false;
+  // Cold onEnter: FAST first, then arm deferred HALF after that paint (not at
+  // enter — a 1s FAST would make millis()-atMs already due).
+  bool armDeferredHalfAfterFirstPaint_ = false;
 
   // Whole-book page-map indexing, run only while Home sits idle. See
   // HomeBookIndexer: Home is the one place no chapter is resident, so indexing

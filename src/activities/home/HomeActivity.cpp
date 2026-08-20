@@ -517,8 +517,7 @@ void HomeActivity::onEnter() {
   // Skip clock AA on that first FAST (deferScrubAfterFirstPaint_) — idle gate
   // runs it after the HALF.
   UiGhostPolicy::clearHardScrub();
-  deferredHalfScrubOnly = true;
-  deferredHalfScrubAtMs = millis() + kClockAaIdleMs;
+  armDeferredHalfAfterFirstPaint_ = true;
   deferScrubAfterFirstPaint_ = true;
   lastHomeInputMs_ = millis();
   // Allow cover pass to run again after leaving reader / changing theme.
@@ -583,6 +582,7 @@ void HomeActivity::onEnter() {
 void HomeActivity::onExit() {
   Activity::onExit();
   deferredHalfScrubOnly = false;
+  armDeferredHalfAfterFirstPaint_ = false;
   pendingClockAaAfterIdle_ = false;
   forcePenumbraClockBwOnly_ = false;
 
@@ -686,6 +686,7 @@ void HomeActivity::onResume() {
   coverGrayRetryAtMs = 0;
   deferredHalfScrubOnly = false;
   deferredHalfScrubAtMs = 0;
+  armDeferredHalfAfterFirstPaint_ = false;
   pendingClockAaAfterIdle_ = false;
   forcePenumbraClockBwOnly_ = false;
   lastHomeInputMs_ = millis();
@@ -1139,6 +1140,7 @@ void HomeActivity::cancelHomeBackgroundPaint() {
     penumbraHalfBaselineDone = false;
   }
   deferredHalfScrubOnly = false;
+  armDeferredHalfAfterFirstPaint_ = false;
   softGrayscaleBase = false;
   // A queued minute-tick must not start clock AA after we leave — that pass
   // displayGrayscaleBase + clearScreen(0x00) on the render task while Opening
@@ -2030,6 +2032,11 @@ void HomeActivity::render(RenderLock&& lock) {
       PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
       pendingClockAaAfterIdle_ = true;
       lastHomeInputMs_ = millis();
+      if (armDeferredHalfAfterFirstPaint_) {
+        armDeferredHalfAfterFirstPaint_ = false;
+        deferredHalfScrubOnly = true;
+        deferredHalfScrubAtMs = millis() + kClockAaIdleMs;
+      }
     } else {
       PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
       forcePenumbraClockRepaint = false;

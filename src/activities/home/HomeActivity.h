@@ -121,6 +121,11 @@ class HomeActivity final : public Activity {
   bool forceHomeShellRepaint = false;
   // seedUnderReader: defer loadRecentBooks / stats until first onResume.
   bool deferredEnterLoad_ = false;
+  // Light UI child (book action sheet / Settings / Library) did not change
+  // recents. onResume skips the SD cluster that showed up as activity_slow
+  // 2226ms before first ink on X3 v36 (47e06f62). Cleared when opening a book
+  // or after a mutating book action (those already reloaded).
+  bool skipResumeSdReload_ = false;
   int minimalMenuIndex = 0;
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   size_t coverBufferSize = 0;      // Bytes allocated to coverBuffer

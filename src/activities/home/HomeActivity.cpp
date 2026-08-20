@@ -615,8 +615,10 @@ void HomeActivity::onResume() {
   // Cover themes may still defer greys after the BW shell.
   Activity::onResume();
 
+  bool justLoadedDeferredEnter = false;
   if (deferredEnterLoad_) {
     deferredEnterLoad_ = false;
+    justLoadedDeferredEnter = true;
     // Same data load as onEnter, without re-arming a second cold boot scrub race.
     hasOpdsServers = OPDS_STORE.hasServers();
     const auto& metrics = UITheme::getInstance().getMetrics();
@@ -687,7 +689,12 @@ void HomeActivity::onResume() {
   // paint and keeps the deferred clock AA.
   if (snappyReturnFromUiChild) {
     UiGhostPolicy::clearHardScrub();
-    deferScrubAfterFirstPaint_ = false;
+    // Device log (47e06f62): FAST first paint then a second full FAST+clockAA
+    // (~950ms). Defer the clock greys to the windowed digit path so Home is
+    // already on glass. cancelBackgroundPaint was left true from the child
+    // and skipped clock AA on the first paint anyway — clear it here.
+    deferScrubAfterFirstPaint_ = true;
+    cancelBackgroundPaint = false;
     SystemLog::logTiming("HOME", "resume snappy (light UI child) — FAST paint");
   } else {
     UiGhostPolicy::requestHardScrub();
@@ -701,6 +708,7 @@ void HomeActivity::onResume() {
     // full-screen greyscale clock multipass, not the HALF — so the HALF stays as
     // the single first paint and the clock's AA is what gets deferred.
     deferScrubAfterFirstPaint_ = true;
+    cancelBackgroundPaint = false;
   }
   suppressMenuBackUntilMs = millis() + 900UL;
   // Cover themes: multipass greys on the *first* home paint when thumbs exist
@@ -711,6 +719,18 @@ void HomeActivity::onResume() {
 
   // Portrait: reader may have left landscape.
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  // v36 X3 log: Back from the long-press book menu still logged
+  // `activity_slow 2226ms` then `penumbra_full FAST` — the snappy flag avoided
+  // HALF but onResume still re-stat'd every recent, re-warmed progress, and
+  // reloaded lifetime stats. None of that changed. Skip when RAM is fresh.
+  const bool skipSdReload = justLoadedDeferredEnter || skipResumeSdReload_;
+  skipResumeSdReload_ = false;
+  if (skipSdReload) {
+    if (isPenumbraTheme()) recentsLoaded = true;
+    LOG_DBG("HOME", "onResume: skip SD reload (RAM recents still valid)");
+    return;
+  }
 
   hasOpdsServers = OPDS_STORE.hasServers();
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -1081,6 +1101,7 @@ void HomeActivity::markLeavingForUiChild() {
   // Penumbra is text-only (no cover greys). Other themes need settled multipass greys.
   const bool themeOk = paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
   leaveForUiChildSnappy = themeOk && (isPenumbraTheme() ? penumbraHalfBaselineDone : coverGrayOnPanel);
+  skipResumeSdReload_ = recentsLoaded;
   cancelHomeBackgroundPaint();
 }
 
@@ -1908,7 +1929,7 @@ void HomeActivity::render(RenderLock&& lock) {
     // ~4s (penumbra_full mode=HALF+clockAA took=4145ms). The clock re-renders
     // anti-aliased on the next tick through the windowed clock path, which is
     // both cheaper and invisible to someone waiting for Home to appear.
-    const bool deferClockAa = hard && deferScrubAfterFirstPaint_;
+    const bool deferClockAa = deferScrubAfterFirstPaint_;
     deferScrubAfterFirstPaint_ = false;
     const int baseMode =
         hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
@@ -2210,6 +2231,8 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // resume can FAST-redraw (~0.45s) instead of HALF (~3.2s on X3 every Back).
   cancelHomeBackgroundPaint();
   leaveForUiChildSnappy = isPenumbraTheme();
+  // Reader updates progress / last-read — onResume must reload recents + stats.
+  skipResumeSdReload_ = false;
   snappyResumeNoGreys = false;
 
   // Bare/Dashboard multipass leaves greys in controller RAM. Opening a book with
@@ -2283,6 +2306,7 @@ void HomeActivity::reloadHomeAfterBookAction() {
   // Book/cache actions may have deleted thumbs — allow a fresh gen pass.
   recentsLoaded = false;
   recentsLoading = false;
+  skipResumeSdReload_ = true;  // this method already reloaded; onResume must not
   homeUiReady = true;  // UI already visible; gen may float Loading again
   coverNeedsRetry = false;
   coverGenAttempts = 0;

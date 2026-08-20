@@ -645,6 +645,12 @@ void HomeActivity::onResume() {
     homeUiReady = true;
   }
 
+  // Capture the snappy-return hint BEFORE clearing it. This flag was written in
+  // five places and never read — so every return to Home armed a hard scrub and
+  // paid a full HALF (~3.2s on X3), even coming back from a light chrome child
+  // like the book action sheet (device log: 2.2s stall + 3184ms HALF + 1108ms
+  // clock ≈ 6.5s back to Home).
+  const bool snappyReturnFromUiChild = leaveForUiChildSnappy;
   leaveForUiChildSnappy = false;
 
   freeCoverBufferRamOnly();
@@ -675,17 +681,27 @@ void HomeActivity::onResume() {
   backResumeArmed = false;
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
   penumbraHalfBaselineDone = false;
-  UiGhostPolicy::requestHardScrub();
-  // ...but get content on glass sooner. Returning from the reader / settings /
-  // the book quick-menu used to wait ~2s of SD work plus a ~4s HALF+clockAA
-  // before anything appeared.
-  //
-  // The first attempt deferred the *scrub* (FAST now, HALF a tick later) and
-  // that ghosted: a FAST pass settles the previous frame's residual into the
-  // panel, and a later HALF cannot fully lift it. What is actually slow is the
-  // full-screen greyscale clock multipass, not the HALF — so the HALF stays as
-  // the single first paint and the clock's AA is what gets deferred.
-  deferScrubAfterFirstPaint_ = true;
+  // Reader → Home genuinely needs the HALF: a dense book page ghosts badly and a
+  // FAST pass settles that residual into the panel. A light UI child (book action
+  // sheet, settings, menus) leaves almost nothing to scrub, so it gets a FAST
+  // paint and keeps the deferred clock AA.
+  if (snappyReturnFromUiChild) {
+    UiGhostPolicy::clearHardScrub();
+    deferScrubAfterFirstPaint_ = false;
+    SystemLog::logTiming("HOME", "resume snappy (light UI child) — FAST paint");
+  } else {
+    UiGhostPolicy::requestHardScrub();
+    // ...but get content on glass sooner. Returning from the reader / settings /
+    // the book quick-menu used to wait ~2s of SD work plus a ~4s HALF+clockAA
+    // before anything appeared.
+    //
+    // The first attempt deferred the *scrub* (FAST now, HALF a tick later) and
+    // that ghosted: a FAST pass settles the previous frame's residual into the
+    // panel, and a later HALF cannot fully lift it. What is actually slow is the
+    // full-screen greyscale clock multipass, not the HALF — so the HALF stays as
+    // the single first paint and the clock's AA is what gets deferred.
+    deferScrubAfterFirstPaint_ = true;
+  }
   suppressMenuBackUntilMs = millis() + 900UL;
   // Cover themes: multipass greys on the *first* home paint when thumbs exist
   // (one HALF greys-base). Deferred "shell HALF → wait → greys HALF" felt like

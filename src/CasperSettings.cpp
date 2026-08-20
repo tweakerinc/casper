@@ -337,6 +337,7 @@ void CasperSettings::toJson(JsonDocument& doc) const {
   doc["longPressSideA"] = longPressSideA;
   doc["longPressSideB"] = longPressSideB;
   doc["orientationFlipWith"] = orientationFlipWith;
+  doc["casperSideLongPressMenuFnMigrated"] = casperSideLongPressMenuFnMigrated;
   // Time-left mode is in SettingsList when STR_TIME_LEFT is wired; also persist manually
   // so older SettingsList builds without the enum still keep the value.
   doc["statusBarTimeLeft"] = statusBarTimeLeft;
@@ -1123,10 +1124,12 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
                                     LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["longPressSideA"].isNull()) {
-    longPressSideA = clamp(doc["longPressSideA"] | (uint8_t)OFF, LONG_PRESS_BUTTON_BEHAVIOR_COUNT, (uint8_t)OFF);
+    longPressSideA =
+        clamp(doc["longPressSideA"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["longPressSideB"].isNull()) {
-    longPressSideB = clamp(doc["longPressSideB"] | (uint8_t)OFF, LONG_PRESS_BUTTON_BEHAVIOR_COUNT, (uint8_t)OFF);
+    longPressSideB =
+        clamp(doc["longPressSideB"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["orientationFlipWith"].isNull()) {
     orientationFlipWith =
@@ -1147,7 +1150,8 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
       casperDoublePressClipMigrated = 1;
     }
   }
-  // Migrate shared longPressButtonBehavior → per-side A/B (once).
+  // Migrate shared longPressButtonBehavior → per-side A/B (once), still as
+  // LONG_PRESS_BUTTON_BEHAVIOR indices; the next migration remaps to menu fns.
   if (doc["longPressButtonBehavior"].is<int>() && !doc["longPressSideA"].is<int>() &&
       !doc["longPressSideB"].is<int>()) {
     uint8_t v = static_cast<uint8_t>(doc["longPressButtonBehavior"].as<int>());
@@ -1157,8 +1161,38 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
     LOG_DBG("CPS", "migrated longPressButtonBehavior=%u → side A/B", static_cast<unsigned>(v));
   }
+  // Reinterpret side long-press storage as LONG_PRESS_MENU_FUNCTION (unified list).
+  {
+    const uint8_t migrated = doc["casperSideLongPressMenuFnMigrated"] | (uint8_t)0;
+    if (migrated == 0) {
+      auto mapSide = [](uint8_t v) -> uint8_t {
+        // Old LONG_PRESS_BUTTON_BEHAVIOR → LONG_PRESS_MENU_FUNCTION.
+        switch (v) {
+          case CHAPTER_SKIP:
+            return LP_MENU_CHAPTER_SKIP;
+          case ORIENTATION_CHANGE:
+            return LP_MENU_ORIENTATION_CHANGE;
+          case ORIENTATION_FLIP:
+            return LP_MENU_ORIENTATION_FLIP;
+          case OFF:
+          case LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3:
+          default:
+            return LP_MENU_DISABLED;
+        }
+      };
+      // Only remap when values still look like the old tiny enum (0–4). Values
+      // already in the menu-function range (e.g. Dictionary=3 vs old Orient=2)
+      // are distinguished by the migration flag, not by magnitude alone.
+      longPressSideA = mapSide(longPressSideA);
+      longPressSideB = mapSide(longPressSideB);
+      casperSideLongPressMenuFnMigrated = 1;
+      needsResave = true;
+    } else {
+      casperSideLongPressMenuFnMigrated = 1;
+    }
+  }
   auto clampSide = [&](uint8_t& side) {
-    if (side >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT || side == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) side = OFF;
+    if (side >= LONG_PRESS_MENU_FUNCTION_COUNT) side = LP_MENU_DISABLED;
   };
   clampSide(longPressSideA);
   clampSide(longPressSideB);

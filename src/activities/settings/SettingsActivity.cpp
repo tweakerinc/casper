@@ -104,14 +104,7 @@ void SettingsActivity::rebuildSettingsLists() {
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into Manage Fonts (TextSettingsActivity)
       if (setting.inTextSettings) continue;
-      readerSettings.push_back(setting);
-      } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      if (setting.valuePtr == &CasperSettings::pwrBtnFootnoteBack &&
-          SETTINGS.shortPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES &&
-          SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
-        continue;
-      }
-      // Device-specific labels for the same side long-press fields.
+      // Device-specific labels for side long-press (same fields, X3 vs X4 names).
       const bool x3 = gpio.deviceIsX3();
       if ((setting.nameId == StrId::STR_LONG_PRESS_SIDE_A_X3 || setting.nameId == StrId::STR_LONG_PRESS_SIDE_B_X3) &&
           !x3) {
@@ -124,8 +117,15 @@ void SettingsActivity::rebuildSettingsLists() {
       // Nested under Flip Orientation — hide unless either side is Flip.
       if ((setting.nameId == StrId::STR_ORIENTATION_FLIP_WITH ||
            (setting.key && strcmp(setting.key, "orientationFlipWith") == 0)) &&
-          SETTINGS.longPressSideA != CasperSettings::ORIENTATION_FLIP &&
-          SETTINGS.longPressSideB != CasperSettings::ORIENTATION_FLIP) {
+          SETTINGS.longPressSideA != CasperSettings::LP_MENU_ORIENTATION_FLIP &&
+          SETTINGS.longPressSideB != CasperSettings::LP_MENU_ORIENTATION_FLIP) {
+        continue;
+      }
+      readerSettings.push_back(setting);
+    } else if (setting.category == StrId::STR_CAT_CONTROLS) {
+      if (setting.valuePtr == &CasperSettings::pwrBtnFootnoteBack &&
+          SETTINGS.shortPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES &&
+          SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
       controlsSettings.push_back(setting);
@@ -152,8 +152,7 @@ void SettingsActivity::rebuildSettingsLists() {
     }
   }
 
-  // Controls order: … → Long-Press Power → side long-press → Remap → Tilt → …
-  // Insert Remap after the last side long-press row (or Long-Press Power).
+  // Controls order: … → Long-Press Power → Remap → Tilt → …
   if (!BoardConfig::hasTouch()) {
     auto insertAt = controlsSettings.end();
     for (auto it = controlsSettings.begin(); it != controlsSettings.end(); ++it) {
@@ -161,8 +160,7 @@ void SettingsActivity::rebuildSettingsLists() {
         insertAt = it;
         break;
       }
-      if (it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X3 || it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X4 ||
-          it->nameId == StrId::STR_ORIENTATION_FLIP_WITH || it->nameId == StrId::STR_LONG_PRESS_ACTION) {
+      if (it->nameId == StrId::STR_LONG_PRESS_ACTION) {
         insertAt = it + 1;
       }
     }

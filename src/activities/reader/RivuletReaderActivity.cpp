@@ -3084,6 +3084,26 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
         openFootnotesMenu();
       }
       return true;
+    case CasperSettings::LP_MENU_CHAPTER_SKIP:
+      chapterSkipNext();
+      return true;
+    case CasperSettings::LP_MENU_ORIENTATION_CHANGE:
+      cycleReadingOrientation(/*nextTriggered=*/false);
+      return true;
+    case CasperSettings::LP_MENU_ORIENTATION_FLIP:
+      flipReadingOrientation();
+      return true;
+    case CasperSettings::LP_MENU_DARK_MODE: {
+      // In-reader shortcut: toggle reader-scoped dark (book dark, Home stays light).
+      const bool on = !(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0);
+      SETTINGS.readerDarkMode = on ? 1 : 0;
+      if (on) SETTINGS.darkModeReaderOnly = 1;
+      SETTINGS.saveToFile();
+      renderer.setInvertOnDisplay(false);  // never whole-UI from a reader hold
+      firstPaint_ = true;
+      requestUpdate();
+      return true;
+    }
     case CasperSettings::LP_MENU_DISABLED:
     default:
       return false;
@@ -3417,13 +3437,14 @@ void RivuletReaderActivity::loop() {
   const bool longPress = !fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS;
 
   // Per-side long-press (hw 4 = X3 Left / X4 Up, hw 5 = X3 Right / X4 Down).
+  // Same action enum as Long-Press / Double-Press Menu.
   if (longPress && (prevTriggered || nextTriggered)) {
     const bool sideA = gpio.isPressed(HalGPIO::BTN_UP);
     const bool sideB = gpio.isPressed(HalGPIO::BTN_DOWN);
     const uint8_t sideAction = sideA   ? SETTINGS.longPressSideA
                                : sideB ? SETTINGS.longPressSideB
-                                       : CasperSettings::OFF;
-    if (sideAction == SETTINGS.CHAPTER_SKIP) {
+                                       : CasperSettings::LP_MENU_DISABLED;
+    if (sideAction == CasperSettings::LP_MENU_CHAPTER_SKIP) {
       if (nextTriggered) {
         chapterSkipNext();
         return;
@@ -3432,12 +3453,11 @@ void RivuletReaderActivity::loop() {
         chapterSkipPrev();
         return;
       }
-    } else if (sideAction == SETTINGS.ORIENTATION_CHANGE) {
+    } else if (sideAction == CasperSettings::LP_MENU_ORIENTATION_CHANGE) {
       cycleReadingOrientation(nextTriggered);
       return;
-    } else if (sideAction == SETTINGS.ORIENTATION_FLIP) {
-      flipReadingOrientation();
-      return;
+    } else if (sideAction != CasperSettings::LP_MENU_DISABLED) {
+      if (fireMenuShortcut(sideAction)) return;
     }
   }
 

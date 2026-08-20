@@ -299,6 +299,12 @@ class CasperSettings : public PersistableStore<CasperSettings> {
     LP_MENU_READING_STATS = 10,
     // Append-only: starts Create Clipping (word select) on long-press Confirm.
     LP_MENU_CLIPPINGS = 11,
+    // Reader Controls shared actions (side long-press + menu long/double).
+    LP_MENU_CHAPTER_SKIP = 12,
+    LP_MENU_ORIENTATION_CHANGE = 13,
+    LP_MENU_ORIENTATION_FLIP = 14,
+    // Toggle reader-scoped dark (Dark Mode On + Reader Only), or turn Dark Mode off.
+    LP_MENU_DARK_MODE = 15,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 
@@ -517,12 +523,15 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // Long-press page turn button behavior
   // Default Off — Flip Orientation is opt-in (not a factory default).
   // Per physical side key (hw 4 / hw 5): X3 Left/Right, X4 Up/Down.
-  // Replaces the old shared longPressButtonBehavior (migrated on load).
-  uint8_t longPressSideA = OFF;  // hw 4: X3 Left / X4 Up
-  uint8_t longPressSideB = OFF;  // hw 5: X3 Right / X4 Down
+  // Stores LONG_PRESS_MENU_FUNCTION (same list as Long-Press / Double-Press Menu).
+  // Migrated from the old LONG_PRESS_BUTTON_BEHAVIOR values on load.
+  uint8_t longPressSideA = LP_MENU_DISABLED;  // hw 4: X3 Left / X4 Up
+  uint8_t longPressSideB = LP_MENU_DISABLED;  // hw 5: X3 Right / X4 Down
   // Second end of Flip Orientation: always Portrait ↔ this. Must not be PORTRAIT.
   // Default Landscape CCW (common one-handed reading pair); only used when Flip is selected.
   uint8_t orientationFlipWith = LANDSCAPE_CCW;
+  // One-time: side long-press storage reinterpreted as LONG_PRESS_MENU_FUNCTION.
+  uint8_t casperSideLongPressMenuFnMigrated = 0;
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Casper: open stock Casper dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;

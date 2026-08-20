@@ -27,7 +27,8 @@ class EpubReaderMenuActivity final : public Activity {
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     ORIENT_FRONT_BUTTONS,  // Nested under Reading Orientation (same as Settings)
-    TOGGLE_DARK_MODE,      // Book-only dark (sets Reader Only; never whole-UI invert)
+    TOGGLE_DARK_MODE,      // Master Dark Mode (Display parity)
+    TOGGLE_DARK_MODE_READER_ONLY,  // Nested under Dark Mode when On
     READING_STATS,
     TOGGLE_COMPLETED,
     GO_HOME,
@@ -80,6 +81,8 @@ class EpubReaderMenuActivity final : public Activity {
   void drawIconTabBar(Rect rect) const;
 
   const TabMenuItems menuItems;
+  // Filtered view of Main when Dark Mode is Off (hides nested Reader Only).
+  mutable std::vector<MenuItem> filteredMainItems_;
 
   // -1 = tab bar focused; 0..n-1 = list item
   int selectedIndex = -1;

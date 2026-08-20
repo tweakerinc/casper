@@ -14,6 +14,7 @@
 #include "components/UITheme.h"
 #include "components/icons/settings2.h"
 #include "fontIds.h"
+#include "util/NestedMenuLabel.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -93,7 +94,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
   auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
   auto& settingsItems = items[SETTINGS_TAB_INDEX];
 
-  mainItems.reserve(12 + (hasFootnotes ? 1u : 0u));
+  mainItems.reserve(14 + (hasFootnotes ? 1u : 0u));
   bookmarkItems.reserve(8 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
   settingsItems.reserve(4 + (hasBookmarks ? 1u : 0u));
 
@@ -111,8 +112,9 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
   mainItems.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   // Nested under Reading Orientation (same placement as Settings).
   mainItems.push_back({MenuAction::ORIENT_FRONT_BUTTONS, StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION});
-  // Book Dark Mode (reader-scoped). System-wide is Settings → Display.
+  // Book Dark Mode (mirrors Settings → Display). Nested Reader Only when On.
   mainItems.push_back({MenuAction::TOGGLE_DARK_MODE, StrId::STR_READER_DARK_MODE});
+  mainItems.push_back({MenuAction::TOGGLE_DARK_MODE_READER_ONLY, StrId::STR_DARK_MODE_READER_ONLY});
   // Mark finished is not session tracking — drives finished folder / recents rules.
   mainItems.push_back(
       {MenuAction::TOGGLE_COMPLETED, isBookCompleted ? StrId::STR_MARK_UNFINISHED : StrId::STR_MARK_FINISHED});
@@ -148,7 +150,18 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
 }
 
 const std::vector<EpubReaderMenuActivity::MenuItem>& EpubReaderMenuActivity::activeMenuItems() const {
-  return menuItems[activeTabIndex()];
+  if (activeTab != MenuTab::Main) {
+    return menuItems[activeTabIndex()];
+  }
+  filteredMainItems_.clear();
+  filteredMainItems_.reserve(menuItems[MAIN_TAB_INDEX].size());
+  for (const auto& item : menuItems[MAIN_TAB_INDEX]) {
+    if (item.action == MenuAction::TOGGLE_DARK_MODE_READER_ONLY && SETTINGS.readerDarkMode == 0) {
+      continue;
+    }
+    filteredMainItems_.push_back(item);
+  }
+  return filteredMainItems_;
 }
 
 void EpubReaderMenuActivity::focusTabRow() { selectedIndex = -1; }
@@ -262,16 +275,25 @@ void EpubReaderMenuActivity::activateSelected() {
     return;
   }
 
-  // Book menu Dark Mode is always reader-scoped: book pages only. Home/settings
-  // stay light. System-wide dark is Settings → Display (Reader Only Off).
+  // Book menu Dark Mode mirrors Settings → Display (master + nested Reader Only).
   if (selectedAction == MenuAction::TOGGLE_DARK_MODE) {
     SETTINGS.readerDarkMode = SETTINGS.readerDarkMode ? 0 : 1;
     if (SETTINGS.readerDarkMode) {
-      SETTINGS.darkModeReaderOnly = 1;
+      SETTINGS.darkModeReaderOnly = 1;  // default book-scoped; nested row can clear it
     }
     SETTINGS.saveToFile();
-    // Never arm whole-UI invert from the reader menu (leaked to home / sleep).
-    renderer.setInvertOnDisplay(false);
+    renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
+    const int n = static_cast<int>(activeMenuItems().size());
+    if (selectedIndex >= n) selectedIndex = std::max(-1, n - 1);
+    requestUpdate();
+    return;
+  }
+
+  if (selectedAction == MenuAction::TOGGLE_DARK_MODE_READER_ONLY) {
+    if (SETTINGS.readerDarkMode == 0) return;
+    SETTINGS.darkModeReaderOnly = SETTINGS.darkModeReaderOnly ? 0 : 1;
+    SETTINGS.saveToFile();
+    renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
     requestUpdate();
     return;
   }
@@ -482,9 +504,14 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   GUI.drawList(
       renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, static_cast<int>(items.size()), selectedIndex,
       [&items](int index) {
-        // No nested "· " prefix under Orientation — looks wrong in the book menu
-        // (especially landscape). Label stands alone.
-        return std::string(I18N.get(items[index].labelId));
+        const bool nest = items[index].action == MenuAction::ORIENT_FRONT_BUTTONS ||
+                          items[index].action == MenuAction::TOGGLE_DARK_MODE_READER_ONLY;
+        // Orient nest prefix omitted (looks wrong in book menu landscape); Reader
+        // Only keeps a light nest mark to match Settings → Display.
+        if (items[index].action == MenuAction::ORIENT_FRONT_BUTTONS) {
+          return std::string(I18N.get(items[index].labelId));
+        }
+        return NestedMenuLabel::format(I18N.get(items[index].labelId), nest);
       },
       nullptr, nullptr,
       [this](int index) -> std::string {
@@ -499,14 +526,15 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         if (value == MenuAction::ORIENT_FRONT_BUTTONS) {
           return pendingFrontButtonFollow ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         }
-        // Same On/Off column as Settings → Display → Dark Mode.
         if (value == MenuAction::TOGGLE_DARK_MODE) {
           return SETTINGS.readerDarkMode ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+        }
+        if (value == MenuAction::TOGGLE_DARK_MODE_READER_ONLY) {
+          return SETTINGS.darkModeReaderOnly ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         }
         if (value == MenuAction::AUTO_PAGE_TURN) {
           return pageTurnLabels[selectedPageTurnOption];
         }
-        // No right-column "Edit" (or other) labels — keeps the list clean.
         return "";
       },
       true);

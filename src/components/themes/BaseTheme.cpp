@@ -715,9 +715,11 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     const auto focusStyle = (focused && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 
     if (centered) {
+      // Section headers: slightly larger + bold so they read as labels, not rows.
+      const int headerFont = UI_12_FONT_ID;
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textY + static_cast<int>(li) * lineStep;
-        renderer.drawCenteredText(titleFont, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+        renderer.drawCenteredText(headerFont, ly, titleLines[li].c_str(), /*black=*/true, EpdFontFamily::BOLD);
       }
     } else {
       for (size_t li = 0; li < titleLines.size(); ++li) {

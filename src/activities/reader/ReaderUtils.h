@@ -110,7 +110,7 @@ struct PageTurnResult {
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress =
-      SETTINGS.longPressSideA == SETTINGS.OFF && SETTINGS.longPressSideB == SETTINGS.OFF;
+      SETTINGS.longPressSideA == SETTINGS.LP_MENU_DISABLED && SETTINGS.longPressSideB == SETTINGS.LP_MENU_DISABLED;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
   // PageBack/PageForward already include Up/Down/Left/Right + Side Layout + Orient Front Buttons.

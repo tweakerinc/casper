@@ -402,9 +402,10 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     const auto focusStyle = (isSelected && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     if (centered) {
+      const int headerFont = UI_12_FONT_ID;
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textDrawY + static_cast<int>(li) * lineStep;
-        renderer.drawCenteredText(titleFont, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+        renderer.drawCenteredText(headerFont, ly, titleLines[li].c_str(), /*black=*/true, EpdFontFamily::BOLD);
       }
     } else {
       for (size_t li = 0; li < titleLines.size(); ++li) {

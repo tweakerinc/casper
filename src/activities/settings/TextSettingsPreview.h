@@ -22,6 +22,9 @@ struct PreviewKey {
   bool focusReading = false;  // Bionic Reading
   bool guideReading = false;  // Guide Dots
   bool hyphenation = false;
+  // Builtin families ship Regular/Bold/Italic/Bold Italic; the sample uses them
+  // so Font pick is not Regular-only. SD packs stay Regular.
+  bool builtinWeights = false;
   bool operator==(const PreviewKey&) const = default;
 };
 

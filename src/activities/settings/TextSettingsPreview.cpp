@@ -41,13 +41,13 @@ CssTextAlign toCssAlign(uint8_t align) {
   return static_cast<CssTextAlign>(align);
 }
 
-void addWordsFromText(ParsedText& parsed, const char* text) {
+void addWordsFromText(ParsedText& parsed, const char* text, const EpdFontFamily::Style wordStyle) {
   if (text == nullptr) return;
   std::string word;
   for (const char* p = text;; p++) {
     if (*p == ' ' || *p == '\0') {
       if (!word.empty()) {
-        parsed.addWord(word, EpdFontFamily::REGULAR);
+        parsed.addWord(word, wordStyle);
         word.clear();
       }
       if (*p == '\0') break;
@@ -57,8 +57,53 @@ void addWordsFromText(ParsedText& parsed, const char* text) {
   }
 }
 
+// Words through the first sentence stay the light face; the tail uses the
+// heavier face so a short preview pane still shows both. No sentence → midpoint.
+int firstBoldWordIndex(const char* text) {
+  int wordCount = 0;
+  int sentenceWords = 0;
+  bool inWord = false;
+  for (const char* p = text; p != nullptr && *p != '\0'; ++p) {
+    if (*p == ' ') {
+      inWord = false;
+      continue;
+    }
+    if (!inWord) {
+      inWord = true;
+      ++wordCount;
+    }
+    if (sentenceWords == 0 && *p == '.' && (p[1] == ' ' || p[1] == '\0')) {
+      sentenceWords = wordCount;
+    }
+  }
+  if (sentenceWords > 0 && sentenceWords < wordCount) return sentenceWords;
+  return wordCount / 2;
+}
+
+void addWordsFromTextThen(ParsedText& parsed, const char* text, const EpdFontFamily::Style light,
+                          const EpdFontFamily::Style heavy) {
+  if (text == nullptr) return;
+  const int heavyFrom = firstBoldWordIndex(text);
+  std::string word;
+  int index = 0;
+  for (const char* p = text;; p++) {
+    if (*p == ' ' || *p == '\0') {
+      if (!word.empty()) {
+        parsed.addWord(word, index >= heavyFrom ? heavy : light);
+        word.clear();
+        ++index;
+      }
+      if (*p == '\0') break;
+    } else {
+      word.push_back(*p);
+    }
+  }
+}
+
+enum class SampleStyle : uint8_t { Regular, RegularThenBold, ItalicThenBoldItalic };
+
 void layoutParagraph(std::vector<std::shared_ptr<TextBlock>>& outLines, const GfxRenderer& renderer, int fontId,
-                     int textWidth, const char* text) {
+                     int textWidth, const char* text, const SampleStyle sample) {
   outLines.clear();
   BlockStyle style;
   style.alignment = toCssAlign(SETTINGS.paragraphAlignment);
@@ -66,22 +111,36 @@ void layoutParagraph(std::vector<std::shared_ptr<TextBlock>>& outLines, const Gf
 
   ParsedText parsed(SETTINGS.extraParagraphSpacing != 0, SETTINGS.hyphenationEnabled != 0,
                     SETTINGS.focusReadingEnabled != 0, SETTINGS.guideReadingEnabled != 0, style);
-  addWordsFromText(parsed, text);
+  switch (sample) {
+    case SampleStyle::Regular:
+      addWordsFromText(parsed, text, EpdFontFamily::REGULAR);
+      break;
+    case SampleStyle::RegularThenBold:
+      addWordsFromTextThen(parsed, text, EpdFontFamily::REGULAR, EpdFontFamily::BOLD);
+      break;
+    case SampleStyle::ItalicThenBoldItalic:
+      addWordsFromTextThen(parsed, text, EpdFontFamily::ITALIC, EpdFontFamily::BOLD_ITALIC);
+      break;
+  }
   parsed.layoutAndExtractLines(renderer, fontId, static_cast<uint16_t>(textWidth),
                                [&outLines](std::shared_ptr<TextBlock> line) { outLines.push_back(std::move(line)); });
 }
 
 void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, int textWidth) {
   Hyphenator::setPreferredLanguage("en");
+  const bool builtin = SETTINGS.sdFontFamilyName[0] == '\0';
 
   if (SETTINGS.hyphenationEnabled != 0) {
-    layoutParagraph(layout.para1, renderer, fontId, textWidth, kHyphenationPreviewText);
+    layoutParagraph(layout.para1, renderer, fontId, textWidth, kHyphenationPreviewText,
+                    builtin ? SampleStyle::RegularThenBold : SampleStyle::Regular);
     layout.para2.clear();
     return;
   }
 
-  layoutParagraph(layout.para1, renderer, fontId, textWidth, kPreviewPara1);
-  layoutParagraph(layout.para2, renderer, fontId, textWidth, kPreviewPara2);
+  layoutParagraph(layout.para1, renderer, fontId, textWidth, kPreviewPara1,
+                  builtin ? SampleStyle::RegularThenBold : SampleStyle::Regular);
+  layoutParagraph(layout.para2, renderer, fontId, textWidth, kPreviewPara2,
+                  builtin ? SampleStyle::ItalicThenBoldItalic : SampleStyle::Regular);
 }
 
 int drawParagraphLines(const GfxRenderer& renderer, const std::vector<std::shared_ptr<TextBlock>>& lines, int fontId,
@@ -195,6 +254,7 @@ PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, c
 
   const bool bionic = SETTINGS.focusReadingEnabled != 0;
   const bool guide = SETTINGS.guideReadingEnabled != 0;
+  const bool builtinWeights = SETTINGS.sdFontFamilyName[0] == '\0';
   const PreviewKey key{.fontId = fontId,
                        .fontSize = SETTINGS.fontSize,
                        .screenMargin = SETTINGS.screenMargin,
@@ -205,7 +265,8 @@ PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, c
                        .extraParagraphSpacingHeight = SETTINGS.extraParagraphSpacingHeight,
                        .focusReading = bionic,
                        .guideReading = guide,
-                       .hyphenation = SETTINGS.hyphenationEnabled != 0};
+                       .hyphenation = SETTINGS.hyphenationEnabled != 0,
+                       .builtinWeights = builtinWeights};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       std::string warm = kPreviewPara1;
@@ -214,7 +275,7 @@ PreviewPaint renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, c
       if (SETTINGS.hyphenationEnabled != 0) {
         warm = kHyphenationPreviewText;
       }
-      fcm->prewarmCache(fontId, warm.c_str(), bionic ? 0x03 : 0x01);
+      fcm->prewarmCache(fontId, warm.c_str(), builtinWeights ? 0x0F : (bionic ? 0x03 : 0x01));
     }
     relayout(layout, renderer, fontId, textWidth);
     layout.key = key;

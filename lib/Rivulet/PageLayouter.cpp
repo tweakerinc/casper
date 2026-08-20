@@ -1019,6 +1019,13 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     else if (block.kind == BlockKind::Heading2) headingFloor = SizeStep::Plus1;
 
     while (ti < toks.size()) {
+      // A wrap after a word leaves ti on the following space token. If that space
+      // starts the next line it paints as a left indent, and under Justify it
+      // absorbs extra glue — the "air," indent and "He   emerged,   angrily"
+      // stretched last-line bugs. Skip leading spaces every line.
+      while (ti < toks.size() && toks[ti].space) ++ti;
+      if (ti >= toks.size()) break;
+
       // Use largest step so mid-heading page breaks leave enough vertical room.
       const int probeLineH = lineH(renderer, baseFontId,
                                    headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
@@ -1161,8 +1168,17 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       int justifyExtra = 0;
       int spaces = 0;
       // No justify while still wrapping beside the drop-cap float.
+      // Only justify when another *word* remains after this line — trailing
+      // space tokens alone must not stretch the last visual line of a paragraph.
       const bool inDropFloat = dropW > 0 && y < dropBottom;
-      if (lineAlign == Align::Justify && !inDropFloat && ti < toks.size()) {
+      bool moreWordsAfter = false;
+      for (size_t j = ti; j < toks.size(); ++j) {
+        if (!toks[j].space) {
+          moreWordsAfter = true;
+          break;
+        }
+      }
+      if (lineAlign == Align::Justify && !inDropFloat && moreWordsAfter) {
         for (size_t k = emitBegin; k < emitEnd; ++k) {
           if ((*emit)[k].space) ++spaces;
         }

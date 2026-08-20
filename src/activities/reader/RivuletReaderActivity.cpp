@@ -1908,6 +1908,11 @@ void RivuletReaderActivity::persistPageMapIfComplete() {
 
 void RivuletReaderActivity::tickIdlePageMap() {
   if (!ready_ || !epub_) return;
+  // Never run heavy idle work before the page is on glass. On open, accept() is
+  // false (no turn edge), so the latch early-return path called us immediately
+  // and extendPageMap(10) blocked the main loop for seconds with only "Opening"
+  // on screen — felt like a hard freeze (0026 capture: MAP 9→21 before first PAGE).
+  if (!firstInkDone_) return;
   // Don't steal the bus while any page-turn control is held.
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
       mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
@@ -1945,8 +1950,10 @@ void RivuletReaderActivity::tickIdlePageMap() {
     const int knownBefore = engine_.mapKnownPages();
     const int est = engine_.chapterPageCount(&renderer);
     const int burst = engine_.idleMapPagesThisTick(&renderer);
-    if (burst > 0) {
-      const bool progressed = engine_.extendPageMap(renderer, burst);
+    // Cap per-tick work so a catch-up burst cannot hitch the UI for seconds.
+    const int burstCap = burst > 4 ? 4 : burst;
+    if (burstCap > 0) {
+      const bool progressed = engine_.extendPageMap(renderer, burstCap);
       const int knownAfter = engine_.mapKnownPages();
       const bool complete = engine_.mapComplete();
       if (progressed) {
@@ -1978,7 +1985,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
         s_lastMapLogMs = now;
         SystemLog::logTiming(
             "MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d burst=%d stall=%d page=%d fre=%u maxA=%u",
-            spineIndex_, knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0, burst, s_stallTicks,
+            spineIndex_, knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0, burstCap, s_stallTicks,
             engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
       }

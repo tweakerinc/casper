@@ -121,9 +121,9 @@ class RivuletReaderActivity final : public Activity {
   // This is what makes PageBack into the previous chapter land on its real last
   // page (CrossInk section.bin feel).
   bool indexSpinePageMap(int spine);
-  // After current chapter map completes: IR + first N page starts for the next
-  // spine, saved as .rvpm so chapter-forward open is a map hit.
+  // After current chapter map completes: quietly prime next spine (2 pages).
   bool warmNextSpinePrefix(int pages);
+  void tickNextSpineWarmIfIdle();
   [[nodiscard]] bool spineHasPageMap(int spine) const;
   [[nodiscard]] int nearestSpineWithoutMap(bool preferBackward, bool adjacentOnly) const;
   // Idle: index the remaining chapters one at a time so the whole book ends up

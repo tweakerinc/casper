@@ -401,15 +401,17 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  // Instant feedback without a panel wait: draw the moon into the framebuffer
-  // for sleep_frame re-seed, but do NOT FAST-refresh the glass (YACP-style).
-  // A full FAST here cost ~0.5–1s on every QR sleep; the last page stays on
-  // glass through deep sleep, and wake loads sleep_frame (with moon) into FB.
+  // Instant feedback: moon on glass so the power press registers before the
+  // multi-second sleep teardown. Windowed on X4; X3 partial path is full FAST
+  // (~430ms) — still worth it vs silent moon-only-in-FB.
   if (isQuickResumeSleep) {
     const bool sysWideDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
     renderer.setInvertOnDisplay(sysWideDark);
     SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
-    // No displayBuffer — panel keeps showing the last page until sleep.
+    const int moonX = SleepChromeIcon::leftX(renderer);
+    const int moonY = SleepChromeIcon::topY(renderer);
+    const int moonSize = SleepChromeIcon::iconSize(renderer);
+    UiGhostPolicy::displayPartialOrSoft(renderer, moonX, moonY, moonSize, moonSize);
   }
 
   // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.

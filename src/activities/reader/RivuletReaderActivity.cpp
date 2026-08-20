@@ -1981,6 +1981,20 @@ void RivuletReaderActivity::tickIdlePageMap() {
   }
 }
 
+// After map is complete and the reader has been quiet a while, silently prime
+// the next spine's first two page-map starts (SD .rvpm). Gated hard so quick
+// page turns never collide with a chapter swap.
+void RivuletReaderActivity::tickNextSpineWarmIfIdle() {
+  if (!ready_ || !epub_ || !firstInkDone_ || chapterNavBusy_ || warmingAdjacent_) return;
+  if (!engine_.mapComplete()) return;
+  const unsigned long now = millis();
+  if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) < 8000UL) return;
+  if (ESP.getFreeHeap() < 95 * 1024 || ESP.getMaxAllocHeap() < 56 * 1024) return;
+  if (lastNextSpineWarmFrom_ == spineIndex_) return;
+  lastNextSpineWarmFrom_ = spineIndex_;
+  (void)warmNextSpinePrefix(/*pages=*/2);
+}
+
 void RivuletReaderActivity::loadCachedBookmarks() {
   cachedBookmarks_.clear();
   if (cachedBookmarks_.capacity() < kInitialBookmarkCacheCapacity) {
@@ -3557,6 +3571,7 @@ void RivuletReaderActivity::loop() {
     // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).
     tickAaCatchUp();
     tickIdlePageMap();
+    tickNextSpineWarmIfIdle();
     tickBackgroundIndexer();
     return;
   }
@@ -3588,6 +3603,7 @@ void RivuletReaderActivity::loop() {
   tickAaCatchUp();
   // B: idle progressive map for the current chapter + adjacent-chapter warm.
   tickIdlePageMap();
+  tickNextSpineWarmIfIdle();
   // C: once settled, index the rest of the book chapter by chapter onto SD so a
   //    jump + PageBack anywhere behaves like a paper book. Heavily gated: after
   //    first ink, idle, healthy heap, one chapter per pass.

@@ -136,7 +136,9 @@ void XtcReaderActivity::loop() {
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool skipPages =
-      !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs > ReaderUtils::SKIP_HOLD_MS;
+      !fromTilt &&
+      (SETTINGS.longPressSideA == SETTINGS.CHAPTER_SKIP || SETTINGS.longPressSideB == SETTINGS.CHAPTER_SKIP) &&
+      heldMs > ReaderUtils::SKIP_HOLD_MS;
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {

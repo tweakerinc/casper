@@ -3318,33 +3318,14 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
-  // Long-press Back: same action list as Long-Press Menu. Suppress the release
-  // so it does not also trigger leave-to-home (classic parity).
-  if (ignoreNextBackRelease_) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-        !mappedInput.isPressed(MappedInputManager::Button::Back)) {
-      ignoreNextBackRelease_ = false;
-      (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
-      (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
-    }
-  } else {
-    if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
-        SETTINGS.longPressBackFunction != CasperSettings::LP_MENU_DISABLED) {
-      if (tryLongPressShortcut(SETTINGS.longPressBackFunction, ignoreNextBackRelease_)) {
-        LOG_INF("RVR", "long-press Back → shortcut %u",
-                static_cast<unsigned>(SETTINGS.longPressBackFunction));
-        return;
-      }
-    }
-    // Back → Home (drains residual edges so Home doesn't see Menu).
-    // Leave path runs settings-driven KOReader auto-sync when enabled.
-    if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
-                                          {this, [](void* ctx) {
-                                             auto* self = static_cast<RivuletReaderActivity*>(ctx);
-                                             self->leaveReaderToHome();
-                                           }})) {
-      return;
-    }
+  // Back → Home (drains residual edges so Home doesn't see Menu).
+  // Leave path runs settings-driven KOReader auto-sync when enabled.
+  if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
+                                        {this, [](void* ctx) {
+                                           auto* self = static_cast<RivuletReaderActivity*>(ctx);
+                                           self->leaveReaderToHome();
+                                         }})) {
+    return;
   }
 
   // Deferred single Confirm after double-press window → menu (classic wiring).
@@ -3435,29 +3416,26 @@ void RivuletReaderActivity::loop() {
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool longPress = !fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS;
 
-  // Settings → Long-Press Buttons = Chapter Skip.
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    if (nextTriggered) {
-      chapterSkipNext();
-      return;
-    }
-    if (prevTriggered) {
-      chapterSkipPrev();
-      return;
-    }
-  }
-
-  // Settings → Long-Press Side Buttons = Change Orientation (cycle all four).
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    if (prevTriggered || nextTriggered) {
+  // Per-side long-press (hw 4 = X3 Left / X4 Up, hw 5 = X3 Right / X4 Down).
+  if (longPress && (prevTriggered || nextTriggered)) {
+    const bool sideA = gpio.isPressed(HalGPIO::BTN_UP);
+    const bool sideB = gpio.isPressed(HalGPIO::BTN_DOWN);
+    const uint8_t sideAction = sideA   ? SETTINGS.longPressSideA
+                               : sideB ? SETTINGS.longPressSideB
+                                       : CasperSettings::OFF;
+    if (sideAction == SETTINGS.CHAPTER_SKIP) {
+      if (nextTriggered) {
+        chapterSkipNext();
+        return;
+      }
+      if (prevTriggered) {
+        chapterSkipPrev();
+        return;
+      }
+    } else if (sideAction == SETTINGS.ORIENTATION_CHANGE) {
       cycleReadingOrientation(nextTriggered);
       return;
-    }
-  }
-
-  // Settings → Long-Press Side Buttons = Flip Orientation (Portrait ↔ Flip With).
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_FLIP) {
-    if (prevTriggered || nextTriggered) {
+    } else if (sideAction == SETTINGS.ORIENTATION_FLIP) {
       flipReadingOrientation();
       return;
     }

@@ -568,7 +568,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          const std::function<bool(int index)>& rowDimmed,
-                         const std::function<bool(int index)>& rowApplied) const {
+                         const std::function<bool(int index)>& rowApplied,
+                         const std::function<bool(int index)>& rowCentered) const {
   (void)highlightValue;
   // Icons reserved title width for no gain on Bare/Penumbra; ignore rowIcon.
   (void)rowIcon;
@@ -668,7 +669,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     if (applied) rowTextWidth -= kRadioReserve;
 
     std::string valueText;
-    if (rowValue != nullptr) {
+    const bool centered = rowCentered && rowCentered(i);
+    if (!centered && rowValue != nullptr) {
       valueText = rowValue(i);
       if (!valueText.empty()) {
         int maxValW = std::max(0, rowTextWidth - 40 - minValueGap);
@@ -692,7 +694,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     std::string subtitleDrawn;
     int subtitleLineH = 0;
-    if (rowSubtitle != nullptr) {
+    if (!centered && rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       if (!subtitleText.empty()) {
         subtitleDrawn = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
@@ -706,18 +708,26 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     }
 
     // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
+    // Section headers stay regular and centered; they are never the focus row.
     const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kBaseTitleSubtitleGap + subtitleLineH));
     int textY = itemY + std::max(0, (rowHeight - blockH) / 2);
     const int textX = rect.x + BaseMetrics::values.contentSidePadding;
-    const auto focusStyle = focused ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    const auto focusStyle = (focused && !centered) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 
-    for (size_t li = 0; li < titleLines.size(); ++li) {
-      const int ly = textY + static_cast<int>(li) * lineStep;
-      renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+    if (centered) {
+      for (size_t li = 0; li < titleLines.size(); ++li) {
+        const int ly = textY + static_cast<int>(li) * lineStep;
+        renderer.drawCenteredText(titleFont, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+      }
+    } else {
+      for (size_t li = 0; li < titleLines.size(); ++li) {
+        const int ly = textY + static_cast<int>(li) * lineStep;
+        renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
+      }
     }
 
     // Apply checkerboard dither to create gray text effect for dimmed items
-    if (rowDimmed && rowDimmed(i) && !focused) {
+    if (rowDimmed && rowDimmed(i) && !focused && !centered) {
       const int dimH = renderer.getLineHeight(titleFont);
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textY + static_cast<int>(li) * lineStep;

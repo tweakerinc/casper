@@ -333,6 +333,10 @@ void CasperSettings::toJson(JsonDocument& doc) const {
   doc["longPressMenuFunction"] = longPressMenuFunction;
   doc["longPressBackFunction"] = longPressBackFunction;
   doc["doublePressMenuFunction"] = doublePressMenuFunction;
+  // Per-side long-press + Flip With (DynamicEnum — no valuePtr in SettingsList).
+  doc["longPressSideA"] = longPressSideA;
+  doc["longPressSideB"] = longPressSideB;
+  doc["orientationFlipWith"] = orientationFlipWith;
   // Time-left mode is in SettingsList when STR_TIME_LEFT is wired; also persist manually
   // so older SettingsList builds without the enum still keep the value.
   doc["statusBarTimeLeft"] = statusBarTimeLeft;
@@ -1118,6 +1122,16 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
     doublePressMenuFunction = clamp(doc["doublePressMenuFunction"] | (uint8_t)LP_MENU_DISABLED,
                                     LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
+  if (!doc["longPressSideA"].isNull()) {
+    longPressSideA = clamp(doc["longPressSideA"] | (uint8_t)OFF, LONG_PRESS_BUTTON_BEHAVIOR_COUNT, (uint8_t)OFF);
+  }
+  if (!doc["longPressSideB"].isNull()) {
+    longPressSideB = clamp(doc["longPressSideB"] | (uint8_t)OFF, LONG_PRESS_BUTTON_BEHAVIOR_COUNT, (uint8_t)OFF);
+  }
+  if (!doc["orientationFlipWith"].isNull()) {
+    orientationFlipWith =
+        clamp(doc["orientationFlipWith"] | (uint8_t)LANDSCAPE_CCW, ORIENTATION_COUNT, (uint8_t)LANDSCAPE_CCW);
+  }
   // Once (after load): Off → Clipping Tool for double-press Confirm (Rivulet).
   // Runs only when the saved value is still Off; never overwrites a chosen action.
   {
@@ -1133,14 +1147,29 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
       casperDoublePressClipMigrated = 1;
     }
   }
-  // Side long-press: retired value 3 (Clipping Tool) → Off. Flip is 4.
-  if (longPressButtonBehavior >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT ||
-      longPressButtonBehavior == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) {
-    longPressButtonBehavior = OFF;
+  // Migrate shared longPressButtonBehavior → per-side A/B (once).
+  if (doc["longPressButtonBehavior"].is<int>() && !doc["longPressSideA"].is<int>() &&
+      !doc["longPressSideB"].is<int>()) {
+    uint8_t v = static_cast<uint8_t>(doc["longPressButtonBehavior"].as<int>());
+    if (v >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT || v == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) v = OFF;
+    longPressSideA = v;
+    longPressSideB = v;
+    needsResave = true;
+    LOG_DBG("CPS", "migrated longPressButtonBehavior=%u → side A/B", static_cast<unsigned>(v));
   }
+  auto clampSide = [&](uint8_t& side) {
+    if (side >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT || side == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) side = OFF;
+  };
+  clampSide(longPressSideA);
+  clampSide(longPressSideB);
   // Flip-with must be a real non-portrait orientation.
   if (orientationFlipWith == PORTRAIT || orientationFlipWith >= ORIENTATION_COUNT) {
     orientationFlipWith = LANDSCAPE_CCW;
+  }
+  // Long-Press Back retired from Controls — force Off so leftover saves cannot fire it.
+  if (longPressBackFunction != LP_MENU_DISABLED) {
+    longPressBackFunction = LP_MENU_DISABLED;
+    needsResave = true;
   }
 
   if (needsResave) {

@@ -108,10 +108,9 @@ inline SettingInfo buildSleepScreenSetting() {
 // Long-Press Menu / Long-Press Back (Confirm or Back hold while reading).
 // Storage LONG_PRESS_MENU_FUNCTION is append-only; display order is product priority.
 
-// Long-Press Side Buttons: Off / Chapter Skip / Change Orientation / Flip Orientation.
-// Storage is append-only (reserved 3 = retired Clipping Tool); UI skips that hole via
-// DynamicEnum so Flip stores ORIENTATION_FLIP (4), not 3.
-inline SettingInfo buildLongPressSideButtonSetting() {
+// One physical side key's long-press action (Off / Chapter Skip / Cycle / Flip).
+// Storage is append-only (reserved 3 = retired Clipping Tool); UI skips that hole.
+inline SettingInfo buildLongPressSideActionSetting(StrId nameId, uint8_t CasperSettings::* field, const char* key) {
   using A = CasperSettings::LONG_PRESS_BUTTON_BEHAVIOR;
   static constexpr A kOrder[] = {
       A::OFF,
@@ -133,22 +132,22 @@ inline SettingInfo buildLongPressSideButtonSetting() {
   for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
 
   return SettingInfo::DynamicEnum(
-      StrId::STR_LONG_PRESS_BEHAVIOR, std::move(labels),
-      [] {
-        const auto mode = static_cast<A>(SETTINGS.longPressButtonBehavior);
+      nameId, std::move(labels),
+      [field] {
+        const auto mode = static_cast<A>(SETTINGS.*field);
         for (uint8_t i = 0; i < kCount; ++i) {
           if (kOrder[i] == mode) return i;
         }
         return static_cast<uint8_t>(0);  // Off
       },
-      [](uint8_t displayIdx) {
+      [field](uint8_t displayIdx) {
         if (displayIdx >= kCount) displayIdx = 0;
-        SETTINGS.longPressButtonBehavior = static_cast<uint8_t>(kOrder[displayIdx]);
+        SETTINGS.*field = static_cast<uint8_t>(kOrder[displayIdx]);
       },
-      "longPressButtonBehavior", StrId::STR_CAT_CONTROLS);
+      key, StrId::STR_CAT_CONTROLS);
 }
 
-// Nested under Flip Orientation: Portrait ↔ this orientation.
+// Nested under Flip Orientation (either side): Portrait ↔ this orientation.
 inline SettingInfo buildOrientationFlipWithSetting() {
   using O = CasperSettings::ORIENTATION;
   static constexpr O kOrder[] = {O::LANDSCAPE_CW, O::INVERTED, O::LANDSCAPE_CCW};
@@ -182,7 +181,8 @@ inline SettingInfo buildOrientationFlipWithSetting() {
 }
 
 inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CasperSettings::* field, const char* key,
-                                               uint8_t fallbackDisplayIdx = 0) {
+                                               uint8_t fallbackDisplayIdx = 0,
+                                               StrId category = StrId::STR_CAT_CONTROLS) {
   using A = CasperSettings::LONG_PRESS_MENU_FUNCTION;
   static constexpr A kOrder[] = {
       A::LP_MENU_DISABLED,      A::LP_MENU_DICTIONARY,   A::LP_MENU_BOOKMARK,      A::LP_MENU_SCREENSHOT,
@@ -225,7 +225,7 @@ inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CasperSetti
         if (displayIdx >= kCount) displayIdx = fallbackDisplayIdx < kCount ? fallbackDisplayIdx : 0;
         SETTINGS.*field = static_cast<uint8_t>(kOrder[displayIdx]);
       },
-      key, StrId::STR_CAT_CONTROLS);
+      key, category);
 }
 
 // Short / Long power-button action picker.
@@ -503,6 +503,12 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
                           {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
                            StrId::STR_PAGES_30, StrId::STR_PAGES_60, StrId::STR_NEVER},
                           "refreshFrequency", StrId::STR_CAT_READER),
+        // Reader-only control shortcuts (Confirm hold / double-tap).
+        SettingInfo::Header(StrId::STR_READER_CONTROLS_HEADING, StrId::STR_CAT_READER),
+        buildLongPressActionSetting(StrId::STR_LONG_PRESS_MENU, &CasperSettings::longPressMenuFunction,
+                                    "longPressMenuFunction", /*fallbackDisplayIdx=*/1, StrId::STR_CAT_READER),
+        buildLongPressActionSetting(StrId::STR_DOUBLE_PRESS_MENU, &CasperSettings::doublePressMenuFunction,
+                                    "doublePressMenuFunction", /*fallbackDisplayIdx=*/0, StrId::STR_CAT_READER),
         // Library / Recents / Settings list chrome (not reader body, not Penumbra home panel).
         SettingInfo::Enum(StrId::STR_MENU_FONT_SIZE, &CasperSettings::menuFontSize,
                           {StrId::STR_MENU_FONT_XSMALL, StrId::STR_MENU_FONT_SMALL, StrId::STR_MENU_FONT_MEDIUM,
@@ -515,22 +521,19 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
         // Display order via DynamicEnum; stored SHORT_PWRBTN values unchanged.
         buildPwrBtnSetting(StrId::STR_SHORT_PWR_BTN, &CasperSettings::shortPwrBtn, "shortPwrBtn"),
         buildPwrBtnSetting(StrId::STR_LONG_PRESS_ACTION, &CasperSettings::longPwrBtn, "longPwrBtn"),
-        // Long-press side buttons (chapter skip / cycle / flip orientation) — under Long-Press Power.
-        // Default remains Off; Flip is opt-in.
-        buildLongPressSideButtonSetting(),
+        // Per-side long-press (X3 Left/Right, X4 Up/Down). Defaults Off; Flip is opt-in.
+        // Labels are device-filtered in SettingsActivity.
+        buildLongPressSideActionSetting(StrId::STR_LONG_PRESS_SIDE_A_X3, &CasperSettings::longPressSideA,
+                                        "longPressSideA"),
+        buildLongPressSideActionSetting(StrId::STR_LONG_PRESS_SIDE_B_X3, &CasperSettings::longPressSideB,
+                                        "longPressSideB"),
+        buildLongPressSideActionSetting(StrId::STR_LONG_PRESS_SIDE_A_X4, &CasperSettings::longPressSideA,
+                                        "longPressSideA"),
+        buildLongPressSideActionSetting(StrId::STR_LONG_PRESS_SIDE_B_X4, &CasperSettings::longPressSideB,
+                                        "longPressSideB"),
         buildOrientationFlipWithSetting(),
-        // Same action list for Confirm hold, Confirm double-tap, and Back hold.
-        // Default display: Back → Off (0), Menu long → Dictionary (1), Menu double → Off (0).
-        // Clipping Tool is safer on Long-Press Menu or Double-Press Menu than Back
-        // (Back release cancels child activities).
-        buildLongPressActionSetting(StrId::STR_LONG_PRESS_BACK, &CasperSettings::longPressBackFunction,
-                                    "longPressBackFunction", /*fallbackDisplayIdx=*/0),
-        buildLongPressActionSetting(StrId::STR_LONG_PRESS_MENU, &CasperSettings::longPressMenuFunction,
-                                    "longPressMenuFunction", /*fallbackDisplayIdx=*/1),
-        buildLongPressActionSetting(StrId::STR_DOUBLE_PRESS_MENU, &CasperSettings::doublePressMenuFunction,
-                                    "doublePressMenuFunction", /*fallbackDisplayIdx=*/0),
-        // Remap Front Buttons is inserted by SettingsActivity after Double-Press Menu (no-touch).
-        // Tilt (if IMU) is inserted after Double-Press Menu by getSettingsList below.
+        // Remap Front Buttons is inserted by SettingsActivity after Long-Press Power (no-touch).
+        // Tilt (if IMU) is inserted after Remap / side long-press by getSettingsList below.
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CasperSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
         // Shown only when short or long power is Footnotes (filtered in SettingsActivity).
@@ -749,10 +752,11 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
                             StrId::STR_STATUS_BAR),
     };
     // Only show tilt page turn when the QMI8658 IMU is present (X3).
-    // After Double-Press Menu (Remap is inserted in the same Controls cluster).
+    // Place after Remap / side long-press cluster in Controls.
     if (halTiltSensor.isAvailable()) {
       for (auto it = v.begin(); it != v.end(); ++it) {
-        if (it->nameId == StrId::STR_DOUBLE_PRESS_MENU) {
+        if (it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X3 || it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X4 ||
+            it->nameId == StrId::STR_ORIENTATION_FLIP_WITH) {
           v.insert(it + 1, SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CasperSettings::tiltPageTurn,
                                              {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED},
                                              "tiltPageTurn", StrId::STR_CAT_CONTROLS));

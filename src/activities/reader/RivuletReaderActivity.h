@@ -182,7 +182,6 @@ class RivuletReaderActivity final : public Activity {
   bool error_ = false;
   bool firstPaint_ = true;
   bool ignoreNextConfirmRelease_ = false;
-  bool ignoreNextBackRelease_ = false;  // after long-press Back shortcut
   bool pendingConfirmMenuOpen_ = false;
   bool pageMapDirty_ = false;  // map grew since last SD save
   // True while walking prev-chapter to true last page — render shows Loading only

@@ -10,7 +10,7 @@
 #include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
-enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
+enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING, HEADER };
 
 enum class SettingAction {
   None,
@@ -105,6 +105,15 @@ struct SettingInfo {
     s.nameId = nameId;
     s.type = SettingType::ACTION;
     s.action = action;
+    return s;
+  }
+
+  // Non-interactive centered section label (skipped by Up/Down navigation).
+  static SettingInfo Header(StrId nameId, StrId category) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::HEADER;
+    s.category = category;
     return s;
   }
 

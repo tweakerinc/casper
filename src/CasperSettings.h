@@ -516,7 +516,10 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
   // Default Off — Flip Orientation is opt-in (not a factory default).
-  uint8_t longPressButtonBehavior = OFF;
+  // Per physical side key (hw 4 / hw 5): X3 Left/Right, X4 Up/Down.
+  // Replaces the old shared longPressButtonBehavior (migrated on load).
+  uint8_t longPressSideA = OFF;  // hw 4: X3 Left / X4 Up
+  uint8_t longPressSideB = OFF;  // hw 5: X3 Right / X4 Down
   // Second end of Flip Orientation: always Portrait ↔ this. Must not be PORTRAIT.
   // Default Landscape CCW (common one-handed reading pair); only used when Flip is selected.
   uint8_t orientationFlipWith = LANDSCAPE_CCW;

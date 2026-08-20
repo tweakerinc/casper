@@ -111,10 +111,21 @@ void SettingsActivity::rebuildSettingsLists() {
           SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
-      // Nested under Flip Orientation — hide unless Flip is selected.
+      // Device-specific labels for the same side long-press fields.
+      const bool x3 = gpio.deviceIsX3();
+      if ((setting.nameId == StrId::STR_LONG_PRESS_SIDE_A_X3 || setting.nameId == StrId::STR_LONG_PRESS_SIDE_B_X3) &&
+          !x3) {
+        continue;
+      }
+      if ((setting.nameId == StrId::STR_LONG_PRESS_SIDE_A_X4 || setting.nameId == StrId::STR_LONG_PRESS_SIDE_B_X4) &&
+          x3) {
+        continue;
+      }
+      // Nested under Flip Orientation — hide unless either side is Flip.
       if ((setting.nameId == StrId::STR_ORIENTATION_FLIP_WITH ||
            (setting.key && strcmp(setting.key, "orientationFlipWith") == 0)) &&
-          SETTINGS.longPressButtonBehavior != CasperSettings::ORIENTATION_FLIP) {
+          SETTINGS.longPressSideA != CasperSettings::ORIENTATION_FLIP &&
+          SETTINGS.longPressSideB != CasperSettings::ORIENTATION_FLIP) {
         continue;
       }
       controlsSettings.push_back(setting);
@@ -141,9 +152,8 @@ void SettingsActivity::rebuildSettingsLists() {
     }
   }
 
-  // Controls order: … → Double-Press Menu → Remap Front Buttons → Tilt → …
-  // Side Button Layout lives under Reader → Reading Orientation (reader-only).
-  // Insert Remap after Double-Press Menu (before Tilt when present).
+  // Controls order: … → Long-Press Power → side long-press → Remap → Tilt → …
+  // Insert Remap after the last side long-press row (or Long-Press Power).
   if (!BoardConfig::hasTouch()) {
     auto insertAt = controlsSettings.end();
     for (auto it = controlsSettings.begin(); it != controlsSettings.end(); ++it) {
@@ -151,7 +161,8 @@ void SettingsActivity::rebuildSettingsLists() {
         insertAt = it;
         break;
       }
-      if (it->nameId == StrId::STR_DOUBLE_PRESS_MENU) {
+      if (it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X3 || it->nameId == StrId::STR_LONG_PRESS_SIDE_B_X4 ||
+          it->nameId == StrId::STR_ORIENTATION_FLIP_WITH || it->nameId == StrId::STR_LONG_PRESS_ACTION) {
         insertAt = it + 1;
       }
     }
@@ -469,12 +480,22 @@ void SettingsActivity::loop() {
     return;
   }
 
-  auto moveListNext = [this, ringSize] {
-    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, ringSize);
+  auto isHeaderFocus = [this](int focusIdx) -> bool {
+    if (focusIdx <= 0 || focusIdx > settingsCount) return false;
+    return (*currentSettings)[focusIdx - 1].type == SettingType::HEADER;
+  };
+  auto moveListNext = [this, ringSize, &isHeaderFocus] {
+    for (int i = 0; i < ringSize; ++i) {
+      selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, ringSize);
+      if (!isHeaderFocus(selectedSettingIndex)) break;
+    }
     requestUpdate();
   };
-  auto moveListPrev = [this, ringSize] {
-    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, ringSize);
+  auto moveListPrev = [this, ringSize, &isHeaderFocus] {
+    for (int i = 0; i < ringSize; ++i) {
+      selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, ringSize);
+      if (!isHeaderFocus(selectedSettingIndex)) break;
+    }
     requestUpdate();
   };
   auto moveTabNext = [this, &hasChangedCategory] {
@@ -521,6 +542,9 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  if (setting.type == SettingType::HEADER) {
+    return;
+  }
   // DynamicEnum sleep picker has no valuePtr — match by name/key as well.
   const bool sleepScreenChanged = setting.valuePtr == &CasperSettings::sleepScreen ||
                                   setting.nameId == StrId::STR_SLEEP_SCREEN ||
@@ -845,6 +869,7 @@ void SettingsActivity::render(RenderLock&&) {
       nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
+        if (setting.type == SettingType::HEADER) return std::string{};
         std::string valueText;
         if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
           valueText = SETTINGS.*(setting.valuePtr) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
@@ -882,7 +907,8 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true);
+      true, nullptr, nullptr,
+      [&settings](int i) { return settings[i].type == SettingType::HEADER; });
 
   const char* confirmLabel = tr(STR_SELECT);
   if (selectedSettingIndex == 0) {

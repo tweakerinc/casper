@@ -107,6 +107,80 @@ inline SettingInfo buildSleepScreenSetting() {
 
 // Long-Press Menu / Long-Press Back (Confirm or Back hold while reading).
 // Storage LONG_PRESS_MENU_FUNCTION is append-only; display order is product priority.
+
+// Long-Press Side Buttons: Off / Chapter Skip / Change Orientation / Flip Orientation.
+// Storage is append-only (reserved 3 = retired Clipping Tool); UI skips that hole via
+// DynamicEnum so Flip stores ORIENTATION_FLIP (4), not 3.
+inline SettingInfo buildLongPressSideButtonSetting() {
+  using A = CasperSettings::LONG_PRESS_BUTTON_BEHAVIOR;
+  static constexpr A kOrder[] = {
+      A::OFF,
+      A::CHAPTER_SKIP,
+      A::ORIENTATION_CHANGE,
+      A::ORIENTATION_FLIP,
+  };
+  static constexpr StrId kLabels[] = {
+      StrId::STR_LONG_PRESS_BEHAVIOR_OFF,
+      StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
+      StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION,
+      StrId::STR_LONG_PRESS_BEHAVIOR_FLIP,
+  };
+  static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
+  static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kCount);
+
+  std::vector<StrId> labels;
+  labels.reserve(kCount);
+  for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
+
+  return SettingInfo::DynamicEnum(
+      StrId::STR_LONG_PRESS_BEHAVIOR, std::move(labels),
+      [] {
+        const auto mode = static_cast<A>(SETTINGS.longPressButtonBehavior);
+        for (uint8_t i = 0; i < kCount; ++i) {
+          if (kOrder[i] == mode) return i;
+        }
+        return static_cast<uint8_t>(0);  // Off
+      },
+      [](uint8_t displayIdx) {
+        if (displayIdx >= kCount) displayIdx = 0;
+        SETTINGS.longPressButtonBehavior = static_cast<uint8_t>(kOrder[displayIdx]);
+      },
+      "longPressButtonBehavior", StrId::STR_CAT_CONTROLS);
+}
+
+// Nested under Flip Orientation: Portrait ↔ this orientation.
+inline SettingInfo buildOrientationFlipWithSetting() {
+  using O = CasperSettings::ORIENTATION;
+  static constexpr O kOrder[] = {O::LANDSCAPE_CW, O::INVERTED, O::LANDSCAPE_CCW};
+  static constexpr StrId kLabels[] = {StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED,
+                                      StrId::STR_LANDSCAPE_CCW};
+  static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
+
+  std::vector<StrId> labels;
+  labels.reserve(kCount);
+  for (uint8_t i = 0; i < kCount; ++i) labels.push_back(kLabels[i]);
+
+  return SettingInfo::DynamicEnum(
+             StrId::STR_ORIENTATION_FLIP_WITH, std::move(labels),
+             [] {
+               const auto v = static_cast<O>(SETTINGS.orientationFlipWith);
+               for (uint8_t i = 0; i < kCount; ++i) {
+                 if (kOrder[i] == v) return i;
+               }
+               // Default display: Landscape CCW
+               for (uint8_t i = 0; i < kCount; ++i) {
+                 if (kOrder[i] == O::LANDSCAPE_CCW) return i;
+               }
+               return static_cast<uint8_t>(0);
+             },
+             [](uint8_t displayIdx) {
+               if (displayIdx >= kCount) displayIdx = 0;
+               SETTINGS.orientationFlipWith = static_cast<uint8_t>(kOrder[displayIdx]);
+             },
+             "orientationFlipWith", StrId::STR_CAT_CONTROLS)
+      .withNestedUnderParent();
+}
+
 inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CasperSettings::* field, const char* key,
                                                uint8_t fallbackDisplayIdx = 0) {
   using A = CasperSettings::LONG_PRESS_MENU_FUNCTION;
@@ -441,11 +515,10 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
         // Display order via DynamicEnum; stored SHORT_PWRBTN values unchanged.
         buildPwrBtnSetting(StrId::STR_SHORT_PWR_BTN, &CasperSettings::shortPwrBtn, "shortPwrBtn"),
         buildPwrBtnSetting(StrId::STR_LONG_PRESS_ACTION, &CasperSettings::longPwrBtn, "longPwrBtn"),
-        // Long-press side buttons (chapter skip / flip orientation) — directly under Long-Press Power.
-        SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CasperSettings::longPressButtonBehavior,
-                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
+        // Long-press side buttons (chapter skip / cycle / flip orientation) — under Long-Press Power.
+        // Default remains Off; Flip is opt-in.
+        buildLongPressSideButtonSetting(),
+        buildOrientationFlipWithSetting(),
         // Same action list for Confirm hold, Confirm double-tap, and Back hold.
         // Default display: Back → Off (0), Menu long → Dictionary (1), Menu double → Off (0).
         // Clipping Tool is safer on Long-Press Menu or Double-Press Menu than Back

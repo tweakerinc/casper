@@ -77,8 +77,10 @@ class RivuletReaderActivity final : public Activity {
   static bool extractEpubItem(void* ctx, const char* srcPath, const char* destPath);
   bool fireMenuShortcut(uint8_t function);
   bool tryLongPressShortcut(uint8_t function, bool& suppressRelease);
-  // Side long-press: cycle Reading Orientation (Settings → Long-Press Buttons).
+  // Side long-press: cycle all orientations, or flip Portrait ↔ Flip With.
   void cycleReadingOrientation(bool nextTriggered);
+  void flipReadingOrientation();
+  void applyReadingOrientation(uint8_t newOrientation);
   // Chapter skip: land at chapter start (next) or previous chapter last page / this chapter start.
   void chapterSkipNext();
   void chapterSkipPrev();

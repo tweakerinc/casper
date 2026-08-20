@@ -1133,10 +1133,14 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
       casperDoublePressClipMigrated = 1;
     }
   }
-  // Side long-press: retired value 3 (Clipping Tool) → Off.
+  // Side long-press: retired value 3 (Clipping Tool) → Off. Flip is 4.
   if (longPressButtonBehavior >= LONG_PRESS_BUTTON_BEHAVIOR_COUNT ||
       longPressButtonBehavior == LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3) {
     longPressButtonBehavior = OFF;
+  }
+  // Flip-with must be a real non-portrait orientation.
+  if (orientationFlipWith == PORTRAIT || orientationFlipWith >= ORIENTATION_COUNT) {
+    orientationFlipWith = LANDSCAPE_CCW;
   }
 
   if (needsResave) {

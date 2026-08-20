@@ -105,10 +105,16 @@ void SettingsActivity::rebuildSettingsLists() {
       // Settings merged into Manage Fonts (TextSettingsActivity)
       if (setting.inTextSettings) continue;
       readerSettings.push_back(setting);
-    } else if (setting.category == StrId::STR_CAT_CONTROLS) {
+      } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CasperSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES &&
           SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
+        continue;
+      }
+      // Nested under Flip Orientation — hide unless Flip is selected.
+      if ((setting.nameId == StrId::STR_ORIENTATION_FLIP_WITH ||
+           (setting.key && strcmp(setting.key, "orientationFlipWith") == 0)) &&
+          SETTINGS.longPressButtonBehavior != CasperSettings::ORIENTATION_FLIP) {
         continue;
       }
       controlsSettings.push_back(setting);

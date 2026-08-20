@@ -309,10 +309,11 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   enum LONG_PRESS_BUTTON_BEHAVIOR {
     OFF = 0,
     CHAPTER_SKIP = 1,
-    ORIENTATION_CHANGE = 2,
+    ORIENTATION_CHANGE = 2,  // cycle all four orientations
     // Retired: was Clipping Tool on side hold; kept so old settings.json index 3
-    // does not collide with a new meaning. Load clamps unknown → OFF.
+    // does not collide with a new meaning. Load clamps → OFF.
     LONG_PRESS_BUTTON_BEHAVIOR_RESERVED_3 = 3,
+    ORIENTATION_FLIP = 4,  // toggle Portrait ↔ orientationFlipWith
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 
@@ -514,7 +515,11 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
+  // Default Off — Flip Orientation is opt-in (not a factory default).
   uint8_t longPressButtonBehavior = OFF;
+  // Second end of Flip Orientation: always Portrait ↔ this. Must not be PORTRAIT.
+  // Default Landscape CCW (common one-handed reading pair); only used when Flip is selected.
+  uint8_t orientationFlipWith = LANDSCAPE_CCW;
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
   // Casper: open stock Casper dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;

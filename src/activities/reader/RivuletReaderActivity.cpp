@@ -3090,13 +3090,8 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
   }
 }
 
-void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
-  const uint8_t count = static_cast<uint8_t>(CasperSettings::ORIENTATION_COUNT);
-  if (count == 0) return;
-  const uint8_t cur = SETTINGS.orientation;
-  const uint8_t neu =
-      nextTriggered ? static_cast<uint8_t>((cur + count - 1) % count) : static_cast<uint8_t>((cur + 1) % count);
-  if (neu == cur) return;
+void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
+  if (neu >= CasperSettings::ORIENTATION_COUNT || neu == SETTINGS.orientation) return;
 
   const int keepSpine = spineIndex_;
   const int keepPage = engine_.currentPage();
@@ -3125,6 +3120,27 @@ void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
     (void)saveProgress();
   }
   requestUpdate();
+}
+
+void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
+  const uint8_t count = static_cast<uint8_t>(CasperSettings::ORIENTATION_COUNT);
+  if (count == 0) return;
+  const uint8_t cur = SETTINGS.orientation;
+  const uint8_t neu =
+      nextTriggered ? static_cast<uint8_t>((cur + count - 1) % count) : static_cast<uint8_t>((cur + 1) % count);
+  applyReadingOrientation(neu);
+}
+
+void RivuletReaderActivity::flipReadingOrientation() {
+  // Portrait ↔ Flip With. Either side long-press toggles; if currently elsewhere,
+  // first flip lands on Portrait so the pair is always reachable in one hold.
+  uint8_t other = SETTINGS.orientationFlipWith;
+  if (other == CasperSettings::PORTRAIT || other >= CasperSettings::ORIENTATION_COUNT) {
+    other = CasperSettings::LANDSCAPE_CCW;
+  }
+  const uint8_t neu =
+      (SETTINGS.orientation == CasperSettings::PORTRAIT) ? other : static_cast<uint8_t>(CasperSettings::PORTRAIT);
+  applyReadingOrientation(neu);
 }
 
 void RivuletReaderActivity::chapterSkipNext() {
@@ -3431,10 +3447,18 @@ void RivuletReaderActivity::loop() {
     }
   }
 
-  // Settings → Long-Press Buttons = Orientation Change.
+  // Settings → Long-Press Side Buttons = Change Orientation (cycle all four).
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
     if (prevTriggered || nextTriggered) {
       cycleReadingOrientation(nextTriggered);
+      return;
+    }
+  }
+
+  // Settings → Long-Press Side Buttons = Flip Orientation (Portrait ↔ Flip With).
+  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_FLIP) {
+    if (prevTriggered || nextTriggered) {
+      flipReadingOrientation();
       return;
     }
   }

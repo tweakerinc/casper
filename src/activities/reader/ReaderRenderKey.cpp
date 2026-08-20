@@ -53,11 +53,14 @@ Layout compute(const GfxRenderer& renderer) {
   renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
   const int screenMargin = static_cast<int>(SETTINGS.screenMargin);
   const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-  // Tool hint strip scales with Menu Font Size (dictionary/clip front keys).
-  const int toolHintBand = ReaderUtils::readerToolHintBand(renderer);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Half-paragraph air between chrome and body text (top and bottom match).
+  const float lcForLine = SETTINGS.getReaderLineCompression();
+  const int bodyLine = std::max(12, renderer.getLineHeight(key.fontId, lcForLine));
+  const int clearance = std::max(6, bodyLine / 2);
+
   // Landscape front-key chrome is a *side* strip (CCW right / CW left). Keep body
-  // text clear of it so dictionary/clip can still see edge words (same idea as
-  // bottom reserve in portrait).
+  // text clear of it so dictionary/clip can still see edge words.
   const auto orient = renderer.getOrientation();
   const bool landscapeCw = orient == GfxRenderer::Orientation::LandscapeClockwise;
   const bool landscapeCcw = orient == GfxRenderer::Orientation::LandscapeCounterClockwise;
@@ -71,26 +74,36 @@ Layout compute(const GfxRenderer& renderer) {
   } else if (landscapeCw) {
     marginL = std::max(marginL, oLeft + screenMargin + frontSideReserve);
   }
-  // Top: screen margin + chrome extra (battery/clock). Avoid double-counting
-  // oriented top if it's already large on some panels.
-  const int marginT = std::max(0, oTop + screenMargin + ReaderUtils::readerTopChromeExtra());
+  // Top: only reserve chrome height when an upper status slot is actually shown.
+  // Readers who put everything in the bottom lane get that space back as text.
+  const auto sbSpec = SETTINGS.statusBarSpec();
+  const bool topChromeVisible = sbSpec.upperLeft != CasperSettings::CORNER_HIDE ||
+                                sbSpec.upperMiddle != CasperSettings::CORNER_HIDE ||
+                                sbSpec.upperRight != CasperSettings::CORNER_HIDE;
+  const int topChromeBottom =
+      BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight, renderer.getLineHeight(SMALL_FONT_ID));
+  const int marginT =
+      std::max(0, oTop + (topChromeVisible ? (topChromeBottom + clearance) : (screenMargin + clearance)));
 
-  // Bottom: take the taller of status chrome vs tool-hint strip — do not stack
-  // full top-chrome air on top of statusBarHeight (that cost ~one body line).
-  // Menu Font Size grows/shrinks toolHintBand so reserve stays adaptive.
-  int statusBand = statusBarHeight + ReaderUtils::readerBottomTextClearance();
+  // Bottom: whichever bottom chrome is actually taller — the status bar band or
+  // the front-button hint strip. These OVERLAY the same band (drawButtonHints
+  // paints at pageHeight - stripDepth, exactly where the status bar sits), so
+  // this is a max, never a sum, and Dictionary / Clip word-select can never
+  // cover body text. No content shifting is needed when a tool opens.
+  //
+  // The old formula stacked a second copy of the TOP chrome padding on top of
+  // statusBarHeight and then floored the result again — that double-count is
+  // what cost roughly a line of body text per page.
+  int chromeBand = statusBarHeight + clearance;
   if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
-    statusBand = std::max(statusBand, statusBarHeight + UITheme::getInstance().getMetrics().statusBarVerticalMargin +
-                                          ReaderUtils::readerBottomTextClearance());
+    chromeBand = std::max(chromeBand, statusBarHeight + metrics.statusBarVerticalMargin + clearance);
   }
-  int chromeBand = statusBand;
   if (!landscape) {
-    chromeBand = std::max(chromeBand, toolHintBand);
+    // Real drawn strip height (portrait band). Landscape puts it on a side edge,
+    // already handled by frontSideReserve above.
+    chromeBand = std::max(chromeBand, BaseTheme::frontButtonHintReserve(renderer));
   }
-  if (SETTINGS.statusBarFontSize >= CasperSettings::STATUS_BAR_FONT_10) {
-    chromeBand += 4;
-  }
-  const int marginB = std::max(0, oBottom + screenMargin + chromeBand + ReaderUtils::kReaderBottomChromePad);
+  const int marginB = std::max(0, oBottom + screenMargin + chromeBand);
 
   key.viewportW = static_cast<uint16_t>(std::max(32, renderer.getScreenWidth() - marginL - marginR));
   key.viewportH = static_cast<uint16_t>(std::max(32, renderer.getScreenHeight() - marginT - marginB));

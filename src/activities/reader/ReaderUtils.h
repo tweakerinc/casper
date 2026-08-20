@@ -61,7 +61,10 @@ constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
 constexpr unsigned long DOUBLE_PRESS_MENU_MS = 220;
 
 // Extra air under top chrome (battery/clock) so page text never sits under it.
-// Bumps slightly when Manage Reader UI → Font Size is larger than 8 pt.
+// NOTE: reader viewport geometry now lives in ReaderRenderKey::compute, which
+// derives clearance from the body line height (half paragraph) and takes the
+// max of the status band and the drawn hint strip. These remain for non-Rivulet
+// readers (Txt/Xtc) that still use fixed chrome padding.
 inline int readerTopChromeExtra() {
   switch (SETTINGS.statusBarFontSize) {
     case CasperSettings::STATUS_BAR_FONT_10:
@@ -72,31 +75,9 @@ inline int readerTopChromeExtra() {
       return 24;
   }
 }
-// Bottom text↔status clearance — smaller than top: statusBarHeight is already
-// in the bottom band, so mirroring top chrome here cost ~one line at 12pt.
-inline int readerBottomTextClearance() {
-  switch (SETTINGS.statusBarFontSize) {
-    case CasperSettings::STATUS_BAR_FONT_12:
-      return 14;
-    case CasperSettings::STATUS_BAR_FONT_10:
-      return 12;
-    default:
-      return 10;
-  }
-}
-// Front-button hint strip (Dictionary / Clip) — scales with Menu Font Size so
-// a compact menu frees a line of body text and a large menu still clears the strip.
-inline int readerToolHintBand(const GfxRenderer& renderer) {
-  const int lh = renderer.getLineHeight(SETTINGS.getMenuListFontId());
-  // One label line + pad inside the physical front-key band.
-  int band = lh + 14;
-  if (band < 28) band = 28;
-  if (band > 52) band = 52;
-  return band;
-}
-inline int readerBottomChromeExtra() { return readerBottomTextClearance(); }
-constexpr int kReaderTopChromeExtra = 24;     // legacy default; prefer readerTopChromeExtra()
-constexpr int kReaderBottomChromeExtra = 10;  // legacy; prefer readerBottomTextClearance()
+inline int readerBottomChromeExtra() { return readerTopChromeExtra(); }
+constexpr int kReaderTopChromeExtra = 24;
+constexpr int kReaderBottomChromeExtra = 24;
 constexpr int kReaderBottomChromePad = 4;
 
 enum ReaderTouchAction : freeink::ui::ActionId {

@@ -52,6 +52,13 @@ class HomeActivity final : public Activity {
   // so Back→Home is ~0.4s not ~2s of multipass. Timer armed after FAST paints.
   bool deferredHalfScrubOnly = false;
   unsigned long deferredHalfScrubAtMs = 0;
+  // Clock AA is a full-frame greyscale pass (HalDisplay windowed grey is a no-op).
+  // Run it only after this idle window so Read can cancel it first.
+  static constexpr unsigned long kClockAaIdleMs = 400;
+  bool pendingClockAaAfterIdle_ = false;
+  unsigned long lastHomeInputMs_ = 0;
+  // Minute tick: BW window only. Unchanged digits keep the last AA raster.
+  bool forcePenumbraClockBwOnly_ = false;
   // Soft FAST grayscale base (panel already shows matching BW shell).
   bool softGrayscaleBase = false;
   // Abort in-flight multipass between stages (Recents/Settings must not freeze

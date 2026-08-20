@@ -98,6 +98,14 @@ bool isAnyFrontButtonPressed(const MappedInputManager& mappedInput) {
          mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
 }
 
+bool homeControlsHeld(const MappedInputManager& mappedInput) {
+  return isAnyFrontButtonPressed(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+         mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+         mappedInput.isPressed(MappedInputManager::Button::Left) ||
+         mappedInput.isPressed(MappedInputManager::Button::Right) ||
+         mappedInput.isPressed(MappedInputManager::Button::Up) || mappedInput.isPressed(MappedInputManager::Button::Down);
+}
+
 // Popup menu: Dashboard BACK (Menu) / Bare CONFIRM (Menu).
 // Settings is always in the Menu list (front bar is Menu · Library · Recents · Read).
 // Recents is a front button — not duplicated in the popup menu.
@@ -505,6 +513,7 @@ void HomeActivity::onEnter() {
   minimalMenuIndex = 0;
   // Cold/first Home: HALF scrub (boot logo residual / first shell).
   UiGhostPolicy::requestHardScrub();
+  lastHomeInputMs_ = millis();
   // Allow cover pass to run again after leaving reader / changing theme.
   // Clear settled multipass so a theme switch always redraws and re-multipasses.
   freeCoverBuffer();
@@ -567,6 +576,8 @@ void HomeActivity::onEnter() {
 void HomeActivity::onExit() {
   Activity::onExit();
   deferredHalfScrubOnly = false;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
 
   // Free the stored cover buffer if any
   freeCoverBuffer();
@@ -668,6 +679,9 @@ void HomeActivity::onResume() {
   coverGrayRetryAtMs = 0;
   deferredHalfScrubOnly = false;
   deferredHalfScrubAtMs = 0;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
+  lastHomeInputMs_ = millis();
   deferredGreysOnly = false;
   softGrayscaleBase = false;
   recentsLoading = false;
@@ -1124,6 +1138,8 @@ void HomeActivity::cancelHomeBackgroundPaint() {
   // displayWindow runs on main, hangs UC8253 BUSY for 30s, and leaves the
   // panel black (FAST first page then ghosts that black under the text).
   forcePenumbraClockRepaint = false;
+  forcePenumbraClockBwOnly_ = false;
+  pendingClockAaAfterIdle_ = false;
   forceStatsUnderBoxRepaint = false;
   // Abort multipass between stages (checked in multipassHomeCoverGrayscale).
   cancelBackgroundPaint = true;
@@ -1146,6 +1162,8 @@ bool HomeActivity::handleForcedRefresh() {
   softGrayscaleBase = false;
   cancelBackgroundPaint = false;
   coverGrayNeedsRetry = false;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
   UiGhostPolicy::requestHardScrub();
   SystemLog::logTiming("HOME", "force_refresh (hard HALF scrub)");
   requestUpdateAndWait();
@@ -1218,6 +1236,8 @@ void HomeActivity::loop() {
   // home repainting behind the menu.)
   if (minimalMenuOpen) {
     forcePenumbraClockRepaint = false;
+    forcePenumbraClockBwOnly_ = false;
+    pendingClockAaAfterIdle_ = false;
     forceStatsUnderBoxRepaint = false;
     deferredHalfScrubOnly = false;
     // Leave coverNeedsRetry / coverGrayNeedsRetry armed for after menu dismiss.
@@ -1226,7 +1246,13 @@ void HomeActivity::loop() {
     // without a full redraw so first ink stayed snappy.
     if (deferredHalfScrubOnly && static_cast<long>(millis() - deferredHalfScrubAtMs) >= 0) {
       deferredHalfScrubOnly = false;
-      if (!RenderLock::peek() && !activityManager.hasPendingActivityChange()) {
+      if (homeControlsHeld(mappedInput)) {
+        lastHomeInputMs_ = millis();
+        deferredHalfScrubOnly = true;
+        deferredHalfScrubAtMs = millis() + 100UL;
+        return;
+      }
+      if (!RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
         RenderLock lock;
         if (activityManager.isCurrentActivity(this) && !minimalMenuOpen) {
           UiGhostPolicy::displayHalf(renderer);
@@ -1240,14 +1266,27 @@ void HomeActivity::loop() {
       }
       return;
     }
+    // Full-frame clock AA after the shell is on glass — never while a button is
+    // held (Read cancels via cancelHomeBackgroundPaint) and never before HALF.
+    if (pendingClockAaAfterIdle_ && !deferredHalfScrubOnly) {
+      if (homeControlsHeld(mappedInput)) {
+        lastHomeInputMs_ = millis();
+      } else if (static_cast<long>(millis() - lastHomeInputMs_) >= static_cast<long>(kClockAaIdleMs) &&
+                 !RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
+        pendingClockAaAfterIdle_ = false;
+        forcePenumbraClockRepaint = true;
+        requestUpdate();
+        return;
+      }
+    }
     // Penumbra X3 hero clock: live minute tick while idle on home.
-    // Stacked activities never call this loop. Only the changing digits are
-    // dirtied in redrawClockBlock (tight windowed refresh).
-    if (isPenumbraTheme() && gpio.deviceIsX3() && !forcePenumbraClockRepaint && !deferredHalfScrubOnly) {
+    // BW window only — greyscale AA here is a full-frame pass (~1s).
+    if (isPenumbraTheme() && gpio.deviceIsX3() && !forcePenumbraClockRepaint && !forcePenumbraClockBwOnly_ &&
+        !deferredHalfScrubOnly && !pendingClockAaAfterIdle_) {
       char now[8];
       PenumbraThemeUi::formatHeroTimeNow(now, sizeof(now));
       if (now[0] != '\0' && (penumbraLastDrawnTime[0] == '\0' || strcmp(now, penumbraLastDrawnTime) != 0)) {
-        forcePenumbraClockRepaint = true;
+        forcePenumbraClockBwOnly_ = true;
         requestUpdate();
         return;
       }
@@ -1782,11 +1821,16 @@ void HomeActivity::render(RenderLock&& lock) {
     // Partial updates (side L/R / Recents Down) — never while menu owns the panel.
     if (minimalMenuOpen) {
       forcePenumbraClockRepaint = false;
+      forcePenumbraClockBwOnly_ = false;
+      pendingClockAaAfterIdle_ = false;
       forceStatsUnderBoxRepaint = false;
     }
-    const bool clockDirty = !minimalMenuOpen && forcePenumbraClockRepaint;
+    const bool clockAa = !minimalMenuOpen && forcePenumbraClockRepaint;
+    const bool clockBw = !minimalMenuOpen && forcePenumbraClockBwOnly_;
+    const bool clockDirty = clockAa || clockBw;
     const bool underDirty = !minimalMenuOpen && forceStatsUnderBoxRepaint;
     forcePenumbraClockRepaint = false;
+    forcePenumbraClockBwOnly_ = false;
     forceStatsUnderBoxRepaint = false;
 
     if ((clockDirty || underDirty) && paintedUiTheme == clockTheme && coverRendered) {
@@ -1818,7 +1862,8 @@ void HomeActivity::render(RenderLock&& lock) {
                             static_cast<unsigned long>(tDraw), static_cast<unsigned long>(millis() - t1),
                             gpio.deviceIsX3() ? 1 : 0);
         if (clockDirty) {
-          forcePenumbraClockRepaint = true;
+          if (clockAa) forcePenumbraClockRepaint = true;
+          else forcePenumbraClockBwOnly_ = true;
           requestUpdate();
         }
         homeUiReady = true;
@@ -1843,12 +1888,16 @@ void HomeActivity::render(RenderLock&& lock) {
               cancelBackgroundPaint || activityManager.hasPendingActivityChange();
           if (leave) {
             SystemLog::logTiming("HOME", "penumbra_clock_digits skip (leave)");
-          } else {
+          } else if (clockAa) {
             if (!PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
                                                           &dirty)) {
               renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
             }
-            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_digits x=%d y=%d w=%d h=%d fre=%u", dirty.x,
+            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_aa x=%d y=%d w=%d h=%d fre=%u", dirty.x,
+                                dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
+          } else {
+            renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_bw x=%d y=%d w=%d h=%d fre=%u", dirty.x,
                                 dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
           }
         }
@@ -1969,13 +2018,11 @@ void HomeActivity::render(RenderLock&& lock) {
     recentsLoaded = true;
     homeUiReady = true;
     if (deferClockAa) {
-      // Hand the clock's greyscale pass to the windowed clock path on the next
-      // tick. Clearing the remembered time makes redrawClockBlock treat the whole
-      // band as dirty, so it re-renders anti-aliased over a Home that is already
-      // on glass — the same pixels, without the multi-second wait for first ink.
-      penumbraLastDrawnTime[0] = '\0';
-      forcePenumbraClockRepaint = true;
-      requestUpdate();
+      // Home is already on glass. Keep lastDrawnTime so the minute-tick path
+      // does not fire every loop, and wait for idle before the full-frame AA.
+      PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
+      pendingClockAaAfterIdle_ = true;
+      lastHomeInputMs_ = millis();
     } else {
       PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
       forcePenumbraClockRepaint = false;

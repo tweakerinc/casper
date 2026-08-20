@@ -1185,9 +1185,10 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   renderer.drawText(kFont, x, y, message, /*black=*/true);
 
   if (refresh) {
-    // FAST only — the old center Loading pill used HALF and ghosted into the next
-    // page. A few glyphs in the corner leave almost no residual under FAST.
-    displayPopupWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+    // Windowed FAST on the wipe only. A full displayBuffer(FAST) raced the reader
+    // activity swap and made "Opening" invisible (user never saw the cue even with
+    // Dark Mode off). Corner glyphs leave no residual worth a full-frame refresh.
+    renderer.displayWindow(x - 1, y - 1, wipeW + 2, wipeH + 2);
   }
   return Rect{x - 1, y - 1, wipeW + 2, wipeH + 2};
 }

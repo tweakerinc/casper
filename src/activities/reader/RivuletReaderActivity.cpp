@@ -56,6 +56,7 @@
 #include "fontIds.h"
 #include "activities/home/BookActions.h"
 #include "util/SystemLog.h"
+#include "util/QrTimingLog.h"
 #include "ReadingStatsUtils.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkFile.h"
@@ -1637,6 +1638,7 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   // Only commit the spine index after layout succeeded — a failed loadSpine
   // used to leave spineIndex_ on the new chapter with ready_=false (blank
   // Loading forever), then a later recovery opened spine 0.
+  if (spineIndex != spineIndex_) lastNextSpineWarmFrom_ = -1;
   spineIndex_ = spineIndex;
   ready_ = true;
 
@@ -1705,6 +1707,58 @@ int RivuletReaderActivity::nearestSpineWithoutMap(const bool preferBackward, con
 // Build + persist one spine's full page map, then return to where the reader was.
 // This is the Rivulet equivalent of CrossInk writing section.bin: pay once, and
 // every later PageBack / chapter jump into that spine is an index lookup.
+bool RivuletReaderActivity::warmNextSpinePrefix(const int pages) {
+  if (warmingAdjacent_ || !ready_ || !epub_ || pages < 1 || irDir_.empty()) return false;
+  const int n = epub_->getSpineItemsCount();
+  int next = spineIndex_ + 1;
+  while (next < n && epub_->getSpineItem(next).href.empty()) ++next;
+  if (next >= n) {
+    SystemLog::logTiming("MAP", "next_warm none after spine=%d", spineIndex_);
+    return false;
+  }
+  if (spineHasPageMap(next)) {
+    SystemLog::logTiming("MAP", "next_warm spine=%d already_has_map", next);
+    return false;
+  }
+
+  const int curSpine = spineIndex_;
+  const int curPage = engine_.currentPage();
+  persistPageMapIfComplete();
+
+  warmingAdjacent_ = true;
+  const uint32_t t0 = millis();
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  bool ok = loadSpine(next, /*startPage=*/-1, /*requireCompleteIr=*/false);
+  if (!ok || engine_.chapter().failed()) {
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    ok = loadSpine(next, -1, /*requireCompleteIr=*/true);
+  }
+
+  int known = 0;
+  if (ok && !engine_.chapter().failed()) {
+    (void)engine_.extendPageMap(renderer, pages);
+    known = engine_.mapKnownPages();
+    if (known > 0) {
+      char mapPath[200];
+      std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), next,
+                    static_cast<unsigned>(SETTINGS.imageRendering));
+      (void)engine_.savePageMap(mapPath);
+    }
+    SystemLog::logTiming("MAP", "next_warm spine=%d known=%d complete=%d ms=%lu fre=%u", next, known,
+                         engine_.mapComplete() ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+                         static_cast<unsigned>(ESP.getFreeHeap()));
+  } else {
+    SystemLog::logTiming("MAP", "next_warm spine=%d load_fail", next);
+  }
+
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (!loadSpine(curSpine, curPage)) {
+    (void)loadSpine(curSpine, 0);
+  }
+  warmingAdjacent_ = false;
+  return known > 0;
+}
+
 bool RivuletReaderActivity::indexSpinePageMap(const int spine) {
   if (warmingAdjacent_ || !ready_ || !epub_ || spine < 0) return false;
   if (spine == spineIndex_ || spineHasPageMap(spine)) return false;
@@ -1861,20 +1915,18 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
   const unsigned long now = millis();
-  // While the map is still building / pages are missing on SD, tick often.
-  // Once caught up, slow down so we are not spinning the CPU for nothing
-  // (battery — CrossPoint 1.5 raised clocks; we want the opposite when idle).
-  const bool catchUp = !engine_.mapComplete() || !engine_.aheadWarm() || !engine_.behindWarm();
+  const bool mapDone = engine_.mapComplete();
+  const bool catchUp = !mapDone || !engine_.aheadWarm() || !engine_.behindWarm();
   const unsigned long intervalMs = catchUp ? 80UL : 250UL;
   if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < intervalMs) return;
   lastIdleMapMs_ = now;
 
-  // Rate-limited field diagnostics (SystemLog no-ops when Enable Logging is Off).
   static int s_lastLoggedKnown = -1;
   static int s_lastLoggedSpine = -1;
   static unsigned long s_lastMapLogMs = 0;
   static unsigned long s_lastHeapSkipLogMs = 0;
   static int s_stallTicks = 0;
+  static int s_idleGaveUpSpine = -1;
 
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) {
     if (now - s_lastHeapSkipLogMs >= 10000UL) {
@@ -1886,68 +1938,98 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
 
-  // 1) RAM windows for the next turn either way.
-  if (engine_.warmAheadPage(renderer)) return;
-  if (engine_.warmBehindPage(renderer)) return;
+  // 1) Finish the chapter page map FIRST. Prefetch used to run before this and
+  //    could busy-loop on ahead SD caches forever while complete stayed false —
+  //    zero MAP logs and "~" never cleared (device capture: map=21/est for minutes).
+  if (!engine_.mapComplete() && s_idleGaveUpSpine != spineIndex_) {
+    const int knownBefore = engine_.mapKnownPages();
+    const int est = engine_.chapterPageCount(&renderer);
+    const int burst = engine_.idleMapPagesThisTick(&renderer);
+    if (burst > 0) {
+      const bool progressed = engine_.extendPageMap(renderer, burst);
+      const int knownAfter = engine_.mapKnownPages();
+      const bool complete = engine_.mapComplete();
+      if (progressed) {
+        pageMapDirty_ = true;
+        s_stallTicks = 0;
+      } else {
+        ++s_stallTicks;
+        // Stuck at the tail: probe last map start for chapter-end without moving
+        // the reader, or give up idle mapping this spine so we stop burning CPU.
+        if (s_stallTicks >= 3 && knownAfter > 0) {
+          if (engine_.tryCompleteMapAtEnd(renderer)) {
+            pageMapDirty_ = true;
+            s_stallTicks = 0;
+            SystemLog::logTiming("MAP", "try_complete spine=%d known=%d complete=%d", spineIndex_,
+                                 engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0);
+          } else if (s_stallTicks >= 8) {
+            s_idleGaveUpSpine = spineIndex_;
+            SystemLog::logTiming("MAP", "idle_give_up spine=%d known=%d est=%d stall=%d", spineIndex_, knownAfter, est,
+                                 s_stallTicks);
+          }
+        }
+      }
 
-  // 2) SD page-paint cache for pages further ahead (not held in RAM) — so
-  //    turns into the chapter stay deserialize+paint even after ahead_ is spent.
-  if (engine_.idlePrefetchPageCache(renderer, /*maxForward=*/4)) {
-    pageMapDirty_ = true;
+      const bool nowComplete = engine_.mapComplete();
+      if (nowComplete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
+          (now - s_lastMapLogMs) >= 5000UL) {
+        s_lastLoggedKnown = knownAfter;
+        s_lastLoggedSpine = spineIndex_;
+        s_lastMapLogMs = now;
+        SystemLog::logTiming(
+            "MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d burst=%d stall=%d page=%d fre=%u maxA=%u",
+            spineIndex_, knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0, burst, s_stallTicks,
+            engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      }
+
+      if (nowComplete) {
+        persistPageMapIfComplete();
+        requestUpdate();  // clear "~"
+        s_stallTicks = 0;
+      }
+      return;  // one map burst per idle tick while incomplete
+    }
+  }
+
+  // 2) RAM ±1 page window.
+  if (engine_.warmAheadPage(renderer)) {
+    if (now - s_lastMapLogMs >= 5000UL) {
+      s_lastMapLogMs = now;
+      SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+    }
+    return;
+  }
+  if (engine_.warmBehindPage(renderer)) {
+    if (now - s_lastMapLogMs >= 5000UL) {
+      s_lastMapLogMs = now;
+      SystemLog::logTiming("MAP", "warm_behind spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+    }
     return;
   }
 
-  // 3) Sitting on page 1 of a spine with no map for the previous one: build it
-  //    first — that is the chapter PageBack is about to need. Never before first
-  //    ink (that turned book open into a 30 s white screen).
-  // Try each spine at most once per session: a chapter whose IR converts partial
-  // never produces a saved map, so without this the same spine is re-indexed
-  // (multi-second, blocking) on every idle tick and the reader stops responding.
-  if (firstInkDone_ && !chapterNavBusy_ && !warmingAdjacent_ && engine_.currentPage() == 0 && spineIndex_ > 0 &&
-      !irDir_.empty() && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) > 4000UL &&
-      ESP.getFreeHeap() > 90 * 1024 && ESP.getMaxAllocHeap() > 56 * 1024) {
-    const int prevSpine = nearestSpineWithoutMap(/*preferBackward=*/true, /*adjacentOnly=*/true);
-    if (prevSpine >= 0 && prevSpine < spineIndex_ && prevSpine != lastIndexAttemptSpine_) {
-      lastIndexAttemptSpine_ = prevSpine;
-      SystemLog::logTiming("MAP", "warm_prev_spine=%d from=%d", prevSpine, spineIndex_);
-      (void)indexSpinePageMap(prevSpine);
+  // 3) SD prefetch only after the map is complete (or we gave up) — otherwise it
+  //    steals every tick and the chapter never seals.
+  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) {
+    if (engine_.idlePrefetchPageCache(renderer, /*maxForward=*/4)) {
+      pageMapDirty_ = true;
+      if (now - s_lastMapLogMs >= 5000UL) {
+        s_lastMapLogMs = now;
+        SystemLog::logTiming("MAP", "prefetch spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+      }
       return;
     }
   }
 
-  // 4) Thin page-map extension (cursors only) until complete.
-  if (engine_.mapComplete()) return;
-  const int knownBefore = engine_.mapKnownPages();
-  const int est = engine_.chapterPageCount(&renderer);
-  const int burst = engine_.idleMapPagesThisTick(&renderer);
-  if (burst <= 0) return;
-  const bool progressed = engine_.extendPageMap(renderer, burst);
-  const int knownAfter = engine_.mapKnownPages();
-  const bool complete = engine_.mapComplete();
-  if (progressed) {
-    pageMapDirty_ = true;
-    s_stallTicks = 0;
-  } else {
-    ++s_stallTicks;
-  }
-
-  // Log on progress, stall, complete, spine change, or every 5s while incomplete.
-  if (complete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
-      (now - s_lastMapLogMs) >= 5000UL) {
-    s_lastLoggedKnown = knownAfter;
-    s_lastLoggedSpine = spineIndex_;
-    s_lastMapLogMs = now;
-    SystemLog::logTiming(
-        "MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d burst=%d stall=%d page=%d fre=%u maxA=%u",
-        spineIndex_, knownBefore, knownAfter, est, complete ? 1 : 0, progressed ? 1 : 0, burst, s_stallTicks,
-        engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
-        static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  }
-
-  if (complete) {
-    persistPageMapIfComplete();
-    // Drop the chapter "~" once — one full refresh, not every idle tick.
-    requestUpdate();
+  // 4) Current chapter done → warm first pages of the next spine so chapter-forward
+  //    opens are map-hit fast (CrossPoint-like). One attempt per resident chapter.
+  if (engine_.mapComplete() && firstInkDone_ && !chapterNavBusy_ && !warmingAdjacent_ &&
+      lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) > 3000UL &&
+      ESP.getFreeHeap() > 90 * 1024 && ESP.getMaxAllocHeap() > 56 * 1024) {
+    if (lastNextSpineWarmFrom_ != spineIndex_) {
+      lastNextSpineWarmFrom_ = spineIndex_;
+      (void)warmNextSpinePrefix(/*pages=*/2);
+    }
   }
 }
 
@@ -2415,10 +2497,10 @@ void RivuletReaderActivity::onEnter() {
   }
   pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
 
-  // QR / warm open: glass already has the page (or home) — never FAST a Loading
-  // status over it. Cold open without hints still shows a corner cue.
-  if (!snappyOpen) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+  // Reinforce Opening after the activity swap (Home already painted it). Skip on
+  // QR wake — glass already has the page; don't flash status over it.
+  if (!QrTimingLog::active()) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
   }
 
   // Hyphenation language from OPF (Liang patterns).

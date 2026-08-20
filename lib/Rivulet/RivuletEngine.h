@@ -115,6 +115,9 @@ class RivuletEngine {
   // When the current page is a verified chapter end, seal the page map so
   // page-back from the next spine can map-hit last page (CrossInk section feel).
   bool sealMapAtChapterEnd();
+  // Idle helper: layout from the last map start without moving currentPage_.
+  // Seals if that page is chapter-end, or pushes one more start if it advances.
+  bool tryCompleteMapAtEnd(const GfxRenderer& renderer);
 
   // Layout current page into laidOut_ (call before paint).
   bool ensureLaidOut(const GfxRenderer& renderer);

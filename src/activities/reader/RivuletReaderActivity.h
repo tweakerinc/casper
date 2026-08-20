@@ -121,6 +121,9 @@ class RivuletReaderActivity final : public Activity {
   // This is what makes PageBack into the previous chapter land on its real last
   // page (CrossInk section.bin feel).
   bool indexSpinePageMap(int spine);
+  // After current chapter map completes: IR + first N page starts for the next
+  // spine, saved as .rvpm so chapter-forward open is a map hit.
+  bool warmNextSpinePrefix(int pages);
   [[nodiscard]] bool spineHasPageMap(int spine) const;
   [[nodiscard]] int nearestSpineWithoutMap(bool preferBackward, bool adjacentOnly) const;
   // Idle: index the remaining chapters one at a time so the whole book ends up
@@ -221,6 +224,8 @@ class RivuletReaderActivity final : public Activity {
   // so without this guard the idle tick re-indexes it forever (blocking, seconds
   // per attempt) and page turns appear frozen.
   int lastIndexAttemptSpine_ = -1;
+  // Spine we last attempted to prefix-warm from (current chapter). -1 = none.
+  int lastNextSpineWarmFrom_ = -1;
   // Reader must be settled this long before the indexer may take the bus, and
   // this long between chapters so input stays responsive.
   static constexpr unsigned long kBackgroundIndexIdleMs = 6000;

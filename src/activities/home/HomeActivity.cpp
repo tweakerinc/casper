@@ -2220,13 +2220,11 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // never HALF a clean home just because the theme multipasses covers.
   const bool greysDirty = coverTheme && !greysSettled;
   const bool preferFast = bookIndexReady && !greysDirty;
-  // Show "Opening" for EVERY book open, not only uncached ones. A warm open is
-  // still ~3s (container + IR + first layout + paint), so suppressing the cue
-  // there just made the device look dead — the corner status is the only
-  // feedback between the button press and first ink.
-  if (SETTINGS.readerDarkMode == 0) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
-  }
+  // Show "Opening" for EVERY book open. Do not gate on Dark Mode — the cue is the
+  // only feedback between Confirm and first ink, and windowed refresh keeps it
+  // visible through the activity swap.
+  GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
+  SystemLog::logTiming("HOME", "opening_status painted dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
 
   const uint32_t t0 = millis();
   activityManager.waitForRenderIdle();

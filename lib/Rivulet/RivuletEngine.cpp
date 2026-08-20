@@ -1099,6 +1099,25 @@ bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const in
   return false;
 }
 
+bool RivuletEngine::tryCompleteMapAtEnd(const GfxRenderer& renderer) {
+  if (chapter_.empty() || map_.complete() || map_.empty()) return false;
+  const int last = map_.knownPages() - 1;
+  if (last < 0) return false;
+  LaidOutPage tmp;
+  if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
+    return false;
+  }
+  if (tmp.atChapterEnd) {
+    markMapCompleteIfPlausible(renderer);
+    return map_.complete();
+  }
+  if (tmp.end != map_.pageStart(last) && !map_.hasPage(last + 1)) {
+    map_.pushPageStart(tmp.end);
+    return true;
+  }
+  return false;
+}
+
 bool RivuletEngine::sealMapAtChapterEnd() {
   if (!laidOutValid_ || !laidOut_.atChapterEnd || chapter_.empty() || chapter_.failed()) return false;
   const int total = currentPage_ + 1;

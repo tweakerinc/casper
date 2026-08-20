@@ -3604,6 +3604,12 @@ void RivuletReaderActivity::loop() {
   nextTriggered = nextTriggered || touch.next;
   const bool fromTouch = touch.prev || touch.next;
   if (!pageTurnLatch_.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
+    // No page-turn edge (normal idle) — accept() returns false. This used to
+    // return before tickIdlePageMap(), so sitting on a page never advanced the
+    // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).
+    tickAaCatchUp();
+    tickIdlePageMap();
+    tickBackgroundIndexer();
     return;
   }
 

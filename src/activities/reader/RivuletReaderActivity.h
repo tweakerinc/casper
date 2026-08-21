@@ -117,18 +117,18 @@ class RivuletReaderActivity final : public Activity {
   void tickIdlePageMap();
   // After open/spine land: index ~10 pages ahead (+ behind RAM) for fast turns.
   void warmOpenNavigationWindow();
-  // Build + persist one spine's page map, restoring the reader's place after.
-  // This is what makes PageBack into the previous chapter land on its real last
-  // page (CrossInk section.bin feel).
-  bool indexSpinePageMap(int spine);
-  // After current chapter map completes: quietly prime next spine (2 pages).
-  bool warmNextSpinePrefix(int pages);
-  void tickNextSpineWarmIfIdle();
   [[nodiscard]] bool spineHasPageMap(int spine) const;
-  [[nodiscard]] int nearestSpineWithoutMap(bool preferBackward, bool adjacentOnly) const;
-  // Idle: index the remaining chapters one at a time so the whole book ends up
-  // mapped on SD (INX-style), without ever blocking a page turn or first ink.
-  void tickBackgroundIndexer();
+  // Next readable spine after the reader's place that has no complete .rvpm.
+  [[nodiscard]] int nextForwardUnmappedSpine() const;
+  // After the current chapter map is sealed: slowly map upcoming chapters so a
+  // chapter hop already knows its page count. Evicts the resident IR; restore
+  // before any user control (see FutureChapterIndex.h).
+  void tickFutureChapterIndex();
+  bool startFutureChapterIndex();
+  void restoreAfterFutureIndex(bool forUser);
+  void persistFutureMap(bool completeOnly);
+  [[nodiscard]] bool futureIndexUserWantsControl() const;
+  void pinnedReaderPlace(int& spine, int& page) const;
 
   // Text + overlays only, in whatever render mode is active. Shared by the BW
   // paint and the greyscale AA passes (images are already 1-bit plates baked
@@ -223,25 +223,24 @@ class RivuletReaderActivity final : public Activity {
   // Heap may still refuse; retry a couple of times, then leave the page BW
   // rather than spin a full-screen greyscale attempt forever.
   static constexpr uint8_t kAaCatchUpMaxTries = 3;
-  // Every readable spine has a .rvpm — background indexer can stop.
-  bool bookIndexComplete_ = false;
-  unsigned long lastIndexPassMs_ = 0;
-  // Spine we last tried to index. A partial-IR chapter never yields a saved map,
-  // so without this guard the idle tick re-indexes it forever (blocking, seconds
-  // per attempt) and page turns appear frozen.
-  int lastIndexAttemptSpine_ = -1;
-  // Spine we last attempted to prefix-warm from (current chapter). -1 = none.
-  int lastNextSpineWarmFrom_ = -1;
-  // Reader must be settled this long before the indexer may take the bus, and
-  // this long between chapters so input stays responsive.
-  static constexpr unsigned long kBackgroundIndexIdleMs = 6000;
-  static constexpr unsigned long kBackgroundIndexGapMs = 1500;
+  // Future-chapter idle map. Engine holds that spine's IR; glass still shows
+  // the reader's page. saveProgress / turns must use heldSpineForFuture_.
+  bool futureIndexActive_ = false;
+  int futureIndexSpine_ = -1;
+  int heldSpineForFuture_ = 0;
+  int heldPageForFuture_ = 0;
+  unsigned long lastFutureWorkMs_ = 0;
+  int futureStallTicks_ = 0;
+  int futureIndexedThisSession_ = 0;
+  // Partial / unloadable spine — do not retry this session.
+  int futureSkipSpine_ = -1;
+  int futurePartSaveAtKnown_ = 0;
   bool currentPageBookmarked_ = false;
   bool clippingsLoaded_ = false;
   bool pendingScreenshot_ = false;
-  bool pendingOpenStateSave_ = false;   // flush APP_STATE after first ink
-  bool pendingRecentsTouch_ = false;    // RECENT_BOOKS.addBook after first ink
-  bool pendingStatsLoad_ = false;       // CasperStats after first ink (QR open)
+  bool pendingOpenStateSave_ = false;  // flush APP_STATE after first ink
+  bool pendingRecentsTouch_ = false;   // RECENT_BOOKS.addBook after first ink
+  bool pendingStatsLoad_ = false;      // CasperStats after first ink (QR open)
   // leaveReaderToHome already wrote progress/stats under "Saving stats" chrome.
   bool leaveExitFlushed_ = false;
   // True after releaseHeavyForUi() until restoreAfterUi() reloads the chapter.

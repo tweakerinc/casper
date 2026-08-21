@@ -2278,7 +2278,12 @@ void RivuletReaderActivity::tickIdlePageMap() {
   if (footnoteScanDeferred_ && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
     footnoteScanDeferred_ = false;
+    const unsigned long t0 = millis();
     ensureChapterFootnotes();
+    const unsigned long dt = millis() - t0;
+    if (dt >= 200UL) {
+      SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u", spineIndex_, static_cast<unsigned>(dt));
+    }
     return;
   }
 
@@ -2286,6 +2291,19 @@ void RivuletReaderActivity::tickIdlePageMap() {
   if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 2000UL) return;
   if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1500UL) return;
   if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
+
+  // Do not walk the whole chapter on idle. Device v48 (3f4b541d): sitting on
+  // page 18, MAP known=23→54 at ~1.7s/page; a tap during a bite waited on
+  // layout. Keep a window past the read head; as the user turns, idle fills
+  // just enough for ahead overlap.
+  if (engine_.mapKnownPages() > engine_.currentPage() + rivulet::RivuletEngine::kIdleMapAheadPages) {
+    if (now - s_lastMapLogMs >= 5000UL) {
+      s_lastMapLogMs = now;
+      SystemLog::logTiming("MAP", "window spine=%d known=%d page=%d cap=%d", spineIndex_, engine_.mapKnownPages(),
+                           engine_.currentPage() + 1, rivulet::RivuletEngine::kIdleMapAheadPages);
+    }
+    return;
+  }
 
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);

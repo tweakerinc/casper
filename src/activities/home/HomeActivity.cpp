@@ -2316,9 +2316,9 @@ void HomeActivity::onSelectBook(const std::string& path) {
     coverGrayOnPanel = false;
   }
 
-  // v0.1.5-style open: cached book.bin → FAST first ink, no home HALF, no
-  // "Opening" paint. Controller greys already torn down above when coverTheme.
-  // Cold index miss: short status only (reader builds book.bin).
+  // v0.1.5-style open: FAST first ink on a clean panel. book.bin missing is
+  // not a grey residual — treating it as one forced a 3.2s HALF after every
+  // cache delete (device: preferFast=0 bookIndex=0 refresh=3182ms).
   bool bookIndexReady = true;
   if (FsHelpers::hasEpubExtension(path)) {
     const std::string cacheDir = Epub(path, CasperPaths::kPackageCacheRoot).getCachePath();
@@ -2327,7 +2327,7 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // Only force a panel scrub when greys are still mid-flight (not settled) —
   // never HALF a clean home just because the theme multipasses covers.
   const bool greysDirty = coverTheme && !greysSettled;
-  const bool preferFast = bookIndexReady && !greysDirty;
+  const bool preferFast = !greysDirty;
   // Wait out any in-flight Home paint BEFORE touching the panel. Opening's
   // windowed FAST on the main task raced the render-task clock AA (log:
   // opening_status then penumbra_clock_digits 30048ms = BUSY timeout) and

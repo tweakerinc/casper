@@ -2033,11 +2033,19 @@ void RivuletReaderActivity::tickIdlePageMap() {
 
   // Turn speed first: warm next page in RAM ASAP (no SD). Only 50ms after a turn.
   // 0029 disabled this and every forward turn paid a full layout — felt unusable.
-  if (!engine_.aheadWarm() && (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
-    if (engine_.warmAheadPage(renderer)) {
-      if (now - s_lastMapLogMs >= 5000UL) {
-        s_lastMapLogMs = now;
-        SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+  // If ahead is still cold, do NOT fall through to extendPageMap: a 1.5s measure
+  // walk of the map tail (device log known=3→4) steals the next tap and the
+  // user still pays a full paint layout on the turn.
+  if (!engine_.aheadWarm()) {
+    const bool atChapterEnd = engine_.hasChapter() && engine_.page().atChapterEnd;
+    if (!atChapterEnd) {
+      if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
+        if (engine_.warmAheadPage(renderer)) {
+          if (now - s_lastMapLogMs >= 5000UL) {
+            s_lastMapLogMs = now;
+            SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+          }
+        }
       }
       return;
     }
@@ -3000,6 +3008,10 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
       if (epub_) {
         clearBookCache(epub_->getPath());
+        if (!irDir_.empty()) {
+          const bool rivOk = wipeCacheDirectory(irDir_);
+          SystemLog::logTiming("CACHE", "menu wipe rivulet=%d spine=%d page=%d", rivOk ? 1 : 0, keepSpine, keepPage);
+        }
         LOG_INF("RVR", "cleared book cache path=%s — restore spine=%d page=%d", epub_->getPath().c_str(), keepSpine,
                 keepPage);
         GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
@@ -3011,7 +3023,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
           return;
         }
       } else if (!irDir_.empty() && Storage.exists(irDir_.c_str())) {
-        Storage.removeDir(irDir_.c_str());
+        (void)wipeCacheDirectory(irDir_);
         LOG_INF("RVR", "cleared rivulet cache %s", irDir_.c_str());
         GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
       }
@@ -3067,10 +3079,17 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
   int remaining = std::max(1, skipPages);
   bool crossedChapter = false;
   while (remaining-- > 0) {
+    const bool hadAhead = engine_.aheadWarm();
+    const uint32_t tTurn = millis();
     if (engine_.nextPage(renderer)) {
       // .rvpm already on SD when the map is complete — rewriting it every turn
       // is a FAT write on the path the user feels. Only dirty an incomplete map.
       if (!engine_.mapComplete()) pageMapDirty_ = true;
+      SystemLog::logTiming("TURN", "next spine=%d page=%d ahead=%d ms=%lu fre=%u maxA=%u", spineIndex_,
+                           engine_.currentPage() + 1, hadAhead ? 1 : 0,
+                           static_cast<unsigned long>(millis() - tTurn),
+                           static_cast<unsigned>(ESP.getFreeHeap()),
+                           static_cast<unsigned>(ESP.getMaxAllocHeap()));
       continue;
     }
     // Only leave the chapter when live layout says the chapter is finished.
@@ -3114,7 +3133,10 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     forceFastAfterChapterNav_ = true;
   }
   noteForwardPageTurn();
-  ignoreNextSideRelease_ = true;
+  // Latch already waits for release (one press → one page). ignoreNextSideRelease_
+  // returns from loop() before idle warm-ahead — keep it for chapter hops only,
+  // where the side key is still held after a multi-second load.
+  if (crossedChapter) ignoreNextSideRelease_ = true;
   pageTurnLatch_.waitingRelease = true;
   (void)saveProgress();
   // In-chapter turns: update the in-memory home percent only. CasperStats /
@@ -3127,6 +3149,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
 
 bool RivuletReaderActivity::turnPrev(const int skipPages) {
   int remaining = std::max(1, skipPages);
+  bool crossedChapter = false;
   while (remaining-- > 0) {
     // In-chapter: page N → N-1 (must work after landing on ch6 page 38).
     if (engine_.prevPage(renderer)) continue;
@@ -3247,6 +3270,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
           // behind_ is warmed on idle — doing it here added layout/SD to the
           // already-slow chapter Back and delayed first ink.
           advanced = true;
+          crossedChapter = true;
         }
       }
       chapterNavBusy_ = false;
@@ -3273,10 +3297,9 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     }
   }
   lastPageTurnTime_ = millis();
-  // The side key that issued this turn is still held after a multi-second
-  // chapter load. Do not treat that hold as a long-press shortcut, and do
-  // not accept another turn until release.
-  ignoreNextSideRelease_ = true;
+  // Chapter hops only: the side key is still held after a multi-second load.
+  // In-chapter Back must reach tickIdlePageMap so behind/ahead can warm.
+  if (crossedChapter) ignoreNextSideRelease_ = true;
   pageTurnLatch_.waitingRelease = true;
   (void)saveProgress();
   persistHomeProgress(true);

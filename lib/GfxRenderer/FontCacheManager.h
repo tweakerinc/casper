@@ -35,7 +35,8 @@ class FontCacheManager {
    public:
     PrewarmScope(FontCacheManager& manager, bool clearOnEnter, bool clearOnExit);
     ~PrewarmScope();
-    void endScanAndPrewarm();
+    // Returns true if shouldAbort fired before every bucket was cached.
+    bool endScanAndPrewarm(bool (*shouldAbort)() = nullptr);
     // Keep page glyph buffers after destroy (idle prewarm / heap-ok page turns).
     void keepCacheOnExit() { clearOnExit_ = false; }
     PrewarmScope(PrewarmScope&& other) noexcept;

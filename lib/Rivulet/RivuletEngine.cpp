@@ -235,6 +235,7 @@ LayoutParams RivuletEngine::makeParams(const GfxRenderer& renderer) const {
   } else {
     p.extraParagraphSpacingHeight = 0;  // half
   }
+  p.shouldAbort = mapAbortCheck_;
   return p;
 }
 

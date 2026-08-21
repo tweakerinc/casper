@@ -8,6 +8,7 @@
 #include <components/bars/tap-zones.h>
 
 #include "MappedInputManager.h"
+#include "PageTurnPolicy.h"
 #include "activities/ActivityManager.h"
 #include "util/UiGhostPolicy.h"
 
@@ -146,15 +147,22 @@ inline bool anyPageTurnControlHeld(const MappedInputManager& input) {
 // Xteink ladders can emit several wasPressed/wasReleased edges per press; without
 // a latch the reader advances once per edge before e-ink paints.
 //
-// Policy:
+// Policy lives in PageTurnPolicy.h (host-tested):
 //  - Accept a turn edge only when not waiting for release and min interval elapsed.
 //  - After accept, ignore further edges until all page-turn controls are released.
+//  - Same-frame prev+next is ambiguous (ADC sweep) — drop both.
+//  - Opposite direction inside kOppositeLockMs is a ladder ghost — drop it.
+//  - After a long idle block, swallow edges until swallowUntilMs.
 //  - Pure tilt events are rate-limited only (sensor has its own re-arm).
 struct PageTurnLatch {
   bool waitingRelease = false;
   unsigned long lastAcceptedMs = 0;
-  // Long enough to cover typical membrane bounce; short enough for deliberate rapid turns.
-  static constexpr unsigned long kMinIntervalMs = 180;
+  unsigned long swallowUntilMs = 0;
+  pageturn::Dir lastDir = pageturn::Dir::None;
+  pageturn::Why lastWhy = pageturn::Why::Idle;
+  static constexpr unsigned long kMinIntervalMs = pageturn::Limits::kMinIntervalMs;
+
+  void armSwallow(const unsigned long nowMs) { swallowUntilMs = nowMs + pageturn::Limits::kSwallowMs; }
 
   // Call every loop when there is no turn edge so we re-arm after release.
   void pollIdle(const MappedInputManager& input) {
@@ -165,43 +173,25 @@ struct PageTurnLatch {
 
   // Returns true if prev/next should be acted on. Clears both when rejected.
   bool accept(bool& prev, bool& next, const bool fromTilt, const bool fromTouch, const MappedInputManager& input) {
-    if (!prev && !next) {
-      pollIdle(input);
-      return false;
-    }
-
-    const unsigned long now = millis();
-
-    // Pure tilt: sensor already re-arms; only rate-limit.
-    if (fromTilt && !fromTouch && !anyPageTurnControlHeld(input)) {
-      if (now - lastAcceptedMs < kMinIntervalMs) {
-        prev = false;
-        next = false;
-        return false;
-      }
-      lastAcceptedMs = now;
-      return true;
-    }
-
-    if (waitingRelease) {
-      if (!anyPageTurnControlHeld(input)) {
-        waitingRelease = false;
-      }
-      // Never accept the same-frame residual edge that coincided with release.
-      prev = false;
-      next = false;
-      return false;
-    }
-
-    if (now - lastAcceptedMs < kMinIntervalMs) {
-      prev = false;
-      next = false;
-      return false;
-    }
-
-    waitingRelease = true;
-    lastAcceptedMs = now;
-    return true;
+    pageturn::Request req;
+    req.prev = prev;
+    req.next = next;
+    req.fromTilt = fromTilt;
+    req.fromTouch = fromTouch;
+    req.held = anyPageTurnControlHeld(input);
+    req.waitingRelease = waitingRelease;
+    req.swallowUntilMs = swallowUntilMs;
+    req.lastDir = lastDir;
+    req.lastAcceptedMs = lastAcceptedMs;
+    req.nowMs = millis();
+    const pageturn::Result r = pageturn::decide(req);
+    waitingRelease = r.waitingRelease;
+    lastDir = r.lastDir;
+    lastAcceptedMs = r.lastAcceptedMs;
+    lastWhy = r.why;
+    prev = r.prev;
+    next = r.next;
+    return r.accept;
   }
 };
 

@@ -119,25 +119,31 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager, const bo
   manager_->resetScanBuckets();
 }
 
-void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+bool FontCacheManager::PrewarmScope::endScanAndPrewarm(bool (*shouldAbort)()) {
   manager_->scanMode_ = ScanMode::None;
 
   // Prewarm each (fontId, style) face with only the text drawn in that face.
   // Buckets are visited in first-seen order, which is reading order, so if the
   // decompressor runs out of page slots the faces carrying the most text on the
   // page are the ones that got cached.
+  bool aborted = false;
   for (uint8_t i = 0; i < manager_->scanBucketCount_; i++) {
+    if (shouldAbort && shouldAbort()) {
+      aborted = true;
+      break;
+    }
     ScanBucket& bucket = manager_->scanBuckets_[i];
     if (bucket.fontId < 0 || bucket.text.empty()) continue;
     manager_->prewarmCache(bucket.fontId, bucket.text.c_str(), static_cast<uint8_t>(1u << bucket.style));
   }
 
   manager_->resetScanBuckets();
+  return aborted;
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {
   if (active_) {
-    endScanAndPrewarm();  // no-op if already called (scanText_ is empty)
+    endScanAndPrewarm();  // no-op if already called (scan buckets already reset)
     if (clearOnExit_) {
       manager_->clearCache();
     }

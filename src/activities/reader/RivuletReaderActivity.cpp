@@ -40,6 +40,7 @@
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
+#include "PageTurnPolicy.h"
 #include "ProgressFile.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
@@ -95,6 +96,12 @@ bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, co
 }
 
 bool gpioPeekHeldForIdleMap() { return gpio.peekRawHeld(); }
+
+void armSwallowAfterIdle(ReaderUtils::PageTurnLatch& latch, const unsigned long startedMs, const bool aborted) {
+  if (aborted) return;
+  const unsigned long now = millis();
+  if (now - startedMs >= pageturn::Limits::kSwallowMs) latch.armSwallow(now);
+}
 
 }  // namespace
 
@@ -2288,17 +2295,24 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
   if (!fcm) return;
   const int nextPage = engine_.currentPage() + 1;
   if (glyphCacheSpine_ == spineIndex_ && glyphCachePage_ == nextPage) return;
+  if (gpioPeekHeldForIdleMap()) return;
 
+  const unsigned long t0 = millis();
   RenderLock lock(*this);
   if (!engine_.aheadWarm()) return;
   auto scope = fcm->createPrewarmScope(/*clearOnEnter=*/true, /*clearOnExit=*/false);
   engine_.paint(renderer, marginX_, marginY_, /*ahead=*/true);
-  scope.endScanAndPrewarm();
+  const bool aborted = scope.endScanAndPrewarm(&gpioPeekHeldForIdleMap);
   glyphCacheSpine_ = spineIndex_;
   glyphCachePage_ = nextPage;
   // Scan painted the next page into the FB. Put this page back so sleep / a
   // later FAST diffs the page that is actually on glass, not white paper.
   paintCurrentPageToFramebuffer();
+  const unsigned long dt = millis() - t0;
+  if (dt >= 50UL) {
+    SystemLog::logTiming("MAP", "prewarm_glyphs page=%d abort=%d ms=%lu", nextPage + 1, aborted ? 1 : 0, dt);
+  }
+  armSwallowAfterIdle(pageTurnLatch_, t0, aborted);
 }
 
 void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
@@ -2337,11 +2351,14 @@ void RivuletReaderActivity::tickIdlePageMap() {
     const bool atChapterEnd = engine_.hasChapter() && engine_.page().atChapterEnd;
     if (!atChapterEnd) {
       if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
-        if (engine_.warmAheadPage(renderer)) {
-          if (now - s_lastMapLogMs >= 5000UL) {
-            s_lastMapLogMs = now;
-            SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
-          }
+        engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+        const unsigned long tAhead = millis();
+        const bool warmed = engine_.warmAheadPage(renderer);
+        engine_.setMapAbortCheck(nullptr);
+        armSwallowAfterIdle(pageTurnLatch_, tAhead, gpioPeekHeldForIdleMap());
+        if (warmed && now - s_lastMapLogMs >= 5000UL) {
+          s_lastMapLogMs = now;
+          SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
         }
       }
       return;
@@ -2359,7 +2376,12 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // turn path — that added SD/layout onto the 3.5s Back the user already felt.
   if (!engine_.behindWarm() && engine_.currentPage() > 0 &&
       (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
-    if (engine_.warmBehindPage(renderer)) return;
+    engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+    const unsigned long tBehind = millis();
+    const bool warmed = engine_.warmBehindPage(renderer);
+    engine_.setMapAbortCheck(nullptr);
+    armSwallowAfterIdle(pageTurnLatch_, tBehind, gpioPeekHeldForIdleMap());
+    if (warmed) return;
   }
 
   // After first ink + ahead/behind warm: one HTML footnote scan. Wait 8s so
@@ -2374,6 +2396,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
     if (dt >= 200UL) {
       SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u", spineIndex_, static_cast<unsigned>(dt));
     }
+    armSwallowAfterIdle(pageTurnLatch_, t0, gpioPeekHeldForIdleMap());
     return;
   }
 
@@ -2396,9 +2419,11 @@ void RivuletReaderActivity::tickIdlePageMap() {
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);
   engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+  const unsigned long tBite = millis();
   const bool progressed = engine_.extendPageMap(renderer, idlemap::Limits::kPagesPerBite);
   engine_.setMapAbortCheck(nullptr);
   lastIdleMapMs_ = millis();
+  armSwallowAfterIdle(pageTurnLatch_, tBite, gpio.peekRawHeld());
   const int knownAfter = engine_.mapKnownPages();
   if (progressed) {
     pageMapDirty_ = true;
@@ -3466,9 +3491,13 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
   int remaining = std::max(1, skipPages);
   bool crossedChapter = false;
   while (remaining-- > 0) {
+    const uint32_t tTurn = millis();
     // In-chapter: page N → N-1 (must work after landing on ch6 page 38).
     if (engine_.prevPage(renderer)) {
       aaCatchUpPending_ = false;
+      SystemLog::logTiming("TURN", "prev spine=%d page=%d ms=%lu fre=%u maxA=%u", spineIndex_,
+                           engine_.currentPage() + 1, static_cast<unsigned long>(millis() - tTurn),
+                           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       continue;
     }
 
@@ -4072,6 +4101,12 @@ void RivuletReaderActivity::loop() {
   nextTriggered = nextTriggered || touch.next;
   const bool fromTouch = touch.prev || touch.next;
   if (!pageTurnLatch_.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
+    if (pageTurnLatch_.lastWhy == pageturn::Why::Swallow || pageTurnLatch_.lastWhy == pageturn::Why::Ambiguous ||
+        pageTurnLatch_.lastWhy == pageturn::Why::Opposite) {
+      SystemLog::logTiming("TURN", "drop why=%c tilt=%d touch=%d held=%d", pageturn::whyChar(pageTurnLatch_.lastWhy),
+                           fromTilt ? 1 : 0, fromTouch ? 1 : 0,
+                           ReaderUtils::anyPageTurnControlHeld(mappedInput) ? 1 : 0);
+    }
     // No page-turn edge (normal idle) — accept() returns false. This used to
     // return before tickIdlePageMap(), so sitting on a page never advanced the
     // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).

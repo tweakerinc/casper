@@ -1770,7 +1770,10 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   // Only commit the spine index after layout succeeded — a failed loadSpine
   // used to leave spineIndex_ on the new chapter with ready_=false (blank
   // Loading forever), then a later recovery opened spine 0.
-  if (spineIndex != spineIndex_) futureIndexedThisSession_ = 0;
+  if (spineIndex != spineIndex_) {
+    futureIndexedThisSession_ = 0;
+    futureIndexAbortedThisSitting_ = false;
+  }
   spineIndex_ = spineIndex;
   ready_ = true;
 
@@ -1818,14 +1821,24 @@ bool RivuletReaderActivity::spineHasPageMap(const int spine) const {
   return Storage.exists(mapPath);
 }
 
+bool RivuletReaderActivity::spineHasIrCache(const int spine) const {
+  if (irDir_.empty() || spine < 0) return false;
+  char irPath[200];
+  std::snprintf(irPath, sizeof(irPath), "%s/s%d_m%u.rvir", irDir_.c_str(), spine,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  return Storage.exists(irPath);
+}
+
 int RivuletReaderActivity::nextForwardUnmappedSpine() const {
   if (!epub_ || irDir_.empty()) return -1;
   const int n = epub_->getSpineItemsCount();
   const int from = futureIndexActive_ ? heldSpineForFuture_ : spineIndex_;
   for (int cand = from + 1; cand < n; ++cand) {
-    if (cand == futureSkipSpine_) continue;
     if (epub_->getSpineItem(cand).href.empty()) continue;
-    if (spineHasPageMap(cand)) continue;
+    // First readable chapter after the reader's place. Do not skip a mapped
+    // or failed spine to crawl further (device: 24 done → 25 convert 15s).
+    if (cand == futureSkipSpine_) return -1;
+    if (spineHasPageMap(cand)) return -1;
     return cand;
   }
   return -1;
@@ -1882,6 +1895,14 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   const int target = nextForwardUnmappedSpine();
   if (target < 0) {
     SystemLog::logTiming("FIDX", "no_forward after spine=%d", spineIndex_);
+    lastFutureWorkMs_ = millis();
+    return false;
+  }
+  if (!spineHasIrCache(target)) {
+    // Idle HTML convert was 14–21s on device (FIDX load cache=0) and froze
+    // the main loop. Index that spine the next time the reader actually opens it.
+    SystemLog::logTiming("FIDX", "skip_no_ir spine=%d after=%d", target, spineIndex_);
+    lastFutureWorkMs_ = millis();
     return false;
   }
 
@@ -1920,19 +1941,20 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   hooks.prepareImages = [](void* ctx, const char* href) {
     static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
   };
-  hooks.shouldAbort = [](void* ctx) {
-    return static_cast<RivuletReaderActivity*>(ctx)->futureIndexUserWantsControl();
-  };
+  hooks.shouldAbort = [](void* ctx) { return static_cast<RivuletReaderActivity*>(ctx)->futureIndexUserWantsControl(); };
 
   const uint32_t t0 = millis();
   const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
   lastFutureWorkMs_ = millis();
 
   if (!loaded.ok || loaded.partial || engine_.chapter().failed()) {
-    LOG_ERR("RVR", "FIDX load fail spine=%d ok=%d partial=%d", target, loaded.ok ? 1 : 0, loaded.partial ? 1 : 0);
-    SystemLog::logTiming("FIDX", "load_fail spine=%d ms=%lu", target, static_cast<unsigned long>(millis() - t0));
-    futureSkipSpine_ = target;
-    restoreAfterFutureIndex(/*forUser=*/false);
+    const bool userNow = futureIndexUserWantsControl();
+    LOG_ERR("RVR", "FIDX load fail spine=%d ok=%d partial=%d user=%d", target, loaded.ok ? 1 : 0,
+            loaded.partial ? 1 : 0, userNow ? 1 : 0);
+    SystemLog::logTiming("FIDX", "load_fail spine=%d ms=%lu user=%d", target, static_cast<unsigned long>(millis() - t0),
+                         userNow ? 1 : 0);
+    if (!userNow) futureSkipSpine_ = target;
+    restoreAfterFutureIndex(/*forUser=*/userNow);
     return false;
   }
 
@@ -1960,6 +1982,18 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
 
 void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   if (!futureIndexActive_) return;
+  // Set before the blocking IR reload: restore is 1–8s on device and the turn
+  // key is still down. getHeldTime() then exceeds BOOKMARK_HOLD_MS (400ms) and
+  // fires the side long-press (Dark Mode / HALF scrub) — "dark mode without
+  // input". Same latch as a chapter hop after a multi-second load.
+  if (forUser) {
+    futureIndexAbortedThisSitting_ = true;
+    ignoreNextSideRelease_ = true;
+    ignoreNextConfirmRelease_ = true;
+    pageTurnLatch_.waitingRelease = true;
+  }
+  forceFastAfterChapterNav_ = true;
+
   const int spine = heldSpineForFuture_;
   const int page = heldPageForFuture_;
   if (!engine_.mapComplete()) persistFutureMap(/*completeOnly=*/false);
@@ -2006,9 +2040,15 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.heapTight = ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024;
   in.futureStallTicks = futureStallTicks_;
   in.forwardIndexedThisSession = futureIndexedThisSession_;
+  in.userAbortedThisSitting = futureIndexAbortedThisSitting_;
   in.nowMs = millis();
   in.lastTurnMs = lastPageTurnTime_;
   in.lastWorkMs = lastFutureWorkMs_;
+  if (!futureIndexActive_) {
+    const int target = nextForwardUnmappedSpine();
+    in.hasForwardTarget = target >= 0;
+    in.targetHasIrCache = target >= 0 && spineHasIrCache(target);
+  }
 
   switch (futureindex::decide(in)) {
     case futureindex::Decision::None:

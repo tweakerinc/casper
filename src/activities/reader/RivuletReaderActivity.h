@@ -122,7 +122,9 @@ class RivuletReaderActivity final : public Activity {
   // After open/spine land: index ~10 pages ahead (+ behind RAM) for fast turns.
   void warmOpenNavigationWindow();
   [[nodiscard]] bool spineHasPageMap(int spine) const;
-  // Next readable spine after the reader's place that has no complete .rvpm.
+  [[nodiscard]] bool spineHasIrCache(int spine) const;
+  // Immediate next readable spine only. Already-mapped or skipped → none
+  // (do not crawl +2/+3). Device: cap-3 walked 24 then 25/26 then failed 27/28.
   [[nodiscard]] int nextForwardUnmappedSpine() const;
   // After the current chapter map is sealed: slowly map upcoming chapters so a
   // chapter hop already knows its page count. Evicts the resident IR; restore
@@ -240,6 +242,8 @@ class RivuletReaderActivity final : public Activity {
   unsigned long lastFutureWorkMs_ = 0;
   int futureStallTicks_ = 0;
   int futureIndexedThisSession_ = 0;
+  // Tap restored the reading IR — do not StartForward again until spine changes.
+  bool futureIndexAbortedThisSitting_ = false;
   // Partial / unloadable spine — do not retry this session.
   int futureSkipSpine_ = -1;
   int futurePartSaveAtKnown_ = 0;

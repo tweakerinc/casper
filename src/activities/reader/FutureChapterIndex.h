@@ -9,6 +9,15 @@
 // This policy is the gate the idle tick must obey so future-chapter work can
 // never outrank a tap. The activity owns SD / IR / restore; this file is
 // timing and priority only (no heap, no Arduino).
+//
+// Device (DCC book 6, build 6d817495): idle StartForward evicted spine 23,
+// converted 24 in 14.5s (cache=0), then after every tap reloaded the same
+// IR in 8.5s. Cap 3 then crawled 25/26 and failed 27/28 (19–21s) — main loop
+// blocked 12–35s (`activity_slow`). Restore while the turn key was still down
+// made getHeldTime() exceed 400ms and fired the side long-press (Dark Mode /
+// HALF scrub). Idle work is therefore: at most the immediate next chapter,
+// only from an existing .rvir, never again this sitting after a user abort,
+// and never a fresh HTML convert.
 namespace futureindex {
 
 // Current-chapter idle map uses 2s quiet + 1.5s between pages. Future work is
@@ -18,7 +27,7 @@ struct Limits {
   static constexpr unsigned long kQuietAfterTurnMs = 8000;
   static constexpr unsigned long kPageGapMs = 3000;
   static constexpr unsigned long kStartGapMs = 4000;
-  static constexpr int kMaxForwardChapters = 3;
+  static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
 };
 
@@ -38,6 +47,12 @@ struct Input {
   bool controlHeld = false;
   bool futureMapComplete = false;
   bool heapTight = false;
+  // Tap during a swap: do not StartForward again until the reader changes spine.
+  bool userAbortedThisSitting = false;
+  // Immediate next chapter has a complete .rvir. Idle must not HTML-convert
+  // (device: cache=0 load 14–21s, then restore 8s, loop frozen).
+  bool targetHasIrCache = false;
+  bool hasForwardTarget = false;
   int futureStallTicks = 0;
   int forwardIndexedThisSession = 0;
   unsigned long nowMs = 0;
@@ -71,6 +86,9 @@ inline Decision decide(const Input& in) {
 
   if (!in.currentMapComplete) return Decision::None;
   if (!in.aheadWarm) return Decision::None;
+  if (in.userAbortedThisSitting) return Decision::None;
+  if (!in.hasForwardTarget) return Decision::None;
+  if (!in.targetHasIrCache) return Decision::None;
   if (in.forwardIndexedThisSession >= Limits::kMaxForwardChapters) return Decision::None;
   if (!quietLongEnough(in, Limits::kQuietAfterTurnMs)) return Decision::None;
   if (!workGapElapsed(in, Limits::kStartGapMs)) return Decision::None;

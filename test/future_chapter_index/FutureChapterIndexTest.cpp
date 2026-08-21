@@ -14,6 +14,8 @@ Input idleReady() {
   in.firstInkDone = true;
   in.currentMapComplete = true;
   in.aheadWarm = true;
+  in.hasForwardTarget = true;
+  in.targetHasIrCache = true;
   in.lastTurnMs = 1000;
   in.nowMs = 1000 + Limits::kQuietAfterTurnMs;
   return in;
@@ -86,6 +88,26 @@ TEST(FutureChapterIndex, GiveUpAfterStalls) {
 TEST(FutureChapterIndex, CapsForwardChaptersPerSitting) {
   Input in = idleReady();
   in.forwardIndexedThisSession = Limits::kMaxForwardChapters;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, CapIsOneChapterAhead) { EXPECT_EQ(Limits::kMaxForwardChapters, 1); }
+
+TEST(FutureChapterIndex, DoesNotStartWithoutIrCache) {
+  Input in = idleReady();
+  in.targetHasIrCache = false;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, DoesNotStartWithoutForwardTarget) {
+  Input in = idleReady();
+  in.hasForwardTarget = false;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, DoesNotRetryAfterUserAbort) {
+  Input in = idleReady();
+  in.userAbortedThisSitting = true;
   EXPECT_EQ(decide(in), Decision::None);
 }
 

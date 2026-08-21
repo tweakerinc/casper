@@ -1376,16 +1376,17 @@ void RivuletReaderActivity::leaveReaderToHome() {
   if (tryStartAutoKoUpload()) {
     return;
   }
-  // Save progress while the book page stays on glass. Upper-left "Saving" with
-  // reader dark polarity (reader-only inverts only for this push).
+  // Windowed "Saving" on the page already on glass. A full FAST used to push a
+  // white FB (glyph scan / !ready_ render) over the book — the blank Saving
+  // screen. Wait for the render task so displayWindow does not race it.
   if (!activityManager.isSleepTransition() && ready_ && epub_) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_SAVING_STATS), /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+    activityManager.waitForRenderIdle();
+    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_SAVING_STATS), /*refresh=*/true);
     flushExitProgressAndStats();
     leaveExitFlushed_ = true;
+  } else {
+    activityManager.waitForRenderIdle();
   }
-  // Loop already waits before PopToHome; only block if a paint is still mid-flight.
-  activityManager.waitForRenderIdle();
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
   (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
   Activity::onGoHome();
@@ -2938,9 +2939,10 @@ void RivuletReaderActivity::onEnter() {
   }
   pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
 
-  // Reinforce Opening after the activity swap (Home already painted it). Skip on
-  // QR wake — glass already has the page; don't flash status over it.
-  if (!QrTimingLog::active()) {
+  // Home already windowed "Opening" when open hints are set. Painting it again
+  // after FrameBufferLoan (epub load wipes RAM FB) then window-refreshing can
+  // promote a full FAST of a white buffer — the blank Opening screen.
+  if (!QrTimingLog::active() && !ReaderActivity::hasOpenHints()) {
     GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
   }
 
@@ -3538,8 +3540,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       // Do not displayWindow from the main task — that raced the render task
       // and the next full ink was a 3.2s HALF (device log refresh=3257ms).
       activityManager.waitForRenderIdle();
-      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
-      requestUpdate();
+      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
       prepareHeapForChapterLoad(/*aggressive=*/true);
       const uint32_t tLoad = millis();
       // Prefer a complete convert, but NEVER end up with nothing: requireCompleteIr
@@ -4340,22 +4341,16 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // Clearing here would paint the wrong chapter (or white) over live text.
   if (futureIndexActive_) return;
 
+  // Corner cue only. Do not clearScreen + full FAST — that replaced Home or
+  // the live page with white paper (exit Saving, book open, chapter Back).
+  if (chapterNavBusy_ || error_ || !ready_) {
+    const char* msg = error_ ? errorMsg_.c_str() : tr(STR_LOADING_POPUP);
+    GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/true);
+    return;
+  }
+
   // 0xFF = white paper; clearScreen(false) is 0 = solid black (bug that ate all text).
   renderer.clearScreen(0xFF);
-
-  // Prev-chapter walk yields; never paint mid-chapter body as if it were the end.
-  if (chapterNavBusy_) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
-    return;
-  }
-
-  if (error_ || !ready_) {
-    const char* msg = error_ ? errorMsg_.c_str() : tr(STR_LOADING_POPUP);
-    GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
-    return;
-  }
 
   if (!engine_.ensureLaidOut(renderer)) {
     renderer.drawText(UI_10_FONT_ID, marginX_, marginY_ + 40, "Empty page", true, EpdFontFamily::REGULAR);

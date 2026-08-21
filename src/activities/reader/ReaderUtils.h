@@ -38,7 +38,10 @@ inline void applyReaderDarkModeIfEnabled(const GfxRenderer& /*renderer*/) {}
 // Push the current framebuffer to the panel with Dark Mode polarity.
 // - System-wide: invertOnDisplay is armed by loop(); displayBuffer inverts there.
 // - Reader-only: temporary invert around the refresh so home/menus stay light.
-// Use for reader pages and reader-context chrome (not home).
+// Use for reader pages and reader-context chrome that must replace the whole
+// plate. Corner cues (Opening / Saving / Loading) must use drawTopLeftStatus
+// with refresh=true (windowed). A full FAST of a white FB is the blank
+// "Saving" / "Opening" screen.
 inline void displayWithDarkMode(const GfxRenderer& renderer,
                                 const HalDisplay::RefreshMode mode = HalDisplay::FAST_REFRESH) {
   if (readerOnlyDarkPaint() && !renderer.getInvertOnDisplay()) {

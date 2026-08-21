@@ -252,9 +252,9 @@ void begin() {
 #else
            "?",
 #endif
-           // ver= is the product version and repeats across builds; build= is the
-           // commit that produced this firmware. Without it a capture cannot be
-           // matched to a build, which cost several rounds of guesswork.
+  // ver= is the product version and repeats across builds; build= is the
+  // commit that produced this firmware. Without it a capture cannot be
+  // matched to a build, which cost several rounds of guesswork.
 #ifdef CASPER_BUILD_ID
            CASPER_BUILD_ID,
 #else
@@ -379,6 +379,12 @@ void armHangWatch(const char* reason) {
   log("ALIVE", "arm watch=%s for=%lums fre=%u", gHangWatchReason, static_cast<unsigned long>(kHangWatchDurationMs),
       static_cast<unsigned>(ESP.getFreeHeap()));
   flush();
+}
+
+void disarmHangWatch() {
+  if (gHangWatchUntilMs == 0 && gHangWatchReason[0] == '\0') return;
+  gHangWatchUntilMs = 0;
+  gHangWatchReason[0] = '\0';
 }
 
 void logCritical(const char* tag, const char* fmt, ...) {

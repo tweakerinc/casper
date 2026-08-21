@@ -123,20 +123,27 @@ class RivuletReaderActivity final : public Activity {
   void warmOpenNavigationWindow();
   [[nodiscard]] bool spineHasPageMap(int spine) const;
   [[nodiscard]] bool spineHasIrCache(int spine) const;
-  // Immediate next readable spine only. Already-mapped or skipped → none
-  // (do not crawl +2/+3). Device: cap-3 walked 24 then 25/26 then failed 27/28.
+  // Immediate next readable spine that still needs IR or page-1 cache.
+  // Already prefetched (IR + page 0 .rvpg) or skipped → none.
   [[nodiscard]] int nextForwardUnmappedSpine() const;
-  // After the current chapter map is sealed: slowly map upcoming chapters so a
-  // chapter hop already knows its page count. Evicts the resident IR; restore
-  // before any user control (see FutureChapterIndex.h).
+  // After the current chapter map is sealed: convert the next spine to IR and
+  // lay out page 1 onto SD so a hop is deserialize + paint. Evicts the resident
+  // IR; restore before any mid-chapter tap (see FutureChapterIndex.h).
   void tickFutureChapterIndex();
   bool startFutureChapterIndex();
   void restoreAfterFutureIndex(bool forUser);
   void persistFutureMap(bool completeOnly);
   [[nodiscard]] bool futureIndexUserWantsControl() const;
-  // PageForward during last-page Indexing: keep the next IR (this IS the hop).
+  // PageForward during last-page swap: keep the next IR (this IS the hop).
   [[nodiscard]] bool futureIndexForwardHeld() const;
+  [[nodiscard]] bool futureIndexBackHeld() const;
   void promoteFutureIndexToCurrent();
+  // Hop: paint page 1 from .rvpg with no IR in RAM, then load IR after ink.
+  [[nodiscard]] bool tryHopToCachedFirstPage(int targetSpine);
+  void tickPendingChapterIr();
+  void finishPendingChapterIr();
+  void bindEnginePageCacheDir();
+  void persistPageMapBestEffort();
   void pinnedReaderPlace(int& spine, int& page) const;
   // Layout the next page without touching the framebuffer (safe during async
   // FAST). Glyph prewarm of that page waits until idle — scan-paint writes FB.
@@ -248,6 +255,7 @@ class RivuletReaderActivity final : public Activity {
   int futureIndexSpine_ = -1;
   int heldSpineForFuture_ = 0;
   int heldPageForFuture_ = 0;
+  bool heldAtChapterEndForFuture_ = false;
   unsigned long lastFutureWorkMs_ = 0;
   int futureStallTicks_ = 0;
   int futureIndexedThisSession_ = 0;
@@ -256,6 +264,8 @@ class RivuletReaderActivity final : public Activity {
   // Partial / unloadable spine — do not retry this session.
   int futureSkipSpine_ = -1;
   int futurePartSaveAtKnown_ = 0;
+  // Spine whose IR still needs to land after a cached first-page hop. -1 = none.
+  int pendingChapterIrLoad_ = -1;
   bool currentPageBookmarked_ = false;
   bool clippingsLoaded_ = false;
   bool pendingScreenshot_ = false;

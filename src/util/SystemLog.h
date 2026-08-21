@@ -52,6 +52,8 @@ void maybeSampleHeap();
 // After a critical paint (e.g. penumbra HALF), arm dense ALIVE ticks + force-flush
 // so the next freeze leaves a clear last-known-good breadcrumb on SD.
 void armHangWatch(const char* reason);
+// Clear the 120s ALIVE window once the watched work finished (chapter hop).
+void disarmHangWatch();
 
 // Log + flush immediately (for pre/post display markers that must survive a hang).
 void logCritical(const char* tag, const char* fmt, ...);

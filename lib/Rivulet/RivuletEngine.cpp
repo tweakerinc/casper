@@ -78,16 +78,35 @@ void RivuletEngine::setPageCacheSpine(const int spineIndex) {
   laidOutValid_ = false;
 }
 
-bool RivuletEngine::pageCachePath(const int pageIndex, char* out, const size_t outSz) const {
-  if (pageCacheDir_.empty() || pageCacheSpine_ < 0 || !out || outSz < 32 || pageIndex < 0) return false;
+uint32_t RivuletEngine::pageCacheKeyFp() const {
+  return static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
+         (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
+         (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
+}
+
+bool RivuletEngine::fillPageCachePath(const int spineIndex, const int pageIndex, char* out, const size_t outSz) const {
+  if (pageCacheDir_.empty() || spineIndex < 0 || !out || outSz < 32 || pageIndex < 0) return false;
   // Filename embeds spine + key fingerprint. Older shared p{N}_{key}.rvpg files
   // are ignored (different name) so chapter 5 page-0 cache cannot paint on ch7.
-  const uint32_t keyFp = static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
-                         (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
-                         (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
   const int n =
-      std::snprintf(out, outSz, "%s/s%d_p%d_%08x.rvpg", pageCacheDir_.c_str(), pageCacheSpine_, pageIndex, keyFp);
+      std::snprintf(out, outSz, "%s/s%d_p%d_%08x.rvpg", pageCacheDir_.c_str(), spineIndex, pageIndex, pageCacheKeyFp());
   return n > 0 && static_cast<size_t>(n) < outSz;
+}
+
+bool RivuletEngine::pageCachePath(const int pageIndex, char* out, const size_t outSz) const {
+  return fillPageCachePath(pageCacheSpine_, pageIndex, out, outSz);
+}
+
+bool RivuletEngine::hasPageCache(const int spineIndex, const int pageIndex) const {
+  char path[220];
+  if (!fillPageCachePath(spineIndex, pageIndex, path, sizeof(path))) return false;
+  return Storage.exists(path);
+}
+
+bool RivuletEngine::loadOrphanPageCache(const int spineIndex, const int pageIndex) {
+  if (!chapter_.empty()) return false;
+  setPageCacheSpine(spineIndex);
+  return tryLoadPageCache(pageIndex);
 }
 
 bool RivuletEngine::tryLoadPageCache(const int pageIndex) {

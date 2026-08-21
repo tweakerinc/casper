@@ -28,11 +28,13 @@ Input idleAtEnd() {
 
 }  // namespace
 
-TEST(FutureChapterIndex, IdleForwardIndexOff) { EXPECT_FALSE(Limits::kIdleForwardIndex); }
+TEST(FutureChapterIndex, IdleForwardIndexOn) { EXPECT_TRUE(Limits::kIdleForwardIndex); }
 
-TEST(FutureChapterIndex, DoesNotStartAtChapterEndWhenIdleOff) { EXPECT_EQ(decide(idleAtEnd()), Decision::None); }
+TEST(FutureChapterIndex, StartsMidChapterWhenQuietAndMapDone) {
+  EXPECT_EQ(decide(idleReady()), Decision::StartForward);
+}
 
-TEST(FutureChapterIndex, DoesNotStartMidChapterEvenWhenMapDone) { EXPECT_EQ(decide(idleReady()), Decision::None); }
+TEST(FutureChapterIndex, StartsAtChapterEndToo) { EXPECT_EQ(decide(idleAtEnd()), Decision::StartForward); }
 
 TEST(FutureChapterIndex, ControlHeldNeverStarts) {
   Input in = idleAtEnd();
@@ -47,7 +49,17 @@ TEST(FutureChapterIndex, ForwardHeldPromotesResidentFuture) {
   in.futureResident = true;
   in.controlHeld = true;
   in.forwardHeld = true;
+  in.heldAtChapterEnd = true;
   EXPECT_EQ(decide(in), Decision::Promote);
+}
+
+TEST(FutureChapterIndex, ForwardHeldMidChapterAbortsNotPromotes) {
+  Input in = idleReady();
+  in.futureResident = true;
+  in.controlHeld = true;
+  in.forwardHeld = true;
+  in.heldAtChapterEnd = false;
+  EXPECT_EQ(decide(in), Decision::AbortRestore);
 }
 
 TEST(FutureChapterIndex, OtherControlAbortsResidentFuture) {
@@ -108,6 +120,12 @@ TEST(FutureChapterIndex, TightHeapDoesNotStart) {
 }
 
 TEST(FutureChapterIndex, CapIsOneChapterAhead) { EXPECT_EQ(Limits::kMaxForwardChapters, 1); }
+
+TEST(FutureChapterIndex, DoesNotStartUntilMapComplete) {
+  Input in = idleReady();
+  in.currentMapComplete = false;
+  EXPECT_EQ(decide(in), Decision::None);
+}
 
 TEST(FutureChapterIndex, NoStartBeforeFirstTurn) {
   Input in = idleAtEnd();

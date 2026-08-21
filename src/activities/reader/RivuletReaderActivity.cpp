@@ -1859,7 +1859,7 @@ int RivuletReaderActivity::nextForwardUnmappedSpine() const {
     // First readable chapter after the reader's place. Do not skip a mapped
     // or failed spine to crawl further (device: 24 done → 25 convert 15s).
     if (cand == futureSkipSpine_) return -1;
-    if (spineHasPageMap(cand)) return -1;
+    if (spineHasIrCache(cand) && engine_.hasPageCache(cand, 0)) return -1;
     return cand;
   }
   return -1;
@@ -1912,6 +1912,7 @@ void RivuletReaderActivity::persistFutureMap(const bool completeOnly) {
 
 bool RivuletReaderActivity::startFutureChapterIndex() {
   if (futureIndexActive_ || warmingAdjacent_ || !ready_ || !epub_ || irDir_.empty()) return false;
+  if (pendingChapterIrLoad_ >= 0) return false;
   if (futureIndexUserWantsControl()) return false;
   const int target = nextForwardUnmappedSpine();
   if (target < 0) {
@@ -1922,7 +1923,8 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
 
   heldSpineForFuture_ = spineIndex_;
   heldPageForFuture_ = engine_.hasChapter() ? engine_.currentPage() : 0;
-  persistPageMapIfComplete();
+  heldAtChapterEndForFuture_ = engine_.hasChapter() && engine_.page().atChapterEnd;
+  persistPageMapBestEffort();
 
   warmingAdjacent_ = true;
   futureIndexActive_ = true;
@@ -1930,11 +1932,9 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   futureStallTicks_ = 0;
   futurePartSaveAtKnown_ = 0;
 
-  // 14s uncached convert (device: FIDX load ms=14503) must not start while a
-  // paint still owns the engine. Indexing is on glass; PageForward during
-  // load is a chapter hop (finish the load, then promote) not an abort.
+  // Silent: glass keeps the current page. Do not paint Indexing — last-page
+  // Indexing (9206393c) froze a 2-sentence ending for 16s+. Abort on GPIO.
   activityManager.waitForRenderIdle();
-  GUI.drawTopLeftStatus(renderer, tr(STR_INDEXING), /*refresh=*/true);
 
   chapterload::Request req;
   req.epub = epub_.get();
@@ -1944,7 +1944,7 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   req.spineIndex = target;
   req.imageRendering = SETTINGS.imageRendering;
   req.requireCompleteIr = true;
-  req.bindPageCache = false;
+  req.bindPageCache = true;
   // Panel still holds the reader's page. Lending the FB hands it back white
   // and a later windowed paint would flash blank over live text.
   req.lendFrameBuffer = false;
@@ -1962,7 +1962,7 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
     // Live sample: mappedInput is otherwise stale for the whole convert
     // (16s+), so a Next tap was invisible and the hop never promoted.
     gpio.update();
-    if (self->futureIndexForwardHeld()) return false;
+    if (self->futureIndexForwardHeld() && self->heldAtChapterEndForFuture_) return false;
     return self->futureIndexUserWantsControl();
   };
 
@@ -1998,7 +1998,7 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   SystemLog::logTiming("FIDX", "load spine=%d cache=%d known=%d ms=%lu fre=%u maxA=%u", target,
                        loaded.fromCache ? 1 : 0, engine_.mapKnownPages(), static_cast<unsigned long>(millis() - t0),
                        static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  if (futureIndexForwardHeld()) {
+  if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
     promoteFutureIndexToCurrent();
     return true;
   }
@@ -2006,12 +2006,27 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
     restoreAfterFutureIndex(/*forUser=*/true);
     return true;
   }
-  // Page 1 is already laid out. Do not walk the rest of the future chapter
-  // (device: 44 pages / ~63s) — persist the IR and put the reader back.
-  if (engine_.mapKnownPages() >= 1) {
-    persistFutureMap(/*completeOnly=*/false);
-    restoreAfterFutureIndex(/*forUser=*/false);
+
+  // Page 1 on SD is the hop payload. Do not walk the rest of the future chapter
+  // (device: 44 pages / ~63s).
+  engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+  const bool laid = engine_.goToStart(renderer);
+  engine_.setMapAbortCheck(nullptr);
+  gpio.update();
+  SystemLog::logTiming("FIDX", "page0 spine=%d laid=%d cache=%d", target, laid ? 1 : 0,
+                       engine_.hasPageCache(target, 0) ? 1 : 0);
+  if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
+    promoteFutureIndexToCurrent();
+    return true;
   }
+  if (futureIndexUserWantsControl() || !laid) {
+    if (!laid && !futureIndexUserWantsControl()) futureSkipSpine_ = target;
+    restoreAfterFutureIndex(/*forUser=*/futureIndexUserWantsControl());
+    return laid;
+  }
+  persistFutureMap(/*completeOnly=*/false);
+  ++futureIndexedThisSession_;
+  restoreAfterFutureIndex(/*forUser=*/false);
   return true;
 }
 
@@ -2050,6 +2065,7 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   firstPaint_ = false;
   lastFutureWorkMs_ = millis();
   futureStallTicks_ = 0;
+  heldAtChapterEndForFuture_ = false;
 
   // A following tap in this same loop() will layout the next page. Do not also
   // warm-ahead here — that was a second layout on a just-reloaded IR.
@@ -2059,12 +2075,20 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   SystemLog::logTiming("FIDX", "restore spine=%d page=%d ok=%d user=%d ms=%lu fre=%u", spine, page, ok ? 1 : 0,
                        forUser ? 1 : 0, static_cast<unsigned long>(millis() - t0),
                        static_cast<unsigned>(ESP.getFreeHeap()));
-  requestUpdate();
+  // Silent crawl never painted over the glass — a requestUpdate here would
+  // FAST the same page after a multi-second swap and look like a freeze.
+  // User abort already calls turnNext/turnPrev which requestUpdate.
+  if (forUser || !ok) requestUpdate();
 }
 
 bool RivuletReaderActivity::futureIndexForwardHeld() const {
   return mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
          mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+}
+
+bool RivuletReaderActivity::futureIndexBackHeld() const {
+  return mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageBack);
 }
 
 void RivuletReaderActivity::promoteFutureIndexToCurrent() {
@@ -2076,6 +2100,7 @@ void RivuletReaderActivity::promoteFutureIndexToCurrent() {
   futureIndexSpine_ = -1;
   futureIndexAbortedThisSitting_ = false;
   futureStallTicks_ = 0;
+  heldAtChapterEndForFuture_ = false;
   ignoreNextSideRelease_ = true;
   ignoreNextConfirmRelease_ = true;
   pageTurnLatch_.waitingRelease = true;
@@ -2108,6 +2133,7 @@ void RivuletReaderActivity::promoteFutureIndexToCurrent() {
 
 void RivuletReaderActivity::tickFutureChapterIndex() {
   if (!ready_ || !epub_ || !firstInkDone_ || chapterNavBusy_ || heavyReleasedForUi_) return;
+  if (pendingChapterIrLoad_ >= 0) return;
   if (activityManager.isRenderInProgress()) return;
 
   futureindex::Input in;
@@ -2115,6 +2141,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.currentMapComplete = !futureIndexActive_ && engine_.mapComplete() && !engine_.chapter().failed();
   in.aheadWarm = futureIndexActive_ || engine_.aheadWarm() || (engine_.hasChapter() && engine_.page().atChapterEnd);
   in.atChapterEnd = !futureIndexActive_ && engine_.hasChapter() && engine_.page().atChapterEnd;
+  in.heldAtChapterEnd = heldAtChapterEndForFuture_;
   in.firstInkDone = firstInkDone_;
   in.controlHeld = futureIndexUserWantsControl();
   in.forwardHeld = futureIndexForwardHeld();
@@ -2129,10 +2156,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.lastWorkMs = lastFutureWorkMs_;
   // SD exists() only when a start is otherwise legal. Probing every idle tick
   // would take the storage mutex while the user is still turning pages.
-  // Last page only: mid-chapter StartForward stole taps (v48/v49).
   const bool maybeStart = futureindex::Limits::kIdleForwardIndex && !futureIndexActive_ && in.currentMapComplete &&
-                          in.atChapterEnd && in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld &&
-                          !in.heapTight && in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
+                          in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld && !in.heapTight &&
+                          in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
   if (maybeStart) {
@@ -2165,7 +2191,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
                            futureIndexSpine_, knownBefore, engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
                            progressed ? 1 : 0, futureStallTicks_, static_cast<unsigned>(ESP.getFreeHeap()));
       const bool userNow = futureIndexUserWantsControl();
-      const bool wantNext = futureIndexForwardHeld();
+      const bool wantNext = futureIndexForwardHeld() && heldAtChapterEndForFuture_;
       if (engine_.mapComplete()) {
         persistFutureMap(/*completeOnly=*/true);
         if (wantNext)
@@ -2188,7 +2214,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       restoreAfterFutureIndex(/*forUser=*/false);
       return;
     case futureindex::Decision::AbortRestore:
-      if (futureIndexForwardHeld()) {
+      if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
         promoteFutureIndexToCurrent();
         return;
       }
@@ -2288,10 +2314,107 @@ void RivuletReaderActivity::persistPageMapIfComplete() {
   }
 }
 
+void RivuletReaderActivity::persistPageMapBestEffort() {
+  // FIDX restore must goToPage(held) without walking. Save even an incomplete
+  // map — complete=false in the file so Home does not treat it as sealed.
+  if (futureIndexActive_) return;
+  if (irDir_.empty() || engine_.chapter().failed()) return;
+  if (engine_.mapKnownPages() <= 0) return;
+  char mapPath[200];
+  std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex_,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  if (engine_.savePageMap(mapPath) && engine_.mapComplete()) pageMapDirty_ = false;
+}
+
+void RivuletReaderActivity::bindEnginePageCacheDir() {
+  if (irDir_.empty()) {
+    engine_.clearPageCacheDir();
+    engine_.setPageCacheSpine(-1);
+    return;
+  }
+  const std::string pagesDir = irDir_ + "/pages";
+  Storage.ensureDirectoryExists(pagesDir.c_str());
+  engine_.setPageCacheDir(pagesDir.c_str());
+}
+
+bool RivuletReaderActivity::tryHopToCachedFirstPage(const int targetSpine) {
+  if (targetSpine < 0 || !engine_.hasPageCache(targetSpine, 0)) return false;
+  bindEnginePageCacheDir();
+  if (engine_.hasChapter()) prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (!engine_.loadOrphanPageCache(targetSpine, 0)) return false;
+
+  pendingChapterIrLoad_ = targetSpine;
+  spineIndex_ = targetSpine;
+  ready_ = true;
+  error_ = false;
+  firstPaint_ = true;
+  footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
+  chapterFootnotes_.clear();
+  currentPageFootnotes_.clear();
+  pageMapDirty_ = true;
+  futureIndexedThisSession_ = 0;
+  futureIndexAbortedThisSitting_ = false;
+  SystemLog::logTiming("TURN", "chapter_next_cached spine=%d page=1 spans=%u", targetSpine,
+                       static_cast<unsigned>(engine_.page().spans.size()));
+  return true;
+}
+
+void RivuletReaderActivity::tickPendingChapterIr() {
+  if (pendingChapterIrLoad_ < 0) return;
+  if (futureIndexActive_ || chapterNavBusy_ || heavyReleasedForUi_) return;
+  if (activityManager.isRenderInProgress()) return;
+
+  const int target = pendingChapterIrLoad_;
+  pendingChapterIrLoad_ = -1;
+
+  chapterload::Request req;
+  req.epub = epub_.get();
+  req.engine = &engine_;
+  req.renderer = &renderer;
+  req.irDir = irDir_;
+  req.spineIndex = target;
+  req.imageRendering = SETTINGS.imageRendering;
+  req.requireCompleteIr = false;
+  req.bindPageCache = true;
+  req.lendFrameBuffer = false;
+
+  chapterload::Hooks hooks;
+  hooks.ctx = this;
+  hooks.prepareHeap = [](void* ctx, const bool aggressive) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareHeapForChapterLoad(aggressive);
+  };
+  hooks.prepareImages = [](void* ctx, const char* href) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+
+  const uint32_t t0 = millis();
+  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
+  if (!loaded.ok) {
+    LOG_ERR("RVR", "chapter IR catchup fail spine=%d", target);
+    SystemLog::logTiming("TURN", "chapter_ir_catchup_fail spine=%d ms=%lu", target,
+                         static_cast<unsigned long>(millis() - t0));
+    bindEnginePageCacheDir();
+    (void)engine_.loadOrphanPageCache(target, 0);
+    return;
+  }
+  if (!engine_.goToStart(renderer)) {
+    LOG_ERR("RVR", "chapter IR catchup goToStart fail spine=%d", target);
+  }
+  SystemLog::logTiming("TURN", "chapter_ir_catchup spine=%d cache=%d ms=%lu", target, loaded.fromCache ? 1 : 0,
+                       static_cast<unsigned long>(millis() - t0));
+}
+
+void RivuletReaderActivity::finishPendingChapterIr() {
+  if (pendingChapterIrLoad_ < 0) return;
+  activityManager.waitForRenderIdle();
+  tickPendingChapterIr();
+}
+
 void RivuletReaderActivity::overlapAheadDuringRefresh() {
   // Layout only — PageLayouter measures via getTextAdvanceX, never drawPixel.
   // Safe while the panel is still reading the framebuffer.
-  if (futureIndexActive_ || !engine_.hasChapter()) return;
+  if (pendingChapterIrLoad_ >= 0 || futureIndexActive_ || !engine_.hasChapter()) return;
   if (engine_.aheadWarm()) return;
   if (engine_.page().atChapterEnd) return;
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
@@ -2343,9 +2466,9 @@ void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
 }
 
 void RivuletReaderActivity::tickIdlePageMap() {
-  if (futureIndexActive_) return;
+  if (futureIndexActive_ || pendingChapterIrLoad_ >= 0) return;
   if (activityManager.isRenderInProgress()) return;
-  if (!ready_ || !epub_ || !firstInkDone_) return;
+  if (!ready_ || !epub_ || !firstInkDone_ || !engine_.hasChapter()) return;
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
     return;
@@ -3425,8 +3548,10 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
 }
 
 bool RivuletReaderActivity::turnNext(const int skipPages) {
+  finishPendingChapterIr();
   int remaining = std::max(1, skipPages);
   bool crossedChapter = false;
+  bool cachedHop = false;
   while (remaining-- > 0) {
     const bool hadAhead = engine_.aheadWarm();
     const uint32_t tTurn = millis();
@@ -3464,26 +3589,39 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     const int n = epub_->getSpineItemsCount();
     const int fromSpine = spineIndex_;
     bool advanced = false;
-    chapterNavBusy_ = true;
     forceFastAfterChapterNav_ = true;
-    SystemLog::armHangWatch("chapter_next");
-    // Paint Loading on glass before the IR load. turnNext used to call
-    // loadSpine with no status and no chapterNavBusy_ (v49 DCC: 3s freeze on
-    // last page → spine 24 with no upper-left cue). waitForRenderIdle first so
-    // displayWindow does not race the render task.
     activityManager.waitForRenderIdle();
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
-    prepareHeapForChapterLoad(/*aggressive=*/true);
-    for (int i = fromSpine + 1; i < n; ++i) {
-      if (loadSpine(i)) {
+
+    for (int i = fromSpine + 1; i < n && !advanced; ++i) {
+      if (epub_->getSpineItem(i).href.empty()) continue;
+      if (tryHopToCachedFirstPage(i)) {
         advanced = true;
+        cachedHop = true;
         break;
       }
     }
-    chapterNavBusy_ = false;
+
+    if (!advanced) {
+      chapterNavBusy_ = true;
+      SystemLog::armHangWatch("chapter_next");
+      // Paint Loading on glass before the IR load. turnNext used to call
+      // loadSpine with no status and no chapterNavBusy_ (v49 DCC: 3s freeze on
+      // last page → spine 24 with no upper-left cue). waitForRenderIdle first so
+      // displayWindow does not race the render task.
+      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      for (int i = fromSpine + 1; i < n; ++i) {
+        if (loadSpine(i)) {
+          advanced = true;
+          break;
+        }
+      }
+      chapterNavBusy_ = false;
+      SystemLog::disarmHangWatch();
+    }
     if (advanced) {
-      SystemLog::logTiming("TURN", "chapter_next %d->%d page=1 ms=%lu", fromSpine, spineIndex_,
-                           static_cast<unsigned long>(millis() - tTurn));
+      SystemLog::logTiming("TURN", "chapter_next %d->%d page=1 cached=%d ms=%lu", fromSpine, spineIndex_,
+                           cachedHop ? 1 : 0, static_cast<unsigned long>(millis() - tTurn));
     }
     if (!advanced) {
       GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
@@ -3497,9 +3635,10 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
   }
   noteForwardPageTurn();
   // Latch already waits for release (one press → one page). ignoreNextSideRelease_
-  // returns from loop() before idle warm-ahead — keep it for chapter hops only,
-  // where the side key is still held after a multi-second load.
-  if (crossedChapter) ignoreNextSideRelease_ = true;
+  // returns from loop() before idle warm-ahead — keep it for slow chapter hops,
+  // where the side key is still held after a multi-second load. A cached first
+  // page is a normal turn: idle must run so chapter_ir_catchup can land.
+  if (crossedChapter && !cachedHop) ignoreNextSideRelease_ = true;
   pageTurnLatch_.waitingRelease = true;
   (void)saveProgress(crossedChapter ? ProgressFlush::Now : ProgressFlush::Deferred);
   // In-chapter turns: update the in-memory home percent only. CasperStats /
@@ -3511,6 +3650,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
 }
 
 bool RivuletReaderActivity::turnPrev(const int skipPages) {
+  finishPendingChapterIr();
   int remaining = std::max(1, skipPages);
   bool crossedChapter = false;
   while (remaining-- > 0) {
@@ -3639,6 +3779,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
         }
       }
       chapterNavBusy_ = false;
+      SystemLog::disarmHangWatch();
     }
 
     if (!advanced) {
@@ -4000,15 +4141,21 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
 
 void RivuletReaderActivity::loop() {
   // Future-chapter IR is in the engine; glass still shows the reader's page.
-  // PageForward is the hop (promote). Any other control restores so a tap
-  // never layouts the wrong spine. Device 9206393c: restore-on-any-control
-  // ate Next on the last page — Indexing then dumped the user back on 38/38.
-  if (futureIndexActive_ && futureIndexForwardHeld()) {
+  // PageForward on the last page is the hop (promote). Mid-chapter Next restores
+  // then turns — promoting here would skip the rest of the chapter.
+  if (futureIndexActive_ && futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
     promoteFutureIndexToCurrent();
     return;
   }
   if (futureIndexActive_ && futureIndexUserWantsControl()) {
+    const bool wantNext = futureIndexForwardHeld();
+    const bool wantPrev = futureIndexBackHeld();
     restoreAfterFutureIndex(/*forUser=*/true);
+    if (wantNext) {
+      (void)turnNext();
+    } else if (wantPrev) {
+      (void)turnPrev();
+    }
     return;
   }
 
@@ -4141,6 +4288,7 @@ void RivuletReaderActivity::loop() {
     // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).
     tickAaCatchUp();
     tickDeferredProgress();
+    tickPendingChapterIr();
     tickIdlePageMap();
     tickFutureChapterIndex();
     return;
@@ -4172,6 +4320,7 @@ void RivuletReaderActivity::loop() {
   //    behind SD I/O.
   tickAaCatchUp();
   tickDeferredProgress();
+  tickPendingChapterIr();
   // B: idle progressive map for the current chapter.
   tickIdlePageMap();
   // C: once this chapter is sealed, slowly map upcoming chapters (half pace).

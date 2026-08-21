@@ -177,6 +177,12 @@ class RivuletEngine {
   // Idle: layout one upcoming page and write .rvpg (not kept in RAM). Heap-gated.
   // Returns true if it did real work this call.
   bool idlePrefetchPageCache(const GfxRenderer& renderer, int maxForward = 3);
+  // True if s{spine}_p{page}_{key}.rvpg exists. Does not change the bound spine
+  // (setPageCacheSpine would drop the live laidOut_ page).
+  [[nodiscard]] bool hasPageCache(int spineIndex, int pageIndex) const;
+  // Deserialize a .rvpg with no chapter IR in RAM. Caller must clear() first.
+  // Used to paint page 1 of the next spine before loadIr.
+  bool loadOrphanPageCache(int spineIndex, int pageIndex);
 
   void clear();
 
@@ -192,6 +198,8 @@ class RivuletEngine {
   bool tryLoadPageCache(int pageIndex);
   void savePageCache(int pageIndex) const;
   bool pageCachePath(int pageIndex, char* out, size_t outSz) const;
+  bool fillPageCachePath(int spineIndex, int pageIndex, char* out, size_t outSz) const;
+  [[nodiscard]] uint32_t pageCacheKeyFp() const;
   // mkdir-if-missing once per page-cache directory (see definition).
   void ensurePageCacheDir() const;
 

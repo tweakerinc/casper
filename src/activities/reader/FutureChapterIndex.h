@@ -2,7 +2,8 @@
 
 #include <cstdint>
 
-// Idle policy for mapping *future* chapters after the current one is sealed.
+// Idle policy for crawling the *next* chapter onto SD while the current one
+// is on glass.
 //
 // Why a separate unit: the reader used to swap the resident chapter out and
 // walk another spine in one blocking pass. That made page turns miss paints.
@@ -17,15 +18,16 @@
 // made getHeldTime() exceed 400ms and fired the side long-press (Dark Mode /
 // HALF scrub).
 //
-// v49 (782b6925) disabled idle start. It came back last-page-only with
-// Indexing on glass. Device (DCC book 6 ch.13 last page, 9206393c): that
-// still converted spine 26 in 16.7s (cache=0), walked all 44 pages (~63s),
-// then restored spine 25 in 13.4s. `activity_slow` 19s then 17s. PageForward
-// during the swap restored the old chapter instead of promoting — Next
-// "froze and did not want to load". Chapter hops already paint Loading in
-// turnNext. Idle swap is off; PageForward while a future IR is resident is
-// a hop (Promote), not a restore. If a first page is already laid out,
-// FinishRestore immediately — never walk the rest of the future chapter.
+// v49 (782b6925) disabled idle start. Last-page-only + Indexing (9206393c)
+// still converted spine 26 in 16.7s, walked all 44 pages (~63s), then restored
+// spine 25 in 13.4s. The last page is often a sentence or two, so the 3s quiet
+// never runs there. v57 (d354dcad) turned idle off: hops worked (3.2s then
+// 2.4s) but every chapter boundary still paid Loading on the tap.
+//
+// Product: silent crawl *mid-chapter* (glass stays on the current page). Convert
+// next IR + lay out page 1 onto SD, restore current. Never walk the future
+// chapter. PageForward during the swap is a hop (Promote) only when the held
+// place was already the last page; mid-chapter Next restores then turns.
 namespace futureindex {
 
 struct Limits {
@@ -34,10 +36,9 @@ struct Limits {
   static constexpr unsigned long kStartGapMs = 1000;
   static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
-  // Off: last-page idle convert blocked the reader for tens of seconds and
-  // ate the chapter hop. turnNext already shows Loading and loads the next
-  // spine on the tap that actually wants it.
-  static constexpr bool kIdleForwardIndex = false;
+  // On: crawl the next spine while the user is still reading this one. Last
+  // page is too short to wait for quiet there.
+  static constexpr bool kIdleForwardIndex = true;
 };
 
 enum class Decision : uint8_t {
@@ -61,8 +62,9 @@ struct Input {
   bool heapTight = false;
   // Tap during a swap: do not StartForward again until the reader changes spine.
   bool userAbortedThisSitting = false;
-  // Last page of the current chapter. Idle must not swap IR mid-chapter
-  // (device v48/v49: 8s load stole in-chapter taps).
+  // Last page of the reader's held place (not the future spine in the engine).
+  // Promote only then — mid-chapter PageForward must restore, not hop.
+  bool heldAtChapterEnd = false;
   bool atChapterEnd = false;
   bool hasForwardTarget = false;
   int futureStallTicks = 0;
@@ -83,8 +85,9 @@ inline bool workGapElapsed(const Input& in, const unsigned long needMs) {
 }
 
 inline Decision decide(const Input& in) {
-  // PageForward while the next chapter is already in the engine is the hop.
-  if (in.futureResident && in.forwardHeld) return Decision::Promote;
+  // PageForward on the last page while the next chapter is already in the
+  // engine is the hop. Mid-chapter Next must not jump a whole spine.
+  if (in.futureResident && in.forwardHeld && in.heldAtChapterEnd) return Decision::Promote;
   if (in.controlHeld && in.futureResident) return Decision::AbortRestore;
   if (in.controlHeld) return Decision::None;
   if (!in.firstInkDone) return Decision::None;
@@ -93,8 +96,8 @@ inline Decision decide(const Input& in) {
 
   if (in.futureResident) {
     if (in.futureMapComplete) return Decision::FinishRestore;
-    // First page is enough to persist IR. Walking the rest (device: 44 pages,
-    // ~63s) left the user on Indexing until a 13s restore dumped them back.
+    // First page is enough to persist IR + .rvpg. Walking the rest (device:
+    // 44 pages, ~63s) left the user on Indexing until a 13s restore.
     if (in.futureHasFirstPage) return Decision::FinishRestore;
     if (in.futureStallTicks >= Limits::kGiveUpStalls) return Decision::AbortRestore;
     if (!workGapElapsed(in, Limits::kPageGapMs)) return Decision::None;
@@ -102,7 +105,6 @@ inline Decision decide(const Input& in) {
   }
 
   if (!Limits::kIdleForwardIndex) return Decision::None;
-  if (!in.atChapterEnd) return Decision::None;
   if (!in.currentMapComplete) return Decision::None;
   if (!in.aheadWarm) return Decision::None;
   if (in.userAbortedThisSitting) return Decision::None;

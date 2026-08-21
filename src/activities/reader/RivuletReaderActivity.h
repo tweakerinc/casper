@@ -161,6 +161,9 @@ class RivuletReaderActivity final : public Activity {
   std::vector<FootnoteEntry> chapterFootnotes_;  // marker-like note links (# + 1/* /a), not TOC titles
   std::vector<FootnoteEntry> currentPageFootnotes_;
   int footnoteCacheSpine_ = -1;
+  // Set by loadSpine; first ink of a new chapter skips the HTML note scan.
+  bool footnoteScanDeferred_ = false;
+  bool imgCacheDirReady_ = false;
   static constexpr int kMaxFootnoteDepth = 4;
   struct SavedPos {
     int spine = 0;

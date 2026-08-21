@@ -545,32 +545,61 @@ void RivuletReaderActivity::openClippingTool() {
 }
 
 std::string RivuletReaderActivity::currentPagePlainText(const size_t maxChars) const {
-  std::string text;
-  text.reserve(std::min(maxChars, static_cast<size_t>(256)));
+  // Stack gather — std::string += / reserve can abort() under -fno-exceptions
+  // (chapter-22 crash was operator new in a growing HTML buf). QR / bookmarks
+  // only need a short snippet.
+  char buf[256];
+  const size_t cap = std::min(maxChars, sizeof(buf) - 1);
+  size_t n = 0;
   for (const auto& sp : engine_.page().spans) {
     if (sp.text.empty()) continue;
-    if (!text.empty() && text.back() != ' ') text.push_back(' ');
-    text += sp.text;
-    if (text.size() >= maxChars) {
-      text.resize(maxChars);
-      break;
+    if (n > 0 && buf[n - 1] != ' ') {
+      if (n + 1 >= cap) break;
+      buf[n++] = ' ';
     }
+    const size_t room = (n < cap) ? (cap - n) : 0;
+    if (room == 0) break;
+    const size_t take = std::min(sp.text.size(), room);
+    std::memcpy(buf + n, sp.text.data(), take);
+    n += take;
+    if (take < sp.text.size()) break;
   }
-  return text;
+  buf[n] = '\0';
+  return std::string(buf, n);
 }
 
 void RivuletReaderActivity::ensureChapterFootnotes() {
   if (!epub_ || irDir_.empty()) return;
   if (footnoteCacheSpine_ == spineIndex_) return;
+  // Paint must never scan. loadSpine sets footnoteScanDeferred_ so first ink
+  // after a chapter convert (maxA≈31KB on the aborting device log) cannot
+  // enter this function. Idle clears the flag when heap recovers.
+  if (footnoteScanDeferred_) return;
+
   chapterFootnotes_.clear();
-  footnoteCacheSpine_ = spineIndex_;
+  currentPageFootnotes_.clear();
+
+  if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) {
+    LOG_ERR("RVR", "footnote scan skip low heap free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    footnoteScanDeferred_ = true;
+    return;
+  }
 
   char htmlPath[192];
   std::snprintf(htmlPath, sizeof(htmlPath), "%s/s%d.html", irDir_.c_str(), spineIndex_);
-  if (!Storage.exists(htmlPath)) return;
+  if (!Storage.exists(htmlPath)) {
+    footnoteCacheSpine_ = spineIndex_;
+    footnoteScanDeferred_ = false;
+    return;
+  }
 
   HalFile f;
-  if (!Storage.openFileForRead("RVR", htmlPath, f)) return;
+  if (!Storage.openFileForRead("RVR", htmlPath, f)) {
+    footnoteCacheSpine_ = spineIndex_;
+    footnoteScanDeferred_ = false;
+    return;
+  }
 
   // Once per spine: collect real footnote-style markers only.
   // Earlier we took any short internal <a> label (≤24 chars). TOC chapter
@@ -578,25 +607,24 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
   // titles did not — so Contents looked half-underlined. Classic EPUB underlines
   // all links; Rivulet only fakes note underlines at paint time, so the filter
   // must stay tight to marker shapes (1, [12], *, a) with a fragment href.
-  auto isFootnoteMarkerLabel = [](const std::string& clean) -> bool {
-    if (clean.empty() || clean.size() > 8) return false;
+  auto isFootnoteMarkerLabel = [](const char* clean, const size_t n) -> bool {
+    if (!clean || n == 0 || n > 8) return false;
     // Multi-word = TOC / cross-ref prose, not a note number.
-    if (clean.find(' ') != std::string::npos) return false;
+    for (size_t i = 0; i < n; ++i) {
+      if (clean[i] == ' ') return false;
+    }
 
     size_t b = 0;
-    size_t e = clean.size();
+    size_t e = n;
     // Strip [1] / (1) wrappers used by many note styles.
-    if (e - b >= 2 &&
-        ((clean[b] == '[' && clean[e - 1] == ']') || (clean[b] == '(' && clean[e - 1] == ')'))) {
+    if (e - b >= 2 && ((clean[b] == '[' && clean[e - 1] == ']') || (clean[b] == '(' && clean[e - 1] == ')'))) {
       ++b;
       --e;
     }
     if (b >= e || e - b > 6) return false;
 
     auto isDigit = [](unsigned char c) { return c >= '0' && c <= '9'; };
-    auto isAlpha = [](unsigned char c) {
-      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-    };
+    auto isAlpha = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
 
     // "*", "**", …
     bool allStar = true;
@@ -638,60 +666,115 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
 
   constexpr size_t kMaxScan = 64 * 1024;
   constexpr size_t kMaxFn = 48;
-  std::string buf;
-  buf.reserve(2048);
-  char chunk[512];
+  constexpr size_t kWin = 4096;
+  auto win = makeUniqueNoThrow<char[]>(kWin);
+  if (!win) {
+    LOG_ERR("RVR", "footnote scan OOM window");
+    footnoteScanDeferred_ = true;
+    return;
+  }
+  if (chapterFootnotes_.capacity() < kMaxFn) {
+    chapterFootnotes_.reserve(kMaxFn);
+  }
+  size_t winLen = 0;
   size_t total = 0;
+
+  auto startsWith = [](const char* s, size_t n, const char* pfx) -> bool {
+    const size_t pl = std::strlen(pfx);
+    return n >= pl && std::memcmp(s, pfx, pl) == 0;
+  };
+
   while (total < kMaxScan && chapterFootnotes_.size() < kMaxFn) {
-    const int n = f.read(chunk, sizeof(chunk));
+    if (winLen >= kWin) {
+      const size_t keep = kWin / 2;
+      std::memmove(win.get(), win.get() + (winLen - keep), keep);
+      winLen = keep;
+    }
+    const size_t room = kWin - winLen;
+    const int n = f.read(win.get() + winLen, room);
     if (n <= 0) break;
-    buf.append(chunk, static_cast<size_t>(n));
+    winLen += static_cast<size_t>(n);
     total += static_cast<size_t>(n);
-    if (buf.size() > 8192) buf.erase(0, buf.size() - 4096);
 
     size_t pos = 0;
-    while (pos < buf.size() && chapterFootnotes_.size() < kMaxFn) {
-      const size_t aPos = buf.find("<a", pos);
-      if (aPos == std::string::npos) break;
-      const size_t tagEnd = buf.find('>', aPos);
-      if (tagEnd == std::string::npos) {
-        buf.erase(0, aPos);
-        pos = 0;
+    while (pos + 3 < winLen && chapterFootnotes_.size() < kMaxFn) {
+      size_t aPos = static_cast<size_t>(-1);
+      for (size_t i = pos; i + 1 < winLen; ++i) {
+        if (win[i] == '<' && (win[i + 1] == 'a' || win[i + 1] == 'A')) {
+          aPos = i;
+          break;
+        }
+      }
+      if (aPos == static_cast<size_t>(-1)) break;
+
+      size_t tagEnd = static_cast<size_t>(-1);
+      for (size_t i = aPos; i < winLen; ++i) {
+        if (win[i] == '>') {
+          tagEnd = i;
+          break;
+        }
+      }
+      if (tagEnd == static_cast<size_t>(-1)) {
+        if (aPos > 0) {
+          std::memmove(win.get(), win.get() + aPos, winLen - aPos);
+          winLen -= aPos;
+        }
         break;
       }
-      const size_t closeA = buf.find("</a", tagEnd);
-      if (closeA == std::string::npos) {
-        buf.erase(0, aPos);
-        pos = 0;
+      size_t closeA = static_cast<size_t>(-1);
+      for (size_t i = tagEnd + 1; i + 2 < winLen; ++i) {
+        if (win[i] == '<' && win[i + 1] == '/' && (win[i + 2] == 'a' || win[i + 2] == 'A')) {
+          closeA = i;
+          break;
+        }
+      }
+      if (closeA == static_cast<size_t>(-1)) {
+        if (aPos > 0) {
+          std::memmove(win.get(), win.get() + aPos, winLen - aPos);
+          winLen -= aPos;
+        }
         break;
       }
-      const std::string openTag = buf.substr(aPos, tagEnd - aPos + 1);
-      std::string label = buf.substr(tagEnd + 1, closeA - tagEnd - 1);
       pos = closeA + 3;
 
-      size_t hrefPos = openTag.find("href=");
-      if (hrefPos == std::string::npos) hrefPos = openTag.find("HREF=");
-      if (hrefPos == std::string::npos) continue;
-      hrefPos += 5;
-      char quote = 0;
-      if (hrefPos < openTag.size() && (openTag[hrefPos] == '"' || openTag[hrefPos] == '\'')) {
-        quote = openTag[hrefPos++];
+      const char* tag = win.get() + aPos;
+      const size_t tagLen = tagEnd - aPos + 1;
+      const char* hrefKey = nullptr;
+      for (size_t i = 0; i + 5 < tagLen; ++i) {
+        if ((tag[i] == 'h' || tag[i] == 'H') && (tag[i + 1] == 'r' || tag[i + 1] == 'R') &&
+            (tag[i + 2] == 'e' || tag[i + 2] == 'E') && (tag[i + 3] == 'f' || tag[i + 3] == 'F') && tag[i + 4] == '=') {
+          hrefKey = tag + i + 5;
+          break;
+        }
       }
-      size_t hrefEnd = quote ? openTag.find(quote, hrefPos) : openTag.find_first_of(" \t>", hrefPos);
-      if (hrefEnd == std::string::npos) continue;
-      std::string href = openTag.substr(hrefPos, hrefEnd - hrefPos);
-      if (href.empty()) continue;
-      if (href.rfind("http://", 0) == 0 || href.rfind("https://", 0) == 0 || href.rfind("mailto:", 0) == 0 ||
-          href.rfind("javascript:", 0) == 0) {
+      if (!hrefKey) continue;
+      char quote = 0;
+      if (*hrefKey == '"' || *hrefKey == '\'') quote = *hrefKey++;
+      const char* hrefEnd = hrefKey;
+      while (hrefEnd < tag + tagLen && *hrefEnd && *hrefEnd != quote && *hrefEnd != ' ' && *hrefEnd != '\t' &&
+             *hrefEnd != '>') {
+        ++hrefEnd;
+      }
+      const size_t hrefN = static_cast<size_t>(hrefEnd - hrefKey);
+      if (hrefN == 0 || hrefN >= 96) continue;
+      if (startsWith(hrefKey, hrefN, "http://") || startsWith(hrefKey, hrefN, "https://") ||
+          startsWith(hrefKey, hrefN, "mailto:") || startsWith(hrefKey, hrefN, "javascript:")) {
         continue;
       }
-      // Footnotes jump to a fragment; bare spine links are TOC / nav.
-      if (href.find('#') == std::string::npos) continue;
+      bool hasHash = false;
+      for (size_t i = 0; i < hrefN; ++i) {
+        if (hrefKey[i] == '#') {
+          hasHash = true;
+          break;
+        }
+      }
+      if (!hasHash) continue;
 
-      std::string clean;
-      clean.reserve(label.size());
+      char clean[12];
+      size_t cleanN = 0;
       bool inTag = false;
-      for (char c : label) {
+      for (size_t i = tagEnd + 1; i < closeA && cleanN + 1 < sizeof(clean); ++i) {
+        char c = win[i];
         if (c == '<') {
           inTag = true;
           continue;
@@ -702,29 +785,36 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
         }
         if (inTag) continue;
         if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-        if (c == ' ' && !clean.empty() && clean.back() == ' ') continue;
-        clean.push_back(c);
+        if (c == ' ' && cleanN > 0 && clean[cleanN - 1] == ' ') continue;
+        clean[cleanN++] = c;
       }
-      while (!clean.empty() && clean.front() == ' ') clean.erase(clean.begin());
-      while (!clean.empty() && clean.back() == ' ') clean.pop_back();
-      if (!isFootnoteMarkerLabel(clean)) continue;
+      while (cleanN > 0 && clean[0] == ' ') {
+        std::memmove(clean, clean + 1, --cleanN);
+      }
+      while (cleanN > 0 && clean[cleanN - 1] == ' ') --cleanN;
+      clean[cleanN] = '\0';
+      if (!isFootnoteMarkerLabel(clean, cleanN)) continue;
 
       bool dup = false;
       for (const auto& e : chapterFootnotes_) {
-        if (e.href[0] && href == e.href) {
+        if (e.href[0] && std::strncmp(e.href, hrefKey, hrefN) == 0 && e.href[hrefN] == '\0') {
           dup = true;
           break;
         }
       }
       if (dup) continue;
 
-      FootnoteEntry entry;
-      std::snprintf(entry.number, sizeof(entry.number), "%s", clean.c_str());
-      std::snprintf(entry.href, sizeof(entry.href), "%s", href.c_str());
+      FootnoteEntry entry{};
+      std::snprintf(entry.number, sizeof(entry.number), "%s", clean);
+      const size_t hrefCopy = hrefN < sizeof(entry.href) - 1 ? hrefN : sizeof(entry.href) - 1;
+      std::memcpy(entry.href, hrefKey, hrefCopy);
+      entry.href[hrefCopy] = '\0';
       chapterFootnotes_.push_back(entry);
     }
   }
-  f.close();
+  // Pin only after a finished attempt so a low-heap skip can retry on idle.
+  footnoteCacheSpine_ = spineIndex_;
+  footnoteScanDeferred_ = false;
   LOG_DBG("RVR", "chapter footnotes spine=%d n=%zu", spineIndex_, chapterFootnotes_.size());
 }
 
@@ -734,13 +824,25 @@ void RivuletReaderActivity::refreshPageFootnotes() {
   ensureChapterFootnotes();
   if (chapterFootnotes_.empty()) return;
 
-  const std::string pageText = currentPagePlainText(1500);
-  if (pageText.empty()) return;
+  // Search live spans — do not concatenate the page into a std::string (paint
+  // path, -fno-exceptions: += abort). Marker labels are short (1, [12], *).
+  auto pageHasMarker = [this](const char* label) -> bool {
+    if (!label || label[0] == '\0') return false;
+    const size_t n = std::strlen(label);
+    for (const auto& sp : engine_.page().spans) {
+      if (sp.text.size() < n) continue;
+      if (sp.text.find(label) != std::string::npos) return true;
+    }
+    return false;
+  };
 
   constexpr size_t kMaxFn = 12;
+  if (currentPageFootnotes_.capacity() < kMaxFn) {
+    currentPageFootnotes_.reserve(kMaxFn);
+  }
   for (const auto& e : chapterFootnotes_) {
     if (e.number[0] == '\0') continue;
-    if (pageText.find(e.number) == std::string::npos) continue;
+    if (!pageHasMarker(e.number)) continue;
     currentPageFootnotes_.push_back(e);
     if (currentPageFootnotes_.size() >= kMaxFn) break;
   }
@@ -749,13 +851,10 @@ void RivuletReaderActivity::refreshPageFootnotes() {
 
 void RivuletReaderActivity::paintFootnoteMarkers() {
   if (!ready_) return;
-  // Skip HTML scan + word-box build on cold first paint when open hints asked for
-  // speed (QR / settled Home). Footnotes still appear on the next paint / idle.
-  if (firstPaint_ && ReaderActivity::hasOpenHints()) {
-    if (currentPageFootnotes_.empty()) return;
-  } else {
-    refreshPageFootnotes();
-  }
+  // firstPaint_ is cleared at the top of render() before this runs, so it
+  // cannot gate the scan. footnoteScanDeferred_ is the real first-ink skip.
+  if (footnoteScanDeferred_) return;
+  refreshPageFootnotes();
   if (currentPageFootnotes_.empty()) return;
 
   // legacy: footnote refs are underlined in the body. Pure paint — never changes
@@ -1349,6 +1448,7 @@ void RivuletReaderActivity::prepareHeapForChapterLoad(const bool aggressive) {
   chapterFootnotes_.clear();
   currentPageFootnotes_.clear();
   footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
   glyphCacheSpine_ = -1;
   glyphCachePage_ = -1;
   // PNGdec ~50 KB held across convert is the main maxAlloc killer on X4 (no PSRAM).
@@ -1588,6 +1688,7 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
             static_cast<unsigned>(ESP.getFreeHeap()), fromIrCache ? 1 : 0);
     if (footnoteCacheSpine_ != spineIndex) {
       footnoteCacheSpine_ = -1;
+      footnoteScanDeferred_ = true;
       chapterFootnotes_.clear();
       currentPageFootnotes_.clear();
     }
@@ -1648,9 +1749,11 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
           static_cast<unsigned long>(millis() - tLayout), static_cast<unsigned>(ESP.getFreeHeap()),
           fromIrCache ? 1 : 0);
   updateBookmarkFlag();
-  // New spine → invalidate footnote cache; scan HTML lazily on first paint that needs it.
+  // New spine → drop footnote cache. Scan is idle-only (first paint of a
+  // just-converted chapter is the abort() site: std::string append at ~31KB maxA).
   if (footnoteCacheSpine_ != spineIndex) {
     footnoteCacheSpine_ = -1;
+    footnoteScanDeferred_ = true;
     chapterFootnotes_.clear();
     currentPageFootnotes_.clear();
   }
@@ -1935,10 +2038,27 @@ void RivuletReaderActivity::tickIdlePageMap() {
     }
   }
 
+  // After first ink + ahead warm: one HTML footnote scan. Never on the paint
+  // path — that is what aborted after spine 22 convert (maxA≈31KB).
+  if (footnoteScanDeferred_ && (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 400UL) &&
+      ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
+    footnoteScanDeferred_ = false;
+    ensureChapterFootnotes();
+    // Underlines appear on the next paint — do not flash a second refresh.
+    return;
+  }
+
   // Map seal ("~"): slower background. Quiet 2s after turn; 1.5s after each bite.
   if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 2000UL) return;
   if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1500UL) return;
-  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
+  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) {
+    // Map is done — keep writing upcoming .rvpg so a later turn is an SD hit,
+    // not a live layout. One page per idle tick; warmAhead already did page+1.
+    if (engine_.mapComplete() && (now - lastPageTurnTime_) >= 800UL) {
+      (void)engine_.idlePrefetchPageCache(renderer, /*maxForward=*/2);
+    }
+    return;
+  }
 
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);
@@ -2341,7 +2461,10 @@ void RivuletReaderActivity::paintPageImages() {
   }
   // Prefer rivulet/img; fall back to package-adjacent if irDir was empty.
   std::string imgCacheDir = irDir_.empty() ? (casperBookDir_ + "/rivulet/img/") : (irDir_ + "/img/");
-  Storage.ensureDirectoryExists(imgCacheDir.c_str());
+  if (!imgCacheDirReady_) {
+    Storage.ensureDirectoryExists(imgCacheDir.c_str());
+    imgCacheDirReady_ = true;
+  }
 
   // Free PNG warm so chapter ornaments / full plates can allocate the decoder.
   PngToFramebufferConverter::releaseWarmIfHeapTight(/*minMaxAllocBytes=*/48 * 1024);
@@ -2376,29 +2499,40 @@ void RivuletReaderActivity::paintPageImages() {
     return nc > 0 ? cands[0] : std::string{};
   };
 
-  int painted = 0;
-  for (const auto& plate : plates) {
-    if (plate.href.empty() || plate.w <= 0 || plate.h <= 0) continue;
-    std::string resolved = resolveItemPath(plate.href);
-    if (resolved.empty() || !ImageDecoderFactory::isFormatSupported(resolved)) {
-      // Do not draw a hollow white box for unsupported images (SVG ornaments).
-      // Layout already skips 0×0 plates; any residual plate is simply omitted.
-      LOG_ERR("RVR", "paint skip image href=%s resolved=%s", plate.href.c_str(),
-              resolved.empty() ? "(empty)" : resolved.c_str());
-      continue;
-    }
-
+  auto destForHref = [&](const std::string& resolved) -> std::string {
     std::string ext;
     const auto dot = resolved.rfind('.');
     if (dot != std::string::npos) ext = resolved.substr(dot);
-    // Stable cache file name from path hash (no counter drift across paints).
     const size_t h = std::hash<std::string>{}(resolved);
     char name[48];
     std::snprintf(name, sizeof(name), "%08x%s", static_cast<unsigned>(h & 0xffffffffu),
                   ext.empty() ? ".img" : ext.c_str());
-    const std::string destPath = imgCacheDir + name;
+    return imgCacheDir + name;
+  };
 
-    LOG_INF("RVR", "paint image %s -> %s at %d,%d %dx%d", resolved.c_str(), destPath.c_str(),
+  int painted = 0;
+  for (const auto& plate : plates) {
+    if (plate.href.empty() || plate.w <= 0 || plate.h <= 0) continue;
+
+    // IR rewrite stores a package-absolute href. If that hash is already on SD,
+    // skip the ZIP getItemSize probe (central-directory walk on every paint).
+    const std::string hrefDecoded = FsHelpers::decodeUriEscapes(plate.href);
+    std::string destPath = destForHref(hrefDecoded);
+    std::string resolved = hrefDecoded;
+    if (!Storage.exists(destPath.c_str())) {
+      resolved = resolveItemPath(plate.href);
+      if (resolved.empty() || !ImageDecoderFactory::isFormatSupported(resolved)) {
+        // Do not draw a hollow white box for unsupported images (SVG ornaments).
+        LOG_ERR("RVR", "paint skip image href=%s resolved=%s", plate.href.c_str(),
+                resolved.empty() ? "(empty)" : resolved.c_str());
+        continue;
+      }
+      destPath = destForHref(resolved);
+    } else if (!ImageDecoderFactory::isFormatSupported(resolved)) {
+      continue;
+    }
+
+    LOG_DBG("RVR", "paint image %s -> %s at %d,%d %dx%d", resolved.c_str(), destPath.c_str(),
             marginX_ + plate.x, marginY_ + plate.y, plate.w, plate.h);
     ImageBlock ib(destPath, resolved, plate.w, plate.h);
     ib.render(renderer, marginX_ + plate.x, marginY_ + plate.y);
@@ -2926,10 +3060,12 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
 
 bool RivuletReaderActivity::turnNext(const int skipPages) {
   int remaining = std::max(1, skipPages);
+  bool crossedChapter = false;
   while (remaining-- > 0) {
     if (engine_.nextPage(renderer)) {
-      pageMapDirty_ = true;
-      if (engine_.mapComplete()) persistPageMapIfComplete();
+      // .rvpm already on SD when the map is complete — rewriting it every turn
+      // is a FAT write on the path the user feels. Only dirty an incomplete map.
+      if (!engine_.mapComplete()) pageMapDirty_ = true;
       continue;
     }
     // Only leave the chapter when live layout says the chapter is finished.
@@ -2968,10 +3104,13 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       requestUpdate();
       return false;
     }
+    crossedChapter = true;
   }
   noteForwardPageTurn();
   (void)saveProgress();
-  persistHomeProgress(true);
+  // In-chapter turns: update the in-memory home percent only. CasperStats /
+  // recents hits SD on chapter change, sleep, and leave (Resource Protocol 8).
+  persistHomeProgress(/*writeToDisk=*/crossedChapter);
   updateBookmarkFlag();
   requestUpdate();
   return true;
@@ -3821,6 +3960,8 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   LOG_DBG("RVR", "paint spans=%u images=%u page=%d", static_cast<unsigned>(nSpans), static_cast<unsigned>(nImgs),
           engine_.currentPage());
 
+  const uint32_t tPaint0 = millis();
+
   // Classic-style page glyph prewarm: scan → decompress needed glyphs into RAM
   // page buffers → real paint. Retain when heap allows so reverse/next turn and
   // drop-cap letters do not thrash SD fonts. Clear when tight so chapter convert
@@ -3960,11 +4101,13 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // PAGE/ERS lines belonged to the classic reader and went away with it. That is
   // why a report of "pages do not load" could not be checked against a capture.
   // One line per painted page: which page, whether AA ran, and the heap it ran on.
-  SystemLog::logTiming("PAGE", "spine=%d page=%d/%d map=%d/%s aa=%d ran=%d why=%c refresh=%lums fre=%u maxA=%u",
+  SystemLog::logTiming("PAGE",
+                       "spine=%d page=%d/%d map=%d/%s aa=%d ran=%d why=%c paint=%lums refresh=%lums fre=%u maxA=%u",
                        spineIndex_, engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)),
                        engine_.mapKnownPages(), engine_.mapComplete() ? "done" : "est", aaThisFrame ? 1 : 0,
-                       aaRan ? 1 : 0, aaWhy, static_cast<unsigned long>(millis() - tRefresh),
-                       static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+                       aaRan ? 1 : 0, aaWhy, static_cast<unsigned long>(tRefresh - tPaint0),
+                       static_cast<unsigned long>(millis() - tRefresh), static_cast<unsigned>(ESP.getFreeHeap()),
+                       static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
   // Layout geometry: how much of the viewport the page actually used, and whether
   // one more body line would have fitted. slack >= bodyLine means we are leaving a

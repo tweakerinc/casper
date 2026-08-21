@@ -478,13 +478,37 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
   if (aheadValid_) return false;              // already warm
   if (!laidOutValid_) return false;           // nothing to be ahead OF yet
   if (laidOut_.atChapterEnd) return false;    // no next page in this chapter
+
+  const int nextIdx = currentPage_ + 1;
+  char path[220];
+  const bool havePath = pageCachePath(nextIdx, path, sizeof(path));
+  // Prefer the SD paint cache (same file ensureLaidOut reads). Indexed chapters
+  // were still re-layouting every idle warm because this path ignored .rvpg.
+  if (havePath) {
+    LaidOutPage tmp;
+    if (tmp.loadFromFile(path, key_, nextIdx)) {
+      const bool startOk = tmp.start == laidOut_.end;
+      const bool mapOk = !map_.hasPage(nextIdx) || tmp.start == map_.pageStart(nextIdx);
+      if (startOk && mapOk) {
+        ahead_ = std::move(tmp);
+        aheadValid_ = true;
+        return true;
+      }
+      Storage.remove(path);
+    }
+  }
+
   aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
   if (!aheadValid_) {
     ahead_.clear();
     return false;
   }
-  // Do not SD-save here. Idle warm used to write .rvpg every time and hitch the
-  // UI; ensureLaidOut/savePageCache persists when the page is actually shown.
+  // Persist once so the next visit (and next-session turns) hit SD instead of
+  // layout. Skip if the file is already there — rewriting on every idle hitch.
+  if (havePath && !Storage.exists(path)) {
+    ensurePageCacheDir();
+    (void)ahead_.saveToFile(path, key_, nextIdx);
+  }
   return true;
 }
 

@@ -1878,6 +1878,7 @@ void RivuletReaderActivity::persistFutureMap(const bool completeOnly) {
 
 bool RivuletReaderActivity::startFutureChapterIndex() {
   if (futureIndexActive_ || warmingAdjacent_ || !ready_ || !epub_ || irDir_.empty()) return false;
+  if (futureIndexUserWantsControl()) return false;
   const int target = nextForwardUnmappedSpine();
   if (target < 0) {
     SystemLog::logTiming("FIDX", "no_forward after spine=%d", spineIndex_);
@@ -1893,6 +1894,10 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   futureIndexSpine_ = target;
   futureStallTicks_ = 0;
   futurePartSaveAtKnown_ = 0;
+
+  // 14s uncached convert (device: FIDX load ms=14503) must not start while a
+  // paint still owns the engine, and must abort if the user taps mid-load.
+  activityManager.waitForRenderIdle();
 
   chapterload::Request req;
   req.epub = epub_.get();
@@ -1914,6 +1919,9 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   };
   hooks.prepareImages = [](void* ctx, const char* href) {
     static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+  hooks.shouldAbort = [](void* ctx) {
+    return static_cast<RivuletReaderActivity*>(ctx)->futureIndexUserWantsControl();
   };
 
   const uint32_t t0 = millis();
@@ -1956,10 +1964,16 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   const int page = heldPageForFuture_;
   if (!engine_.mapComplete()) persistFutureMap(/*completeOnly=*/false);
 
+  // Engine swap must not race a paint / async FAST / glyph prewarm.
+  activityManager.waitForRenderIdle();
   const uint32_t t0 = millis();
-  prepareHeapForChapterLoad(/*aggressive=*/true);
-  bool ok = loadSpine(spine, page);
-  if (!ok) ok = loadSpine(spine, 0);
+  bool ok = false;
+  {
+    RenderLock lock(*this);
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    ok = loadSpine(spine, page);
+    if (!ok) ok = loadSpine(spine, 0);
+  }
 
   futureIndexActive_ = false;
   futureIndexSpine_ = -1;
@@ -1968,9 +1982,9 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   lastFutureWorkMs_ = millis();
   futureStallTicks_ = 0;
 
-  if (ok) {
-    (void)engine_.warmAheadPage(renderer);
-  } else if (forUser) {
+  // A following tap in this same loop() will layout the next page. Do not also
+  // warm-ahead here — that was a second layout on a just-reloaded IR.
+  if (!ok && forUser) {
     showError("Could not restore page");
   }
   SystemLog::logTiming("FIDX", "restore spine=%d page=%d ok=%d user=%d ms=%lu fre=%u", spine, page, ok ? 1 : 0,
@@ -1980,6 +1994,7 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
 
 void RivuletReaderActivity::tickFutureChapterIndex() {
   if (!ready_ || !epub_ || !firstInkDone_ || chapterNavBusy_ || heavyReleasedForUi_) return;
+  if (activityManager.isRenderInProgress()) return;
 
   futureindex::Input in;
   in.futureResident = futureIndexActive_;
@@ -2135,11 +2150,18 @@ void RivuletReaderActivity::overlapAheadDuringRefresh() {
 void RivuletReaderActivity::prewarmAheadGlyphs() {
   if (futureIndexActive_ || !engine_.aheadWarm()) return;
   if (!canRetainGlyphCache()) return;
+  // Paint writes the framebuffer and FontDecompressor is not re-entrant.
+  // Device crash after a FIDX restore+turn: idle prewarm on the main task ran
+  // ~50ms after requestUpdate, while render() still held the FB (async FAST +
+  // FDC "Decompression failed" with healthy heap, then reboot).
+  if (activityManager.isRenderInProgress() || renderer.isFontCacheScanning()) return;
   auto* fcm = renderer.getFontCacheManager();
   if (!fcm) return;
   const int nextPage = engine_.currentPage() + 1;
   if (glyphCacheSpine_ == spineIndex_ && glyphCachePage_ == nextPage) return;
 
+  RenderLock lock(*this);
+  if (!engine_.aheadWarm()) return;
   auto scope = fcm->createPrewarmScope(/*clearOnEnter=*/true, /*clearOnExit=*/false);
   engine_.paint(renderer, marginX_, marginY_, /*ahead=*/true);
   scope.endScanAndPrewarm();
@@ -2151,6 +2173,7 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
 
 void RivuletReaderActivity::tickIdlePageMap() {
   if (futureIndexActive_) return;
+  if (activityManager.isRenderInProgress()) return;
   if (!ready_ || !epub_ || !firstInkDone_) return;
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {

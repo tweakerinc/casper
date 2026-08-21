@@ -8,6 +8,8 @@
 
 #include <cstdio>
 
+#include "util/TaskWatchdog.h"
+
 namespace chapterload {
 namespace {
 
@@ -33,6 +35,11 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
   const auto prepHeap = [&](const bool aggressive) { hooks.prepareHeap(hooks.ctx, aggressive); };
   const auto prepImages = [&](const std::string& href) {
     if (hooks.prepareImages) hooks.prepareImages(hooks.ctx, href.c_str());
+  };
+  const auto aborted = [&]() {
+    if (!hooks.shouldAbort) return false;
+    resetTaskWatchdogIfSubscribed();
+    return hooks.shouldAbort(hooks.ctx);
   };
 
   const int n = epub.getSpineItemsCount();
@@ -100,8 +107,8 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
         const size_t htmlSz = hf.size();
         hf.close();
         const size_t textSz = eng.chapter().textSize();
-        const bool shortVsHtml = (htmlSz > 8000 && textSz > 0 && textSz * 5 / 2 < htmlSz) ||
-                                 (htmlSz > 20000 && textSz < 5000);
+        const bool shortVsHtml =
+            (htmlSz > 8000 && textSz > 0 && textSz * 5 / 2 < htmlSz) || (htmlSz > 20000 && textSz < 5000);
         if (shortVsHtml) {
           LOG_ERR("CHLOAD", "stale short IR spine=%d text=%u html=%u — reconvert", spineIndex,
                   static_cast<unsigned>(textSz), static_cast<unsigned>(htmlSz));
@@ -132,6 +139,10 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
 
   // --- Convert from HTML ----------------------------------------------------
   if (!ok) {
+    if (aborted()) {
+      LOG_INF("CHLOAD", "spine %d abort before convert", spineIndex);
+      return out;
+    }
     // Never accumulate chapter HTML in a std::string: growth aborts on OOM under
     // -fno-exceptions. ZIP-inflate to SD, then load with makeUniqueNoThrow.
     // Hold the framebuffer loan across stream + load + convert so maxAlloc stays
@@ -178,8 +189,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
             }
             if (fileSize > kMaxHtml) {
               Storage.remove(tmpHtmlPath);
-              LOG_ERR("CHLOAD", "spine %d HTML too large (%u) — skip", spineIndex,
-                      static_cast<unsigned>(fileSize));
+              LOG_ERR("CHLOAD", "spine %d HTML too large (%u) — skip", spineIndex, static_cast<unsigned>(fileSize));
               return out;
             }
             readPath = Storage.rename(tmpHtmlPath, htmlPath) ? htmlPath : tmpHtmlPath;
@@ -200,8 +210,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
         const size_t htmlSize = htmlFile.size();
         if (htmlSize == 0 || htmlSize > kMaxHtml) {
           htmlFile.close();
-          LOG_DBG("CHLOAD", "spine %d bad html size %u — discard", spineIndex,
-                  static_cast<unsigned>(htmlSize));
+          LOG_DBG("CHLOAD", "spine %d bad html size %u — discard", spineIndex, static_cast<unsigned>(htmlSize));
           if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
           continue;
         }
@@ -216,20 +225,24 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
         const int got = htmlFile.read(htmlBuf.get(), htmlSize);
         htmlFile.close();
         if (got < 0 || static_cast<size_t>(got) != htmlSize) {
-          LOG_ERR("CHLOAD", "spine %d HTML short read %d/%u", spineIndex, got,
-                  static_cast<unsigned>(htmlSize));
+          LOG_ERR("CHLOAD", "spine %d HTML short read %d/%u", spineIndex, got, static_cast<unsigned>(htmlSize));
           if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
           continue;
         }
         htmlBuf[htmlSize] = 0;
+
+        if (aborted()) {
+          LOG_INF("CHLOAD", "spine %d abort before ingestHtml", spineIndex);
+          return out;
+        }
+        resetTaskWatchdogIfSubscribed();
 
         // free/maxA here are net of the HTML buffer we just took.
         const size_t maxA = ESP.getMaxAllocHeap();
         const size_t freeH = ESP.getFreeHeap();
         if (maxA < 12 * 1024 || freeH < 14 * 1024) {
           LOG_ERR("CHLOAD", "spine %d convert skip low heap free=%u maxA=%u html=%u", spineIndex,
-                  static_cast<unsigned>(freeH), static_cast<unsigned>(maxA),
-                  static_cast<unsigned>(htmlSize));
+                  static_cast<unsigned>(freeH), static_cast<unsigned>(maxA), static_cast<unsigned>(htmlSize));
           htmlBuf.reset();
           eng.clear();
           delay(20);
@@ -247,17 +260,15 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
           delay(30);
           yield();
           if (ESP.getMaxAllocHeap() >= 12 * 1024) {
-            ok = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false,
-                                imageRendering);
+            ok = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false, imageRendering);
           }
         }
         htmlBuf.reset();  // free before the caller lays anything out
         LOG_INF("CHLOAD", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
-                ok ? "ok" : "FAIL", (ok && eng.chapter().failed()) ? 1 : 0,
-                static_cast<unsigned long>(millis() - t0),
-                static_cast<unsigned>(eng.chapter().blockCount()),
-                static_cast<unsigned>(eng.chapter().textSize()), static_cast<unsigned>(htmlSize),
-                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+                ok ? "ok" : "FAIL", (ok && eng.chapter().failed()) ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+                static_cast<unsigned>(eng.chapter().blockCount()), static_cast<unsigned>(eng.chapter().textSize()),
+                static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
         if (ok && !eng.chapter().failed()) {
           prepImages(item.href);

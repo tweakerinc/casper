@@ -32,13 +32,16 @@ struct Hooks {
   void* ctx = nullptr;
   void (*prepareHeap)(void* ctx, bool aggressive) = nullptr;
   void (*prepareImages)(void* ctx, const char* href) = nullptr;
+  // Optional. When true, abandon a convert in progress so a tap is not stuck
+  // behind a 10s+ HTML ingest. Caller must restore any evicted chapter.
+  bool (*shouldAbort)(void* ctx) = nullptr;
 };
 
 struct Request {
   Epub* epub = nullptr;
   rivulet::RivuletEngine* engine = nullptr;
   GfxRenderer* renderer = nullptr;
-  std::string irDir;         // <book>/rivulet
+  std::string irDir;  // <book>/rivulet
   int spineIndex = 0;
   uint8_t imageRendering = 0;  // CasperSettings::IMAGE_RENDERING
   // Refuse a partial (OOM-truncated) convert. Used where a false chapter end
@@ -56,9 +59,9 @@ struct Request {
 };
 
 struct Result {
-  bool ok = false;          // chapter IR is loaded and usable
-  bool fromCache = false;   // came from .rvir rather than a fresh convert
-  bool partial = false;     // convert hit a cap/OOM; IR is truncated
+  bool ok = false;         // chapter IR is loaded and usable
+  bool fromCache = false;  // came from .rvir rather than a fresh convert
+  bool partial = false;    // convert hit a cap/OOM; IR is truncated
 };
 
 Result loadChapterIr(const Request& req, const Hooks& hooks);

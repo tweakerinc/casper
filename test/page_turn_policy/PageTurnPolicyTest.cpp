@@ -101,7 +101,9 @@ TEST(PageTurnPolicy, WaitingReleaseClearsWhenUp) {
 }
 
 TEST(PageTurnPolicy, SwallowDropsEdgeAndArmsWaitIfHeld) {
+  // Opposite of lastDir (ADC ghost Back after Next) is what swallow exists for.
   Request in = backAt(2000);
+  in.lastDir = Dir::Next;
   in.swallowUntilMs = 2000 + Limits::kSwallowMs;
   in.held = true;
   const Result r = decide(in);
@@ -109,6 +111,27 @@ TEST(PageTurnPolicy, SwallowDropsEdgeAndArmsWaitIfHeld) {
   EXPECT_FALSE(r.prev);
   EXPECT_EQ(r.why, Why::Swallow);
   EXPECT_TRUE(r.waitingRelease);
+}
+
+TEST(PageTurnPolicy, SwallowAllowsSameDirNext) {
+  // Device d354dcad: prewarm_glyphs then why=s ate the Next the user meant.
+  Request in = forwardAt(2000);
+  in.lastDir = Dir::Next;
+  in.lastAcceptedMs = 1500;
+  in.swallowUntilMs = 2000 + Limits::kSwallowMs;
+  const Result r = decide(in);
+  EXPECT_TRUE(r.accept);
+  EXPECT_TRUE(r.next);
+  EXPECT_EQ(r.why, Why::Accepted);
+}
+
+TEST(PageTurnPolicy, SwallowDropsBothWhenLastDirNone) {
+  Request in = forwardAt(2000);
+  in.swallowUntilMs = 2000 + Limits::kSwallowMs;
+  const Result r = decide(in);
+  EXPECT_FALSE(r.accept);
+  EXPECT_FALSE(r.next);
+  EXPECT_EQ(r.why, Why::Swallow);
 }
 
 TEST(PageTurnPolicy, SwallowExpires) {

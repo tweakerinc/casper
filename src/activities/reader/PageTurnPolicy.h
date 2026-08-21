@@ -89,15 +89,24 @@ inline Result decide(const Request& in) {
 
   const bool swallowing = in.swallowUntilMs != 0 && in.nowMs < in.swallowUntilMs;
   if (swallowing) {
-    out.why = Why::Swallow;
-    out.prev = false;
-    out.next = false;
-    if (in.held) {
-      out.waitingRelease = true;
-    } else if (in.waitingRelease) {
-      out.waitingRelease = false;
+    // Device (d354dcad): MAP prewarm_glyphs then a burst of TURN drop why=s ate
+    // the same-direction Next the user meant — extra presses to turn a page.
+    // Swallow exists to cover the X3 ADC Down→Up ghost (opposite of lastDir),
+    // not a deliberate repeat tap. Same-dir falls through to waitingRelease /
+    // interval. lastDir None (open) still drops both.
+    const bool sameDir =
+        (in.lastDir == Dir::Next && in.next && !in.prev) || (in.lastDir == Dir::Prev && in.prev && !in.next);
+    if (!sameDir) {
+      out.why = Why::Swallow;
+      out.prev = false;
+      out.next = false;
+      if (in.held) {
+        out.waitingRelease = true;
+      } else if (in.waitingRelease) {
+        out.waitingRelease = false;
+      }
+      return out;
     }
-    return out;
   }
 
   if (!in.prev && !in.next) {

@@ -23,8 +23,6 @@
 #include "CasperState.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
-#include "util/CasperPaths.h"
-
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
@@ -38,6 +36,7 @@
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
+#include "util/CasperPaths.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
 
@@ -56,9 +55,7 @@ bool isDashboardRecentsTheme() { return false; }
 bool isDashboardScrollTheme() { return false; }
 bool usesRecentBookSideNav() { return false; }
 
-bool isBareTheme() {
-  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::BARE;
-}
+bool isBareTheme() { return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::BARE; }
 
 bool isPenumbraTheme() {
   return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::PENUMBRA;
@@ -103,7 +100,8 @@ bool homeControlsHeld(const MappedInputManager& mappedInput) {
          mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
          mappedInput.isPressed(MappedInputManager::Button::Left) ||
          mappedInput.isPressed(MappedInputManager::Button::Right) ||
-         mappedInput.isPressed(MappedInputManager::Button::Up) || mappedInput.isPressed(MappedInputManager::Button::Down);
+         mappedInput.isPressed(MappedInputManager::Button::Up) ||
+         mappedInput.isPressed(MappedInputManager::Button::Down);
 }
 
 // Popup menu: Dashboard BACK (Menu) / Bare CONFIRM (Menu).
@@ -139,8 +137,7 @@ std::string getRecentBookCachePath(const RecentBook& book) {
     return Epub(book.path, CasperPaths::kPackageCacheRoot).getCachePath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
-    return std::string(CasperPaths::kPackageCacheRoot) + "/xtc_" +
-           std::to_string(std::hash<std::string>{}(book.path));
+    return std::string(CasperPaths::kPackageCacheRoot) + "/xtc_" + std::to_string(std::hash<std::string>{}(book.path));
   }
   if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
     return std::string("/.crosspoint/txt_") + std::to_string(std::hash<std::string>{}(book.path));
@@ -234,8 +231,7 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   MinimalMenuItem menuItems[6];
   const int menuCount =
       buildMinimalMenuItems(menuItems, 6, hasOpdsServers, !recentBooks.empty(), /*includeSettings=*/true);
-  const int menuH =
-      menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
+  const int menuH = menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
   const int menuTop = bandTop + std::max(0, (bandBottom - bandTop - menuH) / 2);
   const Rect menuRect{0, menuTop, pageWidth, std::max(menuH, 1)};
   auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index].label); };
@@ -511,13 +507,10 @@ void HomeActivity::onEnter() {
   backPressSeen = false;
   backResumeArmed = false;
   minimalMenuIndex = 0;
-  // Cold/first Home: FAST so the shell appears over splash (~1s), then idle
-  // HALF. Previous frame is splash/moon, not a dense book page, so
-  // FAST-then-HALF does not settle reader residual the way Back-from-book did.
-  // Skip clock AA on that first FAST (deferScrubAfterFirstPaint_) — idle gate
-  // runs it after the HALF.
+  // Cold/first Home: FAST over splash. Boot already HALF-scrubbed the splash,
+  // so a delayed idle HALF was a 3s black flash on a plate that already looked
+  // fine. Clock AA still waits for idle (deferScrubAfterFirstPaint_).
   UiGhostPolicy::clearHardScrub();
-  armDeferredHalfAfterFirstPaint_ = true;
   deferScrubAfterFirstPaint_ = true;
   lastHomeInputMs_ = millis();
   // Allow cover pass to run again after leaving reader / changing theme.
@@ -582,7 +575,6 @@ void HomeActivity::onEnter() {
 void HomeActivity::onExit() {
   Activity::onExit();
   deferredHalfScrubOnly = false;
-  armDeferredHalfAfterFirstPaint_ = false;
   pendingClockAaAfterIdle_ = false;
   forcePenumbraClockBwOnly_ = false;
 
@@ -686,7 +678,6 @@ void HomeActivity::onResume() {
   coverGrayRetryAtMs = 0;
   deferredHalfScrubOnly = false;
   deferredHalfScrubAtMs = 0;
-  armDeferredHalfAfterFirstPaint_ = false;
   pendingClockAaAfterIdle_ = false;
   forcePenumbraClockBwOnly_ = false;
   lastHomeInputMs_ = millis();
@@ -1140,7 +1131,6 @@ void HomeActivity::cancelHomeBackgroundPaint() {
     penumbraHalfBaselineDone = false;
   }
   deferredHalfScrubOnly = false;
-  armDeferredHalfAfterFirstPaint_ = false;
   softGrayscaleBase = false;
   // A queued minute-tick must not start clock AA after we leave — that pass
   // displayGrayscaleBase + clearScreen(0x00) on the render task while Opening
@@ -1871,8 +1861,10 @@ void HomeActivity::render(RenderLock&& lock) {
                             static_cast<unsigned long>(tDraw), static_cast<unsigned long>(millis() - t1),
                             gpio.deviceIsX3() ? 1 : 0);
         if (clockDirty) {
-          if (clockAa) forcePenumbraClockRepaint = true;
-          else forcePenumbraClockBwOnly_ = true;
+          if (clockAa)
+            forcePenumbraClockRepaint = true;
+          else
+            forcePenumbraClockBwOnly_ = true;
           requestUpdate();
         }
         homeUiReady = true;
@@ -1893,8 +1885,7 @@ void HomeActivity::render(RenderLock&& lock) {
           // Skip every panel write when leaving. Clock AA does a full-frame
           // greyscale base then clearScreen(0x00); even a tiny displayWindow
           // here races Opening's corner FAST and can wedge BUSY for 30s.
-          const bool leave =
-              cancelBackgroundPaint || activityManager.hasPendingActivityChange();
+          const bool leave = cancelBackgroundPaint || activityManager.hasPendingActivityChange();
           if (leave) {
             SystemLog::logTiming("HOME", "penumbra_clock_digits skip (leave)");
           } else if (clockAa) {
@@ -1997,8 +1988,7 @@ void HomeActivity::render(RenderLock&& lock) {
     // both cheaper and invisible to someone waiting for Home to appear.
     const bool deferClockAa = deferScrubAfterFirstPaint_;
     deferScrubAfterFirstPaint_ = false;
-    const int baseMode =
-        hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
+    const int baseMode = hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
     SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=%s theme=%u fre=%u", hard ? "HALF" : "FAST",
                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     // Clock greys can take 400–900ms — skip if user already navigated away.
@@ -2032,11 +2022,6 @@ void HomeActivity::render(RenderLock&& lock) {
       PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
       pendingClockAaAfterIdle_ = true;
       lastHomeInputMs_ = millis();
-      if (armDeferredHalfAfterFirstPaint_) {
-        armDeferredHalfAfterFirstPaint_ = false;
-        deferredHalfScrubOnly = true;
-        deferredHalfScrubAtMs = millis() + kClockAaIdleMs;
-      }
     } else {
       PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
       forcePenumbraClockRepaint = false;
@@ -2380,7 +2365,7 @@ void HomeActivity::reloadHomeAfterBookAction() {
   recentsLoaded = false;
   recentsLoading = false;
   skipResumeSdReload_ = true;  // this method already reloaded; onResume must not
-  homeUiReady = true;  // UI already visible; gen may float Loading again
+  homeUiReady = true;          // UI already visible; gen may float Loading again
   coverNeedsRetry = false;
   coverGenAttempts = 0;
   coverRetryAtMs = 0;

@@ -84,13 +84,9 @@ class HomeActivity final : public Activity {
   bool menuLongPressFired = false;
   // Stats: side Left/Right toggled under-box title ↔ lifetime.
   bool forceStatsUnderBoxRepaint = false;
-  // Resume path: paint the shell FAST, then run the anti-ghost HALF just after,
-  // so Home is visible while it scrubs instead of the user staring at the old
-  // frame for the whole refresh.
+  // First Home/resume paint: skip the full-screen clock greys so the shell
+  // lands FAST. Idle loop runs clock AA after that.
   bool deferScrubAfterFirstPaint_ = false;
-  // Cold onEnter: FAST first, then arm deferred HALF after that paint (not at
-  // enter — a 1s FAST would make millis()-atMs already due).
-  bool armDeferredHalfAfterFirstPaint_ = false;
 
   // Whole-book page-map indexing, run only while Home sits idle. See
   // HomeBookIndexer: Home is the one place no chapter is resident, so indexing

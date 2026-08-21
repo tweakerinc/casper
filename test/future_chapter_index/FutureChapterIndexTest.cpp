@@ -29,7 +29,12 @@ TEST(FutureChapterIndex, FlipThroughDoesNotStart) {
   EXPECT_EQ(decide(in), Decision::None);
 }
 
-TEST(FutureChapterIndex, StartsAfterQuietWhenCurrentMapDone) { EXPECT_EQ(decide(idleReady()), Decision::StartForward); }
+TEST(FutureChapterIndex, IdleForwardIndexOff) { EXPECT_FALSE(Limits::kIdleForwardIndex); }
+
+TEST(FutureChapterIndex, StartsAfterQuietWhenCurrentMapDone) {
+  // Idle must not evict the reading IR (device v48: 8s cached swap after seal).
+  EXPECT_EQ(decide(idleReady()), Decision::None);
+}
 
 TEST(FutureChapterIndex, DoesNotStartUntilCurrentMapComplete) {
   Input in = idleReady();
@@ -129,7 +134,8 @@ TEST(FutureChapterIndex, WaitsStartGapAfterPreviousRestore) {
   in.lastWorkMs = in.nowMs - (Limits::kStartGapMs - 1);
   EXPECT_EQ(decide(in), Decision::None);
   in.lastWorkMs = in.nowMs - Limits::kStartGapMs;
-  EXPECT_EQ(decide(in), Decision::StartForward);
+  // Start gap elapsed, but kIdleForwardIndex keeps StartForward off.
+  EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, NoStartBeforeFirstTurn) {

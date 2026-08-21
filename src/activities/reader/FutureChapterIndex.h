@@ -29,6 +29,10 @@ struct Limits {
   static constexpr unsigned long kStartGapMs = 4000;
   static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
+  // Device v48 (3f4b541d): even cap-1 + skip-uncached still allows an 8s
+  // cached IR swap the moment the current map seals. One chapter in RAM —
+  // idle must not evict it. Abort/measure/restore stay for a swap already live.
+  static constexpr bool kIdleForwardIndex = false;
 };
 
 enum class Decision : uint8_t {
@@ -84,6 +88,7 @@ inline Decision decide(const Input& in) {
     return Decision::MeasurePage;
   }
 
+  if (!Limits::kIdleForwardIndex) return Decision::None;
   if (!in.currentMapComplete) return Decision::None;
   if (!in.aheadWarm) return Decision::None;
   if (in.userAbortedThisSitting) return Decision::None;

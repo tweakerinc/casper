@@ -2046,8 +2046,10 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.lastWorkMs = lastFutureWorkMs_;
   // SD exists() only when a start is otherwise legal. Probing every idle tick
   // would take the storage mutex while the user is still turning pages.
-  const bool maybeStart = !futureIndexActive_ && in.currentMapComplete && in.aheadWarm && !in.userAbortedThisSitting &&
-                          !in.controlHeld && !in.heapTight &&
+  // kIdleForwardIndex=false: never StartForward, so never probe .rvir either
+  // (device v48: map seal then untagged activity_slow 3904ms, then freeze).
+  const bool maybeStart = futureindex::Limits::kIdleForwardIndex && !futureIndexActive_ && in.currentMapComplete &&
+                          in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld && !in.heapTight &&
                           in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);

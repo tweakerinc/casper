@@ -3,6 +3,7 @@
 #include <BufferedFile.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <SerializedStringBound.h>
 #include <Utf8.h>
 #include <ZipFile.h>
 
@@ -482,8 +483,62 @@ bool BookMetadataCache::load() {
   serialization::readString(bookFile, coreMetadata.textReferenceHref);
 
   loaded = true;
+  spineCumulative_.clear();
+  if (spineCount > 0) {
+    // One 4-byte slot per spine. Stack/static rejected: count is book-dependent.
+    spineCumulative_.reserve(spineCount);
+    HalStorage::StorageLock lock;
+    bool sizesOk = true;
+    for (uint16_t i = 0; i < spineCount; ++i) {
+      if (!bookFile.seek(lutOffset + sizeof(uint32_t) * i)) {
+        sizesOk = false;
+        break;
+      }
+      uint32_t spineEntryPos = 0;
+      if (!serialization::tryReadPod(bookFile, spineEntryPos)) {
+        sizesOk = false;
+        break;
+      }
+      if (!bookFile.seek(spineEntryPos)) {
+        sizesOk = false;
+        break;
+      }
+      uint32_t hrefLen = 0;
+      if (!serialization::tryReadPod(bookFile, hrefLen)) {
+        sizesOk = false;
+        break;
+      }
+      const size_t pos = bookFile.position();
+      const size_t total = bookFile.size();
+      const size_t remaining = (total > pos) ? (total - pos) : 0;
+      if (!serialization::serializedStringFits(hrefLen, remaining)) {
+        sizesOk = false;
+        break;
+      }
+      if (!bookFile.seek(pos + hrefLen)) {
+        sizesOk = false;
+        break;
+      }
+      uint32_t cum = 0;
+      if (!serialization::tryReadPod(bookFile, cum)) {
+        sizesOk = false;
+        break;
+      }
+      spineCumulative_.push_back(cum);
+    }
+    if (!sizesOk || spineCumulative_.size() != spineCount) {
+      LOG_ERR("BMC", "spine size table failed count=%u got=%u", static_cast<unsigned>(spineCount),
+              static_cast<unsigned>(spineCumulative_.size()));
+      spineCumulative_.clear();
+    }
+  }
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);
   return true;
+}
+
+uint32_t BookMetadataCache::getSpineCumulativeSize(const int index) const {
+  if (index < 0 || index >= static_cast<int>(spineCumulative_.size())) return 0;
+  return spineCumulative_[static_cast<size_t>(index)];
 }
 
 BookMetadataCache::SpineEntry BookMetadataCache::getSpineEntry(const int index) {
@@ -497,6 +552,7 @@ BookMetadataCache::SpineEntry BookMetadataCache::getSpineEntry(const int index) 
     return {};
   }
 
+  HalStorage::StorageLock lock;
   // Seek to spine LUT item, read from LUT and get out data
   bookFile.seek(lutOffset + sizeof(uint32_t) * index);
   uint32_t spineEntryPos;
@@ -516,6 +572,7 @@ BookMetadataCache::TocEntry BookMetadataCache::getTocEntry(const int index) {
     return {};
   }
 
+  HalStorage::StorageLock lock;
   // Seek to TOC LUT item, read from LUT and get out data
   bookFile.seek(lutOffset + sizeof(uint32_t) * spineCount + sizeof(uint32_t) * index);
   uint32_t tocEntryPos;

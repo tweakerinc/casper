@@ -375,6 +375,9 @@ static bool loadSleepFrameBuffer() {
 // Enter deep sleep mode.
 // powerQuickResume: true when Short/Long power action is Quick Resume (not wallpaper Sleep).
 void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
+  // Render task holds the power lock and may be mid book.bin seek. Persist
+  // used to race that HalFile and abort() in readString (v51 crash report).
+  activityManager.waitForRenderIdle();
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
 
   // QR paint vs wallpaper: power action, idle timeout toggle, or legacy Sleep Screen == QR.

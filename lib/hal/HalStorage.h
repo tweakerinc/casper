@@ -50,7 +50,16 @@ class HalStorage {
 
   static HalStorage& getInstance() { return instance; }
 
-  class StorageLock;  // private class, used internally
+  // Recursive RAII lock around multi-step SD sequences (seek + read of one
+  // book.bin record). HalFile already locks per call; this covers the gap
+  // between calls so two tasks cannot tear a length prefix.
+  class StorageLock {
+   public:
+    StorageLock() { xSemaphoreTakeRecursive(HalStorage::getInstance().storageMutex, portMAX_DELAY); }
+    ~StorageLock() { xSemaphoreGiveRecursive(HalStorage::getInstance().storageMutex); }
+    StorageLock(const StorageLock&) = delete;
+    StorageLock& operator=(const StorageLock&) = delete;
+  };
 
  private:
   static HalStorage instance;

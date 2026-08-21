@@ -192,6 +192,9 @@ class RivuletReaderActivity final : public Activity {
   // After a side long-press shortcut fires while held, ignore that key's release
   // so it does not also page-turn (same pattern as Confirm).
   bool ignoreNextSideRelease_ = false;
+  // Chapter land: next ink must stay FAST. A HALF after PageBack was 3.2s and
+  // felt like a freeze (device: spine 21 p21 refresh=3257ms, then no exit).
+  bool forceFastAfterChapterNav_ = false;
   bool pendingConfirmMenuOpen_ = false;
   bool pageMapDirty_ = false;  // map grew since last SD save
   // True while walking prev-chapter to true last page — render shows Loading only

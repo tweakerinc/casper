@@ -503,12 +503,8 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
     ahead_.clear();
     return false;
   }
-  // Persist once so the next visit (and next-session turns) hit SD instead of
-  // layout. Skip if the file is already there — rewriting on every idle hitch.
-  if (havePath && !Storage.exists(path)) {
-    ensurePageCacheDir();
-    (void)ahead_.saveToFile(path, key_, nextIdx);
-  }
+  // Do not SD-save here. Writing .rvpg on idle hitches the loop (PageBack
+  // into a mapped chapter then felt frozen). ensureLaidOut persists when shown.
   return true;
 }
 

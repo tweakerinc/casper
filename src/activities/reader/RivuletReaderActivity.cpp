@@ -1338,6 +1338,9 @@ void RivuletReaderActivity::flushExitProgressAndStats() {
 }
 
 void RivuletReaderActivity::leaveReaderToHome() {
+  SystemLog::logTiming("LEAVE", "reader spine=%d page=%d ready=%d busy=%d fre=%u", spineIndex_,
+                       engine_.currentPage(), ready_ ? 1 : 0, chapterNavBusy_ ? 1 : 0,
+                       static_cast<unsigned>(ESP.getFreeHeap()));
   if (tryStartAutoKoUpload()) {
     return;
   }
@@ -1895,6 +1898,7 @@ bool RivuletReaderActivity::indexSpinePageMap(const int spine) {
       (void)engine_.goToLastPage(renderer, /*maxWalkPages=*/2048);
     }
     if (engine_.mapComplete()) {
+      pageMapDirty_ = true;
       persistPageMapIfComplete();
       indexed = spineHasPageMap(spine);
     }
@@ -1999,6 +2003,7 @@ void RivuletReaderActivity::tickAaCatchUp() {
 void RivuletReaderActivity::persistPageMapIfComplete() {
   // Never persist a map built on partial OOM IR — that froze "last page" mid-chapter
   // (e.g. DCC Ch1 ending on the T'Ghee totem line instead of the saferoom).
+  if (!pageMapDirty_) return;
   if (!engine_.mapComplete() || irDir_.empty() || engine_.chapter().failed()) return;
   char mapPath[200];
   std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex_,
@@ -2038,27 +2043,27 @@ void RivuletReaderActivity::tickIdlePageMap() {
     }
   }
 
-  // After first ink + ahead warm: one HTML footnote scan. Never on the paint
-  // path — that is what aborted after spine 22 convert (maxA≈31KB).
-  if (footnoteScanDeferred_ && (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 400UL) &&
+  // Behind warm after a chapter land (PageBack onto last page). Not on the
+  // turn path — that added SD/layout onto the 3.5s Back the user already felt.
+  if (!engine_.behindWarm() && engine_.currentPage() > 0 &&
+      (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
+    if (engine_.warmBehindPage(renderer)) return;
+  }
+
+  // After first ink + ahead/behind warm: one HTML footnote scan. Wait 2s so
+  // this never overlaps the chapter-land refresh (device: scan+SD during the
+  // 3.2s PageBack ink, then no exit).
+  if (footnoteScanDeferred_ && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
     footnoteScanDeferred_ = false;
     ensureChapterFootnotes();
-    // Underlines appear on the next paint — do not flash a second refresh.
     return;
   }
 
   // Map seal ("~"): slower background. Quiet 2s after turn; 1.5s after each bite.
   if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 2000UL) return;
   if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1500UL) return;
-  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) {
-    // Map is done — keep writing upcoming .rvpg so a later turn is an SD hit,
-    // not a live layout. One page per idle tick; warmAhead already did page+1.
-    if (engine_.mapComplete() && (now - lastPageTurnTime_) >= 800UL) {
-      (void)engine_.idlePrefetchPageCache(renderer, /*maxForward=*/2);
-    }
-    return;
-  }
+  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
 
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);
@@ -3086,6 +3091,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     // Seal + persist this spine's page map BEFORE opening the next file so one
     // PageBack from the next spine's page 0 can map-hit "last page" (CrossInk).
     if (engine_.sealMapAtChapterEnd()) {
+      pageMapDirty_ = true;
       persistPageMapIfComplete();
     }
     // Advance spine (next non-empty href).
@@ -3105,8 +3111,11 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       return false;
     }
     crossedChapter = true;
+    forceFastAfterChapterNav_ = true;
   }
   noteForwardPageTurn();
+  ignoreNextSideRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
   (void)saveProgress();
   // In-chapter turns: update the in-memory home percent only. CasperStats /
   // recents hits SD on chapter change, sleep, and leave (Resource Protocol 8).
@@ -3155,7 +3164,13 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     bool advanced = false;
     if (targetSpine >= 0) {
       chapterNavBusy_ = true;
-      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+      forceFastAfterChapterNav_ = true;
+      SystemLog::armHangWatch("chapter_back");
+      // Do not displayWindow from the main task — that raced the render task
+      // and the next full ink was a 3.2s HALF (device log refresh=3257ms).
+      activityManager.waitForRenderIdle();
+      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
+      requestUpdate();
       prepareHeapForChapterLoad(/*aggressive=*/true);
       const uint32_t tLoad = millis();
       // Prefer a complete convert, but NEVER end up with nothing: requireCompleteIr
@@ -3229,8 +3244,8 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
                              static_cast<unsigned>(ESP.getFreeHeap()));
         if (okLand) {
           persistPageMapIfComplete();
-          // Warm page N-1 in RAM so the next Back is instant (ch6 38→37).
-          (void)engine_.warmBehindPage(renderer);
+          // behind_ is warmed on idle — doing it here added layout/SD to the
+          // already-slow chapter Back and delayed first ink.
           advanced = true;
         }
       }
@@ -3258,6 +3273,11 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     }
   }
   lastPageTurnTime_ = millis();
+  // The side key that issued this turn is still held after a multi-second
+  // chapter load. Do not treat that hold as a long-press shortcut, and do
+  // not accept another turn until release.
+  ignoreNextSideRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
   (void)saveProgress();
   persistHomeProgress(true);
   updateBookmarkFlag();
@@ -3503,7 +3523,10 @@ void RivuletReaderActivity::chapterSkipPrev() {
     if (loaded && !engine_.chapter().failed()) {
       const bool landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
       if (landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0)) {
-        if (engine_.sealMapAtChapterEnd()) persistPageMapIfComplete();
+        if (engine_.sealMapAtChapterEnd()) {
+          pageMapDirty_ = true;
+          persistPageMapIfComplete();
+        }
         advanced = true;
       }
     }
@@ -3587,28 +3610,29 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
 }
 
 void RivuletReaderActivity::loop() {
-  if (error_) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      onGoHome();
-    }
-    return;
-  }
-  if (!ready_) return;
-
-  // Footnote stack: Back restores the link origin before leaving the book.
-  if (footnoteDepth_ > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // Back must work even during chapter load / !ready_ (device: PageBack into
+  // spine 21 painted, then no exit — loop returned before handleBackNavigation).
+  if (footnoteDepth_ > 0 && ready_ && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     restoreFootnotePosition();
     return;
   }
-
-  // Back → Home (drains residual edges so Home doesn't see Menu).
-  // Leave path runs settings-driven KOReader auto-sync when enabled.
   if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
                                         {this, [](void* ctx) {
                                            auto* self = static_cast<RivuletReaderActivity*>(ctx);
                                            self->leaveReaderToHome();
                                          }})) {
+    return;
+  }
+  if (error_) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      onGoHome();
+    }
+    return;
+  }
+  if (!ready_) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      leaveReaderToHome();
+    }
     return;
   }
 
@@ -4027,6 +4051,15 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
         // Cold book.bin or greys residual: one HALF scrub on first ink only.
         pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
       }
+    }
+  }
+  if (forceFastAfterChapterNav_) {
+    forceFastAfterChapterNav_ = false;
+    // Never HALF-scrub the first ink after a chapter hop (PageBack land was
+    // refresh=3257ms on X3). Keep the interval countdown at 2+.
+    if (pagesUntilFullRefresh_ <= 1) {
+      const int freq = SETTINGS.getRefreshFrequency();
+      pagesUntilFullRefresh_ = (freq > 1) ? freq : 2;
     }
   }
 

@@ -43,9 +43,12 @@ struct LaidOutPage {
   std::vector<ImagePlate> images;
   std::vector<RulePlate> rules;
   IrCursor start{};
-  IrCursor end{};     // exclusive end cursor (start of next page)
+  IrCursor end{};  // exclusive end cursor (start of next page)
   int16_t contentH = 0;
   bool atChapterEnd = false;
+  // Measure-only idle map: layout stopped because shouldAbort fired. Not a
+  // layout failure — callers must not skip the block or mark complete.
+  bool aborted = false;
 
   // Drop-cap exclusion for wrap (page-local).
   int16_t dropZoneW = 0;
@@ -60,6 +63,7 @@ struct LaidOutPage {
     end = {};
     contentH = 0;
     atChapterEnd = false;
+    aborted = false;
     dropZoneW = 0;
     dropZoneH = 0;
     hasDropZone = false;

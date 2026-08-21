@@ -241,6 +241,7 @@ LayoutParams RivuletEngine::makeParams(const GfxRenderer& renderer) const {
 LayoutParams RivuletEngine::makeMeasureParams(const GfxRenderer& renderer) const {
   LayoutParams p = makeParams(renderer);
   p.measureOnly = true;
+  p.shouldAbort = mapAbortCheck_;
   return p;
 }
 
@@ -422,6 +423,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     if (last < 0) break;
     LaidOutPage tmp;
     if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
+      if (tmp.aborted) break;
       // Layout failed mid-map (broken image, empty cell). Skip that block rather
       // than freezing the map here — a stuck map also freezes the page count and
       // makes every later last-page walk fail.
@@ -1219,15 +1221,10 @@ int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) cons
   return std::max(atLeastCurrent, smoothed);
 }
 
-int RivuletEngine::idleMapPagesThisTick(const GfxRenderer* rendererForEstimate) const {
+int RivuletEngine::idleMapPagesThisTick(const GfxRenderer* /*rendererForEstimate*/) const {
   if (map_.complete() || chapter_.empty()) return 0;
-  const int known = map_.knownPages();
-  const int estimate = chapterPageCount(rendererForEstimate);
-  // Far behind the estimate → catch up faster so "~47" becomes a real number
-  // before the reader has turned many pages. Still capped so one idle tick
-  // cannot monopolize the main loop.
-  if (estimate >= known + 12) return kIdleMapPagesCatchUp;
-  if (estimate >= known + 6) return std::max(kIdleMapPagesPerTick, 6);
+  // Always one page. A 4–10 page burst is 7–17s of layout with no input sample
+  // (v48 freeze). Catch-up is extra idle ticks, not a bigger bite.
   return kIdleMapPagesPerTick;
 }
 

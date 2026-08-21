@@ -20,6 +20,9 @@ struct LayoutParams {
   bool extraParagraphSpacing = false;
   // When extraParagraphSpacing: 0 = ½ line (default), 1 = full line, 2 = ¼ line.
   uint8_t extraParagraphSpacingHeight = 0;
+  // Idle map abort: peek GPIO without latching edges. Null = never abort.
+  // Paint passes must leave this null so a tap cannot cancel the page on glass.
+  bool (*shouldAbort)() = nullptr;
   // Pagination-only pass: compute the page's end cursor and geometry but do not
   // emit paintable text spans.
   //

@@ -90,6 +90,10 @@ class HalGPIO {
   // Should only be called when wakeup reason is PowerButton.
   bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed);
 
+  // Sample buttons without latching wasPressed / wasReleased. Idle layout
+  // peeks this so a tap can abort a 1.7s measure without eating the turn edge.
+  bool peekRawHeld();
+
   // Check if USB is connected
   bool isUsbConnected() const;
 

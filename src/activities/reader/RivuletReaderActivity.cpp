@@ -36,6 +36,7 @@
 #include "EpubReaderMenuActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "FutureChapterIndex.h"
+#include "IdlePageMap.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
@@ -92,6 +93,8 @@ bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, co
   const float bp = std::clamp(bookmark.percentage, 0.0f, 1.0f);
   return std::fabs(bp - pageProgress01) <= kBookmarkProgressEpsilon;
 }
+
+bool gpioPeekHeldForIdleMap() { return gpio.peekRawHeld(); }
 
 }  // namespace
 
@@ -1724,6 +1727,7 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
       footnoteScanDeferred_ = true;
       chapterFootnotes_.clear();
       currentPageFootnotes_.clear();
+      lastIdleMapMs_ = 0;
     }
     return true;
   }
@@ -1791,6 +1795,7 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
     footnoteScanDeferred_ = true;
     chapterFootnotes_.clear();
     currentPageFootnotes_.clear();
+    lastIdleMapMs_ = 0;
   }
 
   // Index a small window around the land page so the first few turns are cheap.
@@ -2291,7 +2296,6 @@ void RivuletReaderActivity::tickIdlePageMap() {
   const unsigned long now = millis();
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  static unsigned long s_lastMapWorkMs = 0;
   static int s_lastLoggedKnown = -1;
   static int s_lastLoggedSpine = -1;
   static unsigned long s_lastMapLogMs = 0;
@@ -2347,31 +2351,34 @@ void RivuletReaderActivity::tickIdlePageMap() {
     return;
   }
 
-  // Map seal ("~"): slower background. Quiet 2s after turn; 1.5s after each bite.
-  if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) < 2000UL) return;
-  if (s_lastMapWorkMs != 0 && (now - s_lastMapWorkMs) < 1500UL) return;
-  if (engine_.mapComplete() || s_idleGaveUpSpine == spineIndex_) return;
-
-  // Do not walk the whole chapter on idle. Device v48 (3f4b541d): sitting on
-  // page 18, MAP known=23→54 at ~1.7s/page; a tap during a bite waited on
-  // layout. Keep a window past the read head; as the user turns, idle fills
-  // just enough for ahead overlap.
-  if (engine_.mapKnownPages() > engine_.currentPage() + rivulet::RivuletEngine::kIdleMapAheadPages) {
-    if (now - s_lastMapLogMs >= 5000UL) {
-      s_lastMapLogMs = now;
-      SystemLog::logTiming("MAP", "window spine=%d known=%d page=%d cap=%d", spineIndex_, engine_.mapKnownPages(),
-                           engine_.currentPage() + 1, rivulet::RivuletEngine::kIdleMapAheadPages);
-    }
-    return;
-  }
+  // Map seal: keep measuring this chapter until complete (classic 1.5/1.6
+  // `isPartial` keep-ticking). One layoutPage per bite; peek-GPIO abort so a
+  // tap during the ~1.7s measure is not eaten. Quiet after a turn so flip-
+  // through stays snappy. v50 cap=1 sat on page 16 with known=21 for 37s and
+  // never sealed — status bounced 34→33→35 as the heuristic guessed.
+  idlemap::Input mapIn;
+  mapIn.firstInkDone = firstInkDone_;
+  mapIn.mapComplete = engine_.mapComplete();
+  mapIn.controlHeld = false;  // already returned above if a control is held
+  mapIn.knownPages = engine_.mapKnownPages();
+  mapIn.currentPage = engine_.currentPage();
+  mapIn.nowMs = now;
+  mapIn.lastTurnMs = lastPageTurnTime_;
+  mapIn.lastWorkMs = lastIdleMapMs_;
+  if (!idlemap::shouldMeasure(mapIn) || s_idleGaveUpSpine == spineIndex_) return;
 
   const int knownBefore = engine_.mapKnownPages();
   const int est = engine_.chapterPageCount(&renderer);
-  const bool progressed = engine_.extendPageMap(renderer, /*maxPages=*/1);
-  s_lastMapWorkMs = millis();
+  engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+  const bool progressed = engine_.extendPageMap(renderer, idlemap::Limits::kPagesPerBite);
+  engine_.setMapAbortCheck(nullptr);
+  lastIdleMapMs_ = millis();
   const int knownAfter = engine_.mapKnownPages();
   if (progressed) {
     pageMapDirty_ = true;
+    s_stallTicks = 0;
+  } else if (gpio.peekRawHeld()) {
+    // Bite aborted because a button went down mid-layout. Not a stuck map.
     s_stallTicks = 0;
   } else {
     ++s_stallTicks;

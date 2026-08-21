@@ -622,6 +622,12 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
   // Process blocks until page full or chapter ends.
   while (!atEnd(chapter, cur) && y < viewH) {
+    if (params.shouldAbort && params.shouldAbort()) {
+      out.aborted = true;
+      out.end = from;
+      out.atChapterEnd = false;
+      return false;
+    }
     const Block& block = chapter.blocks()[cur.blockIndex];
     // Normalize cursor into block. Stale page-map cursors can carry a runIndex
     // from a previous IR rebuild that falls outside this block's run range —

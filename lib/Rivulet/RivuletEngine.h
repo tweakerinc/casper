@@ -21,16 +21,12 @@ class RivuletEngine {
  public:
   // legacy-style look-ahead for the thin page index (not painted pages).
   static constexpr int kMapAheadPages = 5;
-  // Idle tick only keeps this many mapped pages past the read head. v49 cap=8
-  // still walked ~1.7s/page after a 2s pause and ate the next tap (press twice).
-  // 1 is the ahead page nextPage() needs; the rest of the chapter is mapped on
-  // the last-page Indexing pass or as the reader turns.
-  static constexpr int kIdleMapAheadPages = 1;
-  // Idle tick budget: a few map pages without monopolizing the main loop.
-  // When the map is far behind the heuristic estimate, tickIdlePageMap asks for
-  // a larger burst so the status-bar "~" settles sooner (classic had a real LUT).
-  static constexpr int kIdleMapPagesPerTick = 4;
-  static constexpr int kIdleMapPagesCatchUp = 10;
+  // Idle map: one layoutPage per tick (~1.7s on X3). Bursting 4–10 pages
+  // monopolized the main loop (v48 freeze after complete). The activity keeps
+  // measuring until mapComplete() — see IdlePageMap.h. These caps exist so a
+  // caller cannot ask extendPageMap for a 10-page bite "to catch up."
+  static constexpr int kIdleMapPagesPerTick = 1;
+  static constexpr int kIdleMapPagesCatchUp = 1;
 
   // When the render key changes, invalidate page map + paint window (F).
   void setRenderKey(const RenderKey& key);
@@ -65,6 +61,9 @@ class RivuletEngine {
 
   // Extend thin page map by up to maxPages (no paint change). Returns true if work done.
   bool extendPageMap(const GfxRenderer& renderer, int maxPages);
+  // Peek-GPIO abort for measure-only idle map. Null = never abort (turns / Loading).
+  // Does not latch wasPressed — InputManager::getState() samples ADC without update().
+  void setMapAbortCheck(bool (*fn)()) { mapAbortCheck_ = fn; }
   // Ensure map has starts through currentPage + aheadPages (or complete).
   bool ensureMapAhead(const GfxRenderer& renderer, int aheadPages = kMapAheadPages);
 
@@ -196,6 +195,7 @@ class RivuletEngine {
   // mkdir-if-missing once per page-cache directory (see definition).
   void ensurePageCacheDir() const;
 
+  bool (*mapAbortCheck_)() = nullptr;
   RenderKey key_{};
   float lineCompression_ = 1.0f;
   ChapterIr chapter_{};

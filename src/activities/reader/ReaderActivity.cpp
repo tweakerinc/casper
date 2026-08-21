@@ -20,6 +20,7 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
+#include "util/BookCacheUtils.h"
 #include "util/CasperBookStore.h"
 #include "util/CasperPaths.h"
 #include "util/QrTimingLog.h"
@@ -92,6 +93,16 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // Upper-left status (not center pill). Cached open → no cue.
   const uint32_t tBeforeProbe = millis();
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
+  if (uncached) {
+    // Delete Cache used to drop book.bin and leave rivulet/*.rvpm (open-handle
+    // rmdir). Resume then reloaded a finished chapter map and never rebuilt.
+    const std::string rivulet = CasperBook::rivuletDirForPath(path);
+    if (Storage.exists(rivulet.c_str())) {
+      const bool wiped = wipeCacheDirectory(rivulet);
+      LOG_INF("READER", "book.bin miss — wipe leftover rivulet=%d %s", wiped ? 1 : 0, rivulet.c_str());
+      SystemLog::logTiming("CACHE", "miss wipe rivulet=%d", wiped ? 1 : 0);
+    }
+  }
   if (uncached && !hasOpenHints()) {
     GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
   }
@@ -113,10 +124,8 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
                         uncached ? "MISS" : "HIT");
     }
     SystemLog::logTimed("EPUB", millis() - t0, "load book.bin=%s", uncached ? "MISS" : "HIT");
-    SystemLog::logTiming("OPEN", "probe=%lu loan+load=%lu total=%lu",
-                         static_cast<unsigned long>(tProbe - tBeforeProbe),
-                         static_cast<unsigned long>(millis() - tProbe),
-                         static_cast<unsigned long>(millis() - tStep0));
+    SystemLog::logTiming("OPEN", "probe=%lu loan+load=%lu total=%lu", static_cast<unsigned long>(tProbe - tBeforeProbe),
+                         static_cast<unsigned long>(millis() - tProbe), static_cast<unsigned long>(millis() - tStep0));
   }
   if (loaded) {
     return epub;

@@ -8,11 +8,14 @@
 #include <Txt.h>
 #include <Xtc.h>
 
-#include "util/CasperPaths.h"
-
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "util/CasperPaths.h"
+
+bool wipeCacheDirectory(const std::string& path);
 
 namespace {
 
@@ -108,7 +111,7 @@ void collectPreservedFiles(const std::string& cachePath, std::vector<PreservedFi
 
 bool wipeDirBestEffort(const std::string& path) {
   if (path.empty() || !Storage.exists(path.c_str())) return true;
-  if (!Storage.removeDir(path.c_str())) {
+  if (!wipeCacheDirectory(path)) {
     LOG_ERR("BookCache", "Failed to remove: %s", path.c_str());
     return false;
   }
@@ -179,6 +182,71 @@ std::string bookRootIfPackagePath(const std::string& path) {
 
 }  // namespace
 
+bool wipeCacheDirectory(const std::string& path) {
+  if (path.empty() || !Storage.exists(path.c_str())) return true;
+
+  std::vector<std::pair<std::string, bool>> stack;
+  stack.reserve(16);
+  stack.push_back({path, false});
+
+  bool ok = true;
+  while (!stack.empty()) {
+    std::string current = std::move(stack.back().first);
+    const bool postOrder = stack.back().second;
+    stack.pop_back();
+
+    if (postOrder) {
+      if (Storage.exists(current.c_str()) && !Storage.rmdir(current.c_str())) {
+        LOG_ERR("BookCache", "rmdir failed: %s", current.c_str());
+        ok = false;
+      }
+      continue;
+    }
+
+    auto dir = Storage.open(current.c_str());
+    if (!dir || !dir.isDirectory()) {
+      if (dir) dir.close();
+      if (Storage.exists(current.c_str()) && !Storage.remove(current.c_str())) {
+        LOG_ERR("BookCache", "remove failed: %s", current.c_str());
+        ok = false;
+      }
+      continue;
+    }
+
+    stack.push_back({current, true});
+
+    std::vector<std::string> files;
+    std::vector<std::string> dirs;
+    files.reserve(32);
+    dirs.reserve(8);
+    char name[128];
+    for (auto entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+      entry.getName(name, sizeof(name));
+      const bool isDir = entry.isDirectory();
+      entry.close();
+      if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
+      if (isDir) {
+        dirs.push_back(name);
+      } else {
+        files.push_back(name);
+      }
+    }
+    dir.close();
+
+    for (const auto& f : files) {
+      const std::string child = current + "/" + f;
+      if (!Storage.remove(child.c_str())) {
+        LOG_ERR("BookCache", "Failed to remove: %s", child.c_str());
+        ok = false;
+      }
+    }
+    for (const auto& d : dirs) {
+      stack.push_back({current + "/" + d, false});
+    }
+  }
+  return ok;
+}
+
 bool isBookCacheDirectoryName(const char* name) {
   if (!name) return false;
   // Unified Casper ownership (Rivulet + package).
@@ -203,6 +271,13 @@ void clearBookCache(const std::string& path) {
     }
     if (Storage.exists(cachePath.c_str())) {
       (void)clearBookCacheDirectoryPreservingStats(cachePath);
+    }
+    // Belt: even if the package-dir wipe failed partway, rivulet/ must go or
+    // the next open reuses a finished page map and never rebuilds the chapter.
+    const std::string rivulet = cachePath + "/rivulet";
+    if (Storage.exists(rivulet.c_str())) {
+      const bool rivOk = wipeCacheDirectory(rivulet);
+      LOG_INF("BookCache", "wiped rivulet=%d path=%s", rivOk ? 1 : 0, rivulet.c_str());
     }
     // Optional WIP book_<fnv> folder (never created by v0.1.8 / this build).
     if (BookPathId::isCasperPackageRoot(root)) {
@@ -260,7 +335,7 @@ bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath) {
     return false;
   }
 
-  const bool clearOk = Storage.removeDir(cachePath.c_str());
+  const bool clearOk = wipeCacheDirectory(cachePath);
   bool restoreOk = true;
   for (size_t i = 0; i < files.size(); ++i) {
     if (!restoreFile(cachePath, files[i], moved[i])) restoreOk = false;

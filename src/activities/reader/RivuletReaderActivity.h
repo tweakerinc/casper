@@ -236,6 +236,8 @@ class RivuletReaderActivity final : public Activity {
   // Heap may still refuse; retry a couple of times, then leave the page BW
   // rather than spin a full-screen greyscale attempt forever.
   static constexpr uint8_t kAaCatchUpMaxTries = 3;
+  // storeBwBuffer needs the 48KB snapshot plus this so menus/turns still fit.
+  static constexpr size_t kAaPaintHeadroom = 12 * 1024;
   // Future-chapter idle map. Engine holds that spine's IR; glass still shows
   // the reader's page. saveProgress / turns must use heldSpineForFuture_.
   bool futureIndexActive_ = false;

@@ -48,7 +48,7 @@ bool ReaderActivity::takeOpenHints(bool& preferFastFirstRefresh, bool& deferFirs
   const bool had = s_preferFastFirstRefresh || s_deferFirstPageTextAa || s_openWallStartMs != 0;
   s_preferFastFirstRefresh = false;
   s_deferFirstPageTextAa = false;
-  // Keep s_openWallStartMs until first-ink log (EpubReader may read openWallStartMs()).
+  s_openWallStartMs = 0;
   return had;
 }
 

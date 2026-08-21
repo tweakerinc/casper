@@ -2221,6 +2221,15 @@ void RivuletReaderActivity::tickAaCatchUp() {
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
     return;
   }
+  if (activityManager.isRenderInProgress()) return;
+  // v51: three AACU BW paints in ~1.3s on the same page while maxA=26KB, then
+  // sleep persist raced the still-busy render task. Another paint cannot make
+  // storeBwBuffer fit; wait for heap to recover or give up with the page BW.
+  if (lastPageTurnTime_ != 0UL && (millis() - lastPageTurnTime_) < 800UL) return;
+  if (!renderer.canStoreBwBuffer(kAaPaintHeadroom)) {
+    aaCatchUpAtMs_ = millis() + 2000UL;
+    return;
+  }
   if (static_cast<long>(millis() - aaCatchUpAtMs_) < 0) return;
 
   aaCatchUpPending_ = false;
@@ -3365,6 +3374,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       // .rvpm already on SD when the map is complete — rewriting it every turn
       // is a FAT write on the path the user feels. Only dirty an incomplete map.
       if (!engine_.mapComplete()) pageMapDirty_ = true;
+      aaCatchUpPending_ = false;
       SystemLog::logTiming("TURN", "next spine=%d page=%d ahead=%d ms=%lu fre=%u maxA=%u", spineIndex_,
                            engine_.currentPage() + 1, hadAhead ? 1 : 0, static_cast<unsigned long>(millis() - tTurn),
                            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
@@ -3440,7 +3450,10 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
   bool crossedChapter = false;
   while (remaining-- > 0) {
     // In-chapter: page N → N-1 (must work after landing on ch6 page 38).
-    if (engine_.prevPage(renderer)) continue;
+    if (engine_.prevPage(renderer)) {
+      aaCatchUpPending_ = false;
+      continue;
+    }
 
     // prevPage() failing does NOT mean "chapter start". A transient layout/heap
     // failure mid-chapter used to fall through here and open the previous spine,
@@ -3755,6 +3768,7 @@ void RivuletReaderActivity::chapterSkipNext() {
 
   if (advanced) {
     firstPaint_ = true;
+    forceFastAfterChapterNav_ = true;
     (void)saveProgress();
     persistHomeProgress(true);
     updateBookmarkFlag();
@@ -3783,6 +3797,7 @@ void RivuletReaderActivity::chapterSkipPrev() {
     if (engine_.goToPage(renderer, 0, /*maxWalkPages=*/64) || engine_.goToStart(renderer)) {
       lastPageTurnTime_ = millis();
       firstPaint_ = true;
+      forceFastAfterChapterNav_ = true;
       (void)saveProgress();
       persistHomeProgress(true);
       updateBookmarkFlag();
@@ -3842,6 +3857,7 @@ void RivuletReaderActivity::chapterSkipPrev() {
   if (advanced) {
     lastPageTurnTime_ = millis();
     firstPaint_ = true;
+    forceFastAfterChapterNav_ = true;
     (void)saveProgress();
     persistHomeProgress(true);
     updateBookmarkFlag();
@@ -4389,7 +4405,6 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // AA goes through renderAntiAliased, which now pushes the BW page onto the
   // panel (displayGrayscaleBase) before the greys — that was the missing step
   // that made every AA-on turn look like "page did not load" until a scrub.
-  constexpr size_t kAaPaintHeadroom = 12 * 1024;
   const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
   const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
@@ -4439,6 +4454,10 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
       overlapAheadDuringRefresh();
       renderer.waitRefreshComplete();
     }
+  } else {
+    // AA is blocking; the panel already holds this page. Warm next now so the
+    // following tap is free — v51 AA opens logged ahead=0 then TURN ms=1240.
+    overlapAheadDuringRefresh();
   }
 
   // Heap refused AA this frame: ask for a recovery pass once the page is on

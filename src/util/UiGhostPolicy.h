@@ -27,15 +27,28 @@ inline bool& hardScrubArmed() {
   static bool armed = false;
   return armed;
 }
+inline bool& greyscaleOnPanel() {
+  static bool greys = false;
+  return greys;
+}
 }  // namespace detail
 
-inline void noteHalf() { detail::hardScrubArmed() = false; }
+inline void noteHalf() {
+  detail::hardScrubArmed() = false;
+  detail::greyscaleOnPanel() = false;
+}
 
 inline void requestHardScrub() { detail::hardScrubArmed() = true; }
 
 inline void clearHardScrub() { detail::hardScrubArmed() = false; }
 
 inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
+
+// Clock AA / reader AA leave greyscale on glass while FB is restored BW.
+// QR sleep FAST then diffs the two planes into a black/messed frame
+// (device v50: Home clock_aa then SLEEP).
+inline void noteGreyscaleOnPanel() { detail::greyscaleOnPanel() = true; }
+inline bool panelHoldsGreyscale() { return detail::greyscaleOnPanel(); }
 
 // Hard clean — X3 HALF + resync. Force Refresh / intentional home scrub only.
 inline void displayHalf(const GfxRenderer& renderer) {
@@ -78,9 +91,7 @@ inline void displayMenuFrame(const GfxRenderer& renderer) {
 }
 
 // First full-frame open (library, recents, etc.).
-inline void displayFastFull(const GfxRenderer& renderer) {
-  displaySoftOpen(renderer, /*softCount=*/1);
-}
+inline void displayFastFull(const GfxRenderer& renderer) { displaySoftOpen(renderer, /*softCount=*/1); }
 
 // Menu cursor / band: always plain FAST. Never soft, never HALF.
 inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, int h) {

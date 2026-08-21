@@ -22,6 +22,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Real 72 pt 2-bit Source Serif Bold (digits + colon only) — smooth AA, no pixel scale.
@@ -1467,6 +1468,7 @@ bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int b
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBufferWindow(grayRect.x, grayRect.y, grayRect.width, grayRect.height);
+  UiGhostPolicy::noteGreyscaleOnPanel();
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.restoreBwBuffer();
   renderer.cleanupGrayscaleWithFrameBuffer();

@@ -14,14 +14,15 @@
 #include <vector>
 
 #include "CasperSettings.h"
-#include "util/CasperPaths.h"
 #include "CasperState.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#include "util/CasperPaths.h"
 #include "util/SleepChromeIcon.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Temp 2-bit BMP written when painting a PNG sleep image (reuses BMP greyscale path).
@@ -300,8 +301,8 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
   renderer.clearScreen();
 
-  const bool hasGreyscale = bitmap.hasGreyscale() &&
-                            SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
+  const bool hasGreyscale =
+      bitmap.hasGreyscale() && SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
 
@@ -427,11 +428,16 @@ void SleepActivity::renderLastScreenSleepScreen() const {
   // top status-bar row (same edge as battery/clock in the live reading orientation).
   // Reader onExit forces Portrait; drawAtTopChrome re-applies SETTINGS.orientation
   // so Landscape CCW/CW does not place the moon on a portrait corner.
-  // Both devices: differential FAST only (moon ink delta) — no HALF scrub flash.
-  // Do not use displayGrayscaleBase here: AA-pre-BW mid is greyscale preconditioning
-  // and leaves white muddy when no grey planes follow (v0.1.3 used plain FAST).
+  // Clock AA / reader AA leave greyscale on glass with a restored BW framebuffer.
+  // FAST then diffs those planes into a black/messed sleep image (v50 Home
+  // clock_aa → SLEEP). HALF first so glass matches FB, then the moon is in the
+  // same plate. Pure BW last-frame (reader without AA) stays differential FAST.
   SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  if (UiGhostPolicy::panelHoldsGreyscale()) {
+    UiGhostPolicy::displayHalf(renderer);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
 }
 
 void SleepActivity::renderBlankSleepScreen() const {

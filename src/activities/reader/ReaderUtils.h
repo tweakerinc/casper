@@ -9,6 +9,7 @@
 
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
+#include "util/UiGhostPolicy.h"
 
 namespace ReaderUtils {
 
@@ -318,7 +319,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // reaches the glass and the turn looks like it did nothing.
 template <typename RenderFn>
 [[nodiscard]] bool renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn,
-                                       const HalDisplay::RefreshMode baseMode = HalDisplay::FAST_REFRESH) {
+                                     const HalDisplay::RefreshMode baseMode = HalDisplay::FAST_REFRESH) {
   if (!renderer.storeBwBuffer()) {
     LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing; falling back to BW refresh");
     return false;
@@ -339,6 +340,7 @@ template <typename RenderFn>
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
+  UiGhostPolicy::noteGreyscaleOnPanel();
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();

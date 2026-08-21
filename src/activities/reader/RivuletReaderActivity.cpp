@@ -131,18 +131,10 @@ bool RivuletReaderActivity::saveProgress(const ProgressFlush flush) const {
   // Nothing moved since the last write — skip the FAT round trip. Reported as
   // success because the on-disk state already reflects this position, which is
   // what every caller actually cares about.
-  if (spine == lastSavedSpine_ && page == lastSavedPage_ && pageCount == lastSavedPageCount_) {
-    progressSavePending_ = false;
+  const bool samePlace = spine == lastSavedSpine_ && page == lastSavedPage_ && pageCount == lastSavedPageCount_;
+  if (!progressflush::shouldWriteNow(progressFlush_, flush, millis(), samePlace)) {
     return true;
   }
-  if (flush == ProgressFlush::Deferred) {
-    // Flip-through: keep the place in RAM and write once they sit still.
-    // Sleep / leave / chapter hop use Now so a crash after a hop is not lost.
-    progressSavePending_ = true;
-    progressSaveDueMs_ = millis() + kProgressDebounceMs;
-    return true;
-  }
-  progressSavePending_ = false;
   uint8_t data[6];
   data[0] = static_cast<uint8_t>(spine & 0xFF);
   data[1] = static_cast<uint8_t>((spine >> 8) & 0xFF);
@@ -162,8 +154,7 @@ bool RivuletReaderActivity::saveProgress(const ProgressFlush flush) const {
 }
 
 void RivuletReaderActivity::tickDeferredProgress() {
-  if (!progressSavePending_) return;
-  if (static_cast<long>(millis() - progressSaveDueMs_) < 0) return;
+  if (!progressflush::tickDue(progressFlush_, millis())) return;
   (void)saveProgress(ProgressFlush::Now);
 }
 

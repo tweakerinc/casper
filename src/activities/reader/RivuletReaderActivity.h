@@ -12,6 +12,7 @@
 #include "BookReadingStats.h"
 #include "BookmarkEntry.h"
 #include "GlobalReadingStats.h"
+#include "ProgressFlushPolicy.h"
 #include "ReaderUtils.h"
 #include "activities/Activity.h"
 #include "activities/ActivityResult.h"
@@ -59,11 +60,7 @@ class RivuletReaderActivity final : public Activity {
   bool turnNext(int skipPages = 1);
   bool turnPrev(int skipPages = 1);
   float bookProgress01() const;
-  // Now: write progress.bin immediately (sleep / leave / chapter hop).
-  // Deferred: remember the place and write after a few seconds of idle so
-  // flip-through does not hit FAT on every tap (lost-progress still saved
-  // once the reader sits still, plus every exit/sleep path).
-  enum class ProgressFlush : uint8_t { Deferred, Now };
+  using ProgressFlush = progressflush::Mode;
   bool saveProgress(ProgressFlush flush = ProgressFlush::Now) const;
   void tickDeferredProgress();
   void loadProgress(int& outSpine, int& outPage);
@@ -270,8 +267,6 @@ class RivuletReaderActivity final : public Activity {
   mutable int lastSavedPage_ = -1;
   mutable int lastSavedPageCount_ = -1;
   // In-chapter turns schedule a write; sleep / leave / chapter hop flush Now.
-  mutable bool progressSavePending_ = false;
-  mutable unsigned long progressSaveDueMs_ = 0;
-  static constexpr unsigned long kProgressDebounceMs = 3000;
+  mutable progressflush::State progressFlush_;
   std::string errorMsg_;
 };

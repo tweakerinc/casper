@@ -270,11 +270,15 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub;
     if (useX3SoftReinforce) {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+      UiGhostPolicy::noteBwOnPanel();
     } else if (async) {
       renderer.displayBufferAsync(HalDisplay::HALF_REFRESH);
+      UiGhostPolicy::noteHalf();
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      UiGhostPolicy::noteHalf();
     }
+    UiGhostPolicy::noteHalf();
     pagesUntilFullRefresh = disabled ? CasperSettings::REFRESH_COUNTDOWN_DISABLED : freq;
     if (pagesUntilFullRefresh < 1 && !disabled) pagesUntilFullRefresh = 1;
   } else {
@@ -283,6 +287,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     } else {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
+    UiGhostPolicy::noteBwOnPanel();
     if (!disabled && pagesUntilFullRefresh > 1) {
       pagesUntilFullRefresh--;
     }

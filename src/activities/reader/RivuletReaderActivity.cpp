@@ -174,6 +174,11 @@ void RivuletReaderActivity::persistProgressForSleep() {
   // Called while still foreground — before SleepActivity tears us down. Guarantees
   // progress.bin hits SD even if onExit is skipped or fails mid-teardown.
   if (!epub_ || !ready_) return;
+  // Silent next-chapter crawl / IR catch-up own the engine. Restore the page
+  // that is on glass before QR FASTs the framebuffer (otherwise X3 full-FAST
+  // of a wiped or next-chapter buffer is a black/wrong flash).
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
+  if (pendingChapterIrLoad_ >= 0) finishPendingChapterIr();
   // Idle glyph prewarm / AA overlap leave the FB white or as the next page
   // while glass still holds this one. QR sleep FASTs the FB; restore first.
   if (activityManager.isCurrentActivity(this) && !futureIndexActive_ && !chapterNavBusy_) {
@@ -2456,12 +2461,16 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
 }
 
 void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
-  if (!ready_ || futureIndexActive_ || chapterNavBusy_ || !engine_.hasChapter()) return;
+  // Cached chapter-hop paints page 1 from .rvpg with no IR yet (hasChapter false).
+  // Still rewrite the FB so QR sleep diffs the page on glass, not an empty buffer.
+  if (!ready_ || futureIndexActive_ || chapterNavBusy_) return;
   renderer.clearScreen(0xFF);
   engine_.paint(renderer, marginX_, marginY_);
-  paintPageImages();
-  paintClippingHighlights();
-  paintFootnoteMarkers();
+  if (engine_.hasChapter()) {
+    paintPageImages();
+    paintClippingHighlights();
+    paintFootnoteMarkers();
+  }
   renderStatusBar();
 }
 

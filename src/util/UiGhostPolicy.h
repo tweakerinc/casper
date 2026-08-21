@@ -49,6 +49,9 @@ inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
 // (device v50: Home clock_aa then SLEEP).
 inline void noteGreyscaleOnPanel() { detail::greyscaleOnPanel() = true; }
 inline bool panelHoldsGreyscale() { return detail::greyscaleOnPanel(); }
+// Reader/home BW FAST replaced the greys. Sleep HALF against a stale flag is
+// the black flash on QR (Penumbra home → book → sleep; glass is already BW).
+inline void noteBwOnPanel() { detail::greyscaleOnPanel() = false; }
 
 // Hard clean — X3 HALF + resync. Force Refresh / intentional home scrub only.
 inline void displayHalf(const GfxRenderer& renderer) {

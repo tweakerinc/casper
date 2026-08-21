@@ -12,12 +12,14 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "Esp.h"  // host stub — must define ESP before ChapterIr uses it
 #include "ChapterIr.h"
+#include "Esp.h"  // host stub — must define ESP before ChapterIr uses it
 #include "HtmlToIr.h"
+#include "IrTokenizer.h"
 
 // The firmware links against Arduino's global ESP object; on the host we own it.
 EspStub ESP;
@@ -164,7 +166,11 @@ TEST(HtmlToIr, StripsZeroWidthAndFoldsNoBreakSpace) {
   // Escapes are split with adjacent literals: a following [a-f] digit would
   // otherwise be swallowed into the hex escape (\xADb is not a byte).
   const ChapterIr ir = convertOrDie(
-      "<p>a\xC2\xAD" "b\xE2\x80\x8B" "c\xEF\xBB\xBF" "d no\xC2\xA0" "break</p>");
+      "<p>a\xC2\xAD"
+      "b\xE2\x80\x8B"
+      "c\xEF\xBB\xBF"
+      "d no\xC2\xA0"
+      "break</p>");
   const std::string text = flattenText(ir);
   EXPECT_NE(text.find("abcd"), std::string::npos) << "soft hyphen / ZWSP / BOM should be dropped";
   EXPECT_NE(text.find("no break"), std::string::npos) << "nbsp should fold to a plain space";
@@ -242,6 +248,122 @@ TEST(HtmlToIr, EmptyAndNullInput) {
   ChapterIr ir;
   EXPECT_FALSE(HtmlToIr::convert(nullptr, 10, ir));
   EXPECT_FALSE(HtmlToIr::convert("", 0, ir));
+}
+
+TEST(HtmlToIr, CssVerticalAlignMarksSuperscriptAndKeepsOrdinalGlued) {
+  // Dungeon Crawler Carl / Jim Butcher ordinals. The suffix must stay a
+  // superscript run immediately after the numeral — no extra space — so
+  // layout cannot justify "th" out to the right margin.
+  const ChapterIr ir = convertOrDie(
+      "<p>6<span style=\"font-size:0.75em; margin-left:0.05em; vertical-align:super\">th</span> "
+      "Edition</p>");
+  EXPECT_EQ(flattenText(ir), "6th Edition\n");
+  bool sawSupTh = false;
+  bool sawPlainSix = false;
+  for (const auto& r : ir.runs()) {
+    const std::string t = ir.runString(r);
+    const uint8_t s = static_cast<uint8_t>(r.style);
+    if (t == "th") {
+      EXPECT_NE(s & static_cast<uint8_t>(RunStyle::Superscript), 0);
+      EXPECT_EQ(s & static_cast<uint8_t>(RunStyle::Subscript), 0);
+      sawSupTh = true;
+    }
+    if (t == "6") {
+      EXPECT_EQ(s & static_cast<uint8_t>(RunStyle::Superscript), 0);
+      sawPlainSix = true;
+    }
+  }
+  EXPECT_TRUE(sawSupTh);
+  EXPECT_TRUE(sawPlainSix);
+}
+
+TEST(HtmlToIr, SupTagMarksSuperscript) {
+  const ChapterIr ir = convertOrDie("<p>6<sup>th</sup> Edition</p>");
+  EXPECT_EQ(flattenText(ir), "6th Edition\n");
+  bool sawSup = false;
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r) == "th" && (static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Superscript))) {
+      sawSup = true;
+    }
+  }
+  EXPECT_TRUE(sawSup);
+}
+
+TEST(HtmlToIr, CssVerticalAlignMarksSubscript) {
+  const ChapterIr ir = convertOrDie("<p>H<span style=\"vertical-align:sub\">2</span>O</p>");
+  EXPECT_EQ(flattenText(ir), "H2O\n");
+  bool sawSub = false;
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r) == "2" && (static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Subscript))) {
+      sawSub = true;
+    }
+  }
+  EXPECT_TRUE(sawSub);
+}
+
+std::string tokenText(const ChapterIr& ir, const rivulet::IrTok& t) {
+  if (t.runIndex >= ir.runs().size()) return {};
+  const auto& run = ir.runs()[t.runIndex];
+  if (t.byteOff >= run.textLen) return {};
+  const size_t n = std::min<size_t>(t.byteLen, run.textLen - t.byteOff);
+  return std::string(ir.runText(run) + t.byteOff, n);
+}
+
+TEST(HtmlToIr, TokenizerDoesNotInsertGapBetweenNumeralAndOrdinal) {
+  const ChapterIr ir = convertOrDie("<p>6<span style=\"vertical-align:super\">th</span> Edition</p>");
+  ASSERT_FALSE(ir.blocks().empty());
+  const auto& b = ir.blocks().front();
+  std::vector<rivulet::IrTok> toks;
+  rivulet::tokenizeRuns(ir, b.runBegin, b.runCount, b.runBegin, 0, toks);
+
+  std::vector<std::string> words;
+  std::vector<bool> spaces;
+  words.reserve(toks.size());
+  spaces.reserve(toks.size());
+  for (const auto& t : toks) {
+    words.push_back(tokenText(ir, t));
+    spaces.push_back(t.space);
+  }
+
+  // "6" then "th" with no space token between them, then a real space, then
+  // "Edition". A synthetic gap would show up as an extra space=true token
+  // (often byteLen 0) between 6 and th.
+  auto itSix = std::find(words.begin(), words.end(), "6");
+  ASSERT_NE(itSix, words.end());
+  const size_t i = static_cast<size_t>(itSix - words.begin());
+  ASSERT_LT(i + 1, words.size());
+  EXPECT_FALSE(spaces[i]);
+  EXPECT_EQ(words[i + 1], "th");
+  EXPECT_FALSE(spaces[i + 1]);
+  ASSERT_LT(i + 2, words.size());
+  EXPECT_TRUE(spaces[i + 2]);
+}
+
+TEST(HtmlToIr, TokenizerKeepsRealSpaceAfterStyleRun) {
+  const ChapterIr ir = convertOrDie("<p>The <i>Vampire</i> skill fired.</p>");
+  ASSERT_FALSE(ir.blocks().empty());
+  const auto& b = ir.blocks().front();
+  std::vector<rivulet::IrTok> toks;
+  rivulet::tokenizeRuns(ir, b.runBegin, b.runCount, b.runBegin, 0, toks);
+
+  std::vector<std::string> seq;
+  seq.reserve(toks.size());
+  for (const auto& t : toks) seq.push_back(t.space ? " " : tokenText(ir, t));
+  // Exactly one space between Vampire and skill — not a synthetic extra.
+  std::string joined;
+  for (const auto& s : seq) joined += s;
+  EXPECT_EQ(joined, "The Vampire skill fired.");
+  int vampireToSkillSpaces = 0;
+  bool afterVampire = false;
+  for (size_t i = 0; i < seq.size(); ++i) {
+    if (seq[i] == "Vampire")
+      afterVampire = true;
+    else if (afterVampire && seq[i] == "skill")
+      break;
+    else if (afterVampire && seq[i] == " ")
+      ++vampireToSkillSpaces;
+  }
+  EXPECT_EQ(vampireToSkillSpaces, 1);
 }
 
 }  // namespace

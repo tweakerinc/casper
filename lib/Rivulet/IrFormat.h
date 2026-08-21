@@ -8,8 +8,12 @@ namespace rivulet {
 inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // v22: keep a leading space after style runs (</i> / </b> / </span>) so
 // "Vampire"+" skill" is not glued when HTML whitespace was the only separator.
-// v21 IR may already have glued runs; reconvert to pick this up. Layout still
-// synthesizes a gap between word-char runs as a backstop.
+// v21 IR may already have glued runs; reconvert to pick this up.
+// Layout used to synthesize a gap between adjacent word-char runs as a backstop
+// for stripped spaces. That gap became justify glue, so ordinal suffixes
+// ("6" + superscript "th") stretched to the right margin. Adjacent word-char
+// runs are now left glued; v23 IR already stores the real leading space when
+// HTML had one.
 // v21: table/tr/td/th are parsed — each cell becomes its own block. v20 IR was
 // produced by a parser that did not know these tags, so its cell text is already
 // merged into run-on paragraphs and cannot be recovered without reconverting.
@@ -117,12 +121,12 @@ enum class BlockKind : uint8_t {
 };
 
 // Block flags.
-inline constexpr uint16_t kBlockDropCap = 1u << 0;       // first letter floats as drop cap
-inline constexpr uint16_t kBlockNoIndent = 1u << 1;      // suppress auto first-line indent
+inline constexpr uint16_t kBlockDropCap = 1u << 0;         // first letter floats as drop cap
+inline constexpr uint16_t kBlockNoIndent = 1u << 1;        // suppress auto first-line indent
 inline constexpr uint16_t kBlockForcePageBreak = 1u << 2;  // start on new page if possible
-inline constexpr uint16_t kBlockFloatLeft = 1u << 3;     // image: left float + wrap (figleft / letter)
-inline constexpr uint16_t kBlockFloatRight = 1u << 4;    // image: right float + wrap
-inline constexpr uint16_t kBlockOrnament = 1u << 5;      // small chapter ornament (e.g. .orn img ~12% width)
+inline constexpr uint16_t kBlockFloatLeft = 1u << 3;       // image: left float + wrap (figleft / letter)
+inline constexpr uint16_t kBlockFloatRight = 1u << 4;      // image: right float + wrap
+inline constexpr uint16_t kBlockOrnament = 1u << 5;        // small chapter ornament (e.g. .orn img ~12% width)
 
 // Page map magic
 inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};

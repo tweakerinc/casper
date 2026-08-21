@@ -13,31 +13,15 @@
 
 #include "Epub/hyphenation/Hyphenator.h"
 #include "FontLadder.h"
+#include "IrTokenizer.h"
 
 namespace rivulet {
 namespace {
 
-struct Tok {
-  uint16_t runIndex = 0;
-  uint16_t byteOff = 0;
-  uint16_t byteLen = 0;
-  bool space = false;
-  // Memoized advance width for this token, -1 = not measured yet.
-  //
-  // Every word used to be measured twice per layout: once by the line-fitting
-  // loop and again by the span-emit loop, with identical (fontId, style, bytes)
-  // inputs — and a word pushed to the next line was measured a third time.
-  // measureWord() walks every codepoint through getTextAdvanceX (map lookup,
-  // glyph lookup, kerning), and layoutPage runs on EVERY page turn (Rivulet
-  // lays out on demand rather than reading precomputed geometry), so this was
-  // pure duplicated work on the hot path.
-  //
-  // Only word tokens are cached. Space widths depend on their flanking
-  // codepoints, which change when hyphenation rewrites a neighbour, so they
-  // stay uncached (measureInterWordSpace is far cheaper anyway).
-  // MUST be reset to -1 whenever byteOff/byteLen are rewritten.
-  int16_t w = -1;
-};
+// Token shape lives in IrTokenizer.h (IrTok). `w` is still the layout memo:
+// measured once in the fit loop, reused when emitting spans. Reset to -1
+// whenever byteOff/byteLen are rewritten. Spaces stay uncached.
+using Tok = IrTok;
 
 int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const float lc) {
   const int fid = FontLadder::resolve(baseFontId, step);
@@ -102,219 +86,6 @@ int measureInterWordSpace(const GfxRenderer& r, const int fontId, const EpdFontF
   return r.getSpaceAdvance(fontId, leftCp, rightCp, st);
 }
 
-bool isAsciiWordByte(const unsigned char c) {
-  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-}
-
-// Last byte of previous non-empty run content that is a "word" char (Latin).
-// Used to heal style-boundary glue when IR dropped the inter-run space.
-bool runEndsWithWordChar(const ChapterIr& ch, const Run& run) {
-  if (run.textLen == 0) return false;
-  const char* base = ch.runText(run);
-  // Walk last UTF-8 scalar; treat any non-ASCII letter-like as word (Cyrillic etc.).
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(base);
-  const unsigned char* end = p + run.textLen;
-  uint32_t last = 0;
-  while (p < end) {
-    const unsigned char* before = p;
-    last = utf8NextCodepoint(&p);
-    if (last == 0 || p == before) break;
-  }
-  if (last == 0) return false;
-  if (last < 128) return isAsciiWordByte(static_cast<unsigned char>(last));
-  // Non-ASCII: treat as word if not common punctuation/space.
-  return last != 0x00A0 && last != 0x2013 && last != 0x2014 && last != 0x2026;
-}
-
-bool runStartsWithWordChar(const ChapterIr& ch, const Run& run, const uint16_t byteOff) {
-  if (byteOff >= run.textLen) return false;
-  const char* base = ch.runText(run) + byteOff;
-  const unsigned char* u = reinterpret_cast<const unsigned char*>(base);
-  const uint32_t cp = utf8NextCodepoint(&u);
-  if (cp == 0) return false;
-  if (cp < 128) return isAsciiWordByte(static_cast<unsigned char>(cp));
-  return cp != 0x00A0;
-}
-
-// CJK line breaking. Ported from the classic ParsedText, which Rivulet replaces.
-//
-// CJK prose has no spaces, so a space-only tokenizer turns an entire paragraph
-// into ONE token. It can never fit a line, hyphenation cannot split it, and the
-// layouter's "emit the whole word anyway" fallback then paints the whole
-// paragraph as a single overflowing line. CJK books were effectively unreadable.
-//
-// Breaks are allowed between CJK characters except where punctuation forbids it:
-// closing punctuation may not start a line, opening punctuation may not end one.
-bool isNoBreakBeforeCjkPunct(const uint32_t cp) {
-  switch (cp) {
-    case '.': case ',': case ':': case ';': case '!': case '?':
-    case ')': case ']': case '}':
-    case 0x00BB:  // »
-    case 0x2019:  // ’
-    case 0x201D:  // ”
-    case 0x3001:  // 、
-    case 0x3002:  // 。
-    case 0x3009:  // 〉
-    case 0x300B:  // 》
-    case 0x300D:  // 」
-    case 0x300F:  // 』
-    case 0x3011:  // 】
-    case 0x3015:  // 〕
-    case 0xFF01:  // ！
-    case 0xFF09:  // ）
-    case 0xFF0C:  // ，
-    case 0xFF0E:  // ．
-    case 0xFF1A:  // ：
-    case 0xFF1B:  // ；
-    case 0xFF1F:  // ？
-    case 0xFF3D:  // ］
-    case 0xFF5D:  // ｝
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool isNoBreakAfterCjkPunct(const uint32_t cp) {
-  switch (cp) {
-    case '(': case '[': case '{':
-    case 0x00AB:  // «
-    case 0x2018:  // ‘
-    case 0x201C:  // “
-    case 0x3008:  // 〈
-    case 0x300A:  // 《
-    case 0x300C:  // 「
-    case 0x300E:  // 『
-    case 0x3010:  // 【
-    case 0x3014:  // 〔
-    case 0xFF08:  // （
-    case 0xFF3B:  // ［
-    case 0xFF5B:  // ｛
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool hasCjkBreakBetween(const uint32_t leftCp, const uint32_t rightCp) {
-  if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
-  if (isNoBreakAfterCjkPunct(leftCp) || isNoBreakBeforeCjkPunct(rightCp)) return false;
-  if (utf8IsCombiningMark(rightCp)) return false;
-  return true;
-}
-
-// True if a byte range could contain a codepoint utf8IsCjkBreakable() accepts.
-// Keeps the per-codepoint scan below off the hot path for non-CJK books.
-//
-// The breakable set starts at U+1100 (Hangul Jamo) and is otherwise >= U+3000, so
-// in UTF-8 the lead bytes that matter are 0xE1 and 0xE3..0xEF, plus 0xF0+ for the
-// Extension B/C planes. Continuation bytes are 0x80-0xBF and never collide.
-//
-// 0xE2 is deliberately excluded: it covers U+2000-U+2FFF (General Punctuation,
-// arrows, maths), which contains NO breakable CJK. That range is exactly where
-// ordinary Latin typography lives — em dashes, curly quotes, ellipses — so a naive
-// ">= 0xE0" test would have dragged most real prose onto the slow path for nothing.
-bool mayContainCjk(const char* p, const char* end) {
-  for (const char* q = p; q < end; ++q) {
-    const unsigned char b = static_cast<unsigned char>(*q);
-    if (b == 0xE1 || b >= 0xE3) return true;
-  }
-  return false;
-}
-
-void tokenizeFrom(const ChapterIr& ch, const uint16_t runBegin, const uint16_t runCount, const uint16_t startRun,
-                  const uint16_t startByte, std::vector<Tok>& out) {
-  out.clear();
-  const auto& runs = ch.runs();
-  const uint16_t runEnd = static_cast<uint16_t>(runBegin + runCount);
-
-  // Reserve up front: this runs per block on EVERY page layout, and an unreserved
-  // push_back loop costs a chain of geometric reallocations (allocate + copy +
-  // free each time) that fragments DRAM — the one thing the C3 cannot afford.
-  // Estimate from the remaining byte span at ~1 token per 4 bytes (a word plus its
-  // space averages well above that in Latin prose), clamped so a pathological run
-  // list cannot reserve something silly. Over-estimating slightly is free; the
-  // vector is a per-layout scratch that is cleared and refilled.
-  {
-    size_t remainingBytes = 0;
-    for (uint16_t ri = startRun < runBegin ? runBegin : startRun; ri < runEnd && ri < runs.size(); ++ri) {
-      remainingBytes += runs[ri].textLen;
-    }
-    size_t estimate = remainingBytes / 4 + 8;
-    if (estimate > 4096) estimate = 4096;
-    if (out.capacity() < estimate) out.reserve(estimate);
-  }
-  uint16_t ri = startRun < runBegin ? runBegin : startRun;
-  uint16_t bo = (ri == startRun) ? startByte : 0;
-  int prevRunWithText = -1;
-  for (; ri < runEnd && ri < runs.size(); ++ri, bo = 0) {
-    const Run& run = runs[ri];
-    if (bo >= run.textLen) continue;
-    const char* base = ch.runText(run);
-    // Heal missing space between style runs: "Vampire" + "skill" (old IR stripped
-    // the leading space after </i>). Do not inject before punctuation (": You've").
-    if (prevRunWithText >= 0 && bo == 0 && runStartsWithWordChar(ch, run, 0) &&
-        runEndsWithWordChar(ch, runs[static_cast<size_t>(prevRunWithText)])) {
-      // Synthetic space: reuse current runIndex with byteLen 0 + space flag is wrong
-      // for measure; use a 1-byte space from this run only if present — else mark
-      // space with byteLen 0 and special-case measure… Prefer: space token that
-      // measureInterWordSpace handles (t.space true, text ignored).
-      out.push_back(Tok{ri, 0, 0, true});
-    }
-    const char* p = base + bo;
-    const char* end = base + run.textLen;
-    bool emitted = false;
-    while (p < end) {
-      if (*p == ' ' || *p == '\t') {
-        out.push_back(Tok{ri, static_cast<uint16_t>(p - base), 1, true});
-        ++p;
-        emitted = true;
-        continue;
-      }
-      const char* w0 = p;
-      while (p < end && *p != ' ' && *p != '\t') ++p;
-      // Latin fast path: no CJK possible, so the whole space-delimited run is one
-      // token, exactly as before.
-      if (!mayContainCjk(w0, p)) {
-        out.push_back(Tok{ri, static_cast<uint16_t>(w0 - base), static_cast<uint16_t>(p - w0), false});
-        emitted = true;
-        continue;
-      }
-      // CJK-bearing: re-walk this word by codepoint and cut at every legal break
-      // opportunity, so the line fitter has somewhere to wrap.
-      {
-        const char* const wordEnd = p;
-        const char* segStart = w0;
-        const char* cur = w0;
-        uint32_t prevCp = 0;
-        while (cur < wordEnd) {
-          const auto* q = reinterpret_cast<const unsigned char*>(cur);
-          const uint32_t cp = utf8NextCodepoint(&q);
-          const char* next = reinterpret_cast<const char*>(q);
-          if (cp == 0 || next <= cur) {
-            ++cur;  // malformed byte: step over it rather than spin
-            continue;
-          }
-          if (next > wordEnd) next = wordEnd;
-          if (prevCp != 0 && cur > segStart && hasCjkBreakBetween(prevCp, cp)) {
-            out.push_back(
-                Tok{ri, static_cast<uint16_t>(segStart - base), static_cast<uint16_t>(cur - segStart), false});
-            segStart = cur;
-          }
-          prevCp = cp;
-          cur = next;
-        }
-        if (wordEnd > segStart) {
-          out.push_back(
-              Tok{ri, static_cast<uint16_t>(segStart - base), static_cast<uint16_t>(wordEnd - segStart), false});
-        }
-      }
-      emitted = true;
-    }
-    if (emitted) prevRunWithText = static_cast<int>(ri);
-  }
-}
-
 // Closing punctuation that must not start a line alone ("distinction." → not "distinction" / ".").
 bool isClosingOrphanPunctCp(const uint32_t cp) {
   switch (cp) {
@@ -364,6 +135,15 @@ bool tokenIsOnlyClosingPunct(const ChapterIr& ch, const Tok& t) {
   if (t.byteOff >= run.textLen) return false;
   const size_t n = std::min<size_t>(t.byteLen, run.textLen - t.byteOff);
   return bytesAreOnlyClosingPunct(ch.runText(run) + t.byteOff, n);
+}
+
+// Ordinal suffixes and footnote markers (6 + th, H + 2) share no space token
+// with the stem. Keep them on the same line — slight overflow is better than
+// "6" at the right margin and "th" alone on the next.
+bool tokenIsAttachedScript(const ChapterIr& ch, const Tok& t) {
+  if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) return false;
+  const uint8_t st = static_cast<uint8_t>(ch.runs()[t.runIndex].style);
+  return (st & kRunStyleScriptMask) != 0;
 }
 
 // Optional hyphen-style break only — never force-split ordinary words mid-letter.
@@ -631,7 +411,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     const Block& block = chapter.blocks()[cur.blockIndex];
     // Normalize cursor into block. Stale page-map cursors can carry a runIndex
     // from a previous IR rebuild that falls outside this block's run range —
-    // without clamping, tokenizeFrom yields nothing and we skip all text,
+    // without clamping, tokenizeRuns yields nothing and we skip all text,
     // marking chapter-end after a handful of empty pages.
     const uint16_t blockRunEnd = static_cast<uint16_t>(block.runBegin + block.runCount);
     if (cur.runIndex < block.runBegin || cur.runIndex >= blockRunEnd ||
@@ -996,7 +776,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       }
     }
 
-    tokenizeFrom(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
+    tokenizeRuns(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
 
     int indent = 0;
     // No first-line indent beside drop-cap OR letter float (classic flushes indent).
@@ -1086,8 +866,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           if (tw >= 0 && tw <= INT16_MAX) toks[ti].w = static_cast<int16_t>(tw);
         }
         if (lineW + tw > maxW && lineEnd > lineStart) {
-          // Keep "." / "," / "!" with the preceding word (slight overflow ok).
-          if (!t.space && tokenIsOnlyClosingPunct(chapter, t)) {
+          // Keep "." / "," / "!" and glued super/sub suffixes with the stem.
+          if (!t.space && (tokenIsOnlyClosingPunct(chapter, t) || tokenIsAttachedScript(chapter, t))) {
             lineW += tw;
             lineEnd = ti + 1;
             ++ti;

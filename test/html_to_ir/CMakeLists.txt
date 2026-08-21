@@ -2,6 +2,7 @@ add_executable(HtmlToIrTest
   HtmlToIrTest.cpp
   ${REPO_ROOT}/lib/Rivulet/HtmlToIr.cpp
   ${REPO_ROOT}/lib/Rivulet/ChapterIr.cpp
+  ${REPO_ROOT}/lib/Rivulet/IrTokenizer.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
 )
 

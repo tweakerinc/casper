@@ -536,19 +536,31 @@ void applyInlineStyle(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOut,
       containsI(v, vlen, "font-style:oblique")) {
     styleInOut |= RunStyle::Italic;
   }
+  // DCC / Butcher ordinals:
+  //   6<span style="font-size:0.75em; margin-left:0.05em; vertical-align:super">th</span>
+  // Paint already scales SUP/SUB to ~50% and raises the baseline; sizeStep on
+  // the same span would shrink twice. Classic ChapterHtmlSlimParser glues these
+  // the same way.
+  const bool isSuper =
+      containsI(v, vlen, "vertical-align:super") || containsI(v, vlen, "vertical-align: super");
+  const bool isSub = containsI(v, vlen, "vertical-align:sub") || containsI(v, vlen, "vertical-align: sub");
+  if (isSuper) styleInOut |= RunStyle::Superscript;
+  if (isSub) styleInOut |= RunStyle::Subscript;
   // Size bumps never shrink an already-larger step (h1 Plus2 must stick).
-  if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") ||
-      containsI(v, vlen, "xx-large") || containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") ||
-      containsI(v, vlen, "font-size:1.5")) {
-    if (sizeInOut < SizeStep::Plus2) sizeInOut = SizeStep::Plus2;
-  } else if (containsI(v, vlen, "font-size:1.4") || containsI(v, vlen, "font-size:1.3") ||
-             containsI(v, vlen, "font-size:1.2") || containsI(v, vlen, "x-large") ||
-             containsI(v, vlen, "font-size:large")) {
-    if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
-  }
-  if (containsI(v, vlen, "font-size:small") || containsI(v, vlen, "font-size:0.8") ||
-      containsI(v, vlen, "font-size:0.9") || containsI(v, vlen, "font-size:0.85")) {
-    sizeInOut = SizeStep::Minus1;
+  if (!isSuper && !isSub) {
+    if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") ||
+        containsI(v, vlen, "xx-large") || containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") ||
+        containsI(v, vlen, "font-size:1.5")) {
+      if (sizeInOut < SizeStep::Plus2) sizeInOut = SizeStep::Plus2;
+    } else if (containsI(v, vlen, "font-size:1.4") || containsI(v, vlen, "font-size:1.3") ||
+               containsI(v, vlen, "font-size:1.2") || containsI(v, vlen, "x-large") ||
+               containsI(v, vlen, "font-size:large")) {
+      if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
+    }
+    if (containsI(v, vlen, "font-size:small") || containsI(v, vlen, "font-size:0.8") ||
+        containsI(v, vlen, "font-size:0.9") || containsI(v, vlen, "font-size:0.85")) {
+      sizeInOut = SizeStep::Minus1;
+    }
   }
   if (alignOut) {
     if (containsI(v, vlen, "text-align:center") || containsI(v, vlen, "text-align: center")) {

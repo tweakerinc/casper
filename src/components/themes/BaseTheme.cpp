@@ -1204,8 +1204,8 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   // out to its right: "Loading" covered the battery %, but "Saving" on book exit
   // did not. A constant box also stops the wipe jittering as the word changes.
   int statusW = textW;
-  for (const StrId id : {StrId::STR_LOADING_POPUP, StrId::STR_STATUS_SAVING_STATS, StrId::STR_STATUS_OPENING,
-                         StrId::STR_STATUS_DELETING}) {
+  for (const StrId id : {StrId::STR_LOADING_POPUP, StrId::STR_INDEXING, StrId::STR_STATUS_SAVING_STATS,
+                         StrId::STR_STATUS_OPENING, StrId::STR_STATUS_DELETING}) {
     statusW = std::max(statusW, renderer.getTextWidth(kFont, I18N.get(id)));
   }
   // Never eat into the middle slot — clamp to just short of centre.

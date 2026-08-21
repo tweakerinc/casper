@@ -15,24 +15,24 @@
 // IR in 8.5s. Cap 3 then crawled 25/26 and failed 27/28 (19–21s) — main loop
 // blocked 12–35s (`activity_slow`). Restore while the turn key was still down
 // made getHeldTime() exceed 400ms and fired the side long-press (Dark Mode /
-// HALF scrub). Idle work is therefore: at most the immediate next chapter,
-// only from an existing .rvir, never again this sitting after a user abort,
-// and never a fresh HTML convert.
+// HALF scrub).
+//
+// v49 (782b6925) then disabled idle start entirely. Chapter hops landed with
+// 1/12 est and no Loading; in-chapter idle MAP still stole taps. Idle start
+// is back, but only on the last page of a sealed chapter, with Indexing on
+// glass. Mid-chapter reading never evicts the IR. A PageForward during the
+// swap is a chapter hop (promote), not a restore.
 namespace futureindex {
 
-// Current-chapter idle map uses 2s quiet + 1.5s between pages. Future work is
-// half that duty: longer sit-still before we evict, longer gap between pages.
-// 8s quiet matches the old next-spine warm gate so flip-through never starts it.
+// Last-page index: 3s quiet so flip-through of the final page never starts it,
+// then measure as fast as the loop can poll (Indexing is already on glass).
 struct Limits {
-  static constexpr unsigned long kQuietAfterTurnMs = 8000;
-  static constexpr unsigned long kPageGapMs = 3000;
-  static constexpr unsigned long kStartGapMs = 4000;
+  static constexpr unsigned long kQuietAfterTurnMs = 3000;
+  static constexpr unsigned long kPageGapMs = 200;
+  static constexpr unsigned long kStartGapMs = 1000;
   static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
-  // Device v48 (3f4b541d): even cap-1 + skip-uncached still allows an 8s
-  // cached IR swap the moment the current map seals. One chapter in RAM —
-  // idle must not evict it. Abort/measure/restore stay for a swap already live.
-  static constexpr bool kIdleForwardIndex = false;
+  static constexpr bool kIdleForwardIndex = true;
 };
 
 enum class Decision : uint8_t {
@@ -53,9 +53,10 @@ struct Input {
   bool heapTight = false;
   // Tap during a swap: do not StartForward again until the reader changes spine.
   bool userAbortedThisSitting = false;
-  // Immediate next chapter has a complete .rvir. Idle must not HTML-convert
-  // (device: cache=0 load 14–21s, then restore 8s, loop frozen).
-  bool targetHasIrCache = false;
+  // Last page of the current chapter. Idle must not swap IR mid-chapter
+  // (device v48/v49: 8s load stole in-chapter taps). Convert is allowed here
+  // because Indexing is on glass.
+  bool atChapterEnd = false;
   bool hasForwardTarget = false;
   int futureStallTicks = 0;
   int forwardIndexedThisSession = 0;
@@ -89,11 +90,11 @@ inline Decision decide(const Input& in) {
   }
 
   if (!Limits::kIdleForwardIndex) return Decision::None;
+  if (!in.atChapterEnd) return Decision::None;
   if (!in.currentMapComplete) return Decision::None;
   if (!in.aheadWarm) return Decision::None;
   if (in.userAbortedThisSitting) return Decision::None;
   if (!in.hasForwardTarget) return Decision::None;
-  if (!in.targetHasIrCache) return Decision::None;
   if (in.forwardIndexedThisSession >= Limits::kMaxForwardChapters) return Decision::None;
   if (!quietLongEnough(in, Limits::kQuietAfterTurnMs)) return Decision::None;
   if (!workGapElapsed(in, Limits::kStartGapMs)) return Decision::None;

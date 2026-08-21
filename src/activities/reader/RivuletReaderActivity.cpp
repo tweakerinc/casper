@@ -77,6 +77,8 @@ namespace {
 
 constexpr size_t kInitialBookmarkCacheCapacity = 16;
 constexpr float kBookmarkProgressEpsilon = 0.0025f;
+// v49: 2s footnote scan after land blocked 1.8–2.0s and ate the next tap.
+constexpr unsigned long kFootnoteIdleDelayMs = 8000UL;
 
 bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
                          const float pageProgress01) {
@@ -1898,13 +1900,6 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
     lastFutureWorkMs_ = millis();
     return false;
   }
-  if (!spineHasIrCache(target)) {
-    // Idle HTML convert was 14–21s on device (FIDX load cache=0) and froze
-    // the main loop. Index that spine the next time the reader actually opens it.
-    SystemLog::logTiming("FIDX", "skip_no_ir spine=%d after=%d", target, spineIndex_);
-    lastFutureWorkMs_ = millis();
-    return false;
-  }
 
   heldSpineForFuture_ = spineIndex_;
   heldPageForFuture_ = engine_.hasChapter() ? engine_.currentPage() : 0;
@@ -1917,8 +1912,10 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   futurePartSaveAtKnown_ = 0;
 
   // 14s uncached convert (device: FIDX load ms=14503) must not start while a
-  // paint still owns the engine, and must abort if the user taps mid-load.
+  // paint still owns the engine. Indexing is on glass; PageForward during
+  // load is a chapter hop (finish the load, then promote) not an abort.
   activityManager.waitForRenderIdle();
+  GUI.drawTopLeftStatus(renderer, tr(STR_INDEXING), /*refresh=*/true);
 
   chapterload::Request req;
   req.epub = epub_.get();
@@ -1941,7 +1938,11 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   hooks.prepareImages = [](void* ctx, const char* href) {
     static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
   };
-  hooks.shouldAbort = [](void* ctx) { return static_cast<RivuletReaderActivity*>(ctx)->futureIndexUserWantsControl(); };
+  hooks.shouldAbort = [](void* ctx) {
+    auto* self = static_cast<RivuletReaderActivity*>(ctx);
+    if (self->futureIndexForwardHeld()) return false;
+    return self->futureIndexUserWantsControl();
+  };
 
   const uint32_t t0 = millis();
   const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
@@ -1974,6 +1975,10 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   SystemLog::logTiming("FIDX", "load spine=%d cache=%d known=%d ms=%lu fre=%u maxA=%u", target,
                        loaded.fromCache ? 1 : 0, engine_.mapKnownPages(), static_cast<unsigned long>(millis() - t0),
                        static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (futureIndexForwardHeld()) {
+    promoteFutureIndexToCurrent();
+    return true;
+  }
   if (futureIndexUserWantsControl()) {
     restoreAfterFutureIndex(/*forUser=*/true);
   }
@@ -2024,6 +2029,51 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   SystemLog::logTiming("FIDX", "restore spine=%d page=%d ok=%d user=%d ms=%lu fre=%u", spine, page, ok ? 1 : 0,
                        forUser ? 1 : 0, static_cast<unsigned long>(millis() - t0),
                        static_cast<unsigned>(ESP.getFreeHeap()));
+  requestUpdate();
+}
+
+bool RivuletReaderActivity::futureIndexForwardHeld() const {
+  return mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+}
+
+void RivuletReaderActivity::promoteFutureIndexToCurrent() {
+  if (!futureIndexActive_) return;
+  persistFutureMap(/*completeOnly=*/engine_.mapComplete());
+  const int target = futureIndexSpine_;
+  futureIndexActive_ = false;
+  warmingAdjacent_ = false;
+  futureIndexSpine_ = -1;
+  futureIndexAbortedThisSitting_ = false;
+  futureStallTicks_ = 0;
+  ignoreNextSideRelease_ = true;
+  ignoreNextConfirmRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
+  forceFastAfterChapterNav_ = true;
+
+  spineIndex_ = target;
+  ready_ = true;
+  footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
+  chapterFootnotes_.clear();
+  currentPageFootnotes_.clear();
+  firstPaint_ = true;
+  pageMapDirty_ = true;
+
+  if (!engine_.goToStart(renderer)) {
+    showError("Could not open chapter");
+    SystemLog::logTiming("FIDX", "promote_fail spine=%d", target);
+    return;
+  }
+  lastPageTurnTime_ = millis();
+  noteForwardPageTurn();
+  persistPageMapIfComplete();
+  (void)saveProgress(ProgressFlush::Now);
+  persistHomeProgress(/*writeToDisk=*/true);
+  updateBookmarkFlag();
+  SystemLog::logTiming("FIDX", "promote spine=%d page=%d known=%d complete=%d", target, engine_.currentPage() + 1,
+                       engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0);
+  requestUpdate();
 }
 
 void RivuletReaderActivity::tickFutureChapterIndex() {
@@ -2034,6 +2084,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.futureResident = futureIndexActive_;
   in.currentMapComplete = !futureIndexActive_ && engine_.mapComplete() && !engine_.chapter().failed();
   in.aheadWarm = futureIndexActive_ || engine_.aheadWarm() || (engine_.hasChapter() && engine_.page().atChapterEnd);
+  in.atChapterEnd = !futureIndexActive_ && engine_.hasChapter() && engine_.page().atChapterEnd;
   in.firstInkDone = firstInkDone_;
   in.controlHeld = futureIndexUserWantsControl();
   in.futureMapComplete = futureIndexActive_ && engine_.mapComplete();
@@ -2046,17 +2097,15 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.lastWorkMs = lastFutureWorkMs_;
   // SD exists() only when a start is otherwise legal. Probing every idle tick
   // would take the storage mutex while the user is still turning pages.
-  // kIdleForwardIndex=false: never StartForward, so never probe .rvir either
-  // (device v48: map seal then untagged activity_slow 3904ms, then freeze).
+  // Last page only: mid-chapter StartForward stole taps (v48/v49).
   const bool maybeStart = futureindex::Limits::kIdleForwardIndex && !futureIndexActive_ && in.currentMapComplete &&
-                          in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld && !in.heapTight &&
-                          in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
+                          in.atChapterEnd && in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld &&
+                          !in.heapTight && in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
   if (maybeStart) {
     const int target = nextForwardUnmappedSpine();
     in.hasForwardTarget = target >= 0;
-    in.targetHasIrCache = target >= 0 && spineHasIrCache(target);
   }
 
   switch (futureindex::decide(in)) {
@@ -2081,14 +2130,21 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
                            futureIndexSpine_, knownBefore, engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
                            progressed ? 1 : 0, futureStallTicks_, static_cast<unsigned>(ESP.getFreeHeap()));
       const bool userNow = futureIndexUserWantsControl();
+      const bool wantNext = futureIndexForwardHeld();
       if (engine_.mapComplete()) {
         persistFutureMap(/*completeOnly=*/true);
-        restoreAfterFutureIndex(/*forUser=*/userNow);
+        if (wantNext)
+          promoteFutureIndexToCurrent();
+        else
+          restoreAfterFutureIndex(/*forUser=*/userNow);
       } else if (futureStallTicks_ >= futureindex::Limits::kGiveUpStalls) {
         futureSkipSpine_ = futureIndexSpine_;
         restoreAfterFutureIndex(/*forUser=*/userNow);
       } else if (userNow) {
-        restoreAfterFutureIndex(/*forUser=*/true);
+        if (wantNext)
+          promoteFutureIndexToCurrent();
+        else
+          restoreAfterFutureIndex(/*forUser=*/true);
       }
       return;
     }
@@ -2097,6 +2153,10 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       restoreAfterFutureIndex(/*forUser=*/false);
       return;
     case futureindex::Decision::AbortRestore:
+      if (futureIndexForwardHeld()) {
+        promoteFutureIndexToCurrent();
+        return;
+      }
       if (in.futureStallTicks >= futureindex::Limits::kGiveUpStalls) {
         futureSkipSpine_ = futureIndexSpine_;
       }
@@ -2272,10 +2332,10 @@ void RivuletReaderActivity::tickIdlePageMap() {
     if (engine_.warmBehindPage(renderer)) return;
   }
 
-  // After first ink + ahead/behind warm: one HTML footnote scan. Wait 2s so
-  // this never overlaps the chapter-land refresh (device: scan+SD during the
-  // 3.2s PageBack ink, then no exit).
-  if (footnoteScanDeferred_ && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL &&
+  // After first ink + ahead/behind warm: one HTML footnote scan. Wait 8s so
+  // a tap after chapter-land is not eaten by a 2s HTML scan (v49 DCC:
+  // NOTE footnotes ms=1864 right after spine 24 page 1).
+  if (footnoteScanDeferred_ && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= kFootnoteIdleDelayMs &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
     footnoteScanDeferred_ = false;
     const unsigned long t0 = millis();
@@ -3326,12 +3386,23 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     // Advance spine (next non-empty href).
     const int n = epub_->getSpineItemsCount();
     bool advanced = false;
+    chapterNavBusy_ = true;
+    forceFastAfterChapterNav_ = true;
+    SystemLog::armHangWatch("chapter_next");
+    // Paint Loading on glass before the IR load. turnNext used to call
+    // loadSpine with no status and no chapterNavBusy_ (v49 DCC: 3s freeze on
+    // last page → spine 24 with no upper-left cue). waitForRenderIdle first so
+    // displayWindow does not race the render task.
+    activityManager.waitForRenderIdle();
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+    prepareHeapForChapterLoad(/*aggressive=*/true);
     for (int i = spineIndex_ + 1; i < n; ++i) {
       if (loadSpine(i)) {
         advanced = true;
         break;
       }
     }
+    chapterNavBusy_ = false;
     if (!advanced) {
       GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
       delay(400);

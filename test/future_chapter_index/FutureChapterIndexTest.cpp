@@ -15,75 +15,79 @@ Input idleReady() {
   in.currentMapComplete = true;
   in.aheadWarm = true;
   in.hasForwardTarget = true;
-  in.targetHasIrCache = true;
   in.lastTurnMs = 1000;
   in.nowMs = 1000 + Limits::kQuietAfterTurnMs;
+  return in;
+}
+
+Input idleAtEnd() {
+  Input in = idleReady();
+  in.atChapterEnd = true;
   return in;
 }
 
 }  // namespace
 
 TEST(FutureChapterIndex, FlipThroughDoesNotStart) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.nowMs = in.lastTurnMs + Limits::kQuietAfterTurnMs - 1;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
-TEST(FutureChapterIndex, IdleForwardIndexOff) { EXPECT_FALSE(Limits::kIdleForwardIndex); }
+TEST(FutureChapterIndex, IdleForwardIndexOn) { EXPECT_TRUE(Limits::kIdleForwardIndex); }
 
-TEST(FutureChapterIndex, StartsAfterQuietWhenCurrentMapDone) {
-  // Idle must not evict the reading IR (device v48: 8s cached swap after seal).
-  EXPECT_EQ(decide(idleReady()), Decision::None);
-}
+TEST(FutureChapterIndex, DoesNotStartMidChapterEvenWhenMapDone) { EXPECT_EQ(decide(idleReady()), Decision::None); }
+
+TEST(FutureChapterIndex, StartsAfterQuietAtChapterEnd) { EXPECT_EQ(decide(idleAtEnd()), Decision::StartForward); }
 
 TEST(FutureChapterIndex, DoesNotStartUntilCurrentMapComplete) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.currentMapComplete = false;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, DoesNotStartWhileAheadCold) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.aheadWarm = false;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, ControlHeldNeverStarts) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.controlHeld = true;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, ControlHeldAbortsResidentFuture) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.controlHeld = true;
   EXPECT_EQ(decide(in), Decision::AbortRestore);
 }
 
 TEST(FutureChapterIndex, MeasuresAfterPageGap) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.lastWorkMs = in.nowMs - Limits::kPageGapMs;
   EXPECT_EQ(decide(in), Decision::MeasurePage);
 }
 
 TEST(FutureChapterIndex, WaitsOutPageGap) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.lastWorkMs = in.nowMs - (Limits::kPageGapMs - 1);
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, FinishWhenFutureMapComplete) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.futureMapComplete = true;
   EXPECT_EQ(decide(in), Decision::FinishRestore);
 }
 
 TEST(FutureChapterIndex, GiveUpAfterStalls) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.futureStallTicks = Limits::kGiveUpStalls;
   in.lastWorkMs = in.nowMs - Limits::kPageGapMs;
@@ -91,61 +95,54 @@ TEST(FutureChapterIndex, GiveUpAfterStalls) {
 }
 
 TEST(FutureChapterIndex, CapsForwardChaptersPerSitting) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.forwardIndexedThisSession = Limits::kMaxForwardChapters;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, CapIsOneChapterAhead) { EXPECT_EQ(Limits::kMaxForwardChapters, 1); }
 
-TEST(FutureChapterIndex, DoesNotStartWithoutIrCache) {
-  Input in = idleReady();
-  in.targetHasIrCache = false;
-  EXPECT_EQ(decide(in), Decision::None);
-}
-
 TEST(FutureChapterIndex, DoesNotStartWithoutForwardTarget) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.hasForwardTarget = false;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, DoesNotRetryAfterUserAbort) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.userAbortedThisSitting = true;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, TightHeapAbortsResident) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.futureResident = true;
   in.heapTight = true;
   EXPECT_EQ(decide(in), Decision::AbortRestore);
 }
 
 TEST(FutureChapterIndex, TightHeapDoesNotStart) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.heapTight = true;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
 TEST(FutureChapterIndex, WaitsStartGapAfterPreviousRestore) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.lastWorkMs = in.nowMs - (Limits::kStartGapMs - 1);
   EXPECT_EQ(decide(in), Decision::None);
   in.lastWorkMs = in.nowMs - Limits::kStartGapMs;
-  // Start gap elapsed, but kIdleForwardIndex keeps StartForward off.
-  EXPECT_EQ(decide(in), Decision::None);
+  EXPECT_EQ(decide(in), Decision::StartForward);
 }
 
 TEST(FutureChapterIndex, NoStartBeforeFirstTurn) {
-  Input in = idleReady();
+  Input in = idleAtEnd();
   in.lastTurnMs = 0;
   EXPECT_EQ(decide(in), Decision::None);
 }
 
-TEST(FutureChapterIndex, PageGapIsHalfCurrentChapterDuty) {
-  // Current-chapter idle gap is 1500ms; future work is 3000ms (50% pace).
-  EXPECT_EQ(Limits::kPageGapMs, 3000u);
-  EXPECT_GT(Limits::kPageGapMs, 1500u);
+TEST(FutureChapterIndex, PageGapIsTightWhileIndexingShows) {
+  // Indexing is on glass at last page — measure as fast as the loop can poll.
+  EXPECT_EQ(Limits::kPageGapMs, 200u);
+  EXPECT_LT(Limits::kPageGapMs, 1500u);
 }

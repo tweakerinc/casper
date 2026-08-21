@@ -21,10 +21,11 @@ class RivuletEngine {
  public:
   // legacy-style look-ahead for the thin page index (not painted pages).
   static constexpr int kMapAheadPages = 5;
-  // Idle tick only keeps this many mapped pages past the read head. Walking the
-  // rest of a long chapter is ~1.7s per page on device (v48 DCC ch23: MAP
-  // known=23→54 while sitting on page 18) and steals the next tap.
-  static constexpr int kIdleMapAheadPages = 8;
+  // Idle tick only keeps this many mapped pages past the read head. v49 cap=8
+  // still walked ~1.7s/page after a 2s pause and ate the next tap (press twice).
+  // 1 is the ahead page nextPage() needs; the rest of the chapter is mapped on
+  // the last-page Indexing pass or as the reader turns.
+  static constexpr int kIdleMapAheadPages = 1;
   // Idle tick budget: a few map pages without monopolizing the main loop.
   // When the map is far behind the heuristic estimate, tickIdlePageMap asks for
   // a larger burst so the status-bar "~" settles sooner (classic had a real LUT).

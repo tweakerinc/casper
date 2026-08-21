@@ -134,6 +134,9 @@ class RivuletReaderActivity final : public Activity {
   void restoreAfterFutureIndex(bool forUser);
   void persistFutureMap(bool completeOnly);
   [[nodiscard]] bool futureIndexUserWantsControl() const;
+  // PageForward during last-page Indexing: keep the next IR (this IS the hop).
+  [[nodiscard]] bool futureIndexForwardHeld() const;
+  void promoteFutureIndexToCurrent();
   void pinnedReaderPlace(int& spine, int& page) const;
   // Layout the next page without touching the framebuffer (safe during async
   // FAST). Glyph prewarm of that page waits until idle — scan-paint writes FB.

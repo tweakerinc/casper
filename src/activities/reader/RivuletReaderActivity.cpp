@@ -167,6 +167,12 @@ void RivuletReaderActivity::persistProgressForSleep() {
   // Called while still foreground — before SleepActivity tears us down. Guarantees
   // progress.bin hits SD even if onExit is skipped or fails mid-teardown.
   if (!epub_ || !ready_) return;
+  // Idle glyph prewarm / AA overlap leave the FB white or as the next page
+  // while glass still holds this one. QR sleep FASTs the FB; restore first.
+  if (activityManager.isCurrentActivity(this) && !futureIndexActive_ && !chapterNavBusy_) {
+    RenderLock lock(*this);
+    paintCurrentPageToFramebuffer();
+  }
   if (futureIndexActive_) persistFutureMap(/*completeOnly=*/false);
   APP_STATE.openEpubPath = epub_->getPath();
   // Always write on sleep — do not trust the no-op skip cache. A stale
@@ -2290,8 +2296,19 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
   scope.endScanAndPrewarm();
   glyphCacheSpine_ = spineIndex_;
   glyphCachePage_ = nextPage;
-  // Scan may have dirtied FB; the panel already holds the current page.
+  // Scan painted the next page into the FB. Put this page back so sleep / a
+  // later FAST diffs the page that is actually on glass, not white paper.
+  paintCurrentPageToFramebuffer();
+}
+
+void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
+  if (!ready_ || futureIndexActive_ || chapterNavBusy_ || !engine_.hasChapter()) return;
   renderer.clearScreen(0xFF);
+  engine_.paint(renderer, marginX_, marginY_);
+  paintPageImages();
+  paintClippingHighlights();
+  paintFootnoteMarkers();
+  renderStatusBar();
 }
 
 void RivuletReaderActivity::tickIdlePageMap() {

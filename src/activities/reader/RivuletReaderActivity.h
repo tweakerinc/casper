@@ -142,6 +142,10 @@ class RivuletReaderActivity final : public Activity {
   // FAST). Glyph prewarm of that page waits until idle — scan-paint writes FB.
   void overlapAheadDuringRefresh();
   void prewarmAheadGlyphs();
+  // Rewrite the current page into the FB without a panel refresh. Idle glyph
+  // prewarm scans the *next* page then used to leave the buffer white; QR sleep
+  // then FASTed that white plate over the live page (v52 white sleep).
+  void paintCurrentPageToFramebuffer();
 
   // Text + overlays only, in whatever render mode is active. Shared by the BW
   // paint and the greyscale AA passes (images are already 1-bit plates baked

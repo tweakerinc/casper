@@ -414,7 +414,11 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
     const int moonX = SleepChromeIcon::leftX(renderer);
     const int moonY = SleepChromeIcon::topY(renderer);
     const int moonSize = SleepChromeIcon::iconSize(renderer);
-    UiGhostPolicy::displayPartialOrSoft(renderer, moonX, moonY, moonSize, moonSize);
+    // Greys on glass + BW FB: FAST here is the v50 black/messed QR frame.
+    // SleepActivity HALF-syncs once. FAST only when both planes are already BW.
+    if (!UiGhostPolicy::panelHoldsGreyscale()) {
+      UiGhostPolicy::displayPartialOrSoft(renderer, moonX, moonY, moonSize, moonSize);
+    }
   }
 
   // Skip BootActivity splash on power-button wake for both QR and wallpaper sleep.

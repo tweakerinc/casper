@@ -1959,6 +1959,9 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   };
   hooks.shouldAbort = [](void* ctx) {
     auto* self = static_cast<RivuletReaderActivity*>(ctx);
+    // Live sample: mappedInput is otherwise stale for the whole convert
+    // (16s+), so a Next tap was invisible and the hop never promoted.
+    gpio.update();
     if (self->futureIndexForwardHeld()) return false;
     return self->futureIndexUserWantsControl();
   };
@@ -1966,6 +1969,7 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   const uint32_t t0 = millis();
   const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
   lastFutureWorkMs_ = millis();
+  gpio.update();
 
   if (!loaded.ok || loaded.partial || engine_.chapter().failed()) {
     const bool userNow = futureIndexUserWantsControl();
@@ -2000,6 +2004,13 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   }
   if (futureIndexUserWantsControl()) {
     restoreAfterFutureIndex(/*forUser=*/true);
+    return true;
+  }
+  // Page 1 is already laid out. Do not walk the rest of the future chapter
+  // (device: 44 pages / ~63s) — persist the IR and put the reader back.
+  if (engine_.mapKnownPages() >= 1) {
+    persistFutureMap(/*completeOnly=*/false);
+    restoreAfterFutureIndex(/*forUser=*/false);
   }
   return true;
 }
@@ -2106,7 +2117,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.atChapterEnd = !futureIndexActive_ && engine_.hasChapter() && engine_.page().atChapterEnd;
   in.firstInkDone = firstInkDone_;
   in.controlHeld = futureIndexUserWantsControl();
+  in.forwardHeld = futureIndexForwardHeld();
   in.futureMapComplete = futureIndexActive_ && engine_.mapComplete();
+  in.futureHasFirstPage = futureIndexActive_ && engine_.mapKnownPages() >= 1;
   in.heapTight = ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024;
   in.futureStallTicks = futureStallTicks_;
   in.forwardIndexedThisSession = futureIndexedThisSession_;
@@ -2132,6 +2145,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       return;
     case futureindex::Decision::StartForward:
       (void)startFutureChapterIndex();
+      return;
+    case futureindex::Decision::Promote:
+      promoteFutureIndexToCurrent();
       return;
     case futureindex::Decision::MeasurePage: {
       const int knownBefore = engine_.mapKnownPages();
@@ -2168,7 +2184,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       return;
     }
     case futureindex::Decision::FinishRestore:
-      persistFutureMap(/*completeOnly=*/true);
+      persistFutureMap(/*completeOnly=*/engine_.mapComplete());
       restoreAfterFutureIndex(/*forUser=*/false);
       return;
     case futureindex::Decision::AbortRestore:
@@ -3446,6 +3462,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     }
     // Advance spine (next non-empty href).
     const int n = epub_->getSpineItemsCount();
+    const int fromSpine = spineIndex_;
     bool advanced = false;
     chapterNavBusy_ = true;
     forceFastAfterChapterNav_ = true;
@@ -3457,13 +3474,17 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     activityManager.waitForRenderIdle();
     GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
     prepareHeapForChapterLoad(/*aggressive=*/true);
-    for (int i = spineIndex_ + 1; i < n; ++i) {
+    for (int i = fromSpine + 1; i < n; ++i) {
       if (loadSpine(i)) {
         advanced = true;
         break;
       }
     }
     chapterNavBusy_ = false;
+    if (advanced) {
+      SystemLog::logTiming("TURN", "chapter_next %d->%d page=1 ms=%lu", fromSpine, spineIndex_,
+                           static_cast<unsigned long>(millis() - tTurn));
+    }
     if (!advanced) {
       GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
       delay(400);
@@ -3979,9 +4000,16 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
 
 void RivuletReaderActivity::loop() {
   // Future-chapter IR is in the engine; glass still shows the reader's page.
-  // Restore before any control so a tap never layouts the wrong spine.
+  // PageForward is the hop (promote). Any other control restores so a tap
+  // never layouts the wrong spine. Device 9206393c: restore-on-any-control
+  // ate Next on the last page — Indexing then dumped the user back on 38/38.
+  if (futureIndexActive_ && futureIndexForwardHeld()) {
+    promoteFutureIndexToCurrent();
+    return;
+  }
   if (futureIndexActive_ && futureIndexUserWantsControl()) {
     restoreAfterFutureIndex(/*forUser=*/true);
+    return;
   }
 
   // Back must work even during chapter load / !ready_ (device: PageBack into

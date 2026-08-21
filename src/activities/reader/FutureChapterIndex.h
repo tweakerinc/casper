@@ -17,30 +17,36 @@
 // made getHeldTime() exceed 400ms and fired the side long-press (Dark Mode /
 // HALF scrub).
 //
-// v49 (782b6925) then disabled idle start entirely. Chapter hops landed with
-// 1/12 est and no Loading; in-chapter idle MAP still stole taps. Idle start
-// is back, but only on the last page of a sealed chapter, with Indexing on
-// glass. Mid-chapter reading never evicts the IR. A PageForward during the
-// swap is a chapter hop (promote), not a restore.
+// v49 (782b6925) disabled idle start. It came back last-page-only with
+// Indexing on glass. Device (DCC book 6 ch.13 last page, 9206393c): that
+// still converted spine 26 in 16.7s (cache=0), walked all 44 pages (~63s),
+// then restored spine 25 in 13.4s. `activity_slow` 19s then 17s. PageForward
+// during the swap restored the old chapter instead of promoting — Next
+// "froze and did not want to load". Chapter hops already paint Loading in
+// turnNext. Idle swap is off; PageForward while a future IR is resident is
+// a hop (Promote), not a restore. If a first page is already laid out,
+// FinishRestore immediately — never walk the rest of the future chapter.
 namespace futureindex {
 
-// Last-page index: 3s quiet so flip-through of the final page never starts it,
-// then measure as fast as the loop can poll (Indexing is already on glass).
 struct Limits {
   static constexpr unsigned long kQuietAfterTurnMs = 3000;
   static constexpr unsigned long kPageGapMs = 200;
   static constexpr unsigned long kStartGapMs = 1000;
   static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
-  static constexpr bool kIdleForwardIndex = true;
+  // Off: last-page idle convert blocked the reader for tens of seconds and
+  // ate the chapter hop. turnNext already shows Loading and loads the next
+  // spine on the tap that actually wants it.
+  static constexpr bool kIdleForwardIndex = false;
 };
 
 enum class Decision : uint8_t {
   None,
   StartForward,   // evict current IR, load next unmapped spine
   MeasurePage,    // extendPageMap(1) on the resident future spine
-  FinishRestore,  // future map complete — persist .rvpm and restore current
+  FinishRestore,  // enough future work — persist and restore current
   AbortRestore,   // user input, stall, or tight heap — restore current
+  Promote,        // PageForward during the swap: this IS the chapter hop
 };
 
 struct Input {
@@ -49,13 +55,14 @@ struct Input {
   bool aheadWarm = false;
   bool firstInkDone = false;
   bool controlHeld = false;
+  bool forwardHeld = false;  // PageForward — hop, do not restore
   bool futureMapComplete = false;
+  bool futureHasFirstPage = false;  // page 1 laid out; do not walk the chapter
   bool heapTight = false;
   // Tap during a swap: do not StartForward again until the reader changes spine.
   bool userAbortedThisSitting = false;
   // Last page of the current chapter. Idle must not swap IR mid-chapter
-  // (device v48/v49: 8s load stole in-chapter taps). Convert is allowed here
-  // because Indexing is on glass.
+  // (device v48/v49: 8s load stole in-chapter taps).
   bool atChapterEnd = false;
   bool hasForwardTarget = false;
   int futureStallTicks = 0;
@@ -76,6 +83,8 @@ inline bool workGapElapsed(const Input& in, const unsigned long needMs) {
 }
 
 inline Decision decide(const Input& in) {
+  // PageForward while the next chapter is already in the engine is the hop.
+  if (in.futureResident && in.forwardHeld) return Decision::Promote;
   if (in.controlHeld && in.futureResident) return Decision::AbortRestore;
   if (in.controlHeld) return Decision::None;
   if (!in.firstInkDone) return Decision::None;
@@ -84,6 +93,9 @@ inline Decision decide(const Input& in) {
 
   if (in.futureResident) {
     if (in.futureMapComplete) return Decision::FinishRestore;
+    // First page is enough to persist IR. Walking the rest (device: 44 pages,
+    // ~63s) left the user on Indexing until a 13s restore dumped them back.
+    if (in.futureHasFirstPage) return Decision::FinishRestore;
     if (in.futureStallTicks >= Limits::kGiveUpStalls) return Decision::AbortRestore;
     if (!workGapElapsed(in, Limits::kPageGapMs)) return Decision::None;
     return Decision::MeasurePage;

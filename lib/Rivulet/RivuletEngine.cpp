@@ -85,8 +85,8 @@ bool RivuletEngine::pageCachePath(const int pageIndex, char* out, const size_t o
   const uint32_t keyFp = static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
                          (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
                          (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
-  const int n = std::snprintf(out, outSz, "%s/s%d_p%d_%08x.rvpg", pageCacheDir_.c_str(), pageCacheSpine_, pageIndex,
-                              keyFp);
+  const int n =
+      std::snprintf(out, outSz, "%s/s%d_p%d_%08x.rvpg", pageCacheDir_.c_str(), pageCacheSpine_, pageIndex, keyFp);
   return n > 0 && static_cast<size_t>(n) < outSz;
 }
 
@@ -314,8 +314,7 @@ bool RivuletEngine::loadPageMap(const char* mapPath) {
     for (int i = 0; i < m.knownPages(); ++i) {
       const IrCursor c = m.pageStart(i);
       if (c.blockIndex >= blocks.size()) {
-        LOG_DBG("RVEN", "page map cursor OOB page=%d block=%u — ignoring", i,
-                static_cast<unsigned>(c.blockIndex));
+        LOG_DBG("RVEN", "page map cursor OOB page=%d block=%u — ignoring", i, static_cast<unsigned>(c.blockIndex));
         return false;
       }
       if (static_cast<size_t>(c.runIndex) > nRuns) {
@@ -362,8 +361,8 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
     const int known = map_.knownPages();
     // Only catch the classic false-complete bug (2–3 page "whole chapter").
     if (known <= 3) {
-      const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
-                                                 lineCompression_);
+      const int est =
+          chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx, lineCompression_);
       if (est >= 10) {
         LOG_ERR("RVEN", "scrubStaleCompleteMap: tiny complete known=%d est=%d — reset", known, est);
         IrCursor start{};
@@ -375,8 +374,7 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
     return false;  // honest complete map — keep it
   }
 
-  LOG_DBG("RVEN", "scrubStaleCompleteMap: last page not chapter end (known=%d) — reopening",
-          map_.knownPages());
+  LOG_DBG("RVEN", "scrubStaleCompleteMap: last page not chapter end (known=%d) — reopening", map_.knownPages());
   map_.markIncomplete();
   if (tmp.end != map_.pageStart(last) && !map_.hasPage(last + 1)) {
     map_.pushPageStart(tmp.end);
@@ -394,8 +392,8 @@ void RivuletEngine::markMapCompleteIfPlausible(const GfxRenderer& renderer) {
   const int known = map_.knownPages();
   if (known <= 0) return;
   if (known <= 3) {
-    const int est = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx,
-                                               lineCompression_);
+    const int est =
+        chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx, lineCompression_);
     if (est >= 10) {
       LOG_ERR("RVEN", "refuse markComplete known=%d est=%d (implausibly short)", known, est);
       return;
@@ -475,9 +473,9 @@ bool RivuletEngine::layoutAtCursor(const GfxRenderer& renderer, const IrCursor& 
 }
 
 bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
-  if (aheadValid_) return false;              // already warm
-  if (!laidOutValid_) return false;           // nothing to be ahead OF yet
-  if (laidOut_.atChapterEnd) return false;    // no next page in this chapter
+  if (aheadValid_) return false;            // already warm
+  if (!laidOutValid_) return false;         // nothing to be ahead OF yet
+  if (laidOut_.atChapterEnd) return false;  // no next page in this chapter
 
   const int nextIdx = currentPage_ + 1;
   char path[220];
@@ -527,8 +525,7 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
           behindValid_ = true;
           return true;
         }
-        LOG_DBG("RVEN", "behind cache p=%d rejected (start=%d end=%d)", behindIdx, startOk ? 1 : 0,
-                endOk ? 1 : 0);
+        LOG_DBG("RVEN", "behind cache p=%d rejected (start=%d end=%d)", behindIdx, startOk ? 1 : 0, endOk ? 1 : 0);
         Storage.remove(path);
       }
     }
@@ -537,7 +534,8 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
   // Full paint layout (not measure-only) — this page may be shown on prevPage.
   behindValid_ =
       PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
-  if (!behindValid_) behind_.clear();
+  if (!behindValid_)
+    behind_.clear();
   else if (!pageCacheDir_.empty()) {
     char path[220];
     const int behindIdx = currentPage_ - 1;
@@ -835,8 +833,8 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   // Refusing is right for forward reading, but for PageBack it meant the reader
   // simply never left the current chapter (silent "nothing happens" refresh).
   if (chapter_.failed() && !allowPartial) {
-    LOG_ERR("RVEN", "goToLastPage refuse partial IR text=%u blocks=%u",
-            static_cast<unsigned>(chapter_.textSize()), static_cast<unsigned>(chapter_.blockCount()));
+    LOG_ERR("RVEN", "goToLastPage refuse partial IR text=%u blocks=%u", static_cast<unsigned>(chapter_.textSize()),
+            static_cast<unsigned>(chapter_.blockCount()));
     return false;
   }
   if (chapter_.failed()) {
@@ -957,8 +955,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
         skip.byteInRun = 0;
         LOG_ERR("RVEN", "goToLastPage layout fail at block %u kind=%d — skipping to %u (page=%d)",
-                static_cast<unsigned>(cur.blockIndex),
-                static_cast<int>(chapter_.blocks()[cur.blockIndex].kind),
+                static_cast<unsigned>(cur.blockIndex), static_cast<int>(chapter_.blocks()[cur.blockIndex].kind),
                 static_cast<unsigned>(skip.blockIndex), walked);
         cur = skip;
         lastWalkSkips_ = skips;
@@ -969,8 +966,8 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
         }
         continue;
       }
-      LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d skips=%d", walked, walked,
-              map_.knownPages(), skips);
+      LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d skips=%d", walked, walked, map_.knownPages(),
+              skips);
       lastWalkStop_ = (skips > kMaxBlockSkips) ? kWalkStopSkipsExhausted : kWalkStopLayoutFail;
       break;
     }
@@ -1032,8 +1029,8 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
 
   lastWalkPages_ = map_.knownPages();
   lastWalkBlock_ = static_cast<int>(cur.blockIndex);
-  LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d block=%u/%u stop=%u", walked,
-          walked, budget, map_.knownPages(), static_cast<unsigned>(cur.blockIndex),
+  LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d block=%u/%u stop=%u", walked, walked,
+          budget, map_.knownPages(), static_cast<unsigned>(cur.blockIndex),
           static_cast<unsigned>(chapter_.blocks().size()), static_cast<unsigned>(lastWalkStop_));
   // Do not paint a mid-chapter page as verified "last" — clear paint state.
   // Keep the walked map so goToBestEffortLastPage can land on known-1.
@@ -1152,10 +1149,8 @@ bool RivuletEngine::sealMapAtChapterEnd() {
 
 int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) const {
   // IR estimate is always available (no renderer required for the heuristic).
-  const int bodyEm =
-      rendererForEstimate ? std::max(8, rendererForEstimate->getFontAscenderSize(key_.fontId)) : 14;
-  const int heuristic =
-      chapter_.estimatePageCount(key_.viewportW, key_.viewportH, bodyEm, lineCompression_);
+  const int bodyEm = rendererForEstimate ? std::max(8, rendererForEstimate->getFontAscenderSize(key_.fontId)) : 14;
+  const int heuristic = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, bodyEm, lineCompression_);
 
   const int known = std::max(1, map_.knownPages());
   const int atLeastCurrent = std::max(known, currentPage_ + 1);
@@ -1236,8 +1231,10 @@ int RivuletEngine::idleMapPagesThisTick(const GfxRenderer* rendererForEstimate) 
   return kIdleMapPagesPerTick;
 }
 
-void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int originY) const {
-  if (!laidOutValid_) return;
+void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int originY, const bool ahead) const {
+  const bool valid = ahead ? aheadValid_ : laidOutValid_;
+  if (!valid) return;
+  const LaidOutPage& page = ahead ? ahead_ : laidOut_;
   // Focus / guide only when not Book's Style (forced L/C/R/J) — avoids fighting CSS rhythm.
   const bool bookStyle = (key_.flags & 1) != 0;
   const bool focusOn = !bookStyle && (key_.flags & 0x20) != 0;
@@ -1246,13 +1243,13 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
 
   // Thematic breaks first: they sit behind nothing, and drawing them before text
   // keeps the ordering stable if a rule ever shares a line box with a span.
-  for (const RulePlate& rule : laidOut_.rules) {
+  for (const RulePlate& rule : page.rules) {
     if (rule.w <= 0 || rule.h <= 0) continue;
     renderer.fillRect(originX + rule.x, originY + rule.y, rule.w, rule.h, true);
   }
 
-  for (size_t si = 0; si < laidOut_.spans.size(); ++si) {
-    const GlyphSpan& sp = laidOut_.spans[si];
+  for (size_t si = 0; si < page.spans.size(); ++si) {
+    const GlyphSpan& sp = page.spans[si];
     if (sp.text.empty()) continue;
     // GlyphSpan.y is line-box TOP (same contract as classic PageLine / TextBlock).
     // drawText adds ascender for normal ink; DROP_CAP top-aligns N× ink to y.
@@ -1322,9 +1319,9 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
           bool moreWord = false;
           const char* peek = s;
           while (*peek == ' ' || *peek == '\t') ++peek;
-          if (*peek) moreWord = true;
-          else if (si + 1 < laidOut_.spans.size() && laidOut_.spans[si + 1].y == sp.y &&
-                   !laidOut_.spans[si + 1].text.empty()) {
+          if (*peek)
+            moreWord = true;
+          else if (si + 1 < page.spans.size() && page.spans[si + 1].y == sp.y && !page.spans[si + 1].text.empty()) {
             moreWord = true;
           }
           if (moreWord) {
@@ -1391,9 +1388,9 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
         bool moreWord = false;
         const char* peek = s;
         while (*peek == ' ' || *peek == '\t') ++peek;
-        if (*peek) moreWord = true;
-        else if (si + 1 < laidOut_.spans.size() && laidOut_.spans[si + 1].y == sp.y &&
-                 !laidOut_.spans[si + 1].text.empty()) {
+        if (*peek)
+          moreWord = true;
+        else if (si + 1 < page.spans.size() && page.spans[si + 1].y == sp.y && !page.spans[si + 1].text.empty()) {
           moreWord = true;
         }
         if (moreWord) {

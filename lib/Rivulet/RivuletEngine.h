@@ -6,8 +6,8 @@
 #include "ChapterIr.h"
 #include "IrFormat.h"
 #include "LaidOutPage.h"
-#include "PageMap.h"
 #include "PageLayouter.h"
+#include "PageMap.h"
 
 class GfxRenderer;
 
@@ -142,7 +142,8 @@ class RivuletEngine {
   [[nodiscard]] bool behindWarm() const { return behindValid_; }
 
   // Paint laid-out page at origin (margins applied by caller or via key).
-  void paint(GfxRenderer& renderer, int originX, int originY) const;
+  // ahead=true paints the warm next page (glyph prewarm / scan only).
+  void paint(GfxRenderer& renderer, int originX, int originY, bool ahead = false) const;
 
   [[nodiscard]] bool hasChapter() const { return !chapter_.empty(); }
   [[nodiscard]] int currentPage() const { return currentPage_; }
@@ -207,7 +208,7 @@ class RivuletEngine {
   mutable int smoothedAtKnown_ = -1;
   std::string pageCacheDir_;
   mutable bool pageCacheDirReady_ = false;  // dir created/verified this session
-  int pageCacheSpine_ = -1;  // namespaces .rvpg files; -1 disables cache I/O
+  int pageCacheSpine_ = -1;                 // namespaces .rvpg files; -1 disables cache I/O
   TurnFail lastTurnFail_ = TurnFail::None;
   int lastWalkPages_ = 0;
   int lastWalkBlock_ = 0;

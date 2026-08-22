@@ -324,6 +324,9 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
     return WakeupReason::AfterUSBPower;
   }
-  // Brownout recovery, unknown, etc. → cold boot (not sleep wake).
+  // EN / CHIP_PU (ESP_RST_EXT) stays Other — not PowerButton. Classifying it as
+  // a power wake would QuickResume into the last book, then a follow-up power
+  // press (the usual "reset then turn it on" habit) would sleep it again.
+  // Brownout / watchdog / unknown also land here as a cold Home boot.
   return WakeupReason::Other;
 }

@@ -136,6 +136,11 @@ TEST(FutureChapterIndex, ConvertHeapFloorDoesNotAbortResident) {
 
 TEST(FutureChapterIndex, CapIsOneChapterAhead) { EXPECT_EQ(Limits::kMaxForwardChapters, 1); }
 
+TEST(FutureChapterIndex, LayoutOnlyFloorIsBelowConvertFloor) {
+  EXPECT_LT(Limits::kMinMaxAllocLayoutOnly, Limits::kMinMaxAllocToStart);
+  EXPECT_LT(Limits::kMinFreeLayoutOnly, Limits::kMinFreeToStart);
+}
+
 TEST(FutureChapterIndex, DoesNotStartUntilMapComplete) {
   Input in = idleReady();
   in.currentMapComplete = false;

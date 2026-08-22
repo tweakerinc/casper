@@ -2171,28 +2171,31 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
                           in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
-  if (maybeStart && !in.heapOkToConvert) {
-    // Quiet window already elapsed. Drop font/PNG caches only — not the live IR.
-    if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
-      if (!fcm->isScanning()) fcm->clearCache();
-    }
-    PngToFramebufferConverter::releaseWarmIfHeapTight(futureindex::Limits::kMinMaxAllocToStart);
-    in.heapOkToConvert = ESP.getMaxAllocHeap() >= futureindex::Limits::kMinMaxAllocToStart &&
-                         ESP.getFreeHeap() >= futureindex::Limits::kMinFreeToStart;
-    if (!in.heapOkToConvert) {
-      SystemLog::logTiming("FIDX", "skip_heap maxA=%u fre=%u needA=%u needF=%u",
-                           static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getFreeHeap()),
-                           static_cast<unsigned>(futureindex::Limits::kMinMaxAllocToStart),
-                           static_cast<unsigned>(futureindex::Limits::kMinFreeToStart));
-      lastFutureWorkMs_ = millis();
-      // Map-walk fragmentation does not heal this sitting (8fa5688f maxA stayed
-      // ~31–40KB). Do not retry a 21s convert every quiet window.
-      futureIndexedThisSession_ = futureindex::Limits::kMaxForwardChapters;
-    }
-  }
-  if (maybeStart && in.heapOkToConvert) {
+  if (maybeStart) {
     const int target = nextForwardUnmappedSpine();
     in.hasForwardTarget = target >= 0;
+    const bool layoutOnly = target >= 0 && spineHasIrCache(target);
+    const uint32_t needA =
+        layoutOnly ? futureindex::Limits::kMinMaxAllocLayoutOnly : futureindex::Limits::kMinMaxAllocToStart;
+    const uint32_t needF = layoutOnly ? futureindex::Limits::kMinFreeLayoutOnly : futureindex::Limits::kMinFreeToStart;
+    in.heapOkToConvert = ESP.getMaxAllocHeap() >= needA && ESP.getFreeHeap() >= needF;
+    if (in.hasForwardTarget && !in.heapOkToConvert) {
+      // Quiet window already elapsed. Drop font/PNG caches only — not the live IR.
+      if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+        if (!fcm->isScanning()) fcm->clearCache();
+      }
+      PngToFramebufferConverter::releaseWarmIfHeapTight(needA);
+      in.heapOkToConvert = ESP.getMaxAllocHeap() >= needA && ESP.getFreeHeap() >= needF;
+      if (!in.heapOkToConvert) {
+        SystemLog::logTiming("FIDX", "skip_heap maxA=%u fre=%u needA=%u needF=%u layout=%d",
+                             static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getFreeHeap()),
+                             static_cast<unsigned>(needA), static_cast<unsigned>(needF), layoutOnly ? 1 : 0);
+        lastFutureWorkMs_ = millis();
+        // Map-walk fragmentation does not heal this sitting (8fa5688f maxA stayed
+        // ~31–40KB). Do not retry a 21s convert every quiet window.
+        futureIndexedThisSession_ = futureindex::Limits::kMaxForwardChapters;
+      }
+    }
   }
 
   switch (futureindex::decide(in)) {

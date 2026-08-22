@@ -43,6 +43,12 @@ struct Limits {
   // tighter heapTight flag so page-0 layout is not cancelled for 48KB.
   static constexpr uint32_t kMinMaxAllocToStart = 48 * 1024;
   static constexpr uint32_t kMinFreeToStart = 60 * 1024;
+  // .rvir already on SD: loadIr + goToStart, no ingestHtml. Device 300ec1c0
+  // skipped at maxA=36852 and 47092 (need 49152) after a sitting that already
+  // had IR — layout-only would have prefetched page 1. Do not lower the
+  // convert floor (31KB ingestHtml was the 21s freeze).
+  static constexpr uint32_t kMinMaxAllocLayoutOnly = 24 * 1024;
+  static constexpr uint32_t kMinFreeLayoutOnly = 32 * 1024;
   // On: crawl the next spine while the user is still reading this one. Last
   // page is too short to wait for quiet there.
   static constexpr bool kIdleForwardIndex = true;

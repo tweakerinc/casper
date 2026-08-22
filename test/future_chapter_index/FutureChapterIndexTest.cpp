@@ -15,6 +15,7 @@ Input idleReady() {
   in.currentMapComplete = true;
   in.aheadWarm = true;
   in.hasForwardTarget = true;
+  in.heapOkToConvert = true;
   in.lastTurnMs = 1000;
   in.nowMs = 1000 + Limits::kQuietAfterTurnMs;
   return in;
@@ -117,6 +118,20 @@ TEST(FutureChapterIndex, TightHeapDoesNotStart) {
   Input in = idleAtEnd();
   in.heapTight = true;
   EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, ConvertHeapFloorBlocksStart) {
+  Input in = idleAtEnd();
+  in.heapOkToConvert = false;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, ConvertHeapFloorDoesNotAbortResident) {
+  Input in = idleAtEnd();
+  in.futureResident = true;
+  in.heapOkToConvert = false;
+  in.lastWorkMs = in.nowMs - Limits::kPageGapMs;
+  EXPECT_EQ(decide(in), Decision::MeasurePage);
 }
 
 TEST(FutureChapterIndex, CapIsOneChapterAhead) { EXPECT_EQ(Limits::kMaxForwardChapters, 1); }

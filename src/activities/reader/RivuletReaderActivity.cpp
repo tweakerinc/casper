@@ -1948,7 +1948,10 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   req.irDir = irDir_;
   req.spineIndex = target;
   req.imageRendering = SETTINGS.imageRendering;
-  req.requireCompleteIr = true;
+  // Page 1 on SD is the hop payload. requireFull retries ingestHtml and was
+  // the 21s freeze (8fa5688f FIDX load_fail spine=27). Partial IR that lays
+  // out page 0 is enough; tickPendingChapterIr completes later.
+  req.requireCompleteIr = false;
   req.bindPageCache = true;
   // Panel still holds the reader's page. Lending the FB hands it back white
   // and a later windowed paint would flash blank over live text.
@@ -2153,6 +2156,8 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.futureMapComplete = futureIndexActive_ && engine_.mapComplete();
   in.futureHasFirstPage = futureIndexActive_ && engine_.mapKnownPages() >= 1;
   in.heapTight = ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024;
+  in.heapOkToConvert = ESP.getMaxAllocHeap() >= futureindex::Limits::kMinMaxAllocToStart &&
+                       ESP.getFreeHeap() >= futureindex::Limits::kMinFreeToStart;
   in.futureStallTicks = futureStallTicks_;
   in.forwardIndexedThisSession = futureIndexedThisSession_;
   in.userAbortedThisSitting = futureIndexAbortedThisSitting_;
@@ -2166,7 +2171,26 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
                           in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
-  if (maybeStart) {
+  if (maybeStart && !in.heapOkToConvert) {
+    // Quiet window already elapsed. Drop font/PNG caches only — not the live IR.
+    if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+      if (!fcm->isScanning()) fcm->clearCache();
+    }
+    PngToFramebufferConverter::releaseWarmIfHeapTight(futureindex::Limits::kMinMaxAllocToStart);
+    in.heapOkToConvert = ESP.getMaxAllocHeap() >= futureindex::Limits::kMinMaxAllocToStart &&
+                         ESP.getFreeHeap() >= futureindex::Limits::kMinFreeToStart;
+    if (!in.heapOkToConvert) {
+      SystemLog::logTiming("FIDX", "skip_heap maxA=%u fre=%u needA=%u needF=%u",
+                           static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getFreeHeap()),
+                           static_cast<unsigned>(futureindex::Limits::kMinMaxAllocToStart),
+                           static_cast<unsigned>(futureindex::Limits::kMinFreeToStart));
+      lastFutureWorkMs_ = millis();
+      // Map-walk fragmentation does not heal this sitting (8fa5688f maxA stayed
+      // ~31–40KB). Do not retry a 21s convert every quiet window.
+      futureIndexedThisSession_ = futureindex::Limits::kMaxForwardChapters;
+    }
+  }
+  if (maybeStart && in.heapOkToConvert) {
     const int target = nextForwardUnmappedSpine();
     in.hasForwardTarget = target >= 0;
   }
@@ -4490,7 +4514,10 @@ void RivuletReaderActivity::renderStatusBar() const {
 }
 
 bool RivuletReaderActivity::handleForcedRefresh() {
-  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/true);
+  // Device 8fa5688f: MAIN force_refresh then the log died — HALF started while
+  // the previous async FAST or a silent FIDX swap still owned the panel.
+  activityManager.waitForRenderIdle();
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
   {
     RenderLock lock(*this);
     pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;

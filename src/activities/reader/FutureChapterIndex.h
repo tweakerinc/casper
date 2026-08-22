@@ -36,6 +36,13 @@ struct Limits {
   static constexpr unsigned long kStartGapMs = 1000;
   static constexpr int kMaxForwardChapters = 1;
   static constexpr int kGiveUpStalls = 8;
+  // Idle start does not lend the 48KB framebuffer (glass still holds this
+  // page). ChapterLoader's convert floor is 48KB maxAlloc / 60KB free — below
+  // that, ingestHtml + requireFull retry ran 21s then failed (device 8fa5688f
+  // spine 27, maxA=31732, activity_slow 38269ms). Resident abort stays on the
+  // tighter heapTight flag so page-0 layout is not cancelled for 48KB.
+  static constexpr uint32_t kMinMaxAllocToStart = 48 * 1024;
+  static constexpr uint32_t kMinFreeToStart = 60 * 1024;
   // On: crawl the next spine while the user is still reading this one. Last
   // page is too short to wait for quiet there.
   static constexpr bool kIdleForwardIndex = true;
@@ -60,6 +67,8 @@ struct Input {
   bool futureMapComplete = false;
   bool futureHasFirstPage = false;  // page 1 laid out; do not walk the chapter
   bool heapTight = false;
+  // Enough contiguous heap to convert without lending the FB. StartForward only.
+  bool heapOkToConvert = false;
   // Tap during a swap: do not StartForward again until the reader changes spine.
   bool userAbortedThisSitting = false;
   // Last page of the reader's held place (not the future spine in the engine).
@@ -112,6 +121,7 @@ inline Decision decide(const Input& in) {
   if (in.forwardIndexedThisSession >= Limits::kMaxForwardChapters) return Decision::None;
   if (!quietLongEnough(in, Limits::kQuietAfterTurnMs)) return Decision::None;
   if (!workGapElapsed(in, Limits::kStartGapMs)) return Decision::None;
+  if (!in.heapOkToConvert) return Decision::None;
   return Decision::StartForward;
 }
 

@@ -1114,7 +1114,7 @@ void RivuletReaderActivity::navigateToHref(const std::string& hrefStr, const boo
     requestUpdate();
   } else {
     if (savePosition && footnoteDepth_ > 0) footnoteDepth_--;
-    GUI.drawPopup(renderer, "Chapter not readable", BaseTheme::kPopupCenterY, true);
+    GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
     delay(400);
   }
 }
@@ -1875,7 +1875,10 @@ int RivuletReaderActivity::nextForwardUnmappedSpine() const {
     // First readable chapter after the reader's place. Do not skip a mapped
     // or failed spine to crawl further (device: 24 done → 25 convert 15s).
     if (cand == futureSkipSpine_) return -1;
-    if (spineHasIrCache(cand) && engine_.hasPageCache(cand, 0)) return -1;
+    // Never idle-convert. Device e38a3a71: StartForward cache=0 on DCC spine 33
+    // blocked the loop 33s (ingestHtml 16s + restore 8s) while sitting.
+    if (!spineHasIrCache(cand)) return -1;
+    if (engine_.hasPageCache(cand, 0)) return -1;
     return cand;
   }
   return -1;
@@ -2196,8 +2199,10 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
   if (maybeStart) {
     const int target = nextForwardUnmappedSpine();
-    in.hasForwardTarget = target >= 0;
-    const bool layoutOnly = target >= 0 && spineHasIrCache(target);
+    // hasForwardTarget is layout-only: nextForwardUnmappedSpine returns -1
+    // when the next spine has no .rvir, so idle never runs ingestHtml.
+    in.hasForwardTarget = target >= 0 && spineHasIrCache(target);
+    const bool layoutOnly = in.hasForwardTarget;
     const uint32_t needA =
         layoutOnly ? futureindex::Limits::kMinMaxAllocLayoutOnly : futureindex::Limits::kMinMaxAllocToStart;
     const uint32_t needF = layoutOnly ? futureindex::Limits::kMinFreeLayoutOnly : futureindex::Limits::kMinFreeToStart;
@@ -2481,6 +2486,9 @@ void RivuletReaderActivity::overlapAheadDuringRefresh() {
 void RivuletReaderActivity::prewarmAheadGlyphs() {
   if (futureIndexActive_ || !engine_.aheadWarm()) return;
   if (!canRetainGlyphCache()) return;
+  // Device e38a3a71: 4.1s next-page paint at maxA after a sitting (abort=0).
+  // Skip when the largest free block cannot hold another decompress.
+  if (ESP.getMaxAllocHeap() < 32 * 1024) return;
   // FIDX restore + IR catchup already blocked the loop for seconds; glyph
   // prewarm then held RenderLock for 2–5s more (device 300ec1c0). Skip until
   // the reader has been idle again.
@@ -2569,8 +2577,10 @@ void RivuletReaderActivity::tickIdlePageMap() {
   }
 
   // Next page is laid out: decompress its glyphs so the coming tap skips scan.
+  // Wait 2s after a turn — device e38a3a71 painted the next page for 4.1s
+  // (prewarm_glyphs abort=0) 50ms after the tap and froze the following press.
   if (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1) {
-    if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
+    if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL) {
       prewarmAheadGlyphs();
     }
   }
@@ -3376,7 +3386,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                   (void)saveProgress();
                 } else {
                   // loadTocChapter restores the previous spine; do not leave Empty page.
-                  GUI.drawPopup(renderer, "Chapter not readable", BaseTheme::kPopupCenterY, true);
+                  GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
                   delay(600);
                   firstPaint_ = true;
                 }
@@ -3507,16 +3517,13 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       return;
     }
     case MA::DELETE_STATS: {
-      // Wipe stats under book_<id> plus any legacy epub_*/legacy folders
-      // loadForBook might still find (same as File Browser → Delete Book Stats).
-      // Copy the live 75-byte file to trash first so Restore Book Stats can undo.
+      // Move live stats into <cache>/.trash — Recover Stats puts them back.
       if (epub_) {
         (void)stashDeletedBookStats(epub_->getPath().c_str());
-        (void)BookReadingStats::removeForBook(epub_->getPath());
-        LOG_INF("RVR", "deleted stats for %s", epub_->getPath().c_str());
+        LOG_INF("RVR", "stashed stats for %s", epub_->getPath().c_str());
       } else if (!casperBookDir_.empty()) {
-        (void)BookReadingStats::remove(casperBookDir_);
-        LOG_INF("RVR", "deleted casper stats %s", casperBookDir_.c_str());
+        (void)BookReadingStats::stashToTrash(casperBookDir_);
+        LOG_INF("RVR", "stashed casper stats %s", casperBookDir_.c_str());
       }
       readingStats_ = BookReadingStats{};
       PenumbraThemeUi::invalidateRecentsProgressCache();
@@ -3677,20 +3684,33 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       pageMapDirty_ = true;
       persistPageMapIfComplete();
     }
-    // Advance spine (next non-empty href).
+    // Immediate next non-empty spine only. Walking later files after a failed
+    // convert is what skipped DCC 33→34→36 on a font change (log_00001_4aa3).
     const int n = epub_->getSpineItemsCount();
     const int fromSpine = spineIndex_;
+    const int fromPage = engine_.currentPage();
+    int nextSpine = -1;
+    for (int i = fromSpine + 1; i < n; ++i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        nextSpine = i;
+        break;
+      }
+    }
+    if (nextSpine < 0) {
+      GUI.drawPopup(renderer, tr(STR_END_OF_BOOK), BaseTheme::kPopupCenterY, true);
+      delay(400);
+      (void)saveProgress();
+      requestUpdate();
+      return false;
+    }
+
     bool advanced = false;
     forceFastAfterChapterNav_ = true;
     activityManager.waitForRenderIdle();
 
-    for (int i = fromSpine + 1; i < n && !advanced; ++i) {
-      if (epub_->getSpineItem(i).href.empty()) continue;
-      if (tryHopToCachedFirstPage(i)) {
-        advanced = true;
-        cachedHop = true;
-        break;
-      }
+    if (tryHopToCachedFirstPage(nextSpine)) {
+      advanced = true;
+      cachedHop = true;
     }
 
     if (!advanced) {
@@ -3702,11 +3722,8 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       // displayWindow does not race the render task.
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
       prepareHeapForChapterLoad(/*aggressive=*/true);
-      for (int i = fromSpine + 1; i < n; ++i) {
-        if (loadSpine(i)) {
-          advanced = true;
-          break;
-        }
+      if (loadSpine(nextSpine)) {
+        advanced = true;
       }
       chapterNavBusy_ = false;
       SystemLog::disarmHangWatch();
@@ -3716,9 +3733,14 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
                            cachedHop ? 1 : 0, static_cast<unsigned long>(millis() - tTurn));
     }
     if (!advanced) {
-      GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      if (spineIndex_ != fromSpine || !ready_ || !engine_.hasChapter()) {
+        if (!loadSpine(fromSpine, fromPage)) {
+          (void)loadSpine(fromSpine, 0);
+        }
+      }
+      GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
       delay(400);
-      (void)saveProgress();
       requestUpdate();
       return false;
     }
@@ -3886,7 +3908,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       // Tell the user. A bare repaint of the page they pressed Back on reads as
       // "the firmware is broken"; naming the reason is honest and debuggable.
       if (targetSpine >= 0) {
-        GUI.drawPopup(renderer, "Previous chapter unavailable", BaseTheme::kPopupCenterY, true);
+        GUI.drawPopup(renderer, tr(STR_PREV_CHAPTER_UNAVAILABLE), BaseTheme::kPopupCenterY, true);
         delay(700);
         firstPaint_ = true;
       }
@@ -4032,39 +4054,38 @@ void RivuletReaderActivity::chapterSkipNext() {
   const int originSpine = spineIndex_;
   const int originPage = engine_.currentPage();
 
-  auto tryLoadNext = [&](const int spine) -> bool {
-    if (spine < 0 || spine >= n || spine == originSpine) return false;
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
-    // Cold cache after Delete Cache needs the same aggressive scrub as prev-chapter.
-    prepareHeapForChapterLoad(/*aggressive=*/true);
-    if (!loadSpine(spine, /*startPage=*/0)) {
-      prepareHeapForChapterLoad(/*aggressive=*/true);
-      return loadSpine(spine, 0);
-    }
-    return true;
-  };
-
-  // Prefer TOC chapter boundaries (CrossInk) — raw spine+1 often stays inside the
-  // same named chapter (split XHTML) so "next chapter" looked like a reload of ch6.
+  // Immediate next TOC chapter only — never scan ch6→ch7→…→ch12 (font change
+  // OOM used that walk to skip a ton of chapters and then saveProgress pinned it).
+  int targetSpine = -1;
   const int tocCount = epub_->getTocItemsCount();
   const int tocIdx = epub_->getTocIndexForSpineIndex(originSpine);
-  bool advanced = false;
   if (tocCount > 0 && tocIdx >= 0) {
     for (int t = tocIdx + 1; t < tocCount; ++t) {
       const int spine = epub_->getTocItem(t).spineIndex;
-      if (spine < 0 || spine == originSpine) continue;
-      if (tryLoadNext(spine)) {
-        advanced = true;
+      if (spine >= 0 && spine < n && spine != originSpine) {
+        targetSpine = spine;
         break;
       }
     }
   } else {
     for (int i = originSpine + 1; i < n; ++i) {
-      if (tryLoadNext(i)) {
-        advanced = true;
+      if (!epub_->getSpineItem(i).href.empty()) {
+        targetSpine = i;
         break;
       }
     }
+  }
+
+  bool advanced = false;
+  if (targetSpine >= 0) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    bool loaded = loadSpine(targetSpine, /*startPage=*/0);
+    if (!loaded) {
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      loaded = loadSpine(targetSpine, 0);
+    }
+    advanced = loaded;
   }
 
   if (advanced) {
@@ -4077,16 +4098,14 @@ void RivuletReaderActivity::chapterSkipNext() {
     return;
   }
 
-  // Restore origin — do not claim "End of book" when a later TOC entry exists but
-  // failed to load (cold convert / OOM). That matched the "keeps reloading ch6 p1" loop.
   if (spineIndex_ != originSpine || !ready_) {
     prepareHeapForChapterLoad();
     if (!loadSpine(originSpine, originPage)) {
       (void)loadSpine(originSpine, 0);
     }
   }
-  const bool hasLaterToc = (tocCount > 0 && tocIdx >= 0 && tocIdx + 1 < tocCount);
-  GUI.drawPopup(renderer, hasLaterToc ? "Chapter not readable" : "End of book", BaseTheme::kPopupCenterY, true);
+  GUI.drawPopup(renderer, targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_END_OF_BOOK),
+                BaseTheme::kPopupCenterY, true);
   delay(400);
   requestUpdate();
 }
@@ -4172,7 +4191,8 @@ void RivuletReaderActivity::chapterSkipPrev() {
       (void)loadSpine(originSpine, 0);
     }
   }
-  GUI.drawPopup(renderer, targetSpine >= 0 ? "Chapter not readable" : "Start of book", BaseTheme::kPopupCenterY, true);
+  GUI.drawPopup(renderer, targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_START_OF_BOOK),
+                BaseTheme::kPopupCenterY, true);
   delay(400);
   requestUpdate();
 }

@@ -159,6 +159,14 @@ TEST(FutureChapterIndex, NoStartWhileFootnoteScanPending) {
   EXPECT_EQ(decide(in), Decision::None);
 }
 
+TEST(FutureChapterIndex, NoStartWithoutForwardTarget) {
+  // Activity must leave hasForwardTarget false when the next spine has no
+  // .rvir (never idle-convert). decide() then stays None.
+  Input in = idleReady();
+  in.hasForwardTarget = false;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
 TEST(FutureChapterIndex, FootnotePendingDoesNotAbortResident) {
   Input in = idleReady();
   in.futureResident = true;

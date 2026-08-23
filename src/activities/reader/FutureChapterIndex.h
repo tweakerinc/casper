@@ -49,8 +49,9 @@ struct Limits {
   // convert floor (31KB ingestHtml was the 21s freeze).
   static constexpr uint32_t kMinMaxAllocLayoutOnly = 24 * 1024;
   static constexpr uint32_t kMinFreeLayoutOnly = 32 * 1024;
-  // On: crawl the next spine while the user is still reading this one. Last
-  // page is too short to wait for quiet there.
+  // On: layout page 1 of the *already-converted* next spine while the user is
+  // still reading this one. Never idle-convert (no .rvir): device e38a3a71
+  // StartForward cache=0 ran ingestHtml 16s + restore 8s (activity_slow 33s).
   static constexpr bool kIdleForwardIndex = true;
 };
 

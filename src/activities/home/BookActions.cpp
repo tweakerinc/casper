@@ -94,8 +94,7 @@ bool deleteBookStats(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  (void)stashDeletedBookStats(fullPath.c_str());
-  return BookReadingStats::removeForBook(fullPath);
+  return stashDeletedBookStats(fullPath.c_str());
 }
 
 bool restoreBookStatsForBook(const std::string& fullPath) {

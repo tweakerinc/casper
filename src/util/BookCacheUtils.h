@@ -14,7 +14,8 @@ void clearBookCache(const std::string& path);
 bool wipeCacheDirectory(const std::string& path);
 
 // Clears a known book cache directory while preserving user state:
-// progress.bin(+.bak), reader_settings.bin, stats*.bin, dictionary_history.txt.
+// progress.bin(+.bak), reader_settings.bin, stats*.bin, dictionary_history.txt,
+// and <cache>/.trash/stats*.bin (Recover Stats after Delete Book Stats).
 // Used by Settings → Clear Cache and per-book clear actions.
 //
 // Accepts either:

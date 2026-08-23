@@ -14,13 +14,9 @@
 #include "BookReadingStats.h"
 #include "GlobalReadingStats.h"
 #include "ReadingStatsUtils.h"
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
-#include "util/TaskWatchdog.h"
 
 namespace {
 constexpr char LOG_TAG[] = "SBACK";
-// Prefer Casper path; fall back to legacy Casper if not migrated yet.
 constexpr char GLOBAL_STATS_PATH[] = "/.crosspoint/global_stats.bin";
 constexpr const char* BACKUP_DIR = statsbackup::kDir;
 constexpr int DEFAULT_BACKUP_KEEP_COUNT = statsbackup::kKeepSnaps;
@@ -175,190 +171,6 @@ bool writeBackupFile(const char* path, const uint8_t* data, const size_t size) {
   return true;
 }
 
-bool findLiveStatsFile(const char* cacheDir, char* out, const size_t outLen) {
-  if (!cacheDir || !out || outLen == 0) return false;
-  static constexpr const char* kNames[] = {"stats_v6.bin", "stats_v5.bin", "stats_v4.bin", "stats_v3.bin",
-                                           "stats_v2.bin", "stats_v1.bin", "stats.bin"};
-  for (const char* name : kNames) {
-    const int n = snprintf(out, outLen, "%s/%s", cacheDir, name);
-    if (n > 0 && static_cast<size_t>(n) < outLen && Storage.exists(out)) return true;
-  }
-  return false;
-}
-
-bool copySmallStatsFile(const char* srcPath, const char* destPath) {
-  if (!srcPath || !destPath) return false;
-  HalFile in;
-  if (!Storage.openFileForRead(LOG_TAG, srcPath, in)) return false;
-  const size_t sz = in.fileSize();
-  if (sz < statsbackup::kMinBookFileBytes || sz > statsbackup::kMaxBookFileBytes) {
-    LOG_ERR(LOG_TAG, "Skip stats copy size=%u %s", static_cast<unsigned>(sz), srcPath);
-    in.close();
-    return false;
-  }
-  uint8_t buf[statsbackup::kMaxBookFileBytes];
-  const int n = in.read(buf, sz);
-  in.close();
-  if (n != static_cast<int>(sz)) {
-    LOG_ERR(LOG_TAG, "Short read stats copy %s", srcPath);
-    return false;
-  }
-  return writeBackupFile(destPath, buf, sz);
-}
-
-bool copyLiveStatsTo(const char* destPath, const char* cacheDir) {
-  char src[192];
-  if (!findLiveStatsFile(cacheDir, src, sizeof(src))) return false;
-  return copySmallStatsFile(src, destPath);
-}
-
-bool bookFileNameForPath(const char* bookPath, char* out, const size_t outLen) {
-  if (!bookPath || bookPath[0] == '\0') return false;
-  const std::string folder = CasperBook::cacheFolderName(bookPath);
-  return statsbackup::bookBackupFileName(folder.c_str(), out, outLen);
-}
-
-bool trashPathForBook(const char* bookPath, char* out, const size_t outLen) {
-  char fileName[80];
-  if (!bookFileNameForPath(bookPath, fileName, sizeof(fileName))) return false;
-  const int n = snprintf(out, outLen, "%s/%s", statsbackup::kTrashDir, fileName);
-  return n > 0 && static_cast<size_t>(n) < outLen;
-}
-
-int backupAllBookStats(const char* snapId) {
-  if (!snapId || snapId[0] == '\0') return 0;
-  if (!Storage.ensureDirectoryExists(statsbackup::kBooksDir)) {
-    LOG_ERR(LOG_TAG, "Could not create book stats backup dir");
-    return 0;
-  }
-  char snapDir[192];
-  const int snapN = snprintf(snapDir, sizeof(snapDir), "%s/%s", statsbackup::kBooksDir, snapId);
-  if (snapN <= 0 || static_cast<size_t>(snapN) >= sizeof(snapDir)) return 0;
-  if (!Storage.ensureDirectoryExists(snapDir)) {
-    LOG_ERR(LOG_TAG, "Could not create book snap dir %s", snapDir);
-    return 0;
-  }
-
-  HalFile root = Storage.open(CasperPaths::kRoot);
-  if (!root || !root.isDirectory()) {
-    if (root) root.close();
-    return 0;
-  }
-
-  char name[128];
-  int copied = 0;
-  for (HalFile entry = root.openNextFile(); entry; entry = root.openNextFile()) {
-    resetTaskWatchdogIfSubscribed();
-    const bool isDir = entry.isDirectory();
-    const size_t nameLen = entry.getName(name, sizeof(name));
-    entry.close();
-    if (!isDir || nameLen == 0 || !statsbackup::isBookCacheFolderName(name)) continue;
-    if (copied >= statsbackup::kMaxBooksPerSnap) {
-      LOG_ERR(LOG_TAG, "Book stats backup cap %d — remaining folders skipped", statsbackup::kMaxBooksPerSnap);
-      break;
-    }
-
-    char cacheDir[192];
-    char backupName[80];
-    char dest[192];
-    const int cN = snprintf(cacheDir, sizeof(cacheDir), "%s/%s", CasperPaths::kRoot, name);
-    if (cN <= 0 || static_cast<size_t>(cN) >= sizeof(cacheDir)) continue;
-    if (!statsbackup::bookBackupFileName(name, backupName, sizeof(backupName))) continue;
-    const int dN = snprintf(dest, sizeof(dest), "%s/%s", snapDir, backupName);
-    if (dN <= 0 || static_cast<size_t>(dN) >= sizeof(dest)) continue;
-    if (copyLiveStatsTo(dest, cacheDir)) ++copied;
-  }
-  root.close();
-  LOG_DBG(LOG_TAG, "Wrote %d book stats into %s", copied, snapDir);
-  return copied;
-}
-
-bool removeDirContentsThenRmdir(const char* path) {
-  if (!path || path[0] == '\0') return true;
-  HalFile dir = Storage.open(path);
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return !Storage.exists(path) || Storage.remove(path);
-  }
-  char name[128];
-  for (;;) {
-    resetTaskWatchdogIfSubscribed();
-    dir.rewindDirectory();
-    bool removed = false;
-    for (HalFile file = dir.openNextFile(); file; file = dir.openNextFile()) {
-      const bool isDir = file.isDirectory();
-      file.getName(name, sizeof(name));
-      file.close();
-      if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
-      char child[192];
-      const int n = snprintf(child, sizeof(child), "%s/%s", path, name);
-      if (n <= 0 || static_cast<size_t>(n) >= sizeof(child)) continue;
-      if (isDir) {
-        (void)removeDirContentsThenRmdir(child);
-      } else if (!Storage.remove(child)) {
-        LOG_ERR(LOG_TAG, "Failed to prune %s", child);
-        dir.close();
-        return false;
-      }
-      removed = true;
-      break;
-    }
-    if (!removed) break;
-  }
-  dir.close();
-  return Storage.rmdir(path);
-}
-
-int pruneBookSnaps(const int keep) {
-  if (keep < 0) return 0;
-  HalFile dir = Storage.open(statsbackup::kBooksDir);
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return 0;
-  }
-
-  char name[128];
-  std::vector<BackupName> names;
-  names.reserve(16);
-  for (HalFile file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    const bool isDirectory = file.isDirectory();
-    const size_t nameLen = file.getName(name, sizeof(name));
-    file.close();
-    if (!isDirectory || nameLen == 0) continue;
-    BackupName snap;
-    if (copyString(name, snap.value, sizeof(snap.value))) names.push_back(snap);
-  }
-  dir.close();
-
-  if (static_cast<int>(names.size()) <= keep) return 0;
-  std::sort(names.begin(), names.end(),
-            [](const BackupName& lhs, const BackupName& rhs) { return strcmp(lhs.value, rhs.value) < 0; });
-
-  int removed = 0;
-  const int toRemove = static_cast<int>(names.size()) - keep;
-  for (int i = 0; i < toRemove; ++i) {
-    char path[192];
-    const int n = snprintf(path, sizeof(path), "%s/%s", statsbackup::kBooksDir, names[static_cast<size_t>(i)].value);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(path)) continue;
-    if (removeDirContentsThenRmdir(path)) ++removed;
-  }
-  if (removed > 0) LOG_DBG(LOG_TAG, "Pruned %d old book-stats snap(s)", removed);
-  return removed;
-}
-
-bool copyBackupOverLive(const char* srcPath, const char* bookPath) {
-  if (!srcPath || !Storage.exists(srcPath)) return false;
-  const std::string cacheDir = CasperBook::bookDirForPath(bookPath);
-  if (cacheDir.empty()) return false;
-  Storage.ensureDirectoryExists(cacheDir.c_str());
-  char dest[192];
-  const int n = snprintf(dest, sizeof(dest), "%s/stats_v6.bin", cacheDir.c_str());
-  if (n <= 0 || static_cast<size_t>(n) >= sizeof(dest)) return false;
-  if (!copySmallStatsFile(srcPath, dest)) return false;
-  (void)BookReadingStats::load(cacheDir);
-  return true;
-}
-
 }  // namespace
 
 bool backupGlobalStats(const bool manual, char* outFileName, const size_t outFileNameLen) {
@@ -386,14 +198,6 @@ bool backupGlobalStats(const bool manual, char* outFileName, const size_t outFil
 
   if (!writeBackupFile(backupPath, data.data(), dataSize)) return false;
   pruneBackups(DEFAULT_BACKUP_KEEP_COUNT);
-
-  char snapId[32];
-  if (statsbackup::snapIdFromGlobalFileName(fileName, snapId, sizeof(snapId))) {
-    (void)backupAllBookStats(snapId);
-    (void)pruneBookSnaps(statsbackup::kKeepSnaps);
-  } else {
-    LOG_ERR(LOG_TAG, "Could not derive book snap id from %s", fileName);
-  }
 
   if (outFileName != nullptr && outFileNameLen > 0) {
     copyString(fileName, outFileName, outFileNameLen);
@@ -453,92 +257,22 @@ int pruneBackups(const int keep) {
 
 bool stashDeletedBookStats(const char* bookPath) {
   if (!bookPath || bookPath[0] == '\0') return false;
-  if (!Storage.ensureDirectoryExists(statsbackup::kTrashDir)) {
-    LOG_ERR(LOG_TAG, "Could not create stats trash dir");
-    return false;
-  }
-  char dest[192];
-  if (!trashPathForBook(bookPath, dest, sizeof(dest))) return false;
-  const std::string cacheDir = CasperBook::bookDirForPath(bookPath);
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
   if (cacheDir.empty()) return false;
-  if (!copyLiveStatsTo(dest, cacheDir.c_str())) {
-    LOG_DBG(LOG_TAG, "No live book stats to stash for %s", bookPath);
-    return false;
-  }
-  LOG_INF(LOG_TAG, "Stashed deleted book stats %s", dest);
-  return true;
+  return BookReadingStats::stashToTrash(cacheDir);
 }
 
 bool restoreBookStats(const char* bookPath) {
   if (!bookPath || bookPath[0] == '\0') return false;
-  char trash[192];
-  if (trashPathForBook(bookPath, trash, sizeof(trash)) && copyBackupOverLive(trash, bookPath)) {
-    LOG_INF(LOG_TAG, "Restored book stats from trash");
-    return true;
-  }
-
-  char fileName[80];
-  if (!bookFileNameForPath(bookPath, fileName, sizeof(fileName))) return false;
-
-  HalFile dir = Storage.open(statsbackup::kBooksDir);
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return false;
-  }
-  char name[128];
-  std::vector<BackupName> snaps;
-  snaps.reserve(16);
-  for (HalFile file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    const bool isDirectory = file.isDirectory();
-    const size_t nameLen = file.getName(name, sizeof(name));
-    file.close();
-    if (!isDirectory || nameLen == 0) continue;
-    BackupName snap;
-    if (copyString(name, snap.value, sizeof(snap.value))) snaps.push_back(snap);
-  }
-  dir.close();
-  std::sort(snaps.begin(), snaps.end(),
-            [](const BackupName& lhs, const BackupName& rhs) { return strcmp(lhs.value, rhs.value) > 0; });
-
-  for (const auto& snap : snaps) {
-    resetTaskWatchdogIfSubscribed();
-    char src[192];
-    const int n = snprintf(src, sizeof(src), "%s/%s/%s", statsbackup::kBooksDir, snap.value, fileName);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(src)) continue;
-    if (copyBackupOverLive(src, bookPath)) {
-      LOG_INF(LOG_TAG, "Restored book stats from snap %s", snap.value);
-      return true;
-    }
-  }
-  return false;
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
+  if (cacheDir.empty()) return false;
+  if (!BookReadingStats::restoreFromTrash(cacheDir)) return false;
+  (void)BookReadingStats::loadForBook(bookPath);
+  return true;
 }
 
 bool hasRestorableBookStats(const char* bookPath) {
   if (!bookPath || bookPath[0] == '\0') return false;
-  char trash[192];
-  if (trashPathForBook(bookPath, trash, sizeof(trash)) && Storage.exists(trash)) return true;
-
-  char fileName[80];
-  if (!bookFileNameForPath(bookPath, fileName, sizeof(fileName))) return false;
-  HalFile dir = Storage.open(statsbackup::kBooksDir);
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return false;
-  }
-  char name[128];
-  bool found = false;
-  for (HalFile file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    const bool isDirectory = file.isDirectory();
-    const size_t nameLen = file.getName(name, sizeof(name));
-    file.close();
-    if (!isDirectory || nameLen == 0) continue;
-    char src[192];
-    const int n = snprintf(src, sizeof(src), "%s/%s/%s", statsbackup::kBooksDir, name, fileName);
-    if (n > 0 && static_cast<size_t>(n) < sizeof(src) && Storage.exists(src)) {
-      found = true;
-      break;
-    }
-  }
-  dir.close();
-  return found;
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
+  return !cacheDir.empty() && BookReadingStats::hasTrash(cacheDir);
 }

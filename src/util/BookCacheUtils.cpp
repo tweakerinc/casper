@@ -19,9 +19,10 @@ bool wipeCacheDirectory(const std::string& path);
 
 namespace {
 
-constexpr size_t MAX_STATS_FILES_TO_PRESERVE = 8;
+constexpr size_t MAX_STATS_FILES_TO_PRESERVE = 16;
 constexpr char STATS_PREFIX[] = "stats";
 constexpr char STATS_SUFFIX[] = ".bin";
+constexpr char TRASH_DIR[] = ".trash";
 
 // Fixed user-state files that must survive cache clear (legacy parity).
 struct FixedPreserve {
@@ -72,6 +73,11 @@ bool restoreFile(const std::string& cachePath, const PreservedFile& file, const 
   const std::string tmpPath = cachePath + "." + file.tmpName;
   if (!Storage.exists(tmpPath.c_str())) return true;
   Storage.mkdir(cachePath.c_str());
+  const size_t slash = file.name.find_last_of('/');
+  if (slash != std::string::npos) {
+    const std::string parent = cachePath + "/" + file.name.substr(0, slash);
+    Storage.ensureDirectoryExists(parent.c_str());
+  }
   const std::string finalPath = cachePath + "/" + file.name;
   if (Storage.exists(finalPath.c_str())) {
     Storage.remove(finalPath.c_str());
@@ -107,6 +113,25 @@ void collectPreservedFiles(const std::string& cachePath, std::vector<PreservedFi
     ++statsCount;
   }
   dir.close();
+
+  // Recover Stats lives in <cache>/.trash/ — keep it across Delete Book Cache.
+  const std::string trashPath = cachePath + "/" + TRASH_DIR;
+  auto trash = Storage.open(trashPath.c_str());
+  if (!trash || !trash.isDirectory()) {
+    if (trash) trash.close();
+    return;
+  }
+  size_t trashCount = 0;
+  for (auto file = trash.openNextFile(); file; file = trash.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (trashCount >= MAX_STATS_FILES_TO_PRESERVE) continue;
+    out.push_back({std::string(TRASH_DIR) + "/" + name, std::string("clear_preserve_trash_") + name});
+    ++trashCount;
+  }
+  trash.close();
 }
 
 bool wipeDirBestEffort(const std::string& path) {

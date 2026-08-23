@@ -8,7 +8,10 @@
 
 #include <cstring>
 #include <functional>
+#include <string>
+#include <vector>
 
+#include "StatsBackupLayout.h"
 #include "util/CasperBookStore.h"
 #include "util/CasperPaths.h"
 
@@ -500,6 +503,15 @@ void memoInvalidate(const std::string& bookPath) {
   }
 }
 
+void memoInvalidateByCachePath(const std::string& cachePath) {
+  if (cachePath.empty()) return;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.cachePath[i] == cachePath) {
+      g_loadForBookMemo.valid[i] = false;
+    }
+  }
+}
+
 // One-time legacy / legacy scan marker under the Casper cache folder.
 // Present ⇒ we already looked for alternate cache dirs once; do not thrash SD
 // again until the user clears cache (which deletes this folder/marker).
@@ -767,7 +779,147 @@ bool BookReadingStats::remove(const std::string& cachePath) {
   }
   if (dir) dir.close();
 
+  // Book-file delete also drops Recover Stats — the epub is gone.
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (Storage.exists(trashDir.c_str())) {
+    std::vector<std::string> trashNames;
+    trashNames.reserve(8);
+    auto trash = Storage.open(trashDir.c_str());
+    if (trash && trash.isDirectory()) {
+      char name[96];
+      for (auto file = trash.openNextFile(); file; file = trash.openNextFile()) {
+        const bool isDir = file.isDirectory();
+        file.getName(name, sizeof(name));
+        file.close();
+        if (isDir || !isStatsFileName(name)) continue;
+        if (trashNames.size() < 8) trashNames.emplace_back(name);
+      }
+    }
+    if (trash) trash.close();
+    for (const auto& name : trashNames) {
+      const std::string path = trashDir + "/" + name;
+      if (Storage.exists(path.c_str()) && !Storage.remove(path.c_str())) {
+        LOG_ERR("STATS", "Could not delete trash %s", name.c_str());
+        ok = false;
+      }
+    }
+    if (Storage.exists(trashDir.c_str()) && !Storage.rmdir(trashDir.c_str())) {
+      LOG_ERR("STATS", "Could not rmdir %s", trashDir.c_str());
+      ok = false;
+    }
+  }
+
   return ok;
+}
+
+bool BookReadingStats::stashToTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (!Storage.ensureDirectoryExists(trashDir.c_str())) {
+    LOG_ERR("STATS", "Could not create %s", trashDir.c_str());
+    return false;
+  }
+
+  std::vector<std::string> names;
+  names.reserve(8);
+  auto dir = Storage.open(cachePath.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (names.size() < 8) names.emplace_back(name);
+  }
+  dir.close();
+
+  int moved = 0;
+  for (const auto& fileName : names) {
+    const std::string src = cachePath + "/" + fileName;
+    const std::string dest = trashDir + "/" + fileName;
+    if (!Storage.exists(src.c_str())) continue;
+    if (Storage.exists(dest.c_str()) && !Storage.remove(dest.c_str())) {
+      LOG_ERR("STATS", "Could not replace trash %s", dest.c_str());
+      continue;
+    }
+    if (!Storage.rename(src.c_str(), dest.c_str())) {
+      LOG_ERR("STATS", "Could not stash %s", src.c_str());
+      continue;
+    }
+    ++moved;
+  }
+  LOG_INF("STATS", "stashed %d stats file(s) into %s", moved, trashDir.c_str());
+  if (moved > 0) memoInvalidateByCachePath(cachePath);
+  return moved > 0;
+}
+
+bool BookReadingStats::restoreFromTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (!Storage.exists(trashDir.c_str())) return false;
+
+  std::vector<std::string> names;
+  names.reserve(8);
+  auto dir = Storage.open(trashDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (names.size() < 8) names.emplace_back(name);
+  }
+  dir.close();
+
+  if (!Storage.ensureDirectoryExists(cachePath.c_str())) return false;
+  int moved = 0;
+  for (const auto& fileName : names) {
+    const std::string src = trashDir + "/" + fileName;
+    const std::string dest = cachePath + "/" + fileName;
+    if (!Storage.exists(src.c_str())) continue;
+    if (Storage.exists(dest.c_str()) && !Storage.remove(dest.c_str())) {
+      LOG_ERR("STATS", "Could not replace live %s", dest.c_str());
+      continue;
+    }
+    if (!Storage.rename(src.c_str(), dest.c_str())) {
+      LOG_ERR("STATS", "Could not restore %s", src.c_str());
+      continue;
+    }
+    ++moved;
+  }
+  LOG_INF("STATS", "restored %d stats file(s) from %s", moved, trashDir.c_str());
+  if (moved > 0) memoInvalidateByCachePath(cachePath);
+  return moved > 0;
+}
+
+bool BookReadingStats::hasTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  auto dir = Storage.open(trashDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  bool found = false;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    found = true;
+    break;
+  }
+  dir.close();
+  return found;
 }
 
 bool BookReadingStats::removeForBook(const std::string& bookPath) {

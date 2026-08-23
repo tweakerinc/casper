@@ -6,10 +6,10 @@
 #include <Logging.h>
 #include <Xtc.h>
 
-#include "util/CasperPaths.h"
-
 #include <algorithm>
 #include <iterator>
+
+#include "util/CasperPaths.h"
 
 bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentBook>& out) {
   out.clear();
@@ -71,8 +71,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
             static_cast<unsigned>(loaded.size()), static_cast<unsigned>(recentBooks.size()));
     for (const auto& d : loaded) {
       const bool have =
-          std::any_of(recentBooks.begin(), recentBooks.end(),
-                      [&](const RecentBook& b) { return b.path == d.path; });
+          std::any_of(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == d.path; });
       if (!have && recentBooks.size() < static_cast<size_t>(MAX_RECENT_BOOKS)) {
         recentBooks.push_back(d);
       }
@@ -104,8 +103,8 @@ void RecentBooksStore::mergeMissingFromDisk() {
     parseBooksArray(doc.as<JsonVariantConst>(), disk);
     size_t added = 0;
     for (const auto& d : disk) {
-      const bool have = std::any_of(recentBooks.begin(), recentBooks.end(),
-                                    [&](const RecentBook& b) { return b.path == d.path; });
+      const bool have =
+          std::any_of(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == d.path; });
       if (!have && recentBooks.size() < static_cast<size_t>(MAX_RECENT_BOOKS)) {
         recentBooks.push_back(d);
         ++added;
@@ -128,15 +127,18 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   ensureLoaded();
   mergeMissingFromDisk();
 
-  // Remove existing entry if present (path match).
+  // Remove existing entry if present (path match). Keep its Home progress —
+  // a 4-field insert used to default progressPercentMilli to unknown and the
+  // Recents bars went blank until the next stats save.
+  uint16_t keptProgress = 0xFFFF;
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it != recentBooks.end()) {
+    keptProgress = it->progressPercentMilli;
     recentBooks.erase(it);
   }
 
-  // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath, keptProgress});
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {

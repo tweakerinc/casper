@@ -742,8 +742,22 @@ void HomeActivity::onResume() {
   const bool skipSdReload = justLoadedDeferredEnter || skipResumeSdReload_;
   skipResumeSdReload_ = false;
   if (skipSdReload) {
-    if (isPenumbraTheme()) recentsLoaded = true;
-    LOG_DBG("HOME", "onResume: skip SD reload (RAM recents still valid)");
+    // Skip SD stats / global reload (that was the 2s stall). Still copy the
+    // in-memory recents list: Library / Recents / reader mutate RECENT_BOOKS
+    // while Home is paused, and skipping the copy left Now Reading + bars stale.
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const std::string prevFront = recentBooks.empty() ? std::string() : recentBooks[0].path;
+    loadRecentBooks(metrics.homeRecentBooksCount);
+    if (recentBooks.empty() || recentBooks[0].path != prevFront) {
+      selectorIndex = 0;
+      penumbraRecentsFocus = 0;
+      if (!recentBooks.empty()) loadFocusedRecentStats();
+    }
+    if (isPenumbraTheme()) {
+      recentsLoaded = true;
+      if (!recentBooks.empty()) PenumbraThemeUi::warmRecentsProgressCache(recentBooks);
+    }
+    LOG_DBG("HOME", "onResume: skip SD stats reload (synced RAM recents n=%d)", static_cast<int>(recentBooks.size()));
     return;
   }
 

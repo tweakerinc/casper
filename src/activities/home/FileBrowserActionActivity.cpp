@@ -246,8 +246,8 @@ void FileBrowserActionActivity::activateSelected() {
               // Show "Deleting" before it starts, not just a toast afterwards.
               GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
               if (BookActions::clearBookCache(bookPath)) {
-                BookActions::drawToast(renderer, tr(STR_DELETE_CACHE));
-                delay(800);
+                GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETED), /*refresh=*/true);
+                delay(400);
               }
               // Leave focus on a safe row so a stray Confirm cannot re-open this dialog.
               selectedIndex = 0;

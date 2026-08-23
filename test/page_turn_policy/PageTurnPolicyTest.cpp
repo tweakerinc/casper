@@ -125,13 +125,15 @@ TEST(PageTurnPolicy, SwallowAllowsSameDirNext) {
   EXPECT_EQ(r.why, Why::Accepted);
 }
 
-TEST(PageTurnPolicy, SwallowDropsBothWhenLastDirNone) {
+TEST(PageTurnPolicy, SwallowDoesNotDropFirstTapAfterOpen) {
+  // lastDir None: open then Next. Swallow after prewarm must not eat that tap.
   Request in = forwardAt(2000);
   in.swallowUntilMs = 2000 + Limits::kSwallowMs;
   const Result r = decide(in);
-  EXPECT_FALSE(r.accept);
-  EXPECT_FALSE(r.next);
-  EXPECT_EQ(r.why, Why::Swallow);
+  EXPECT_TRUE(r.accept);
+  EXPECT_TRUE(r.next);
+  EXPECT_EQ(r.why, Why::Accepted);
+  EXPECT_EQ(r.lastDir, Dir::Next);
 }
 
 TEST(PageTurnPolicy, SwallowExpires) {

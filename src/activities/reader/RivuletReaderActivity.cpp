@@ -42,7 +42,6 @@
 #include "MappedInputManager.h"
 #include "PageTurnPolicy.h"
 #include "ProgressFile.h"
-#include "util/TaskWatchdog.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
@@ -74,6 +73,7 @@
 #include "util/ScreenshotInfo.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SystemLog.h"
+#include "util/TaskWatchdog.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -714,6 +714,13 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
   };
 
   while (total < kMaxScan && chapterFootnotes_.size() < kMaxFn) {
+    // Peek only — gpio.update() would consume the edge the turn path needs.
+    if (gpioPeekHeldForIdleMap()) {
+      chapterFootnotes_.clear();
+      footnoteScanDeferred_ = true;
+      return;
+    }
+    resetTaskWatchdogIfSubscribed();
     if (winLen >= kWin) {
       const size_t keep = kWin / 2;
       std::memmove(win.get(), win.get() + (winLen - keep), keep);
@@ -2579,20 +2586,20 @@ void RivuletReaderActivity::tickIdlePageMap() {
     if (warmed) return;
   }
 
-  // After first ink + ahead/behind warm: one HTML footnote scan. Wait 8s so
-  // a tap after chapter-land is not eaten by a 2s HTML scan (v49 DCC:
-  // NOTE footnotes ms=1864 right after spine 24 page 1).
-  if (footnoteScanDeferred_ && firstInkDone_ && firstInkAtMs_ != 0UL && (now - firstInkAtMs_) >= kFootnoteIdleDelayMs &&
+  // Footnotes ~2s on chapter 32. Wait 8s after the last turn (or first ink if
+  // they have not turned) so a flip-through is not blocked by HTML scanning.
+  const unsigned long quietFrom = lastPageTurnTime_ != 0UL ? lastPageTurnTime_ : firstInkAtMs_;
+  if (footnoteScanDeferred_ && firstInkDone_ && quietFrom != 0UL && (now - quietFrom) >= kFootnoteIdleDelayMs &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
     footnoteScanDeferred_ = false;
     const unsigned long t0 = millis();
     ensureChapterFootnotes();
     const unsigned long dt = millis() - t0;
     if (dt >= 200UL) {
-      SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u", spineIndex_, static_cast<unsigned>(dt));
+      SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u abort=%d", spineIndex_, static_cast<unsigned>(dt),
+                           footnoteScanDeferred_ ? 1 : 0);
     }
     armSwallowAfterIdle(pageTurnLatch_, t0, gpioPeekHeldForIdleMap());
-    // Do not StartForward in the same / next 1s window as this 1–2s HTML scan.
     lastFutureWorkMs_ = millis();
     resetTaskWatchdogIfSubscribed();
     return;

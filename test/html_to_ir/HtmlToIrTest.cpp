@@ -19,6 +19,7 @@
 #include "ChapterIr.h"
 #include "Esp.h"  // host stub — must define ESP before ChapterIr uses it
 #include "HtmlToIr.h"
+#include "IrFormat.h"
 #include "IrTokenizer.h"
 
 // The firmware links against Arduino's global ESP object; on the host we own it.
@@ -185,6 +186,68 @@ TEST(HtmlToIr, EmitsHeadings) {
   const ChapterIr ir = convertOrDie("<h1>Title</h1><h2>Sub</h2><p>Body</p>");
   EXPECT_EQ(countBlocks(ir, BlockKind::Heading1), 1);
   EXPECT_EQ(countBlocks(ir, BlockKind::Heading2), 1);
+}
+
+TEST(HtmlToIr, HeadingsDefaultCenter) {
+  const ChapterIr ir = convertOrDie("<h2>Introduction</h2><p>Long before Austenmania.</p>");
+  ASSERT_FALSE(ir.blocks().empty());
+  EXPECT_EQ(ir.blocks().front().kind, BlockKind::Heading2);
+  EXPECT_EQ(ir.blocks().front().align, rivulet::Align::Center);
+}
+
+TEST(HtmlToIr, HtmlAlignCenterOnParagraph) {
+  // Classic engine honored align= even with stylesheets off. v0.1.9 left these
+  // titles looking left-aligned (single-word justify).
+  const ChapterIr ir = convertOrDie("<p align=\"center\"><b>Introduction</b></p><p>Body.</p>");
+  ASSERT_GE(ir.blocks().size(), 1u);
+  EXPECT_EQ(ir.blocks().front().kind, BlockKind::Paragraph);
+  EXPECT_EQ(ir.blocks().front().align, rivulet::Align::Center);
+}
+
+TEST(HtmlToIr, TableCellAlignCenter) {
+  const ChapterIr ir = convertOrDie("<table><tr><td align=\"center\">Introduction</td></tr></table>");
+  ASSERT_GE(ir.blocks().size(), 1u);
+  EXPECT_EQ(ir.blocks().front().align, rivulet::Align::Center);
+  EXPECT_NE(flattenText(ir).find("Introduction"), std::string::npos);
+}
+
+TEST(HtmlToIr, ChapterOrnamentIsCenteredNotFloated) {
+  const ChapterIr ir = convertOrDie(
+      "<h2>Introduction</h2><p align=\"center\"><img src=\"images/flourish.png\" alt=\"\"/></p>"
+      "<p>Long before Austenmania overtook America.</p>");
+  bool sawImage = false;
+  for (const auto& b : ir.blocks()) {
+    if (b.kind != BlockKind::Image) continue;
+    sawImage = true;
+    EXPECT_EQ(b.align, rivulet::Align::Center);
+    EXPECT_EQ(b.flags & rivulet::kBlockFloatLeft, 0);
+    EXPECT_EQ(b.flags & rivulet::kBlockFloatRight, 0);
+  }
+  EXPECT_TRUE(sawImage);
+}
+
+TEST(HtmlToIr, FigleftImageStillFloatsLeft) {
+  const ChapterIr ir = convertOrDie(
+      "<div class=\"figleft\"><img src=\"images/letter-c.png\" alt=\"C\"/></div>"
+      "<p>Alice was beginning to get very tired.</p>");
+  bool sawFloat = false;
+  for (const auto& b : ir.blocks()) {
+    if (b.kind != BlockKind::Image) continue;
+    EXPECT_NE(b.flags & rivulet::kBlockFloatLeft, 0);
+    sawFloat = true;
+  }
+  EXPECT_TRUE(sawFloat);
+}
+
+TEST(HtmlToIr, ImgAlignLeftFloats) {
+  const ChapterIr ir = convertOrDie("<p><img src=\"c.png\" align=\"left\" alt=\"C\"/>Alice.</p>");
+  bool sawFloat = false;
+  for (const auto& b : ir.blocks()) {
+    if (b.kind != BlockKind::Image) continue;
+    EXPECT_NE(b.flags & rivulet::kBlockFloatLeft, 0);
+    sawFloat = true;
+  }
+  EXPECT_TRUE(sawFloat);
 }
 
 TEST(HtmlToIr, SkipsScriptStyleAndSvg) {

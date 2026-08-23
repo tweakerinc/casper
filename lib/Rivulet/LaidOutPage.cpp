@@ -15,7 +15,9 @@ namespace {
 
 constexpr char kPageMagic[4] = {'R', 'V', 'P', 'G'};
 // v2: page carries drawn thematic-break rules (RulePlate) as well as spans/images.
-constexpr uint16_t kPageFormatVersion = 3;  // v3: no leading-space indent / last-line justify
+// v3: no leading-space indent / last-line justify
+// v4: chapter titles stay centered; small ornaments are not letter-floated
+constexpr uint16_t kPageFormatVersion = 4;
 // Soft caps — a pathological page should not allocate unbounded on load.
 constexpr uint32_t kMaxSpans = 2000;
 constexpr uint32_t kMaxImages = 64;

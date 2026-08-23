@@ -424,11 +424,12 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     }
     const bool atBlockStart = (cur.runIndex == block.runBegin && cur.byteInRun == 0);
     const bool isHeading = (block.kind >= BlockKind::Heading1 && block.kind <= BlockKind::Heading6);
+    const bool isChapterHead = block.kind == BlockKind::Heading1 || block.kind == BlockKind::Heading2;
     // Book's Style: per-block IR align (CSS/heuristics from HtmlToIr).
-    // Force L/C/R/J: same user align for every text block — no CSS "center this title".
+    // Force L/C/R/J applies to body paragraphs only. Headings stay at IR align —
+    // classic engine always defaulted h1–h6 to center (e-reader convention).
     Align blockAlign = block.align;
-    if (forceUserAlign &&
-        (block.kind == BlockKind::Paragraph || isHeading)) {
+    if (forceUserAlign && block.kind == BlockKind::Paragraph) {
       blockAlign = userAlign;
     }
     // Its text is never drawn (a rule replaces it below); we only need the flag
@@ -461,8 +462,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         continue;
       }
       if (isHeading) {
-        marginTop = (y > 0) ? bodyLine / 3 : 0;
-        marginBottom = bodyLine / 4;
+        marginTop = bodyLine / 3;
+        marginBottom = isChapterHead ? bodyLine / 2 : bodyLine / 4;
       } else if (block.kind == BlockKind::Paragraph) {
         marginTop = 0;
         if (params.extraParagraphSpacing) {
@@ -488,9 +489,17 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         marginBottom = extraParaGapPx(bodyLine, params.extraParagraphSpacingHeight);
       }
     }
+    // Chapter titles need air from the top chrome and before the ornament / body.
+    // v0.1.9 skipped heading top at y=0 and auto-floated small images, which
+    // glued "Introduction" to the bezel and wrapped the flourish into the prose.
+    if (isChapterHead) {
+      if (y == 0) marginTop = std::max(marginTop, bodyLine / 2);
+      marginBottom = std::max(marginBottom, bodyLine / 2);
+    }
     // Apply top margin with collapse against previous block's trailing margin.
     // Collapse only in Book's Style (CSS adjacent-margin behavior).
-    if (atBlockStart && (y > 0 || block.kind == BlockKind::Spacer)) {
+    // Headings at y=0 still take their top margin (chapter-open air).
+    if (atBlockStart && (y > 0 || block.kind == BlockKind::Spacer || isHeading)) {
       int applyTop = marginTop;
       if (bookStyle && trailingCollapsePx > 0) {
         // Collapse: only the excess of this top over the already-applied trailing.

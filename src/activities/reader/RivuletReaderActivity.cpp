@@ -2969,9 +2969,9 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
       iw = targetW;
     }
 
-    // Letter-shrink ONLY narrow LEFT floats (Alice ornate C). Never shrink figright
-    // plates (183×450) — that produced the tiny white box on page 3.
-    // Ornaments stay centered (kBlockOrnament) — never mis-tagged as letter floats.
+    // Letter-shrink ONLY narrow LEFT floats (Alice ornate C / figleft). Never
+    // invent a float for a small centered ornament — v0.1.9 wrapped chapter
+    // flourishes into the first body lines and left-aligned the title.
     const int bodyLineEst = std::max(18, renderer.getLineHeight(engine_.renderKey().fontId, 1.0f));
     const int maxLetterW = std::max(120, (viewW * 28) / 100);
     const bool letterGlyph = !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW;
@@ -2981,14 +2981,6 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
         iw = std::max(1, (iw * targetH) / ih);
         ih = targetH;
       }
-    } else if (!isOrnament && !leftFloat && !rightFloat && iw <= maxLetterW && iw <= ih * 2 && ih <= bodyLineEst * 4) {
-      // Heuristic letter without float class.
-      const int targetH = bodyLineEst * 2;
-      if (ih > targetH && ih > 0) {
-        iw = std::max(1, (iw * targetH) / ih);
-        ih = targetH;
-      }
-      b.flags = static_cast<uint16_t>(b.flags | rivulet::kBlockFloatLeft);
     }
     b.imageW = static_cast<uint16_t>(std::min(65535, iw));
     b.imageH = static_cast<uint16_t>(std::min(65535, ih));

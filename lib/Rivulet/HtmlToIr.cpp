@@ -619,6 +619,32 @@ bool styleSaysCenter(const Tag& tag) {
          containsI(c, clen, "text-center") || containsI(c, clen, "text_center") || containsI(c, clen, "toc");
 }
 
+// Legacy HTML align="center|left|right|justify" on p/h1/div/td/img.
+// Classic ChapterHtmlSlimParser always honors this (even with stylesheets off) —
+// many EPUBs center chapter titles that way without a class or inline CSS.
+bool htmlAlignAttr(const Tag& tag, Align& out) {
+  size_t vlen = 0;
+  const char* v = attrValue(tag, "align", &vlen);
+  if (!v || vlen == 0) return false;
+  if (ieq(v, vlen, "center") || ieq(v, vlen, "middle")) {
+    out = Align::Center;
+    return true;
+  }
+  if (ieq(v, vlen, "right")) {
+    out = Align::Right;
+    return true;
+  }
+  if (ieq(v, vlen, "left")) {
+    out = Align::Left;
+    return true;
+  }
+  if (ieq(v, vlen, "justify")) {
+    out = Align::Justify;
+    return true;
+  }
+  return false;
+}
+
 bool classSaysNoIndent(const Tag& tag) {
   // Illuminae memos/emails: .nonindent / .nonindent-em / .list_ul (bullet lines).
   return attrHasClass(tag, "unindent") || attrHasClass(tag, "noindent") || attrHasClass(tag, "no-indent") ||
@@ -729,6 +755,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   int alignmentBlockDepth = 0;
   // Open heading level 1–6 (0 = none). Soft <br> keeps the same heading block style.
   int headingLevelOpen = 0;
+  Align headingAlignOpen = Align::Center;
   // Fourth Wing: .orn span/div wraps a small chapter ornament image (~12% width).
   int ornamentDepth = 0;
   // Epigraph / citaini blockquote — center + slightly smaller body.
@@ -957,7 +984,14 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (!tag.closing && !tag.selfClose &&
             (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th"))) {
           // One cell = one block. Tight stack, no first-line indent, same as <li>.
-          openBlock(BlockKind::Paragraph, Align::Left, kBlockNoIndent);
+          Align cellAlign = Align::Left;
+          if (styleSaysCenter(tag)) cellAlign = Align::Center;
+          Align htmlA = Align::Left;
+          if (htmlAlignAttr(tag, htmlA)) cellAlign = htmlA;
+          RunStyle dummySt = RunStyle::Regular;
+          SizeStep dummySz = SizeStep::Body;
+          applyInlineStyle(tag, dummySt, dummySz, &cellAlign);
+          openBlock(BlockKind::Paragraph, cellAlign, kBlockNoIndent);
           out.setCurrentMarginsEmQ4(0, 2);
         }
         continue;
@@ -1058,7 +1092,13 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         const int level = tag.name[1] - '0';
         closeBlock();
         const BlockKind bk = static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (level - 1));
-        openBlock(bk, Align::Center, kBlockNoIndent);
+        Align headingAlign = Align::Center;
+        Align htmlA = Align::Center;
+        if (htmlAlignAttr(tag, htmlA)) headingAlign = htmlA;
+        RunStyle st = RunStyle::Bold;
+        SizeStep sz = sizeForHeading(level);
+        applyInlineStyle(tag, st, sz, &headingAlign);
+        openBlock(bk, headingAlign, kBlockNoIndent);
         if (hgroupDepth > 0) {
           // SE: hgroup > * { margin: 0 } — air comes from hgroup close spacer only.
           out.setCurrentMarginsEmQ4(0, 0);
@@ -1066,13 +1106,11 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           // Standalone heading: modest top, real bottom gap before body (scaled ~1.5–2em).
           out.setCurrentMarginsEmQ4(level <= 1 ? 6 : 4, static_cast<int8_t>(scaleBookVSpaceQ4(32)));
         }
-        RunStyle st = RunStyle::Bold;
-        SizeStep sz = sizeForHeading(level);
-        applyInlineStyle(tag, st, sz, nullptr);
         // element-title 1.29em etc. may bump size; keep within ladder (±2).
         if (sz > SizeStep::Plus2) sz = SizeStep::Plus2;
         beginBlockStyle(st, sz);
         headingLevelOpen = level;
+        headingAlignOpen = headingAlign;
         continue;
       }
       if (tag.closing && tag.nameLen == 2 && (tag.name[0] == 'h' || tag.name[0] == 'H') && tag.name[1] >= '1' &&
@@ -1092,7 +1130,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (headingLevelOpen < 1 || headingLevelOpen > 6) return;
         const BlockKind bk =
             static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (headingLevelOpen - 1));
-        openBlock(bk, Align::Center, kBlockNoIndent);
+        openBlock(bk, headingAlignOpen, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(2, 12);  // tight top after ornament / soft break
       };
 
@@ -1160,6 +1198,11 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (dropCapArmed && kind == BlockKind::Paragraph) {
           flags |= kBlockDropCap | kBlockNoIndent;
           dropCapArmed = false;
+        }
+        Align htmlA = Align::Left;
+        if (htmlAlignAttr(tag, htmlA)) {
+          align = htmlA;
+          if (align == Align::Center || align == Align::Right) flags |= kBlockNoIndent;
         }
         applyInlineStyle(tag, st, sz, &align);
         applyClassEmphasis(tag, st, sz);
@@ -1240,8 +1283,13 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           (looksLikeTitleHost(tag) || classIsChapterLeftTitle(tag)) && !tag.selfClose) {
         closeBlock();
         // Alice .chapter is left + larger; other title hosts default center.
-        const Align divAlign =
-            classIsChapterLeftTitle(tag) ? Align::Left : (styleSaysCenter(tag) ? Align::Center : Align::Left);
+        const Align divAlign = [&]() {
+          Align a = classIsChapterLeftTitle(tag) ? Align::Left
+                                                 : (styleSaysCenter(tag) ? Align::Center : Align::Left);
+          Align htmlA = Align::Left;
+          if (htmlAlignAttr(tag, htmlA)) a = htmlA;
+          return a;
+        }();
         openBlock(BlockKind::Paragraph, divAlign, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(4, 8);
         RunStyle st = RunStyle::Regular;
@@ -1317,7 +1365,17 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         }
         size_t altLen = 0;
         const char* alt = attrValue(tag, "alt", &altLen);
-        const int side = classSaysFloatRight(tag) ? 2 : (classSaysFloatLeft(tag) ? 1 : floatInherit);
+        int side = classSaysFloatRight(tag) ? 2 : (classSaysFloatLeft(tag) ? 1 : floatInherit);
+        Align imgHtml = Align::Left;
+        if (htmlAlignAttr(tag, imgHtml)) {
+          if (imgHtml == Align::Left) {
+            side = 1;
+          } else if (imgHtml == Align::Right) {
+            side = 2;
+          } else if (imgHtml == Align::Center) {
+            side = 0;
+          }
+        }
 
         // Placeholder mode: classic "[Image: alt]" text only (no decode / no plate).
         if (imageRendering == 1) {
@@ -1385,15 +1443,26 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
             uint16_t imgFlags = kBlockNoIndent;
             // Parent .figleft / self float class → left letter float (Alice ornate C).
             // Illuminae: wrapper .figure_float_right_briefing → floatInherit right.
+            // HTML align="left|right" on <img> is the same contract as classic.
             if (side == 1) imgFlags = static_cast<uint16_t>(imgFlags | kBlockFloatLeft);
             if (side == 2) imgFlags = static_cast<uint16_t>(imgFlags | kBlockFloatRight);
             // Fourth Wing: .orn img { width: 12% } — small centered chapter ornament.
             // Only class / wrapper / explicit orn.png basename — do not match any
             // path containing "/orn" (false-positive on "ornate", "morning", folders).
+            const bool lastWasHeading =
+                !out.blocks().empty() && out.blocks().back().kind >= BlockKind::Heading1 &&
+                out.blocks().back().kind <= BlockKind::Heading6;
             const bool isOrnament = ornamentDepth > 0 || attrHasClass(tag, "orn") ||
-                                    (use >= 7 && containsI(src, use, "orn.png"));
+                                    attrHasClass(tag, "ornament") ||
+                                    (use >= 7 && containsI(src, use, "orn.png")) ||
+                                    containsI(src, use, "ornament") || containsI(src, use, "flourish") ||
+                                    containsI(src, use, "fleuron") || containsI(src, use, "headpiece");
             if (isOrnament) imgFlags = static_cast<uint16_t>(imgFlags | kBlockOrnament);
             openBlock(BlockKind::Image, Align::Center, imgFlags);
+            // Chapter-open decoration: air between title and flourish (v0.1.8 look).
+            if (side == 0 && (lastWasHeading || headingLevelOpen > 0 || isOrnament)) {
+              out.setCurrentMarginsEmQ4(6, 10);
+            }
             int cssW = parseStyleWidthPx(tag);
             if (cssW <= 0) cssW = floatWidthPx;
             // Side floats without rich alt (email chrome icons, etc.).

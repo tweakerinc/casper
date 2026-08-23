@@ -21,10 +21,12 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // v23: real typography preserved. v22 and earlier flattened curly quotes to ' ",
 // en/em dashes to -, and the ellipsis to "..." while building the IR, so cached
 // chapters hold the flattened text and must be reconverted to get it back.
-inline constexpr uint16_t kIrFormatVersion = 23;
+// v24: HTML align="center|left|right" on p/h*/td/img (classic ChapterHtmlSlimParser
+// parity). v23 IR left-aligned chapter titles that only used the align= attribute.
+inline constexpr uint16_t kIrFormatVersion = 24;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 23;
-inline constexpr uint16_t kIrFormatVersionMax = 23;
+inline constexpr uint16_t kIrFormatVersionMin = 24;
+inline constexpr uint16_t kIrFormatVersionMax = 24;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

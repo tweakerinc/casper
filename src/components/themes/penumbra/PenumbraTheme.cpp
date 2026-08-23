@@ -30,13 +30,13 @@ constexpr int kClockFontId = SOURCESERIF4_72_CLOCK_FONT_ID;
 constexpr int kDayFontId = SOURCESERIF4_12_FONT_ID;
 // All Penumbra home text is Source Serif 4.
 // X3 under-panel title stack: caption 14 / title 18 / author 14.
-// X4 upper "Now Reading": caption 14 / title 18 / author 12 (list fonts only on Recents).
+// X4 Now Reading (v0.1.8): caption 12 / title 16 / author 12. 14/18 on this
+// stack crowded the author into the hairline and stole air from Recents.
 constexpr int kLabelFontId = SOURCESERIF4_14_FONT_ID;
-constexpr int kLabelFontIdX4 = SOURCESERIF4_14_FONT_ID;
+constexpr int kLabelFontIdX4 = SOURCESERIF4_12_FONT_ID;
 constexpr int kTitleFontId = SOURCESERIF4_18_FONT_ID;
 constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
-// X4 Now Reading title: match X3 book title weight (Source Serif 18 UI face).
-constexpr int kTitleFontIdX4 = SOURCESERIF4_18_FONT_ID;
+constexpr int kTitleFontIdX4 = SOURCESERIF4_16_FONT_ID;
 constexpr int kAuthorFontIdX4 = SOURCESERIF4_12_FONT_ID;
 // Recents list only: 10 pt title (bold when focused), 8 pt author.
 // (Must stay on SOURCESERIF4_10 / _8 — not UI_10 which aliases 12 pt.)
@@ -383,7 +383,7 @@ void drawStatCell(const GfxRenderer& renderer, const int x, const int w, const i
 }
 
 // Section label (NOW READING / RECENTS / STATS / LIFETIME).
-// Always REGULAR Source Serif — never bold. fontId defaults to 12pt; X4 hero uses 14pt.
+// Always REGULAR Source Serif — never bold. Default is the X3 14pt caption.
 void drawSectionLabel(const GfxRenderer& renderer, const int centerX, const int y, const char* label,
                       const int fontId = kLabelFontId) {
   if (!label || !*label) return;
@@ -528,7 +528,7 @@ int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band, c
                          const bool includeViewAll = false) {
   (void)band;
   const bool x4 = isX4Penumbra();
-  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int captionH = renderer.getLineHeight(x4 ? kLabelFontIdX4 : kLabelFontId);
   const int titleLineH = renderer.getLineHeight(kRecentsTitleFontId);
   const int rowH = recentsRowHeight(renderer);
   const int rowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
@@ -586,8 +586,7 @@ int measureX3StatsStyleBlockH(const GfxRenderer& renderer) {
   const int titleH = renderer.getLineHeight(kStatsBookTitleFontId);
   // Compact stack: title → gap → grid → gap → caption → dots clearance.
   // Must match layoutX3StatsChrome() so G / lowerTop stay stable across pages.
-  return kStatsTopInsetX3 + titleH + kStatsStackGap + gridH + kStatsStackGap + captionH +
-         kStatsFooterDotsClearance;
+  return kStatsTopInsetX3 + titleH + kStatsStackGap + gridH + kStatsStackGap + captionH + kStatsFooterDotsClearance;
 }
 
 // Stable lower-block height for X3 equal-gap layout. MUST be mode-independent:
@@ -826,7 +825,8 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
   const int listLeft = centerX - band.textMaxW / 2;
   const int listW = band.textMaxW;
 
-  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int captionFont = x4 ? kLabelFontIdX4 : kLabelFontId;
+  const int captionH = renderer.getLineHeight(captionFont);
   const int titleFont = kRecentsTitleFontId;
   const int authorFont = kRecentsAuthorFontId;
   const int titleLineH = renderer.getLineHeight(titleFont);
@@ -867,7 +867,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
     }
   }
 
-  drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS));
+  drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS), captionFont);
   y += captionH + capToList;
 
   if (n == 0) {
@@ -960,8 +960,8 @@ struct X3StatsChrome {
   int zoneBottom = 0;
 };
 
-X3StatsChrome layoutX3StatsChrome(const GfxRenderer& renderer, const ContentBand& band,
-                                  const bool showBookTitle, const int titleH) {
+X3StatsChrome layoutX3StatsChrome(const GfxRenderer& renderer, const ContentBand& band, const bool showBookTitle,
+                                  const int titleH) {
   X3StatsChrome out;
   out.zoneTop = band.pinBlocks ? band.lowerTop : (band.midY + kRuleThickness);
   out.zoneBottom = band.contentBottom - penumbraPageDotsStripH();
@@ -1109,9 +1109,8 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
   // RTC date row — same fields as BookStatsView drawPerBookStatsCard row 3.
   ReadingStatsDateTime today;
   const bool hasToday = getCurrentLocalReadingStatsDateTime(today);
-  const ReadingStatsDate endDate = s.isCompleted && s.finishedDate.isValid()
-                                       ? s.finishedDate
-                                       : (hasToday ? today.date : ReadingStatsDate{});
+  const ReadingStatsDate endDate =
+      s.isCompleted && s.finishedDate.isValid() ? s.finishedDate : (hasToday ? today.date : ReadingStatsDate{});
   const bool hasDaySpan = s.startDate.isValid() && endDate.isValid();
   const uint16_t daysReading = hasDaySpan ? readingSpanDaysElapsed(s.startDate, endDate) : 0;
   if (hasDaySpan) {
@@ -1170,10 +1169,9 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
 
   // Row 0–1: 3 columns (BookStatsView card layout).
   const char* topValues[6] = {vSessions, vTime, vProgress, vAvg, vLeft, vPace};
-  const char* topLabels[6] = {tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_STATS_PROGRESS_LBL),
-                              tr(STR_STATS_AVG_SESSION_LBL), tr(STR_TIME_LEFT),          tr(STR_STATS_PAGES_PER_MIN)};
-  drawStatGrid(renderer, band.centerX, chrome.gridY, gridW, drawnTwoRowH, /*cols=*/3, /*rows=*/2, topValues,
-               topLabels);
+  const char* topLabels[6] = {tr(STR_STATS_SESSIONS_LBL),    tr(STR_STATS_TIME_LBL), tr(STR_STATS_PROGRESS_LBL),
+                              tr(STR_STATS_AVG_SESSION_LBL), tr(STR_TIME_LEFT),      tr(STR_STATS_PAGES_PER_MIN)};
+  drawStatGrid(renderer, band.centerX, chrome.gridY, gridW, drawnTwoRowH, /*cols=*/3, /*rows=*/2, topValues, topLabels);
   y = chrome.gridY + drawnTwoRowH + ((drawnGridH >= gridH) ? rowGap : std::max(2, rowGap / 2));
 
   // Row 2: half-width Started | Est. Finish
@@ -1414,8 +1412,7 @@ Rect clockDigitBandRect(const GfxRenderer& renderer) {
   const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
   const int dayH = renderer.getLineHeight(kDayFontId);
   const int clockBlockH = clockInkH + kClockToDayGap + dayH;
-  const int groupTop =
-      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
   constexpr int kPadY = 4;
   const int top = std::max(0, groupTop - kPadY);
   const int h = clockInkH + kPadY * 2;
@@ -1430,8 +1427,7 @@ void paintHeroClockOnly(const GfxRenderer& renderer) {
   const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
   const int dayH = renderer.getLineHeight(kDayFontId);
   const int clockBlockH = clockInkH + kClockToDayGap + dayH;
-  const int groupTop =
-      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
   drawHeroClockCentered(renderer, band.centerX, groupTop, timeBuf);
 }
 
@@ -1452,9 +1448,8 @@ bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int b
   // glyphs are not cut when only minutes change.
   const Rect grayRect{0, band.y, renderer.getScreenWidth(), band.height};
 
-  const auto baseMode =
-      (baseRefreshMode == static_cast<int>(HalDisplay::HALF_REFRESH)) ? HalDisplay::HALF_REFRESH
-                                                                      : HalDisplay::FAST_REFRESH;
+  const auto baseMode = (baseRefreshMode == static_cast<int>(HalDisplay::HALF_REFRESH)) ? HalDisplay::HALF_REFRESH
+                                                                                        : HalDisplay::FAST_REFRESH;
   renderer.displayGrayscaleBase(baseMode);
 
   renderer.clearScreen(0x00);

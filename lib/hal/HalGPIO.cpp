@@ -307,8 +307,12 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   // X4 on battery: GPIO13 power latch cuts MCU power in sleep, so wake is a
   // cold ESP_RST_POWERON (not DEEPSLEEP). Without USB that is still a power-
   // button wake and must QuickResume like v0.1.3 — not Splash/"reboot".
-  // Flash/USB paths below keep sticky lastSleepFromReader from auto-opening a book.
-  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) {
+  //
+  // X3 sleep is always DEEPSLEEP+GPIO. CHIP_PU/EN on the C3 reports POWERON
+  // (ESP_RST_EXT is not the EN pin here). Treating X3 POWERON as PowerButton
+  // QuickResumed into the frozen book: moon→dots on the stuck page, no logo,
+  // no Home.
+  if (!deviceIsX3() && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) {
     return WakeupReason::PowerButton;
   }
 #ifdef ESP_RST_USB
@@ -321,12 +325,11 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
       (resetReason == ESP_RST_UNKNOWN || resetReason == ESP_RST_SW)) {
     return WakeupReason::AfterFlash;
   }
-  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
+  // X4: USB VBUS while the latch is off. X3 POWERON+USB is EN reset while
+  // charging — must cold-boot Home, not sleep immediately (stuck glass).
+  if (!deviceIsX3() && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
     return WakeupReason::AfterUSBPower;
   }
-  // EN / CHIP_PU (ESP_RST_EXT) stays Other — not PowerButton. Classifying it as
-  // a power wake would QuickResume into the last book, then a follow-up power
-  // press (the usual "reset then turn it on" habit) would sleep it again.
-  // Brownout / watchdog / unknown also land here as a cold Home boot.
+  // X3 EN/CHIP_PU (POWERON or EXT), watchdog, brownout → cold Home.
   return WakeupReason::Other;
 }

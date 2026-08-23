@@ -685,15 +685,12 @@ void setup() {
   // (Do not require ESP_RST_DEEPSLEEP only — that forced a full reboot-feel on
   // X4 unplugged wake.)
   //
-  // EN / CHIP_PU (ESP_RST_EXT) is Other, not PowerButton. Device 300ec1c0: EN
-  // did boot (wake=3, cold/splash), BootActivity HALF blacked the glass, then a
-  // follow-up power press (the usual "reset then turn it on" habit) slept the
-  // device before Home ink — felt like a dead reset button. Keep last glass
-  // when sleep_frame is on SD, skip the logo HALF, and wait for Home first ink
-  // before allowSleepAt.
+  // X3 EN/CHIP_PU is Other (see HalGPIO::getWakeupReason). Splash must HALF the
+  // boot logo so a freeze-reset actually replaces the stuck page. Skipping that
+  // and FASTing Home over the retained frame left the frozen page on glass
+  // (user: three dots, no logo, no Home). Wait for Home first ink before
+  // allowSleepAt so a follow-up power press cannot sleep during the logo.
   const bool powerButtonWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
-  const bool enPinReset = (resetReason == ESP_RST_EXT);
-  const bool enKeepGlass = enPinReset && Storage.exists(SLEEP_FRAME_FILE);
   const BootResume resume = isSilentReboot    ? BootResume::Silent
                             : powerButtonWake ? BootResume::QuickResume
                                               : BootResume::Splash;
@@ -709,7 +706,7 @@ void setup() {
     SystemLog::logTiming("BOOT", "silent reboot path");
   }
 
-  setupDisplayAndFonts(resume != BootResume::Splash || enKeepGlass);
+  setupDisplayAndFonts(resume != BootResume::Splash);
   if (QrTimingLog::active()) QrTimingLog::line("after setupDisplayAndFonts");
   SystemLog::logTiming("BOOT", "after setupDisplayAndFonts millis=%lu", static_cast<unsigned long>(millis()));
 
@@ -779,17 +776,9 @@ void setup() {
       break;
     }
     case BootResume::Splash:
-      // Cold boot / flash / unknown only — never power-button sleep wake.
-      // EN reset: skip the logo HALF (1–2s black). That flash plus a power
-      // press before Home ink put the device back to sleep (device 300ec1c0).
-      if (enPinReset) {
-        SystemLog::logTiming("BOOT", "en_reset skip_splash keep_glass=%d", enKeepGlass ? 1 : 0);
-        if (enKeepGlass && loadSleepFrameBuffer()) {
-          renderer.cleanupGrayscaleWithFrameBuffer();
-        }
-      } else {
-        activityManager.goToBoot();
-      }
+      // Cold boot / flash / X3 EN reset — never power-button sleep wake.
+      // HALF logo is what wipes a frozen reader page off the glass.
+      activityManager.goToBoot();
       break;
   }
 

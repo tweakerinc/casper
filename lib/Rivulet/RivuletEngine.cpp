@@ -498,6 +498,8 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
   if (aheadValid_) return false;            // already warm
   if (!laidOutValid_) return false;         // nothing to be ahead OF yet
   if (laidOut_.atChapterEnd) return false;  // no next page in this chapter
+  // Same floor as idlePrefetch: loadFromFile reserve() aborts on OOM.
+  if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024) return false;
 
   const int nextIdx = currentPage_ + 1;
   char path[220];
@@ -531,6 +533,9 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
 bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
   if (behindValid_) return false;
   if (!laidOutValid_ || currentPage_ <= 0) return false;
+  // Device abort: first_ink of a Hangul page, then idle load of s11_p9_*.rvpg
+  // ran vector::reserve with throwing new. Skip until there is a spare block.
+  if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024) return false;
   // Prefer SD page cache (instant) before re-layout.
   {
     char path[220];

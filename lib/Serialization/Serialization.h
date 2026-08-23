@@ -69,7 +69,7 @@ inline void readString(std::istream& is, std::string& s) {
 // -fno-exceptions that throw becomes abort(), i.e. the device reboots because a
 // cache file on the SD card went bad. A torn concurrent seek on a large book.bin
 // has the same shape: the length still "fits in the file" but resize() aborts.
-inline bool tryReadString(HalFile& file, std::string& s) {
+inline bool tryReadString(HalFile& file, std::string& s, const uint32_t maxBytes = kMaxSerializedStringBytes) {
   uint32_t len = 0;
   if (!tryReadPod(file, len)) {
     return false;
@@ -77,7 +77,7 @@ inline bool tryReadString(HalFile& file, std::string& s) {
   const size_t pos = file.position();
   const size_t total = file.size();
   const size_t remaining = (total > pos) ? (total - pos) : 0;
-  if (!serializedStringFits(len, remaining)) {
+  if (len > maxBytes || !serializedStringFits(len, remaining)) {
     s.clear();
     return false;
   }

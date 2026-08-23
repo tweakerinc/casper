@@ -1,11 +1,14 @@
 #include "LaidOutPage.h"
 
+#include <Esp.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 
 namespace rivulet {
 namespace {
@@ -17,7 +20,25 @@ constexpr uint16_t kPageFormatVersion = 3;  // v3: no leading-space indent / las
 constexpr uint32_t kMaxSpans = 2000;
 constexpr uint32_t kMaxImages = 64;
 constexpr uint32_t kMaxRules = 64;
-constexpr uint32_t kMaxTextBytes = 4096;
+// One GlyphSpan is a style run, not the whole page. 256 UTF-8 bytes is plenty;
+// tryReadString used to allow 16KB then std::string::resize aborted on OOM.
+constexpr uint32_t kMaxTextBytes = 256;
+constexpr uint32_t kMaxHrefBytes = 256;
+// x,y,fontId,style,scale + uint32 length (empty text).
+constexpr uint32_t kMinOnDiskSpanBytes = 14;
+
+// Device crash (v0.1.9, 2026-08-23): idle warmBehindPage loaded
+// s11_p9_*.rvpg after a Hangul page filled the font cache. vector::reserve /
+// string::resize used throwing new → abort() (PC in the loadFromFile frame).
+// Probe a real block, same as ChapterIr, so we fail soft instead of rebooting.
+bool canAlloc(const size_t bytes) {
+  if (bytes == 0) return true;
+  if (ESP.getMaxAllocHeap() < bytes + 512) return false;
+  void* p = std::malloc(bytes);
+  if (!p) return false;
+  std::free(p);
+  return true;
+}
 
 bool writeCursor(HalFile& f, const IrCursor& c) {
   return serialization::tryWritePod(f, c.blockIndex) && serialization::tryWritePod(f, c.runIndex) &&
@@ -107,47 +128,63 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
   HalFile f;
   if (!Storage.openFileForRead("RVPG", path, f)) return false;
 
+  auto fail = [&](const bool corrupt) {
+    f.close();
+    clear();
+    if (corrupt) Storage.remove(path);
+    return false;
+  };
+
   char magic[4] = {};
   if (!serialization::tryReadPod(f, magic) || std::memcmp(magic, kPageMagic, 4) != 0) {
-    f.close();
-    return false;
+    return fail(true);
   }
   uint16_t ver = 0;
   if (!serialization::tryReadPod(f, ver) || ver != kPageFormatVersion) {
-    f.close();
-    return false;
+    return fail(true);
   }
   RenderKey key{};
   if (!serialization::tryReadPod(f, key) || key != expectedKey) {
-    f.close();
-    return false;
+    return fail(true);
   }
   int32_t pageIndex = -1;
   if (!serialization::tryReadPod(f, pageIndex) || pageIndex != expectedPage) {
-    f.close();
-    return false;
+    return fail(true);
   }
   if (!readCursor(f, start) || !readCursor(f, end)) {
-    f.close();
-    clear();
-    return false;
+    return fail(true);
   }
   uint8_t endU8 = 0, dropU8 = 0;
   if (!serialization::tryReadPod(f, contentH) || !serialization::tryReadPod(f, endU8) ||
       !serialization::tryReadPod(f, dropZoneW) || !serialization::tryReadPod(f, dropZoneH) ||
       !serialization::tryReadPod(f, dropU8)) {
-    f.close();
-    clear();
-    return false;
+    return fail(true);
   }
   atChapterEnd = endU8 != 0;
   hasDropZone = dropU8 != 0;
 
   uint32_t nSpans = 0;
   if (!serialization::tryReadPod(f, nSpans) || nSpans > kMaxSpans) {
-    f.close();
-    clear();
-    return false;
+    LOG_ERR("RVPG", "span count %u rejected (cap %u)", static_cast<unsigned>(nSpans), static_cast<unsigned>(kMaxSpans));
+    return fail(true);
+  }
+  {
+    const uint32_t fileSize = static_cast<uint32_t>(f.size());
+    const uint32_t consumed = static_cast<uint32_t>(f.position());
+    const uint32_t remaining = fileSize > consumed ? fileSize - consumed : 0;
+    if (static_cast<uint64_t>(nSpans) * kMinOnDiskSpanBytes > remaining) {
+      LOG_ERR("RVPG", "truncated page: %u spans need %u bytes, %u left", static_cast<unsigned>(nSpans),
+              static_cast<unsigned>(nSpans * kMinOnDiskSpanBytes), static_cast<unsigned>(remaining));
+      return fail(true);
+    }
+  }
+  const size_t spanBytes = static_cast<size_t>(nSpans) * sizeof(GlyphSpan);
+  // SSO covers Hangul tofu spans; slack covers a few heap strings + 4KB.
+  const size_t slack = static_cast<size_t>(nSpans) * 32u + 4096u;
+  if (!canAlloc(spanBytes + slack)) {
+    LOG_ERR("RVPG", "OOM spans=%u bytes=%u maxA=%u", static_cast<unsigned>(nSpans),
+            static_cast<unsigned>(spanBytes + slack), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return fail(false);
   }
   spans.reserve(nSpans);
   for (uint32_t i = 0; i < nSpans; ++i) {
@@ -155,15 +192,8 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
     int32_t fontId = 0;
     if (!serialization::tryReadPod(f, sp.x) || !serialization::tryReadPod(f, sp.y) ||
         !serialization::tryReadPod(f, fontId) || !serialization::tryReadPod(f, sp.epdStyle) ||
-        !serialization::tryReadPod(f, sp.dropScale) || !serialization::tryReadString(f, sp.text)) {
-      f.close();
-      clear();
-      return false;
-    }
-    if (sp.text.size() > kMaxTextBytes) {
-      f.close();
-      clear();
-      return false;
+        !serialization::tryReadPod(f, sp.dropScale) || !serialization::tryReadString(f, sp.text, kMaxTextBytes)) {
+      return fail(true);
     }
     sp.fontId = static_cast<int>(fontId);
     spans.push_back(std::move(sp));
@@ -171,37 +201,35 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
 
   uint32_t nImgs = 0;
   if (!serialization::tryReadPod(f, nImgs) || nImgs > kMaxImages) {
-    f.close();
-    clear();
-    return false;
+    return fail(true);
+  }
+  if (!canAlloc(static_cast<size_t>(nImgs) * sizeof(ImagePlate))) {
+    return fail(false);
   }
   images.reserve(nImgs);
   for (uint32_t i = 0; i < nImgs; ++i) {
     ImagePlate im;
     if (!serialization::tryReadPod(f, im.x) || !serialization::tryReadPod(f, im.y) ||
         !serialization::tryReadPod(f, im.w) || !serialization::tryReadPod(f, im.h) ||
-        !serialization::tryReadString(f, im.href)) {
-      f.close();
-      clear();
-      return false;
+        !serialization::tryReadString(f, im.href, kMaxHrefBytes)) {
+      return fail(true);
     }
     images.push_back(std::move(im));
   }
 
   uint32_t nRules = 0;
   if (!serialization::tryReadPod(f, nRules) || nRules > kMaxRules) {
-    f.close();
-    clear();
-    return false;
+    return fail(true);
+  }
+  if (!canAlloc(static_cast<size_t>(nRules) * sizeof(RulePlate))) {
+    return fail(false);
   }
   rules.reserve(nRules);
   for (uint32_t i = 0; i < nRules; ++i) {
     RulePlate r;
     if (!serialization::tryReadPod(f, r.x) || !serialization::tryReadPod(f, r.y) ||
         !serialization::tryReadPod(f, r.w) || !serialization::tryReadPod(f, r.h)) {
-      f.close();
-      clear();
-      return false;
+      return fail(true);
     }
     rules.push_back(r);
   }

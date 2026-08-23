@@ -21,3 +21,9 @@ TEST(SerializedStringBound, RejectsLengthPastRemaining) {
   EXPECT_FALSE(serialization::serializedStringFits(16, 15));
   EXPECT_FALSE(serialization::serializedStringFits(1, 0));
 }
+
+TEST(SerializedStringBound, RejectsRvpgCrashSizedStringLength) {
+  // Device abort stack (2026-08-23) had 0x7980 next to LaidOutPage::loadFromFile.
+  // 31104 > kMaxSerializedStringBytes, so tryReadString must refuse before resize.
+  EXPECT_FALSE(serialization::serializedStringFits(0x7980, 64 * 1024));
+}

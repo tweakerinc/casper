@@ -517,6 +517,10 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
         return true;
       }
       Storage.remove(path);
+    } else if (Storage.exists(path)) {
+      // OOM deserialize keeps the file. Idle layout of that same page is how
+      // Hangul + warmBehind aborted after first_ink — skip until heap recovers.
+      return false;
     }
   }
 
@@ -554,6 +558,8 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
         }
         LOG_DBG("RVEN", "behind cache p=%d rejected (start=%d end=%d)", behindIdx, startOk ? 1 : 0, endOk ? 1 : 0);
         Storage.remove(path);
+      } else if (Storage.exists(path)) {
+        return false;
       }
     }
   }

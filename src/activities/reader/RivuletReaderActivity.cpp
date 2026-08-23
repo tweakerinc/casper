@@ -2602,6 +2602,13 @@ void RivuletReaderActivity::tickIdlePageMap() {
     armSwallowAfterIdle(pageTurnLatch_, t0, gpioPeekHeldForIdleMap());
     lastFutureWorkMs_ = millis();
     resetTaskWatchdogIfSubscribed();
+    // Scan is per chapter; paint is per page. Without a repaint the sitting
+    // page would keep bare numbers until a dummy turn. Only refresh when this
+    // page actually has markers — no flash for a page with none.
+    if (!footnoteScanDeferred_ && !chapterFootnotes_.empty()) {
+      refreshPageFootnotes();
+      if (!currentPageFootnotes_.empty()) requestUpdate();
+    }
     return;
   }
 

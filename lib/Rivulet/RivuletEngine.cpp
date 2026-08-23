@@ -1241,6 +1241,20 @@ int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) cons
   return std::max(atLeastCurrent, smoothed);
 }
 
+int RivuletEngine::chapterPageCountForEta(const GfxRenderer* rendererForEstimate) const {
+  // Partial IR (idle prefetch, requireCompleteIr=false) sets atChapterEnd when
+  // the fragment ends. chapterPageCount then returns the current page, so
+  // time-left in chapter stuck on <1m for a 40-page spine.
+  if (laidOutValid_ && laidOut_.atChapterEnd && !map_.complete()) {
+    const int bodyEm = rendererForEstimate ? std::max(8, rendererForEstimate->getFontAscenderSize(key_.fontId)) : 14;
+    const int heuristic = chapter_.estimatePageCount(key_.viewportW, key_.viewportH, bodyEm, lineCompression_);
+    const int known = std::max(1, map_.knownPages());
+    const int atLeastCurrent = std::max(known, currentPage_ + 1);
+    return std::max(atLeastCurrent, heuristic);
+  }
+  return chapterPageCount(rendererForEstimate);
+}
+
 int RivuletEngine::idleMapPagesThisTick(const GfxRenderer* /*rendererForEstimate*/) const {
   if (map_.complete() || chapter_.empty()) return 0;
   // Always one page. A 4–10 page burst is 7–17s of layout with no input sample

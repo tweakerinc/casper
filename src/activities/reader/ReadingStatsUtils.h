@@ -67,7 +67,10 @@ uint16_t computeReadingHistoryDaysRead(const std::array<uint8_t, READING_HISTORY
 // Seconds per page from dwell average and/or total time ÷ pages turned.
 // Prefers the long-term rate (stable); lightly blends dwell so a few slow/fast
 // pages do not swing multi-hour ETAs. Returns 0 if not enough data.
+// Ignores a rate faster than kMinSecondsPerPageForEta (skimming / inflated
+// page counts) so chapter time-left cannot stick on <1m.
 // totalReadingSeconds may include the open session (live total).
+static constexpr uint32_t kMinSecondsPerPageForEta = 8;
 uint32_t estimateSecondsPerPage(uint16_t avgSecondsPerForwardPage, uint16_t paceSampleCount,
                                 uint32_t totalReadingSeconds, uint32_t totalPagesTurned);
 

@@ -153,6 +153,9 @@ class RivuletEngine {
   [[nodiscard]] int currentPage() const { return currentPage_; }
   // Exact if map complete; else estimate from IR (+ map extrapolation while walking).
   [[nodiscard]] int chapterPageCount(const GfxRenderer* rendererForEstimate = nullptr) const;
+  // Like chapterPageCount, but an incomplete map does not collapse to "this
+  // page is the end" when the live page's atChapterEnd came from a partial IR.
+  [[nodiscard]] int chapterPageCountForEta(const GfxRenderer* rendererForEstimate = nullptr) const;
   // How many measure-only pages the idle tick should lay out this pass.
   // Larger when the map is far behind the estimate so "~N" settles faster.
   [[nodiscard]] int idleMapPagesThisTick(const GfxRenderer* rendererForEstimate = nullptr) const;

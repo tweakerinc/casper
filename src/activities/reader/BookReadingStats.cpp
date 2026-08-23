@@ -6,11 +6,11 @@
 #include <I18n.h>
 #include <Logging.h>
 
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
-
 #include <cstring>
 #include <functional>
+
+#include "util/CasperBookStore.h"
+#include "util/CasperPaths.h"
 
 namespace {
 // Binary layout v1 (11 bytes):
@@ -588,10 +588,10 @@ bool BookReadingStats::samePayloadAs(const BookReadingStats& o) const {
          avgSecondsPerForwardPage == o.avgSecondsPerForwardPage && paceSampleCount == o.paceSampleCount &&
          estimatedTimeLeftSeconds == o.estimatedTimeLeftSeconds && progressPercentMilli == o.progressPercentMilli &&
          startDateManual == o.startDateManual && finishedDateManual == o.finishedDateManual &&
-         startDate.year == o.startDate.year && startDate.month == o.startDate.month && startDate.day == o.startDate.day &&
-         finishedDate.year == o.finishedDate.year && finishedDate.month == o.finishedDate.month &&
-         finishedDate.day == o.finishedDate.day && timeOfDaySeconds == o.timeOfDaySeconds &&
-         dayOfWeekSeconds == o.dayOfWeekSeconds;
+         startDate.year == o.startDate.year && startDate.month == o.startDate.month &&
+         startDate.day == o.startDate.day && finishedDate.year == o.finishedDate.year &&
+         finishedDate.month == o.finishedDate.month && finishedDate.day == o.finishedDate.day &&
+         timeOfDaySeconds == o.timeOfDaySeconds && dayOfWeekSeconds == o.dayOfWeekSeconds;
 }
 
 float BookReadingStats::getProgressPercent() const {
@@ -636,6 +636,9 @@ void BookReadingStats::recordForwardPageRead(uint32_t seconds) {
   }
 
   const uint16_t sample = static_cast<uint16_t>(seconds);
+  if (totalPagesTurned < UINT32_MAX) {
+    totalPagesTurned++;
+  }
   if (paceSampleCount == 0 || avgSecondsPerForwardPage == 0) {
     avgSecondsPerForwardPage = sample;
     paceSampleCount = 1;

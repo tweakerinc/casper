@@ -2458,6 +2458,10 @@ void RivuletReaderActivity::overlapAheadDuringRefresh() {
 void RivuletReaderActivity::prewarmAheadGlyphs() {
   if (futureIndexActive_ || !engine_.aheadWarm()) return;
   if (!canRetainGlyphCache()) return;
+  // FIDX restore + IR catchup already blocked the loop for seconds; glyph
+  // prewarm then held RenderLock for 2–5s more (device 300ec1c0). Skip until
+  // the reader has been idle again.
+  if (lastFutureWorkMs_ != 0UL && (millis() - lastFutureWorkMs_) < 4000UL) return;
   // Paint writes the framebuffer and FontDecompressor is not re-entrant.
   // Device crash after a FIDX restore+turn: idle prewarm on the main task ran
   // ~50ms after requestUpdate, while render() still held the FB (async FAST +
@@ -4387,7 +4391,7 @@ bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, con
   }
 
   const int currentPage1 = engine_.currentPage() + 1;
-  const int chapterPages = std::max(1, engine_.chapterPageCount(&renderer));
+  const int chapterPages = std::max(1, engine_.chapterPageCountForEta(&renderer));
   const float sectionChapterProg = static_cast<float>(currentPage1) / static_cast<float>(chapterPages);
   const float bookProg = epub_->calculateProgress(spineIndex_, sectionChapterProg);
   const float chapterStartProg = epub_->calculateProgress(spineIndex_, 0.0f);

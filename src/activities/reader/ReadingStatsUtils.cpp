@@ -478,13 +478,19 @@ uint32_t estimateSecondsPerPage(const uint16_t avgSecondsPerForwardPage, const u
   if (totalPagesTurned >= 8 && totalReadingSeconds >= 180) {
     fromLife = (totalReadingSeconds + totalPagesTurned / 2u) / totalPagesTurned;
   }
+  if (fromLife > 0 && fromLife < kMinSecondsPerPageForEta) {
+    fromLife = 0;
+  }
+  if (fromDwell > 0 && fromDwell < kMinSecondsPerPageForEta) {
+    fromDwell = 0;
+  }
   if (fromLife > 0 && fromDwell > 0) {
     // Lifetime primary; dwell is a light nudge only (max() caused 13h vs 16h thrash).
     return (fromLife * 4u + fromDwell) / 5u;
   }
   if (fromLife > 0) return fromLife;
   if (fromDwell > 0) return fromDwell;
-  if (paceSampleCount >= 3 && avgSecondsPerForwardPage > 0) {
+  if (paceSampleCount >= 3 && avgSecondsPerForwardPage >= kMinSecondsPerPageForEta) {
     return avgSecondsPerForwardPage;
   }
   return 0;

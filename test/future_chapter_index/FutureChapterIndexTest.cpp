@@ -152,3 +152,17 @@ TEST(FutureChapterIndex, NoStartBeforeFirstTurn) {
   in.lastTurnMs = 0;
   EXPECT_EQ(decide(in), Decision::None);
 }
+
+TEST(FutureChapterIndex, NoStartWhileFootnoteScanPending) {
+  Input in = idleReady();
+  in.footnoteScanPending = true;
+  EXPECT_EQ(decide(in), Decision::None);
+}
+
+TEST(FutureChapterIndex, FootnotePendingDoesNotAbortResident) {
+  Input in = idleReady();
+  in.futureResident = true;
+  in.footnoteScanPending = true;
+  in.lastWorkMs = in.nowMs - Limits::kPageGapMs;
+  EXPECT_EQ(decide(in), Decision::MeasurePage);
+}

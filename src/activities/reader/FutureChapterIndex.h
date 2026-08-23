@@ -77,6 +77,10 @@ struct Input {
   bool heapOkToConvert = false;
   // Tap during a swap: do not StartForward again until the reader changes spine.
   bool userAbortedThisSitting = false;
+  // HTML footnote scan still owed after first ink. StartForward in that window
+  // stacked a 1.7s ZIP/HTML read with an IR swap (device bcff8a47: NOTE then
+  // the session died, EN rst=1).
+  bool footnoteScanPending = false;
   // Last page of the reader's held place (not the future spine in the engine).
   // Promote only then — mid-chapter PageForward must restore, not hop.
   bool heldAtChapterEnd = false;
@@ -85,12 +89,14 @@ struct Input {
   int futureStallTicks = 0;
   int forwardIndexedThisSession = 0;
   unsigned long nowMs = 0;
+  // Real forward page turn only. Open/onEnter must leave this 0 or StartForward
+  // runs while the user is still looking at the first page.
   unsigned long lastTurnMs = 0;
   unsigned long lastWorkMs = 0;
 };
 
 inline bool quietLongEnough(const Input& in, const unsigned long needMs) {
-  if (in.lastTurnMs == 0) return false;  // never turned — wait for first ink settle
+  if (in.lastTurnMs == 0) return false;  // never turned forward this sitting
   return (in.nowMs - in.lastTurnMs) >= needMs;
 }
 
@@ -123,6 +129,7 @@ inline Decision decide(const Input& in) {
   if (!in.currentMapComplete) return Decision::None;
   if (!in.aheadWarm) return Decision::None;
   if (in.userAbortedThisSitting) return Decision::None;
+  if (in.footnoteScanPending) return Decision::None;
   if (!in.hasForwardTarget) return Decision::None;
   if (in.forwardIndexedThisSession >= Limits::kMaxForwardChapters) return Decision::None;
   if (!quietLongEnough(in, Limits::kQuietAfterTurnMs)) return Decision::None;

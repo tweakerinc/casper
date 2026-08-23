@@ -42,6 +42,7 @@
 #include "MappedInputManager.h"
 #include "PageTurnPolicy.h"
 #include "ProgressFile.h"
+#include "util/TaskWatchdog.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
@@ -247,6 +248,7 @@ void RivuletReaderActivity::persistHomeProgress(const bool writeToDisk) {
 void RivuletReaderActivity::noteForwardPageTurn() {
   if (!SETTINGS.readingStatsTrackingEnabled()) {
     lastPageTurnTime_ = millis();
+    lastForwardTurnMs_ = lastPageTurnTime_;
     return;
   }
   const unsigned long now = millis();
@@ -262,6 +264,7 @@ void RivuletReaderActivity::noteForwardPageTurn() {
     }
   }
   lastPageTurnTime_ = now;
+  lastForwardTurnMs_ = now;
 }
 
 void RivuletReaderActivity::jumpToPercent(const int percent) {
@@ -1929,6 +1932,9 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   heldSpineForFuture_ = spineIndex_;
   heldPageForFuture_ = engine_.hasChapter() ? engine_.currentPage() : 0;
   heldAtChapterEndForFuture_ = engine_.hasChapter() && engine_.page().atChapterEnd;
+  SystemLog::logTiming("FIDX", "begin spine=%d from=%d cache=%d page0=%d", target, heldSpineForFuture_,
+                       spineHasIrCache(target) ? 1 : 0, engine_.hasPageCache(target, 0) ? 1 : 0);
+  SystemLog::flush();
   persistPageMapBestEffort();
 
   warmingAdjacent_ = true;
@@ -2054,10 +2060,17 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
 
   const int spine = heldSpineForFuture_;
   const int page = heldPageForFuture_;
-  if (!engine_.mapComplete()) persistFutureMap(/*completeOnly=*/false);
+  // A failed goToStart leaves known=1 incomplete. Persisting that .part then
+  // reloading the held spine hung the device (bcff8a47 FIDX spine=93 laid=0).
+  if (engine_.mapComplete()) {
+    persistFutureMap(/*completeOnly=*/true);
+  } else if (engine_.mapKnownPages() >= 2) {
+    persistFutureMap(/*completeOnly=*/false);
+  }
 
   // Engine swap must not race a paint / async FAST / glyph prewarm.
   activityManager.waitForRenderIdle();
+  resetTaskWatchdogIfSubscribed();
   const uint32_t t0 = millis();
   bool ok = false;
   {
@@ -2129,6 +2142,7 @@ void RivuletReaderActivity::promoteFutureIndexToCurrent() {
     return;
   }
   lastPageTurnTime_ = millis();
+  lastForwardTurnMs_ = lastPageTurnTime_;
   noteForwardPageTurn();
   persistPageMapIfComplete();
   (void)saveProgress(ProgressFlush::Now);
@@ -2161,14 +2175,15 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   in.futureStallTicks = futureStallTicks_;
   in.forwardIndexedThisSession = futureIndexedThisSession_;
   in.userAbortedThisSitting = futureIndexAbortedThisSitting_;
+  in.footnoteScanPending = footnoteScanDeferred_;
   in.nowMs = millis();
-  in.lastTurnMs = lastPageTurnTime_;
+  in.lastTurnMs = lastForwardTurnMs_;
   in.lastWorkMs = lastFutureWorkMs_;
   // SD exists() only when a start is otherwise legal. Probing every idle tick
   // would take the storage mutex while the user is still turning pages.
   const bool maybeStart = futureindex::Limits::kIdleForwardIndex && !futureIndexActive_ && in.currentMapComplete &&
-                          in.aheadWarm && !in.userAbortedThisSitting && !in.controlHeld && !in.heapTight &&
-                          in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
+                          in.aheadWarm && !in.userAbortedThisSitting && !in.footnoteScanPending && !in.controlHeld &&
+                          !in.heapTight && in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
                           futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
                           futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
   if (maybeStart) {
@@ -2567,7 +2582,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // After first ink + ahead/behind warm: one HTML footnote scan. Wait 8s so
   // a tap after chapter-land is not eaten by a 2s HTML scan (v49 DCC:
   // NOTE footnotes ms=1864 right after spine 24 page 1).
-  if (footnoteScanDeferred_ && lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= kFootnoteIdleDelayMs &&
+  if (footnoteScanDeferred_ && firstInkDone_ && firstInkAtMs_ != 0UL && (now - firstInkAtMs_) >= kFootnoteIdleDelayMs &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
     footnoteScanDeferred_ = false;
     const unsigned long t0 = millis();
@@ -2577,6 +2592,9 @@ void RivuletReaderActivity::tickIdlePageMap() {
       SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u", spineIndex_, static_cast<unsigned>(dt));
     }
     armSwallowAfterIdle(pageTurnLatch_, t0, gpioPeekHeldForIdleMap());
+    // Do not StartForward in the same / next 1s window as this 1–2s HTML scan.
+    lastFutureWorkMs_ = millis();
+    resetTaskWatchdogIfSubscribed();
     return;
   }
 
@@ -3103,7 +3121,9 @@ void RivuletReaderActivity::onEnter() {
     pendingStatsLoad_ = true;
   }
   readingSessionStartMs_ = millis();
-  lastPageTurnTime_ = readingSessionStartMs_;
+  lastPageTurnTime_ = 0;
+  lastForwardTurnMs_ = 0;
+  firstInkAtMs_ = 0;
 
   // Sticky path for QR in RAM immediately; SD write deferred until after first ink
   // (state.json save was ~100–200ms on the critical open path).
@@ -4771,6 +4791,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   }
 
   // Page is on glass — adjacent-chapter indexing may now run on the idle tick.
+  if (!firstInkDone_) firstInkAtMs_ = millis();
   firstInkDone_ = true;
 
   // After glass has the page: stats + path + recents (never on critical open).

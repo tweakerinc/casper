@@ -206,6 +206,10 @@ class RivuletReaderActivity final : public Activity {
   int pagesUntilFullRefresh_ = 0;
   unsigned long readingSessionStartMs_ = 0;
   unsigned long lastPageTurnTime_ = 0;
+  // FIDX quiet clock. 0 until a real forward turn — onEnter used to stamp this
+  // so opening a book and sitting still started a next-chapter IR swap.
+  unsigned long lastForwardTurnMs_ = 0;
+  unsigned long firstInkAtMs_ = 0;
   unsigned long lastConfirmReleaseMs_ = 0;
   unsigned long lastIdleMapMs_ = 0;
   mutable uint32_t smoothedBookTimeLeftSeconds_ = 0;

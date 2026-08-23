@@ -17,8 +17,10 @@
 // Menu used to call cleanupGrayscale with the *new* sparse FB *after* draw:
 // both planes became the menu with no glass update, so FAST saw zero diff and
 // the main screen stayed visible until many Up/Down FASTs eroded residual.
-// Fix: never cleanup with the destination plate before its first display;
-// open with FAST (+ optional soft settle). Cursor moves: plain FAST only.
+// Fix: never cleanup with the destination plate before its first display.
+// X3 opens FAST + mid-bank settle. X4 SoftOpen is one HALF (no mid bank);
+// list cursor stays FAST. Do not window X4 UI — displayWindow only resyncs
+// RED for the strip and ghosts the rest of the plate.
 
 namespace UiGhostPolicy {
 
@@ -53,7 +55,7 @@ inline bool panelHoldsGreyscale() { return detail::greyscaleOnPanel(); }
 // the black flash on QR (Penumbra home → book → sleep; glass is already BW).
 inline void noteBwOnPanel() { detail::greyscaleOnPanel() = false; }
 
-// Hard clean — X3 HALF + resync. Force Refresh / intentional home scrub only.
+// Hard clean — X3 HALF+resync, X4 SSD1677 0xD7. Force Refresh / home scrub.
 inline void displayHalf(const GfxRenderer& renderer) {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   noteHalf();
@@ -69,14 +71,19 @@ inline void displaySoftReinforce(const GfxRenderer& renderer) {
   }
 }
 
-// New plate open (menu, library, settings, recents):
-//   1) Full FAST — strong differential so sparse white menus actually clear home
-//   2) softCount soft pulls — gentle residual settle (X3; capped)
-// Cursor / band nav must use displayMenuFrame or displayMenuBand instead.
+// New plate open (in-home menu, Settings first paint):
+//   X3: FAST + OEM AA-pre-BW mid pulls (no black flash)
+//   X4: HALF once — SSD1677 has no mid bank; FAST (0xFC) only drives diffs
+//       and cannot lift residual. Cursor moves must stay on displayMenuFrame.
 inline void displaySoftOpen(const GfxRenderer& renderer, int softCount = 1) {
   clearHardScrub();
+  if (!gpio.deviceIsX3()) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    noteHalf();
+    return;
+  }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-  if (!gpio.deviceIsX3() || softCount < 1) return;
+  if (softCount < 1) return;
   if (softCount > 2) softCount = 2;
   for (int i = 0; i < softCount; ++i) {
     renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
@@ -93,16 +100,27 @@ inline void displayMenuFrame(const GfxRenderer& renderer) {
   }
 }
 
-// First full-frame open (library, recents, etc.).
-inline void displayFastFull(const GfxRenderer& renderer) { displaySoftOpen(renderer, /*softCount=*/1); }
-
-// Menu cursor / band: always plain FAST. Never soft, never HALF.
-inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, int h) {
+// List screens that paint the full frame on every cursor move (Library,
+// Recents). Must stay FAST — routing these through displaySoftOpen made every
+// Down a HALF flash. X3 still gets the mid-bank settle; X4 cannot (no mid bank)
+// so this is one full FAST. Do not window: SSD1677 displayWindow uses the 0xFC
+// PART LUT on a strip and only resyncs RED for that strip, which ghosts the rest.
+inline void displayFastFull(const GfxRenderer& renderer) {
   if (gpio.deviceIsX3()) {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-  } else {
-    renderer.displayWindow(x, y, w, h);
+    displaySoftOpen(renderer, /*softCount=*/1);
+    return;
   }
+  clearHardScrub();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+// Menu cursor / band: always plain full-frame FAST. Never soft, never HALF.
+inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, int h) {
+  (void)x;
+  (void)y;
+  (void)w;
+  (void)h;
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 inline void displayListNav(const GfxRenderer& renderer, int listTopY) {
@@ -121,11 +139,11 @@ inline bool sameListPage(int indexA, int indexB, int pageItems) {
 }
 
 inline void displayHomeUnderUpdate(const GfxRenderer& renderer, int winX, int winY, int winW, int winH) {
-  if (gpio.deviceIsX3()) {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-  } else {
-    renderer.displayWindow(winX, winY, winW, winH);
-  }
+  (void)winX;
+  (void)winY;
+  (void)winW;
+  (void)winH;
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 inline void displaySoftFull(const GfxRenderer& renderer) { displayMenuFrame(renderer); }

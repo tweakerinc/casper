@@ -186,7 +186,7 @@ class SettingsActivity final : public Activity {
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
-  // First paint only: soft reinforce pulls (home residual); list nav stays FAST.
+  // First paint (and X4 resume from a child): SoftOpen. List nav stays FAST.
   bool softOpenPending_ = true;
 
   OptionPopup optionPopup;

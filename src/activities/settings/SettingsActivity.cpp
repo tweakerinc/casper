@@ -5,18 +5,17 @@
 #include <HalClock.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <WiFi.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include "BackupStatsActivity.h"
-#include <WiFi.h>
-
 #include "ButtonRemapActivity.h"
+#include "CasperSettings.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
-#include "CasperSettings.h"
 #include "DictionarySelectActivity.h"
 #include "FontDownloadActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -239,8 +238,7 @@ void SettingsActivity::rebuildSettingsLists() {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
-  // Prefer FAST first paint so Settings does not sit dark for a full HALF scrub
-  // after the user already waited on list build. Arm scrub only if ghosting piles up.
+  // First paint: displaySoftOpen (X3 FAST+settle, X4 one HALF). Cursor FAST.
 
   // Reset selection to first category
   selectedCategoryIndex = 0;
@@ -257,8 +255,8 @@ void SettingsActivity::onEnter() {
   // start scrolling immediately. Wait until every nav key is up.
   armAwaitOpenButtonRelease();
 
-  // FAST plate (same as long-press book menu). HALF on enter was multi-second
-  // on X3 and felt like Settings was frozen. List nav stays FAST.
+  // Open plate: X3 FAST+settle, X4 one HALF (SSD1677 has no mid bank). List nav
+  // stays FAST via displayMenuFrame.
   UiGhostPolicy::clearHardScrub();
   requestUpdate();
 }
@@ -270,6 +268,7 @@ void SettingsActivity::onResume() {
   // Without a quiet frame, Settings tab-nav would fire on that residual edge
   // (Remap Back → Controls also jumps to Reader).
   UiGhostPolicy::clearHardScrub();
+  if (!gpio.deviceIsX3()) softOpenPending_ = true;
   armAwaitOpenButtonRelease(/*force=*/true);
 }
 
@@ -382,9 +381,9 @@ void SettingsActivity::loop() {
   const int listTop = tabTop + metrics.tabBarHeight + metrics.verticalSpacing;
   const int versionBand =
       (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(SMALL_FONT_ID) + 4) : 0;
-  const int listHeight = renderer.getScreenHeight() -
-                         (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
-                          metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
+  const int listHeight =
+      renderer.getScreenHeight() - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
   int tx = 0, ty = 0;
   auto buildTabs = [this]() {
     std::vector<TabInfo> tabs;
@@ -456,9 +455,9 @@ void SettingsActivity::loop() {
   const auto& navMetrics = UITheme::getInstance().getMetrics();
   const int navSystemVersionBand =
       (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
-  const int settingsListHeight =
-      renderer.getScreenHeight() - (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
-                                    navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
+  const int settingsListHeight = renderer.getScreenHeight() -
+                                 (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
+                                  navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
   const int settingsPageItems = GUI.getListPageItems(settingsListHeight, false);
   // Front Up/Down: within-category list ring only
   //   0 = this tab's label, 1..N = list rows (Down past last → tab label).
@@ -580,28 +579,28 @@ void SettingsActivity::toggleCurrentSetting() {
       const bool isEnableLogging = setting.nameId == StrId::STR_ENABLE_LOGGING ||
                                    setting.nameId == StrId::STR_SYSTEM_LOG ||
                                    (setting.key && strcmp(setting.key, "systemLogLevel") == 0);
-      optionPopup.show(
-          setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()), currentValue,
-          [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
-            SETTINGS.*valuePtr = idx;
-            // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
-            if (valuePtr == &CasperSettings::menuFontSize &&
-                (idx == CasperSettings::MENU_FONT_MEDIUM || idx == CasperSettings::MENU_FONT_LARGE)) {
-              SETTINGS.splitBookTitleLines = 1;
-            }
-            // Reading Orientation: seed Orient Front Buttons for that layout.
-            // Portrait / Landscape CW → Off; Portrait 180° / Landscape CCW → On.
-            if (valuePtr == &CasperSettings::orientation) {
-              SETTINGS.frontButtonFollowOrientation =
-                  CasperSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
-            }
-            if (isEnableLogging) {
-              SystemLog::reloadLevel();
-            }
-            syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-            markSettingsDirty();
-            rebuildSettingsLists();
-          });
+      optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()),
+                       currentValue,
+                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
+                         SETTINGS.*valuePtr = idx;
+                         // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
+                         if (valuePtr == &CasperSettings::menuFontSize &&
+                             (idx == CasperSettings::MENU_FONT_MEDIUM || idx == CasperSettings::MENU_FONT_LARGE)) {
+                           SETTINGS.splitBookTitleLines = 1;
+                         }
+                         // Reading Orientation: seed Orient Front Buttons for that layout.
+                         // Portrait / Landscape CW → Off; Portrait 180° / Landscape CCW → On.
+                         if (valuePtr == &CasperSettings::orientation) {
+                           SETTINGS.frontButtonFollowOrientation =
+                               CasperSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
+                         }
+                         if (isEnableLogging) {
+                           SystemLog::reloadLevel();
+                         }
+                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+                         markSettingsDirty();
+                         rebuildSettingsLists();
+                       });
       requestUpdate();
       return;
     }
@@ -905,8 +904,7 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true, nullptr, nullptr,
-      [&settings](int i) { return settings[i].type == SettingType::HEADER; });
+      true, nullptr, nullptr, [&settings](int i) { return settings[i].type == SettingType::HEADER; });
 
   const char* confirmLabel = tr(STR_SELECT);
   if (selectedSettingIndex == 0) {
@@ -929,7 +927,7 @@ void SettingsActivity::render(RenderLock&&) {
     renderer.drawCenteredText(SMALL_FONT_ID, textY, CASPER_VERSION, true);
   }
 
-  // Open: FAST plate + soft settle (same as Library). Up/Down: plain FAST only.
+  // Open: displaySoftOpen (X3 FAST+settle, X4 HALF). Up/Down: plain FAST.
   if (softOpenPending_) {
     softOpenPending_ = false;
     UiGhostPolicy::displaySoftOpen(renderer, /*softCount=*/1);

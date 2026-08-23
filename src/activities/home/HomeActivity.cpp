@@ -263,8 +263,9 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   homeMenuShellOnPanel = true;
   coverGrayOnPanel = false;
   coverRendered = false;
-  // Same open path as Library (FAST + soft settle). DTM1 still holds home BW so
-  // the differential actually drives home → menu. Up/Down = band FAST only.
+  // Same open path as Settings (X3: FAST + settle; X4: one HALF). DTM1 still
+  // holds home BW so the differential actually drives home → menu.
+  // Up/Down = band FAST only.
   UiGhostPolicy::displaySoftOpen(renderer, /*softCount=*/1);
 }
 
@@ -697,10 +698,11 @@ void HomeActivity::onResume() {
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
   penumbraHalfBaselineDone = false;
   // Reader → Home genuinely needs the HALF: a dense book page ghosts badly and a
-  // FAST pass settles that residual into the panel. A light UI child (book action
-  // sheet, settings, menus) leaves almost nothing to scrub, so it gets a FAST
-  // paint and keeps the deferred clock AA.
-  if (snappyReturnFromUiChild) {
+  // FAST pass settles that residual into the panel. On X3 a light UI child
+  // (settings / menus) can FAST-return because the mid-bank settle pulls residual.
+  // X4 has no mid bank — FAST after Settings left the previous plate ghosted on
+  // Home — so it always hard-scrubs like a reader return.
+  if (snappyReturnFromUiChild && gpio.deviceIsX3()) {
     UiGhostPolicy::clearHardScrub();
     // Device log (47e06f62): FAST first paint then a second full FAST+clockAA
     // (~950ms). Defer the clock greys to the windowed digit path so Home is

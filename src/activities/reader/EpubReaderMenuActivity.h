@@ -26,8 +26,8 @@ class EpubReaderMenuActivity final : public Activity {
     MANAGE_FONTS,      // Text settings (family/size/layout/style); stays in reader stack
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
-    ORIENT_FRONT_BUTTONS,  // Nested under Reading Orientation (same as Settings)
-    TOGGLE_DARK_MODE,      // Master Dark Mode (Display parity)
+    ORIENT_FRONT_BUTTONS,          // Nested under Reading Orientation (same as Settings)
+    TOGGLE_DARK_MODE,              // Master Dark Mode (Display parity)
     TOGGLE_DARK_MODE_READER_ONLY,  // Nested under Dark Mode when On
     READING_STATS,
     TOGGLE_COMPLETED,
@@ -41,6 +41,7 @@ class EpubReaderMenuActivity final : public Activity {
     SCREENSHOT,
     DISPLAY_QR,
     DELETE_STATS,
+    RESTORE_STATS,
     DELETE_CACHE,
     RESET_READING_PACE,
   };
@@ -49,7 +50,7 @@ class EpubReaderMenuActivity final : public Activity {
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks,
                                   bool hasClippings = false, bool isCurrentPageBookmarked = false,
-                                  bool isBookCompleted = false);
+                                  bool isBookCompleted = false, bool hasRestorableBookStats = false);
 
   void onEnter() override;
   void onExit() override;
@@ -71,7 +72,7 @@ class EpubReaderMenuActivity final : public Activity {
   using TabMenuItems = std::array<std::vector<MenuItem>, MENU_TAB_COUNT>;
 
   static TabMenuItems buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasClippings,
-                                     bool isCurrentPageBookmarked, bool isBookCompleted);
+                                     bool isCurrentPageBookmarked, bool isBookCompleted, bool hasRestorableBookStats);
   [[nodiscard]] const std::vector<MenuItem>& activeMenuItems() const;
   [[nodiscard]] size_t activeTabIndex() const { return static_cast<size_t>(activeTab); }
   void cycleActiveTab(int direction = 1);

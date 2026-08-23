@@ -50,6 +50,7 @@
 #include "ReadingStatsUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "StatsBackup.h"
 #include "activities/ActivityManager.h"
 #include "activities/ActivityResult.h"  // ClippingJumpResult, MenuResult, …
 #include "activities/home/BookActions.h"
@@ -3271,6 +3272,7 @@ void RivuletReaderActivity::openReaderMenu() {
   const bool hasBookmarks = !cachedBookmarks_.empty();
   const bool pageBookmarked = currentPageBookmarked_;
   const bool bookCompleted = readingStats_.isCompleted;
+  const bool canRestoreStats = epub_ && hasRestorableBookStats(epub_->getPath().c_str());
   // Cheap pin so sleep / crash during the menu still has a place — no IR drop.
   (void)saveProgress();
   LOG_INF("RVR", "openReaderMenu prep=%lums page=%d/%d spine=%d bm=%zu clips=%d fn=%d",
@@ -3281,7 +3283,7 @@ void RivuletReaderActivity::openReaderMenu() {
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, title, page, total, bookProgressPercent,
                                                SETTINGS.orientation, hasFootnotes, hasBookmarks, hasClips,
-                                               pageBookmarked, bookCompleted),
+                                               pageBookmarked, bookCompleted, canRestoreStats),
       [this, darkModeOnOpen](const ActivityResult& result) {
         using MA = EpubReaderMenuActivity::MenuAction;
         int action = -1;
@@ -3507,7 +3509,9 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
     case MA::DELETE_STATS: {
       // Wipe stats under book_<id> plus any legacy epub_*/legacy folders
       // loadForBook might still find (same as File Browser → Delete Book Stats).
+      // Copy the live 75-byte file to trash first so Restore Book Stats can undo.
       if (epub_) {
+        (void)stashDeletedBookStats(epub_->getPath().c_str());
         (void)BookReadingStats::removeForBook(epub_->getPath());
         LOG_INF("RVR", "deleted stats for %s", epub_->getPath().c_str());
       } else if (!casperBookDir_.empty()) {
@@ -3516,7 +3520,21 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       }
       readingStats_ = BookReadingStats{};
       PenumbraThemeUi::invalidateRecentsProgressCache();
-      GUI.drawPopup(renderer, "Stats deleted", BaseTheme::kPopupCenterY, true);
+      GUI.drawPopup(renderer, tr(STR_BOOK_STATS_DELETED), BaseTheme::kPopupCenterY, true);
+      delay(400);
+      requestUpdate();
+      return;
+    }
+    case MA::RESTORE_STATS: {
+      if (!epub_ || !restoreBookStats(epub_->getPath().c_str())) {
+        GUI.drawPopup(renderer, tr(STR_BOOK_STATS_RESTORE_FAILED), BaseTheme::kPopupCenterY, true);
+        delay(400);
+        requestUpdate();
+        return;
+      }
+      readingStats_ = CasperStats::loadBook(epub_->getPath());
+      PenumbraThemeUi::invalidateRecentsProgressCache();
+      GUI.drawPopup(renderer, tr(STR_BOOK_STATS_RESTORED), BaseTheme::kPopupCenterY, true);
       delay(400);
       requestUpdate();
       return;

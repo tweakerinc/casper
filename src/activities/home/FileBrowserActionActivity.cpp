@@ -1,17 +1,15 @@
 #include "FileBrowserActionActivity.h"
-#include "util/UiGhostPolicy.h"
 
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Xtc.h>
 
 #include <algorithm>
-
-#include <Epub.h>
-#include <FsHelpers.h>
-#include <Xtc.h>
 
 #include "BookActions.h"
 #include "BookDescriptionActivity.h"
@@ -23,6 +21,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/CasperPaths.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Match Bare footer / larger chrome: UI_12 reads better than UI_10 on the action list.
@@ -209,8 +208,8 @@ void FileBrowserActionActivity::activateSelected() {
 
     case FileBrowserAction::DeleteStats:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
               // Upper-left cue while SD work runs — the toast only appears after,
@@ -226,10 +225,21 @@ void FileBrowserActionActivity::activateSelected() {
           });
       return;
 
+    case FileBrowserAction::RestoreStats:
+      if (BookActions::restoreBookStatsForBook(bookPath)) {
+        BookActions::drawToast(renderer, tr(STR_BOOK_STATS_RESTORED));
+      } else {
+        BookActions::drawToast(renderer, tr(STR_BOOK_STATS_RESTORE_FAILED));
+      }
+      delay(800);
+      selectedIndex = 0;
+      stayInMenu();
+      return;
+
     case FileBrowserAction::DeleteCache:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
               // Wiping IR + page maps for a large book is seconds of SD work.

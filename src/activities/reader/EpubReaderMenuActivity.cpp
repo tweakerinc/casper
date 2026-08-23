@@ -3,11 +3,10 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <cstring>
-
-#include <Logging.h>
 
 #include "CasperSettings.h"
 #include "MappedInputManager.h"
@@ -75,9 +74,10 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const int bookProgressPercent, const uint8_t currentOrientation,
                                                const bool hasFootnotes, const bool hasBookmarks,
                                                const bool hasClippings, const bool isCurrentPageBookmarked,
-                                               const bool isBookCompleted)
+                                               const bool isBookCompleted, const bool hasRestorableBookStats)
     : Activity("EpubReaderMenu", renderer, mappedInput),
-      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasClippings, isCurrentPageBookmarked, isBookCompleted)),
+      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, hasClippings, isCurrentPageBookmarked, isBookCompleted,
+                               hasRestorableBookStats)),
       title(title),
       pendingOrientation(currentOrientation),
       pendingFrontButtonFollow(SETTINGS.frontButtonFollowOrientation ? 1 : 0),
@@ -88,7 +88,8 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
 EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasBookmarks,
                                                                             bool hasClippings,
                                                                             bool isCurrentPageBookmarked,
-                                                                            bool isBookCompleted) {
+                                                                            bool isBookCompleted,
+                                                                            bool hasRestorableBookStats) {
   TabMenuItems items;
   auto& mainItems = items[MAIN_TAB_INDEX];
   auto& bookmarkItems = items[BOOKMARKS_TAB_INDEX];
@@ -96,7 +97,7 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
 
   mainItems.reserve(14 + (hasFootnotes ? 1u : 0u));
   bookmarkItems.reserve(8 + (hasBookmarks ? 2u : 0u) + (hasClippings ? 1u : 0u));
-  settingsItems.reserve(4 + (hasBookmarks ? 1u : 0u));
+  settingsItems.reserve(5 + (hasBookmarks ? 1u : 0u));
 
   // ---- Main ----
   mainItems.push_back({MenuAction::DICTIONARY, StrId::STR_DICTIONARY});
@@ -140,6 +141,9 @@ EpubReaderMenuActivity::TabMenuItems EpubReaderMenuActivity::buildMenuItems(bool
     settingsItems.push_back({MenuAction::READING_STATS, StrId::STR_READING_STATS});
     settingsItems.push_back({MenuAction::RESET_READING_PACE, StrId::STR_RESET_READING_PACE});
     settingsItems.push_back({MenuAction::DELETE_STATS, StrId::STR_DELETE_BOOK_STATS});
+    if (hasRestorableBookStats) {
+      settingsItems.push_back({MenuAction::RESTORE_STATS, StrId::STR_RESTORE_BOOK_STATS});
+    }
   }
   settingsItems.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   if (hasBookmarks) {

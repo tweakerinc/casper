@@ -22,6 +22,7 @@ enum class FileBrowserAction : int {
   DeleteStats = 6,
   DeleteCache = 7,
   ReadingStats = 8,  // Book stats screen (Stats theme long-press)
+  RestoreStats = 9,
 };
 
 class FileBrowserActionActivity final : public Activity {

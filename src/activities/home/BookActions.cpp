@@ -8,14 +8,15 @@
 #include <Logging.h>
 #include <Xtc.h>
 
-#include "ClippingStore.h"
 #include "CasperSettings.h"
-#include "util/CasperPaths.h"
+#include "ClippingStore.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
+#include "activities/reader/StatsBackup.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/CasperPaths.h"
 #include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
@@ -35,7 +36,7 @@ std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std:
   // Long-press: Read, Synopsis (EPUB), Reset Pace, …
   // (Per-book Reading Stats entry was Stats-theme only; use Menu → Reading Stats.)
   std::vector<FileBrowserActionActivity::MenuItem> items;
-  items.reserve(9);
+  items.reserve(10);
   items.push_back({FileBrowserAction::Open, StrId::STR_READ});
   if (FsHelpers::hasEpubExtension(fullPath)) {
     items.push_back({FileBrowserAction::Description, StrId::STR_SYNOPSIS});
@@ -55,6 +56,9 @@ std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std:
   items.push_back({FileBrowserAction::Delete, StrId::STR_DELETE});
   if (statsOk && hasReadingStats(fullPath)) {
     items.push_back({FileBrowserAction::DeleteStats, StrId::STR_DELETE_BOOK_STATS});
+    if (hasRestorableBookStats(fullPath.c_str())) {
+      items.push_back({FileBrowserAction::RestoreStats, StrId::STR_RESTORE_BOOK_STATS});
+    }
   }
   if (hasClearableBookCache(fullPath)) {
     items.push_back({FileBrowserAction::DeleteCache, StrId::STR_DELETE_CACHE});
@@ -90,7 +94,13 @@ bool deleteBookStats(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
+  (void)stashDeletedBookStats(fullPath.c_str());
   return BookReadingStats::removeForBook(fullPath);
+}
+
+bool restoreBookStatsForBook(const std::string& fullPath) {
+  if (fullPath.empty()) return false;
+  return restoreBookStats(fullPath.c_str());
 }
 
 bool resetReadingPace(const std::string& fullPath) {

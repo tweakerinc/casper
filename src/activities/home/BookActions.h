@@ -17,6 +17,7 @@ bool hasClearableBookCache(const std::string& path);
 void clearFileMetadata(const std::string& fullPath);
 bool clearBookCache(const std::string& fullPath);
 bool deleteBookStats(const std::string& fullPath);
+bool restoreBookStatsForBook(const std::string& fullPath);
 bool resetReadingPace(const std::string& fullPath);
 std::string confirmationHeading(StrId actionLabelId);
 bool isBookCompleted(const std::string& fullPath);

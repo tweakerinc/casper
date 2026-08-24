@@ -97,6 +97,9 @@ class GfxRenderer {
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // Load advance metrics for one SD face (and the mapped fallback, if any).
+  void warmSdCardFont(int fontId, const char* utf8Text, uint8_t styleMask) const;
+  void warmSdCardFont(int fontId, const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;

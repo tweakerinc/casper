@@ -13,38 +13,15 @@
 #include "fontIds.h"
 
 namespace readerkey {
-namespace {
-
-// SD-card fonts have no Rivulet v1 ladder, so fall back to the builtin ladder
-// closest to the chosen size. Builtin ladder is 10/12/14/16 only; 8 maps to 10
-// and 18 maps to 16.
-int32_t builtinLadderFontId() {
-  const bool literata = SETTINGS.fontFamily == CrossPointSettings::LITERATA;
-  switch (SETTINGS.fontSize) {
-    case CrossPointSettings::SIZE_8:
-    case CrossPointSettings::SIZE_10:
-      return literata ? LITERATA_10_FONT_ID : SOURCESERIF4_10_FONT_ID;
-    case CrossPointSettings::SIZE_14:
-      return literata ? LITERATA_14_FONT_ID : SOURCESERIF4_14_FONT_ID;
-    case CrossPointSettings::SIZE_16:
-    case CrossPointSettings::SIZE_18:
-      return literata ? LITERATA_16_FONT_ID : SOURCESERIF4_16_FONT_ID;
-    case CrossPointSettings::SIZE_12:
-    default:
-      return literata ? LITERATA_12_FONT_ID : SOURCESERIF4_12_FONT_ID;
-  }
-}
-
-}  // namespace
 
 Layout compute(const GfxRenderer& renderer) {
   Layout out;
   rivulet::RenderKey& key = out.key;
 
+  // Keep the selected face. FontLadder::resolve() already returns unknown
+  // (SD) ids unchanged; StyleResolve's SD ladder hook loads extra sizes when
+  // the pack has them. Do not swap SD ids for Literata/Source Serif.
   key.fontId = SETTINGS.getReaderFontId();
-  if (renderer.isSdCardFont(key.fontId)) {
-    key.fontId = builtinLadderFontId();
-  }
 
   // Match EpubReader computeReaderViewportLayout: top chrome air + bottom reserve
   // for status bar AND dictionary/clip front-button hint strip so last lines

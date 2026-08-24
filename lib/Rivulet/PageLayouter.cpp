@@ -34,6 +34,23 @@ int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const
   return std::max(10, h);
 }
 
+// ParsedText warms SD glyph advances before measuring. Rivulet must too,
+// or SD packs keep 0-width metrics. Stack buffer, no heap.
+void warmSdToks(const GfxRenderer& renderer, const int baseFontId, const ChapterIr& ch,
+                const std::vector<Tok>& toks) {
+  for (const auto& t : toks) {
+    if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) continue;
+    const Run& run = ch.runs()[t.runIndex];
+    const int fid = FontLadder::resolve(baseFontId, run.sizeStep);
+    char buf[192];
+    const uint16_t n = t.byteLen < 191 ? t.byteLen : 191;
+    std::memcpy(buf, ch.runText(run) + t.byteOff, n);
+    buf[n] = '\0';
+    const uint8_t styleMask = static_cast<uint8_t>(1u << (FontLadder::epdStyleBits(run.style) & 0x03));
+    renderer.ensureSdCardFontReady(fid, buf, styleMask);
+  }
+}
+
 int measureWord(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st, const char* s, const size_t n) {
   if (!s || n == 0) return 0;
   char buf[128];
@@ -691,6 +708,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
             FontLadder::resolve(baseFontId, SizeStep::Plus1),
         };
         const int nCand = (candidates[1] != candidates[0]) ? 2 : 1;
+        renderer.ensureSdCardFontReady(bodyFaceId, letter.c_str());
+        if (nCand > 1) renderer.ensureSdCardFontReady(candidates[1], letter.c_str());
 
         int bestFaceId = bodyFaceId;
         int bestScale = 2;
@@ -786,6 +805,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     }
 
     tokenizeRuns(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
+    warmSdToks(renderer, baseFontId, chapter, toks);
 
     int indent = 0;
     // No first-line indent beside drop-cap OR letter float (classic flushes indent).

@@ -1293,6 +1293,7 @@ void RivuletEngine::paint(GfxRenderer& renderer, const int originX, const int or
   for (size_t si = 0; si < page.spans.size(); ++si) {
     const GlyphSpan& sp = page.spans[si];
     if (sp.text.empty()) continue;
+    renderer.ensureSdCardFontReady(sp.fontId, sp.text.c_str());
     // GlyphSpan.y is line-box TOP (same contract as classic PageLine / TextBlock).
     // drawText adds ascender for normal ink; DROP_CAP top-aligns N× ink to y.
     const auto style = static_cast<EpdFontFamily::Style>(sp.epdStyle);

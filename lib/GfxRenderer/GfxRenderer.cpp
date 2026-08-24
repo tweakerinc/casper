@@ -121,34 +121,51 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
   return &fontData->bitmap[glyph->dataOffset];
 }
 
-void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+void GfxRenderer::warmSdCardFont(int fontId, const char* utf8Text, uint8_t styleMask) const {
   auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
-    std::string shaped;
-    appendShapedRtlTokens(utf8Text, shaped);
-    int missed = it->second->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
-    if (missed > 0) {
-      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
-    }
+  if (it == sdCardFonts_.end()) return;
+  std::string shaped;
+  appendShapedRtlTokens(utf8Text, shaped);
+  const int missed = it->second->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+  if (missed > 0) {
+    LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+  }
+}
+
+void GfxRenderer::warmSdCardFont(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+                                 uint8_t styleMask) const {
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return;
+  // Augment the persistent advance-only table for layout measurement.
+  // The table survives across paragraphs/sections (capped per font), so
+  // repeated indexing of the same SD font amortizes glyph-metric SD reads.
+  std::string shaped;
+  for (const auto& w : words) {
+    appendShapedRtlTokens(w.c_str(), shaped);
+  }
+  const int missed =
+      it->second->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+  if (missed > 0) {
+    LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+  }
+}
+
+void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+  warmSdCardFont(fontId, utf8Text, styleMask);
+  // resolveTextFontId already routes CJK to the mapped fallback. Warm that
+  // face so layout measures the same advances paint will use.
+  const auto fb = fallbackFontMap_.find(fontId);
+  if (fb != fallbackFontMap_.end() && fb->second != fontId) {
+    warmSdCardFont(fb->second, utf8Text, styleMask);
   }
 }
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
                                         uint8_t styleMask) const {
-  auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
-    // Augment the persistent advance-only table for layout measurement.
-    // The table survives across paragraphs/sections (capped per font), so
-    // repeated indexing of the same SD font amortizes glyph-metric SD reads.
-    std::string shaped;
-    for (const auto& w : words) {
-      appendShapedRtlTokens(w.c_str(), shaped);
-    }
-    int missed =
-        it->second->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
-    if (missed > 0) {
-      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
-    }
+  warmSdCardFont(fontId, words, includeHyphen, styleMask);
+  const auto fb = fallbackFontMap_.find(fontId);
+  if (fb != fallbackFontMap_.end() && fb->second != fontId) {
+    warmSdCardFont(fb->second, words, includeHyphen, styleMask);
   }
 }
 

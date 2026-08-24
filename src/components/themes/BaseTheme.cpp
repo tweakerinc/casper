@@ -1330,7 +1330,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   const bool showBattIcon = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
   const bool showBattPct = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_ICON;
 
-  const int topTextY = metrics.topPadding + kTopChromeBatteryY;
+  const int topTextY = chromeClockY(metrics);
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
   const int rightX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;
   const int screenW = renderer.getScreenWidth();
@@ -1559,10 +1559,9 @@ void BaseTheme::drawTopStatusBarClock(const GfxRenderer& renderer, int topY, con
   // Same SMALL_FONT_ID as battery % for a uniform top row.
   constexpr int kClockFont = SMALL_FONT_ID;
   const int textWidth = renderer.getTextWidth(kClockFont, timeText);
-  const int lineHeight = renderer.getLineHeight(kClockFont);
   const int textX = (renderer.getScreenWidth() - textWidth) / 2;
-  const int baseTopY = topY >= 0 ? topY : orientedMarginTop + metrics.topPadding;
-  const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineHeight) / 2);
+  const int originY = topY < 0 ? orientedMarginTop + metrics.topPadding : (topY == 0 ? metrics.topPadding : topY);
+  const int textY = originY + kTopChromeBatteryY;
   renderer.drawText(kClockFont, textX, textY, timeText);
 }
 
@@ -1596,8 +1595,8 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
                                    &orientedMarginLeft);
   (void)orientedMarginBottom;
 
-  const int baseTopY = topY >= 0 ? topY : orientedMarginTop + metrics.topPadding;
-  const int batteryY = baseTopY + kTopChromeBatteryY;
+  const int originY = topY < 0 ? orientedMarginTop + metrics.topPadding : (topY == 0 ? metrics.topPadding : topY);
+  const int batteryY = originY + kTopChromeBatteryY;
   const int screenW = renderer.getScreenWidth();
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
   const int rightX = screenW - orientedMarginRight - kTopChromeInsetX;
@@ -1609,7 +1608,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     batteryIconSizeForStatusFont(renderer, iconW, iconH);
     (void)iconW;
     const int clearH = std::max(iconH + 10, metrics.statusBarVerticalMargin);
-    renderer.fillRect(orientedMarginLeft, baseTopY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
+    renderer.fillRect(orientedMarginLeft, originY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
   }
 
   char timeBuf[16];
@@ -1634,8 +1633,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     if (timeText == nullptr || timeText[0] == '\0') return;
     constexpr int kClockFont = SMALL_FONT_ID;
     const int textWidth = renderer.getTextWidth(kClockFont, timeText);
-    const int lineHeight = renderer.getLineHeight(kClockFont);
-    const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineHeight) / 2);
+    const int textY = originY + kTopChromeBatteryY;
     int textX = centerX - textWidth / 2;
     if (align == 0)
       textX = leftX;
@@ -1669,8 +1667,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     // "Battery 15% · Charge Soon"
     snprintf(warnBuf, sizeof(warnBuf), "Battery %d%% · %s", warnPctShow, tr(STR_CHARGE_SOON));
     constexpr int kFont = SMALL_FONT_ID;
-    const int lineH = renderer.getLineHeight(kFont);
-    const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineH) / 2);
+    const int textY = originY + kTopChromeBatteryY;
     const int maxW = std::max(40, (screenW / 2) - 16);
     const std::string vis = renderer.truncatedText(kFont, warnBuf, maxW);
     const int tw = renderer.getTextWidth(kFont, vis.c_str());

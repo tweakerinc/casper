@@ -299,6 +299,9 @@ class BaseTheme {
   // Shared top chrome geometry — MUST match reader status bar and home/dashboard headers.
   static constexpr int kTopChromeInsetX = 12;
   static constexpr int kTopChromeBatteryY = 5;
+  // Reader status-bar clock/text Y. Bare's small status clock must use this
+  // (not vertical-centering in the chrome band, and not Penumbra's 72pt hero).
+  static int chromeClockY(const ThemeMetrics& metrics) { return metrics.topPadding + kTopChromeBatteryY; }
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
 };

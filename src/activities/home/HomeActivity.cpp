@@ -2114,7 +2114,10 @@ void HomeActivity::render(RenderLock&& lock) {
                                                     SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK));
     // Bare / Penumbra: header only when the user has enabled battery/clock.
     if (!textOnlyHome || chromeOnlyMinimal) {
-      const int headerTop = textOnlyHome ? 0 : metrics.topPadding;
+      // Bare's small status clock must sit at the same Y as the reader status
+      // clock (topPadding + kTopChromeBatteryY). Penumbra keeps y=0 so its
+      // 72pt hero clock layout is unchanged.
+      const int headerTop = isBareTheme() ? metrics.topPadding : (textOnlyHome ? 0 : metrics.topPadding);
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
       GUI.drawHeader(renderer, Rect{0, headerTop, pageWidth, headerH}, nullptr);

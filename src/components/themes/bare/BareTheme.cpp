@@ -47,7 +47,7 @@ int bareContentTopY() {
     return kTopPadNoChrome;
   }
   // Match HomeActivity bare header height (battery row).
-  return BaseTheme::kTopChromeBatteryY +
+  return BareMetrics::values.topPadding + BaseTheme::kTopChromeBatteryY +
          std::max(BareMetrics::values.batteryHeight + 8, BareMetrics::values.statusBarVerticalMargin) +
          kTopPadWithChrome;
 }

@@ -101,15 +101,15 @@ void checkPanic() {
     // Remove first so create always goes through FsDateTime callback (some hosts
     // keep a stale 12/31/2025 create time across O_TRUNC rewrites).
     // Hidden diagnostics folder (same home as system/QR logs).
-    Storage.ensureDirectoryExists("/.casper-logs");  // CasperLogPaths::kDir — keep literal for lib isolation
-    Storage.remove("/.casper-logs/crash_report.txt");
-    auto file = Storage.open("/.casper-logs/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
+    Storage.ensureDirectoryExists("/.crosspoint-logs");  // CrossPointLogPaths::kDir — keep literal for lib isolation
+    Storage.remove("/.crosspoint-logs/crash_report.txt");
+    auto file = Storage.open("/.crosspoint-logs/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
       file.write(panicInfo.c_str(), panicInfo.size());
       file.close();
-      LOG_INF("SYS", "Dumped panic info to /.casper-logs/crash_report.txt");
+      LOG_INF("SYS", "Dumped panic info to /.crosspoint-logs/crash_report.txt");
     } else {
-      LOG_ERR("SYS", "Failed to open /.casper-logs/crash_report.txt for writing");
+      LOG_ERR("SYS", "Failed to open /.crosspoint-logs/crash_report.txt for writing");
     }
   }
 }
@@ -128,7 +128,7 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "Casper version: " CASPER_VERSION;
+    info += "CrossPoint version: " CROSSPOINT_VERSION;
     // Wall-clock stamp (RTC when available) so the report itself carries time even if
     // FAT metadata is wrong. Written after boot re-inits the clock; not panic-time.
     {

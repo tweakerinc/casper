@@ -8,15 +8,15 @@
 #include <Logging.h>
 #include <Xtc.h>
 
-#include "CasperSettings.h"
 #include "ClippingStore.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/reader/StatsBackup.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 #include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
@@ -73,7 +73,7 @@ bool hasClearableBookCache(const std::string& path) {
 void clearFileMetadata(const std::string& fullPath) {
   // Drop reading cache + stats when deleting a book from SD.
   ::clearBookCache(fullPath);
-  // Wipe stats under Casper and legacy cache hashes (if both exist).
+  // Wipe stats under CrossPoint and legacy cache hashes (if both exist).
   BookReadingStats::removeForBook(fullPath);
   if (FsHelpers::hasEpubExtension(fullPath)) {
     ClippingStore::deleteForFilePath(fullPath, "epub");
@@ -107,7 +107,7 @@ bool resetReadingPace(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  // loadForBook picks up legacy FNV stats if present, then we rewrite Casper path.
+  // loadForBook picks up legacy FNV stats if present, then we rewrite CrossPoint path.
   BookReadingStats stats = BookReadingStats::loadForBook(fullPath);
   stats.avgSecondsPerForwardPage = 0;
   stats.paceSampleCount = 0;
@@ -133,8 +133,8 @@ bool toggleBookCompleted(const std::string& fullPath, const std::string& display
     return false;
   }
 
-  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
-  Xtc xtc(fullPath, CasperPaths::kPackageCacheRoot);
+  Epub epub(fullPath, CrossPointPaths::kPackageCacheRoot);
+  Xtc xtc(fullPath, CrossPointPaths::kPackageCacheRoot);
   std::string cachePath;
   std::string title = displayName;
   std::string author;
@@ -230,7 +230,7 @@ std::string loadBookDescription(const std::string& fullPath) {
   if (!FsHelpers::hasEpubExtension(fullPath)) {
     return {};
   }
-  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
+  Epub epub(fullPath, CrossPointPaths::kPackageCacheRoot);
   return epub.getDescription();
 }
 

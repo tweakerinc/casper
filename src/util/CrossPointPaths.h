@@ -2,7 +2,7 @@
 
 // On-disk roots — same layout as CrossPoint / CrossInk (/.crosspoint).
 
-namespace CasperPaths {
+namespace CrossPointPaths {
 
 inline constexpr const char* kRoot = "/.crosspoint";
 
@@ -34,12 +34,12 @@ inline constexpr const char* kKoreader = "/.crosspoint/koreader.json";
 // Multi-device synced stats (optional SD folder)
 inline constexpr const char* kSyncedStatsDir = "/.crosspoint/synced_stats";
 
-// Logs (Casper field diagnostics — separate from app config tree)
-inline constexpr const char* kLogsDir = "/.casper-logs";
+// Logs (CrossPoint field diagnostics — separate from app config tree)
+inline constexpr const char* kLogsDir = "/.crosspoint-logs";
 // Optional lifetime-stats copies (v0.1.8 shipped path; not under /.crosspoint).
-inline constexpr const char* kStatsBackupDir = "/.casper-stats-backup";
+inline constexpr const char* kStatsBackupDir = "/.crosspoint-stats-backup";
 
 // Package + progress/stats: /.crosspoint/epub_<std::hash>/ (shipped v0.1.8 layout).
 inline constexpr const char* kPackageCacheRoot = "/.crosspoint";
 
-}  // namespace CasperPaths
+}  // namespace CrossPointPaths

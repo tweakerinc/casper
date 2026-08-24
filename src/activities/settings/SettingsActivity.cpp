@@ -13,9 +13,9 @@
 
 #include "BackupStatsActivity.h"
 #include "ButtonRemapActivity.h"
-#include "CasperSettings.h"
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
+#include "CrossPointSettings.h"
 #include "DictionarySelectActivity.h"
 #include "FontDownloadActivity.h"
 #include "KOReaderSettingsActivity.h"
@@ -85,7 +85,7 @@ void SettingsActivity::rebuildSettingsLists() {
       // Sleep Screen (+ cover nest) only when Quick Resume on Timeout is Off.
       // When Timeout QR is On, idle sleep is last-frame; wallpaper picker is hidden.
       const bool timeoutQrOn =
-          SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+          SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
       if (timeoutQrOn && (setting.nameId == StrId::STR_SLEEP_SCREEN || setting.nameId == StrId::STR_SLEEP_COVER_MODE ||
                           setting.nameId == StrId::STR_SLEEP_COVER_FILTER ||
                           (setting.key && (strcmp(setting.key, "sleepScreen") == 0 ||
@@ -116,15 +116,15 @@ void SettingsActivity::rebuildSettingsLists() {
       // Nested under Flip Orientation — hide unless either side is Flip.
       if ((setting.nameId == StrId::STR_ORIENTATION_FLIP_WITH ||
            (setting.key && strcmp(setting.key, "orientationFlipWith") == 0)) &&
-          SETTINGS.longPressSideA != CasperSettings::LP_MENU_ORIENTATION_FLIP &&
-          SETTINGS.longPressSideB != CasperSettings::LP_MENU_ORIENTATION_FLIP) {
+          SETTINGS.longPressSideA != CrossPointSettings::LP_MENU_ORIENTATION_FLIP &&
+          SETTINGS.longPressSideB != CrossPointSettings::LP_MENU_ORIENTATION_FLIP) {
         continue;
       }
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      if (setting.valuePtr == &CasperSettings::pwrBtnFootnoteBack &&
-          SETTINGS.shortPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES &&
-          SETTINGS.longPwrBtn != CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
+      if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
+          SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
+          SETTINGS.longPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
       controlsSettings.push_back(setting);
@@ -197,10 +197,10 @@ void SettingsActivity::rebuildSettingsLists() {
     // Fallback if the shared list entry is missing (should not happen).
     systemSettings.push_back(SettingInfo::DynamicEnum(
         StrId::STR_ENABLE_LOGGING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON},
-        [] { return static_cast<uint8_t>(SETTINGS.systemLogLevel != CasperSettings::SYSTEM_LOG_OFF ? 1 : 0); },
+        [] { return static_cast<uint8_t>(SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF ? 1 : 0); },
         [](uint8_t on) {
-          SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CasperSettings::SYSTEM_LOG_TIMING)
-                                       : static_cast<uint8_t>(CasperSettings::SYSTEM_LOG_OFF);
+          SETTINGS.systemLogLevel = on ? static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_TIMING)
+                                       : static_cast<uint8_t>(CrossPointSettings::SYSTEM_LOG_OFF);
         },
         "systemLogLevel"));
   }
@@ -244,7 +244,7 @@ void SettingsActivity::onEnter() {
   selectedCategoryIndex = 0;
   selectedSettingIndex = 0;
   preserveQuickResumeTimeoutOn =
-      SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
   syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
@@ -543,16 +543,16 @@ void SettingsActivity::toggleCurrentSetting() {
     return;
   }
   // DynamicEnum sleep picker has no valuePtr — match by name/key as well.
-  const bool sleepScreenChanged = setting.valuePtr == &CasperSettings::sleepScreen ||
+  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen ||
                                   setting.nameId == StrId::STR_SLEEP_SCREEN ||
                                   (setting.key && strcmp(setting.key, "sleepScreen") == 0);
-  const bool quickResumeTimeoutChanged = setting.valuePtr == &CasperSettings::quickResumeSleepScreen;
+  const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
     openSleepTimeoutPicker();
     return;
   }
-  if (setting.nameId == StrId::STR_SESSION_TIME || setting.valuePtr == &CasperSettings::readingSessionIdleMinutes) {
+  if (setting.nameId == StrId::STR_SESSION_TIME || setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
     openSessionTimePicker();
     return;
   }
@@ -562,12 +562,12 @@ void SettingsActivity::toggleCurrentSetting() {
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
     // Clear-from-recents is a child of Move Finished — hide + reset when parent turns off.
-    if (setting.valuePtr == &CasperSettings::moveFinishedToReadFolder && !SETTINGS.moveFinishedToReadFolder) {
+    if (setting.valuePtr == &CrossPointSettings::moveFinishedToReadFolder && !SETTINGS.moveFinishedToReadFolder) {
       SETTINGS.removeReadBooksFromRecents = 0;
     }
     // Apply whole-UI invert immediately so the Settings list flips with the toggle.
-    if (setting.valuePtr == &CasperSettings::readerDarkMode ||
-        setting.valuePtr == &CasperSettings::darkModeReaderOnly) {
+    if (setting.valuePtr == &CrossPointSettings::readerDarkMode ||
+        setting.valuePtr == &CrossPointSettings::darkModeReaderOnly) {
       renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
     }
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
@@ -579,35 +579,35 @@ void SettingsActivity::toggleCurrentSetting() {
       const bool isEnableLogging = setting.nameId == StrId::STR_ENABLE_LOGGING ||
                                    setting.nameId == StrId::STR_SYSTEM_LOG ||
                                    (setting.key && strcmp(setting.key, "systemLogLevel") == 0);
-      optionPopup.show(setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()),
-                       currentValue,
-                       [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
-                         SETTINGS.*valuePtr = idx;
-                         // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
-                         if (valuePtr == &CasperSettings::menuFontSize &&
-                             (idx == CasperSettings::MENU_FONT_MEDIUM || idx == CasperSettings::MENU_FONT_LARGE)) {
-                           SETTINGS.splitBookTitleLines = 1;
-                         }
-                         // Reading Orientation: seed Orient Front Buttons for that layout.
-                         // Portrait / Landscape CW → Off; Portrait 180° / Landscape CCW → On.
-                         if (valuePtr == &CasperSettings::orientation) {
-                           SETTINGS.frontButtonFollowOrientation =
-                               CasperSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
-                         }
-                         if (isEnableLogging) {
-                           SystemLog::reloadLevel();
-                         }
-                         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-                         markSettingsDirty();
-                         rebuildSettingsLists();
-                       });
+      optionPopup.show(
+          setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()), currentValue,
+          [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
+            SETTINGS.*valuePtr = idx;
+            // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
+            if (valuePtr == &CrossPointSettings::menuFontSize &&
+                (idx == CrossPointSettings::MENU_FONT_MEDIUM || idx == CrossPointSettings::MENU_FONT_LARGE)) {
+              SETTINGS.splitBookTitleLines = 1;
+            }
+            // Reading Orientation: seed Orient Front Buttons for that layout.
+            // Portrait / Landscape CW → Off; Portrait 180° / Landscape CCW → On.
+            if (valuePtr == &CrossPointSettings::orientation) {
+              SETTINGS.frontButtonFollowOrientation =
+                  CrossPointSettings::defaultFrontButtonFollowForOrientation(static_cast<uint8_t>(idx));
+            }
+            if (isEnableLogging) {
+              SystemLog::reloadLevel();
+            }
+            syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
+            markSettingsDirty();
+            rebuildSettingsLists();
+          });
       requestUpdate();
       return;
     }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
-    if (setting.valuePtr == &CasperSettings::menuFontSize) {
+    if (setting.valuePtr == &CrossPointSettings::menuFontSize) {
       const uint8_t size = SETTINGS.*(setting.valuePtr);
-      if (size == CasperSettings::MENU_FONT_MEDIUM || size == CasperSettings::MENU_FONT_LARGE) {
+      if (size == CrossPointSettings::MENU_FONT_MEDIUM || size == CrossPointSettings::MENU_FONT_LARGE) {
         SETTINGS.splitBookTitleLines = 1;
       }
     }
@@ -777,7 +777,7 @@ void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChan
   (void)sleepScreenChanged;
   if (quickResumeTimeoutChanged) {
     preserveQuickResumeTimeoutOn =
-        SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
     quickResumeTimeoutAutoEnabled = false;
   }
 }
@@ -786,7 +786,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(
           renderer, mappedInput, "SleepTimeoutInterval", StrId::STR_TIME_TO_SLEEP, SETTINGS.sleepTimeoutMinutes,
-          CasperSettings::MIN_SLEEP_TIMEOUT_MINUTES, CasperSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
+          CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
           StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true, StrId::STR_SLEEP_NEVER),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
@@ -802,8 +802,8 @@ void SettingsActivity::openSessionTimePicker() {
   startActivityForResult(
       std::make_unique<IntervalSelectionActivity>(renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
                                                   static_cast<int>(SETTINGS.readingSessionIdleMinutes),
-                                                  static_cast<int>(CasperSettings::MIN_SESSION_IDLE_MINUTES),
-                                                  static_cast<int>(CasperSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
+                                                  static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
+                                                  static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
                                                   StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
@@ -882,7 +882,7 @@ void SettingsActivity::render(RenderLock&&) {
           }
         } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
           if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
-            if (SETTINGS.sleepTimeoutMinutes >= CasperSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
+            if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
               valueText = tr(STR_SLEEP_NEVER);
             } else {
               char valueBuffer[32];
@@ -891,7 +891,7 @@ void SettingsActivity::render(RenderLock&&) {
               valueText = valueBuffer;
             }
           } else if (setting.nameId == StrId::STR_SESSION_TIME ||
-                     setting.valuePtr == &CasperSettings::readingSessionIdleMinutes) {
+                     setting.valuePtr == &CrossPointSettings::readingSessionIdleMinutes) {
             char valueBuffer[32];
             snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
                      static_cast<unsigned int>(SETTINGS.readingSessionIdleMinutes));
@@ -921,10 +921,10 @@ void SettingsActivity::render(RenderLock&&) {
     const int bandBottom = pageHeight - metrics.buttonHintsHeight;
     const int textH = renderer.getLineHeight(SMALL_FONT_ID);
     const int textY = bandTop + std::max(0, (bandBottom - bandTop - textH) / 2);
-#ifndef CASPER_VERSION
-#define CASPER_VERSION "dev"
+#ifndef CROSSPOINT_VERSION
+#define CROSSPOINT_VERSION "dev"
 #endif
-    renderer.drawCenteredText(SMALL_FONT_ID, textY, CASPER_VERSION, true);
+    renderer.drawCenteredText(SMALL_FONT_ID, textY, CROSSPOINT_VERSION, true);
   }
 
   // Open: displaySoftOpen (X3 FAST+settle, X4 HALF). Up/Down: plain FAST.

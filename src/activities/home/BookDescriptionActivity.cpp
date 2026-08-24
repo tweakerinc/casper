@@ -10,7 +10,7 @@
 #include <cstring>
 
 #include "BookActions.h"
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"

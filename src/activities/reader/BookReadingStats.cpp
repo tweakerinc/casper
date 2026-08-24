@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "StatsBackupLayout.h"
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
 
 namespace {
 // Binary layout v1 (11 bytes):
@@ -89,7 +89,7 @@ std::string statsFileNameForVersion(const uint8_t version) {
 }
 
 // legacy EPUB cache dirs use FNV-1a 64-bit of the full book path (ZipFile::fnvHash64).
-// Casper / Casper 1.5 use std::hash → different epub_<n> folder names on the same SD.
+// CrossPoint / CrossPoint 1.5 use std::hash → different epub_<n> folder names on the same SD.
 uint64_t fnv1a64Path(const std::string& path) {
   uint64_t hash = 14695981039346656037ull;
   for (size_t i = 0; i < path.size(); ++i) {
@@ -99,11 +99,11 @@ uint64_t fnv1a64Path(const std::string& path) {
   return hash;
 }
 
-std::string stdHashEpubCachePath(const std::string& bookPath, const char* root = CasperPaths::kPackageCacheRoot) {
+std::string stdHashEpubCachePath(const std::string& bookPath, const char* root = CrossPointPaths::kPackageCacheRoot) {
   return std::string(root) + "/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
 }
 
-std::string legacyFnvEpubCachePath(const std::string& bookPath, const char* root = CasperPaths::kPackageCacheRoot) {
+std::string legacyFnvEpubCachePath(const std::string& bookPath, const char* root = CrossPointPaths::kPackageCacheRoot) {
   return std::string(root) + "/epub_" + std::to_string(fnv1a64Path(bookPath));
 }
 
@@ -295,7 +295,7 @@ bool looksLikeEmptyShell(const BookReadingStats& s) {
   return s.sessionCount == 0 && s.totalReadingSeconds < 60 && s.totalPagesTurned <= 1 && !s.isCompleted;
 }
 
-// Lifetime still looks like a fresh Casper shell (progress-only or near-empty).
+// Lifetime still looks like a fresh CrossPoint shell (progress-only or near-empty).
 // Thin shell: prefer richer lifetime totals if another candidate has them.
 bool isLifetimeThin(const BookReadingStats& s) {
   return s.totalReadingSeconds < 60 && s.sessionCount <= 1 && s.totalPagesTurned <= 2 && !s.isCompleted;
@@ -374,7 +374,7 @@ BookReadingStats loadBestInCacheDir(const std::string& cachePath) {
     return best;
   }
 
-  // Prefer current filename first (Casper writes stats_vN.bin on every save/migrate).
+  // Prefer current filename first (CrossPoint writes stats_vN.bin on every save/migrate).
   const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
   considerNamedStatsFile(cachePath, currentName, best, have);
   if (have && hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
@@ -412,9 +412,9 @@ void collectBookCacheCandidates(const std::string& bookPath, std::string* paths,
   // v0.1.8 primary: epub_/xtc_/txt_<std::hash> (same as package cache).
   pushUnique(BookReadingStats::cachePathForBook(bookPath));
   if (FsHelpers::hasEpubExtension(bookPath)) {
-    pushUnique(stdHashEpubCachePath(bookPath, CasperPaths::kPackageCacheRoot));
+    pushUnique(stdHashEpubCachePath(bookPath, CrossPointPaths::kPackageCacheRoot));
     // CrossInk FNV leftover only (read if present).
-    pushUnique(legacyFnvEpubCachePath(bookPath, CasperPaths::kPackageCacheRoot));
+    pushUnique(legacyFnvEpubCachePath(bookPath, CrossPointPaths::kPackageCacheRoot));
   }
 }
 
@@ -425,12 +425,12 @@ std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
     return {};
   }
   // v0.1.8: stats live under /.crosspoint/epub_<std::hash>/ (with package).
-  return CasperBook::bookDirForPath(bookPath);
+  return CrossPointBook::bookDirForPath(bookPath);
 }
 
 // Session memo for loadForBook — Home/recents used to re-scan the same 4–5 books
 // several times per paint (each scan was multi-version SD probes).
-// cachePath is the Casper primary folder so save() can update one slot without
+// cachePath is the CrossPoint primary folder so save() can update one slot without
 // wiping the whole memo (or re-hashing every path).
 struct LoadForBookMemo {
   static constexpr size_t kCap = 8;
@@ -512,7 +512,7 @@ void memoInvalidateByCachePath(const std::string& cachePath) {
   }
 }
 
-// One-time legacy / legacy scan marker under the Casper cache folder.
+// One-time legacy / legacy scan marker under the CrossPoint cache folder.
 // Present ⇒ we already looked for alternate cache dirs once; do not thrash SD
 // again until the user clears cache (which deletes this folder/marker).
 static constexpr const char* kLegacyScanMarker = "stats_legacy_scanned";
@@ -572,7 +572,7 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
   }
 
   // Promote the richest found blob to the current versioned filename when the
-  // primary file is missing or a thin reopen shell (legacy v5 <-> Casper v6).
+  // primary file is missing or a thin reopen shell (legacy v5 <-> CrossPoint v6).
   const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
   BookReadingStats currentOnly;
   const bool haveCurrent = loadStatsFileNamed(cachePath, currentName, currentOnly);

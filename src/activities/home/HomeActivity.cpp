@@ -19,8 +19,8 @@
 #include <vector>
 
 #include "BookActions.h"
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -36,7 +36,7 @@
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
 
@@ -55,10 +55,12 @@ bool isDashboardRecentsTheme() { return false; }
 bool isDashboardScrollTheme() { return false; }
 bool usesRecentBookSideNav() { return false; }
 
-bool isBareTheme() { return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::BARE; }
+bool isBareTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::BARE;
+}
 
 bool isPenumbraTheme() {
-  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::PENUMBRA;
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::PENUMBRA;
 }
 
 // Stats (FocusTheme) is not in this firmware build.
@@ -130,14 +132,15 @@ int buildMinimalMenuItems(MinimalMenuItem* out, int maxItems, const bool hasOpds
   return n;
 }
 
-// Same path as EpubReaderActivity save: Epub(path, CasperPaths::kPackageCacheRoot).getCachePath().
+// Same path as EpubReaderActivity save: Epub(path, CrossPointPaths::kPackageCacheRoot).getCachePath().
 // Constructor hashes the path; load() is not required for the cache directory.
 std::string getRecentBookCachePath(const RecentBook& book) {
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, CasperPaths::kPackageCacheRoot).getCachePath();
+    return Epub(book.path, CrossPointPaths::kPackageCacheRoot).getCachePath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
-    return std::string(CasperPaths::kPackageCacheRoot) + "/xtc_" + std::to_string(std::hash<std::string>{}(book.path));
+    return std::string(CrossPointPaths::kPackageCacheRoot) + "/xtc_" +
+           std::to_string(std::hash<std::string>{}(book.path));
   }
   if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
     return std::string("/.crosspoint/txt_") + std::to_string(std::hash<std::string>{}(book.path));
@@ -150,7 +153,7 @@ BookReadingStats loadRecentBookStats(const RecentBook& book) {
   return BookReadingStats::loadForBook(book.path);
 }
 
-// Dashboard progress %: prefer recent.json (CasperStats); no multi-path SD hunt.
+// Dashboard progress %: prefer recent.json (CrossPointStats); no multi-path SD hunt.
 float loadRecentBookProgressPercent(const RecentBook& book) {
   if (book.progressPercentMilli != 0xFFFF) {
     return static_cast<float>(book.progressPercentMilli) / 100.0f;
@@ -179,7 +182,7 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
   }
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
+      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
       const std::string heroPath = epub.getThumbBmpPath(heroH);
       if (!thumbLooksValid(heroPath)) {
         return false;
@@ -191,7 +194,7 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
         book.coverBmpPath = epub.getThumbBmpPath();
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
+      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
       // Path-only probe — avoid full XTC load when the hero BMP is already on disk.
       const std::string heroPath = xtc.getThumbBmpPath(heroH);
       if (!thumbLooksValid(heroPath)) {
@@ -315,13 +318,13 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool anyNeedWork = false;
   for (const RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
+      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
       if (!heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)))) {
         anyNeedWork = true;
         break;
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
+      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
       if (!xtc.load()) {
         anyNeedWork = true;
         break;
@@ -366,7 +369,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool pathsUpdated = false;
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
+      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
       const bool needWork = !heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)));
       if (needWork) {
         showProgress(progress, total);
@@ -428,7 +431,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         }
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
+      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
       if (xtc.load()) {
         const bool needWork = !heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)));
         if (needWork) {
@@ -911,7 +914,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   // same-recipe fallback height while c30_560 regenerates after flash.
   std::string coverPath;
   if (FsHelpers::hasEpubExtension(book.path)) {
-    Epub epub(book.path, CasperPaths::kPackageCacheRoot);
+    Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
     if (isBareTheme()) {
       coverPath = firstExisting({
           epub.getThumbBmpPath(heroH),
@@ -1830,7 +1833,7 @@ void HomeActivity::render(RenderLock&& lock) {
     coverRectX = coverRectY = coverRectW = coverRectH = 0;
     freeCoverBufferRamOnly();
 
-    const int clockTheme = static_cast<int>(CasperSettings::UI_THEME::PENUMBRA);
+    const int clockTheme = static_cast<int>(CrossPointSettings::UI_THEME::PENUMBRA);
     PenumbraThemeUi::clampUnderModeToTracking();
 
     // Partial updates (side L/R / Recents Down) — never while menu owns the panel.
@@ -1950,8 +1953,8 @@ void HomeActivity::render(RenderLock&& lock) {
 
     homeMenuShellOnPanel = false;
     renderer.clearScreen(0xFF);
-    const bool chromeOnly = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                            SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
+    const bool chromeOnly = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
+                            SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
     if (chromeOnly) {
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
@@ -2107,8 +2110,8 @@ void HomeActivity::render(RenderLock&& lock) {
     // Top chrome (battery icon+% / clock). Bare / Penumbra default chrome off;
     // Stats always draws the status-bar band (same plate packing on X3 + X4).
     const bool textOnlyHome = isBareTheme() || isPenumbraTheme();
-    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                                                    SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK));
+    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
+                                                    SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK));
     // Bare / Penumbra: header only when the user has enabled battery/clock.
     if (!textOnlyHome || chromeOnlyMinimal) {
       const int headerTop = textOnlyHome ? 0 : metrics.topPadding;
@@ -2322,7 +2325,7 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // cache delete (device: preferFast=0 bookIndex=0 refresh=3182ms).
   bool bookIndexReady = true;
   if (FsHelpers::hasEpubExtension(path)) {
-    const std::string cacheDir = Epub(path, CasperPaths::kPackageCacheRoot).getCachePath();
+    const std::string cacheDir = Epub(path, CrossPointPaths::kPackageCacheRoot).getCachePath();
     bookIndexReady = Storage.exists((cacheDir + "/book.bin").c_str());
   }
   // Only force a panel scrub when greys are still mid-flight (not settled) —

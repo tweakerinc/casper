@@ -10,7 +10,7 @@
 // esp_image_verify rejects with bogus efuse-blk-rev errors. Both SD-card and
 // OTA update paths bypass that runtime check by writing the OTA app partition
 // raw and updating otadata directly — same scheme as the web flasher
-// (Casper-reader-docs/src/lib/flasher/OtaPartition.ts).
+// (CrossPoint-reader-docs/src/lib/flasher/OtaPartition.ts).
 //
 // Layout reference: esp_flash_partitions.h. CRC covers ota_seq (4 bytes) only.
 

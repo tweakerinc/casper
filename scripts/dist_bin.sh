@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish a built firmware into dist/ with a sequential, sortable name.
 #
-# Naming: dist/Casper-<NNNN>-<shortsha>.bin
+# Naming: dist/CrossPoint-<NNNN>-<shortsha>.bin
 #   NNNN is a zero-padded counter kept in dist/.build-number, so `ls` always
 #   lists builds oldest -> newest. The short SHA keeps each build traceable to
 #   a commit without having to remember which hash was which.
@@ -10,7 +10,7 @@
 #   scripts/dist_bin.sh [env]        # env defaults to gh_release
 #
 # Example:
-#   scripts/dist_bin.sh gh_release   -> dist/Casper-0007-79219c65.bin
+#   scripts/dist_bin.sh gh_release   -> dist/CrossPoint-0007-79219c65.bin
 set -euo pipefail
 
 ENV_NAME="${1:-gh_release}"
@@ -31,7 +31,7 @@ NEXT=$(( $(cat "$COUNTER") + 1 ))
 echo "$NEXT" > "$COUNTER"
 
 SHA="$(cd "$REPO_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-OUT="$DIST/$(printf 'Casper-%04d-%s.bin' "$NEXT" "$SHA")"
+OUT="$DIST/$(printf 'CrossPoint-%04d-%s.bin' "$NEXT" "$SHA")"
 
 cp -f "$SRC" "$OUT"
 echo "$OUT"

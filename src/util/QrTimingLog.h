@@ -8,10 +8,10 @@
 #include <cstdarg>
 #include <cstdio>
 
-#include "CasperSettings.h"
-#include "util/CasperLogPaths.h"
+#include "CrossPointSettings.h"
+#include "util/CrossPointLogPaths.h"
 
-// Append-only Quick Resume timing log: /.casper-logs/qr_timing.log only.
+// Append-only Quick Resume timing log: /.crosspoint-logs/qr_timing.log only.
 // Gated by Settings → Enable Logging (same as SystemLog). Crash reports are separate.
 
 namespace QrTimingLog {
@@ -20,20 +20,23 @@ inline bool gActive = false;
 inline uint32_t gT0 = 0;
 inline bool gMigratedRoot = false;
 
-// Ensure /.casper-logs is a directory. Never write logs to the volume root.
+// Ensure /.crosspoint-logs is a directory. Never write logs to the volume root.
 inline bool ensureLogDir() {
-  if (!Storage.ensureDirectoryExists(CasperLogPaths::kDir)) {
+  if (!Storage.exists(CrossPointLogPaths::kDir) && Storage.exists(CrossPointLogPaths::kLegacyCasperDir)) {
+    Storage.rename(CrossPointLogPaths::kLegacyCasperDir, CrossPointLogPaths::kDir);
+  }
+  if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
     return false;
   }
   // One-shot: move a mistaken root /qr_timing.log into the log folder.
   if (!gMigratedRoot) {
     gMigratedRoot = true;
-    if (Storage.exists(CasperLogPaths::kLegacyRootQrTiming)) {
+    if (Storage.exists(CrossPointLogPaths::kLegacyRootQrTiming)) {
       // Prefer keep existing nested log; just delete root junk if nested already exists.
-      if (Storage.exists(CasperLogPaths::kQrTiming)) {
-        Storage.remove(CasperLogPaths::kLegacyRootQrTiming);
-      } else if (!Storage.rename(CasperLogPaths::kLegacyRootQrTiming, CasperLogPaths::kQrTiming)) {
-        Storage.remove(CasperLogPaths::kLegacyRootQrTiming);
+      if (Storage.exists(CrossPointLogPaths::kQrTiming)) {
+        Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+      } else if (!Storage.rename(CrossPointLogPaths::kLegacyRootQrTiming, CrossPointLogPaths::kQrTiming)) {
+        Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
       }
     }
   }
@@ -43,7 +46,7 @@ inline bool ensureLogDir() {
 inline void appendRaw(const char* text) {
   if (!text || !text[0]) return;
   if (!ensureLogDir()) return;
-  HalFile f = Storage.open(CasperLogPaths::kQrTiming, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(CrossPointLogPaths::kQrTiming, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
   if (!f) return;
   f.print(text);
   f.close();
@@ -52,7 +55,7 @@ inline void appendRaw(const char* text) {
 inline void begin(const char* reason) {
   // Gated with System → Enable Logging (same switch as SystemLog). Crash reports
   // are independent and always write.
-  if (SETTINGS.systemLogLevel == CasperSettings::SYSTEM_LOG_OFF) {
+  if (SETTINGS.systemLogLevel == CrossPointSettings::SYSTEM_LOG_OFF) {
     gActive = false;
     return;
   }
@@ -64,14 +67,14 @@ inline void begin(const char* reason) {
            "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s build=%s\n",
            static_cast<unsigned long>(gT0), reason ? reason : "?", gpio.deviceIsX3() ? "X3" : "X4",
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
-#ifdef CASPER_VERSION
-           CASPER_VERSION,
+#ifdef CROSSPOINT_VERSION
+           CROSSPOINT_VERSION,
 #else
            "?",
 #endif
-           // See SystemLog: ver= repeats across builds, build= pins the commit.
-#ifdef CASPER_BUILD_ID
-           CASPER_BUILD_ID
+  // See SystemLog: ver= repeats across builds, build= pins the commit.
+#ifdef CROSSPOINT_BUILD_ID
+           CROSSPOINT_BUILD_ID
 #else
            "?"
 #endif

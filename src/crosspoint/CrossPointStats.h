@@ -5,7 +5,7 @@
 
 #include "activities/reader/BookReadingStats.h"
 
-// Casper-owned stats facade.
+// CrossPoint-owned stats facade.
 //
 // Contract (v0.1.8 layout — unchanged on upgrade):
 //   - Book folder: /.crosspoint/epub_<std::hash(path)>/ (same as package cache)
@@ -15,7 +15,7 @@
 // BookReadingStats remains the in-memory/record layout (binary compatible with
 // stats_v6 on disk).
 
-namespace CasperStats {
+namespace CrossPointStats {
 
 // Primary ownership dir for a book file path (empty if path empty).
 std::string bookDir(const std::string& bookFilePath);
@@ -32,7 +32,7 @@ float homeProgressPercent(const std::string& bookFilePath);
 // Update Home progress without a full stats save (reader page leave / mark done).
 void setHomeProgress(const std::string& bookFilePath, float percent0to100);
 
-// Delete stats under the Casper book dir only.
+// Delete stats under the CrossPoint book dir only.
 bool removeBook(const std::string& bookFilePath);
 
-}  // namespace CasperStats
+}  // namespace CrossPointStats

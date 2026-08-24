@@ -1,4 +1,4 @@
-#include "CasperWebServer.h"
+#include "CrossPointWebServer.h"
 
 #include <ArduinoJson.h>
 #include <FsHelpers.h>
@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cctype>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "FontInstaller.h"
 #include "OpdsServerStore.h"
 #include "SdCardFontSystem.h"
@@ -36,7 +36,7 @@ constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 
 // Static pointer for WebSocket callback (WebSocketsServer requires C-style callback)
-CasperWebServer* wsInstance = nullptr;
+CrossPointWebServer* wsInstance = nullptr;
 
 // WebSocket upload state
 HalFile wsUploadFile;
@@ -87,11 +87,11 @@ bool isProtectedItemName(const String& name) {
 // - HomePageHtml (from html/HomePage.html)
 // - FilesPageHeaderHtml (from html/FilesPageHeader.html)
 // - FilesPageFooterHtml (from html/FilesPageFooter.html)
-CasperWebServer::CasperWebServer() {}
+CrossPointWebServer::CrossPointWebServer() {}
 
-CasperWebServer::~CasperWebServer() { stop(); }
+CrossPointWebServer::~CrossPointWebServer() { stop(); }
 
-void CasperWebServer::begin() {
+void CrossPointWebServer::begin() {
   if (running) {
     LOG_DBG("WEB", "Web server already running");
     return;
@@ -214,7 +214,7 @@ void CasperWebServer::begin() {
   if (!wsServer) {
     LOG_ERR("WEB", "OOM: WebSocket server on port %d; uploads fall back to HTTP", wsPort);
   } else {
-    wsInstance = const_cast<CasperWebServer*>(this);
+    wsInstance = const_cast<CrossPointWebServer*>(this);
     wsServer->begin();
     wsServer->onEvent(wsEventCallback);
     LOG_DBG("WEB", "WebSocket server started");
@@ -241,7 +241,7 @@ void CasperWebServer::begin() {
   LOG_DBG("WEB", "[MEM] Free heap after server.begin(): %d bytes", ESP.getFreeHeap());
 }
 
-void CasperWebServer::abortWsUpload(const char* tag) {
+void CrossPointWebServer::abortWsUpload(const char* tag) {
   // Explicit close() required: file-scope global persists beyond function scope
   wsUploadFile.close();
   String filePath = wsUploadPath;
@@ -257,7 +257,7 @@ void CasperWebServer::abortWsUpload(const char* tag) {
   wsLastProgressSent = 0;
 }
 
-void CasperWebServer::stop() {
+void CrossPointWebServer::stop() {
   if (!running || !server) {
     LOG_DBG("WEB", "stop() called but already stopped (running=%d, server=%p)", running, server.get());
     if (watchdogTaskRegistered) {
@@ -314,7 +314,7 @@ void CasperWebServer::stop() {
   LOG_DBG("WEB", "[MEM] Free heap final: %d bytes", ESP.getFreeHeap());
 }
 
-void CasperWebServer::handleClient() {
+void CrossPointWebServer::handleClient() {
   static unsigned long lastDebugPrint = 0;
 
   // Check running flag FIRST before accessing server
@@ -352,9 +352,9 @@ void CasperWebServer::handleClient() {
         if (strcmp(buffer, "hello") == 0) {
           String hostname = WiFi.getHostname();
           if (hostname.isEmpty()) {
-            hostname = "casper";
+            hostname = "crosspoint";
           }
-          String message = "casper (on " + hostname + ");" + String(wsPort);
+          String message = "crosspoint (on " + hostname + ");" + String(wsPort);
           udp.beginPacket(udp.remoteIP(), udp.remotePort());
           udp.write(reinterpret_cast<const uint8_t*>(message.c_str()), message.length());
           udp.endPacket();
@@ -364,7 +364,7 @@ void CasperWebServer::handleClient() {
   }
 }
 
-CasperWebServer::WsUploadStatus CasperWebServer::getWsUploadStatus() const {
+CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() const {
   WsUploadStatus status;
   status.inProgress = wsUploadInProgress;
   status.received = wsUploadReceived;
@@ -381,18 +381,18 @@ static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
   server->send_P(200, "text/html", data, len);
 }
 
-void CasperWebServer::handleRoot() const {
+void CrossPointWebServer::handleRoot() const {
   sendHtmlContent(server.get(), HomePageHtml, sizeof(HomePageHtml));
   LOG_DBG("WEB", "Served root page");
 }
 
-void CasperWebServer::handleJszip() const {
+void CrossPointWebServer::handleJszip() const {
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "application/javascript", jszip_minJs, jszip_minJsCompressedSize);
   LOG_DBG("WEB", "Served jszip.min.js");
 }
 
-void CasperWebServer::handleNotFound() const {
+void CrossPointWebServer::handleNotFound() const {
   // CORS preflight: routes are registered per-method, so OPTIONS requests land
   // here. The Access-Control-Allow-* headers are added by enableCORS().
   if (server->method() == HTTP_OPTIONS) {
@@ -414,12 +414,12 @@ void CasperWebServer::handleNotFound() const {
   server->send(404, "text/plain", message);
 }
 
-void CasperWebServer::handleStatus() const {
+void CrossPointWebServer::handleStatus() const {
   // Get correct IP based on AP vs STA mode
   const String ipAddr = apMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
 
   JsonDocument doc;
-  doc["version"] = CASPER_VERSION;
+  doc["version"] = CROSSPOINT_VERSION;
   doc["ip"] = ipAddr;
   doc["mode"] = apMode ? "AP" : "STA";
   doc["rssi"] = apMode ? 0 : WiFi.RSSI();
@@ -453,7 +453,7 @@ void CasperWebServer::handleStatus() const {
   server->send(200, "application/json", response);
 }
 
-void CasperWebServer::scanFiles(const char* path, const std::function<void(FileInfo)>& callback) const {
+void CrossPointWebServer::scanFiles(const char* path, const std::function<void(FileInfo)>& callback) const {
   HalFile root = Storage.open(path);
   if (!root) {
     LOG_DBG("WEB", "Failed to open directory: %s", path);
@@ -511,13 +511,13 @@ void CasperWebServer::scanFiles(const char* path, const std::function<void(FileI
   root.close();
 }
 
-bool CasperWebServer::isEpubFile(const String& filename) const { return FsHelpers::hasEpubExtension(filename); }
+bool CrossPointWebServer::isEpubFile(const String& filename) const { return FsHelpers::hasEpubExtension(filename); }
 
-void CasperWebServer::handleFileList() const {
+void CrossPointWebServer::handleFileList() const {
   sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml));
 }
 
-void CasperWebServer::handleFileListData() const {
+void CrossPointWebServer::handleFileListData() const {
   // Get current path from query string (default to root)
   String currentPath = "/";
   if (server->hasArg("path")) {
@@ -567,7 +567,7 @@ void CasperWebServer::handleFileListData() const {
   LOG_DBG("WEB", "Served file listing page for path: %s", currentPath.c_str());
 }
 
-void CasperWebServer::handleDownload() const {
+void CrossPointWebServer::handleDownload() const {
   if (!server->hasArg("path")) {
     server->send(400, "text/plain", "Missing path");
     return;
@@ -654,7 +654,7 @@ static unsigned long uploadStartTime = 0;
 static unsigned long totalWriteTime = 0;
 static size_t writeCount = 0;
 
-static bool flushUploadBuffer(CasperWebServer::UploadState& state) {
+static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   if (state.bufferPos > 0 && state.file) {
     resetTaskWatchdogIfSubscribed();  // Reset watchdog before potentially slow SD write
     const unsigned long writeStart = millis();
@@ -673,7 +673,7 @@ static bool flushUploadBuffer(CasperWebServer::UploadState& state) {
   return true;
 }
 
-void CasperWebServer::handleUpload(UploadState& state) const {
+void CrossPointWebServer::handleUpload(UploadState& state) const {
   static size_t lastLoggedSize = 0;
 
   // Reset watchdog at start of every upload callback - HTTP parsing can be slow
@@ -824,7 +824,7 @@ void CasperWebServer::handleUpload(UploadState& state) const {
   }
 }
 
-void CasperWebServer::handleUploadPost(UploadState& state) const {
+void CrossPointWebServer::handleUploadPost(UploadState& state) const {
   if (state.success) {
     server->send(200, "text/plain", "File uploaded successfully: " + state.fileName);
   } else {
@@ -833,7 +833,7 @@ void CasperWebServer::handleUploadPost(UploadState& state) const {
   }
 }
 
-void CasperWebServer::handleCreateFolder() const {
+void CrossPointWebServer::handleCreateFolder() const {
   // Get folder name from form data
   if (!server->hasArg("name")) {
     server->send(400, "text/plain", "Missing folder name");
@@ -883,7 +883,7 @@ void CasperWebServer::handleCreateFolder() const {
   }
 }
 
-void CasperWebServer::handleRename() const {
+void CrossPointWebServer::handleRename() const {
   if (!server->hasArg("path") || !server->hasArg("name")) {
     server->send(400, "text/plain", "Missing path or new name");
     return;
@@ -965,7 +965,7 @@ void CasperWebServer::handleRename() const {
   }
 }
 
-void CasperWebServer::handleMove() const {
+void CrossPointWebServer::handleMove() const {
   if (!server->hasArg("path") || !server->hasArg("dest")) {
     server->send(400, "text/plain", "Missing path or destination");
     return;
@@ -1058,7 +1058,7 @@ void CasperWebServer::handleMove() const {
   }
 }
 
-void CasperWebServer::handleDelete() const {
+void CrossPointWebServer::handleDelete() const {
   // To ensure backwards compatibility, plain `path` is mapped
   // to a single element JSON array.
   bool hasPathArg = server->hasArg("path");
@@ -1180,12 +1180,12 @@ void CasperWebServer::handleDelete() const {
   }
 }
 
-void CasperWebServer::handleSettingsPage() const {
+void CrossPointWebServer::handleSettingsPage() const {
   sendHtmlContent(server.get(), SettingsPageHtml, sizeof(SettingsPageHtml));
   LOG_DBG("WEB", "Served settings page");
 }
 
-void CasperWebServer::handleGetSettings() const {
+void CrossPointWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // three built-in fonts.
@@ -1277,7 +1277,7 @@ void CasperWebServer::handleGetSettings() const {
   LOG_DBG("WEB", "Served settings API");
 }
 
-void CasperWebServer::handlePostSettings() {
+void CrossPointWebServer::handlePostSettings() {
   if (!server->hasArg("plain")) {
     server->send(400, "text/plain", "Missing JSON body");
     return;
@@ -1356,7 +1356,7 @@ void CasperWebServer::handlePostSettings() {
 
 // ---- OPDS Server API ----
 
-void CasperWebServer::handleGetOpdsServers() const {
+void CrossPointWebServer::handleGetOpdsServers() const {
   const auto& servers = OPDS_STORE.getServers();
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -1387,7 +1387,7 @@ void CasperWebServer::handleGetOpdsServers() const {
   LOG_DBG("WEB", "Served OPDS servers API (%zu servers)", servers.size());
 }
 
-void CasperWebServer::handlePostOpdsServer() {
+void CrossPointWebServer::handlePostOpdsServer() {
   if (!server->hasArg("plain")) {
     server->send(400, "text/plain", "Missing JSON body");
     return;
@@ -1434,7 +1434,7 @@ void CasperWebServer::handlePostOpdsServer() {
   server->send(200, "text/plain", "OK");
 }
 
-void CasperWebServer::handleDeleteOpdsServer() {
+void CrossPointWebServer::handleDeleteOpdsServer() {
   if (!server->hasArg("plain")) {
     server->send(400, "text/plain", "Missing JSON body");
     return;
@@ -1466,7 +1466,7 @@ void CasperWebServer::handleDeleteOpdsServer() {
 
 // ---- Wi-Fi Credentials API ----
 
-void CasperWebServer::handleGetWifiNetworks() const {
+void CrossPointWebServer::handleGetWifiNetworks() const {
   const auto& credentials = WIFI_STORE.getCredentials();
   const std::string& lastConnectedSsid = WIFI_STORE.getLastConnectedSsid();
 
@@ -1499,7 +1499,7 @@ void CasperWebServer::handleGetWifiNetworks() const {
   LOG_DBG("WEB", "Served Wi-Fi credentials API (%zu network(s))", credentials.size());
 }
 
-void CasperWebServer::handlePostWifiNetwork() {
+void CrossPointWebServer::handlePostWifiNetwork() {
   if (!server->hasArg("plain")) {
     server->send(400, "text/plain", "Missing JSON body");
     return;
@@ -1562,7 +1562,7 @@ void CasperWebServer::handlePostWifiNetwork() {
 }
 
 // Uses POST (not HTTP DELETE) because ESP32 WebServer doesn't support DELETE with body.
-void CasperWebServer::handleDeleteWifiNetwork() {
+void CrossPointWebServer::handleDeleteWifiNetwork() {
   if (!server->hasArg("plain")) {
     server->send(400, "text/plain", "Missing JSON body");
     return;
@@ -1599,7 +1599,7 @@ void CasperWebServer::handleDeleteWifiNetwork() {
 }
 
 // WebSocket callback trampoline
-void CasperWebServer::wsEventCallback(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+void CrossPointWebServer::wsEventCallback(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   if (wsInstance) {
     wsInstance->onWebSocketEvent(num, type, payload, length);
   }
@@ -1611,7 +1611,7 @@ void CasperWebServer::wsEventCallback(uint8_t num, WStype_t type, uint8_t* paylo
 //   2. Client sends BINARY messages with file data chunks
 //   3. Server sends TEXT "PROGRESS:<received>:<total>" after each chunk
 //   4. Server sends TEXT "DONE" or "ERROR:<message>" when complete
-void CasperWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       LOG_DBG("WS", "Client %u disconnected", num);
@@ -1787,12 +1787,12 @@ void CasperWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
 
 // --- Font management handlers ---
 
-void CasperWebServer::handleFontsPage() const {
+void CrossPointWebServer::handleFontsPage() const {
   sendHtmlContent(server.get(), FontsPageHtml, sizeof(FontsPageHtml));
   LOG_DBG("WEB", "Served fonts page");
 }
 
-void CasperWebServer::handleFontList() const {
+void CrossPointWebServer::handleFontList() const {
   // Pick up any uploads/deletes that happened since the last reader load.
   const_cast<SdCardFontSystem&>(sdFontSystem).refreshIfDirty();
   const auto& families = sdFontSystem.registry().getFamilies();
@@ -1833,7 +1833,7 @@ void CasperWebServer::handleFontList() const {
   server->send(200, "application/json", json);
 }
 
-void CasperWebServer::handleFontUploadData() {
+void CrossPointWebServer::handleFontUploadData() {
   HTTPUpload& upload = server->upload();
 
   switch (upload.status) {
@@ -1955,7 +1955,7 @@ void CasperWebServer::handleFontUploadData() {
   }
 }
 
-void CasperWebServer::handleFontUpload() {
+void CrossPointWebServer::handleFontUpload() {
   if (fontUpload.valid) {
     sdFontSystem.markRegistryDirty();
     server->send(200, "application/json", "{\"ok\":true}");
@@ -1965,7 +1965,7 @@ void CasperWebServer::handleFontUpload() {
   }
 }
 
-void CasperWebServer::handleFontDelete() {
+void CrossPointWebServer::handleFontDelete() {
   String body = server->arg("plain");
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, body);

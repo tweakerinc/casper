@@ -97,7 +97,7 @@ class TextSettingsActivity final : public Activity {
 
   struct SizeEntry {
     std::string name;
-    uint8_t settingIndex;  // CasperSettings::FONT_SIZE enum value
+    uint8_t settingIndex;  // CrossPointSettings::FONT_SIZE enum value
   };
 
   const SdCardFontRegistry* registry_;

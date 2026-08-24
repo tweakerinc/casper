@@ -22,12 +22,12 @@ constexpr int kLiterata[] = {
     -209681255,   // 18 → clamp to 16
 };
 constexpr int kSourceSerif[] = {
-    1470095001,   // 8
-    -324599973,   // 10
-    876380291,    // 12
-    426921930,    // 14
-    1484141743,   // 16
-    652444703,    // 18
+    1470095001,  // 8
+    -324599973,  // 10
+    876380291,   // 12
+    426921930,   // 14
+    1484141743,  // 16
+    652444703,   // 18
 };
 static constexpr int kReaderLadderLen = 6;
 
@@ -122,8 +122,7 @@ void initStyleResolveContext(StyleResolveContext& ctx, const int baseFontId, con
   }
 }
 
-int collectDropCapFontCandidates(const StyleResolveContext& ctx, const int bodyFontId, int* outIds,
-                                 const int maxOut) {
+int collectDropCapFontCandidates(const StyleResolveContext& ctx, const int bodyFontId, int* outIds, const int maxOut) {
   if (!outIds || maxOut <= 0) return 0;
 
   auto pushUnique = [&](const int id, int& n) {
@@ -167,7 +166,7 @@ uint8_t sizeStepFromCssFontSize(const CssStyle& css, const StyleResolveContext& 
   }
   // Keep relative steps even on single-size faces so paint can DROP_CAP-scale larger steps.
 
-  // Resolve length against base em (Casper convention). Percent is relative to base em, not viewport.
+  // Resolve length against base em (CrossPoint convention). Percent is relative to base em, not viewport.
   float px = 0.0f;
   switch (css.fontSize.unit) {
     case CssUnit::Percent:

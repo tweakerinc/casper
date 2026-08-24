@@ -1,4 +1,4 @@
-# Casper book store (ownership pillars v1)
+# CrossPoint book store (ownership pillars v1)
 
 ## Why
 
@@ -19,7 +19,7 @@ Rename or move a book → new folder → lost progress/stats (or wrong book if c
 | **3. /.casper file types** | Per-book folder layout below |
 | **4. Progress + stats** | Own files under book folder (not path-hash) |
 
-**Reader state** (resume, stats, Rivulet IR) is Casper-owned under `book_<stableId>/`.
+**Reader state** (resume, stats, Rivulet IR) is CrossPoint-owned under `book_<stableId>/`.
 
 **Package parse cache** (`book.bin`, thumbs) still uses path-hash folders
 `/.casper/epub_<std::hash(path)>/` (same *scheme* as classic CrossPoint, root is `/.casper`).
@@ -51,13 +51,13 @@ stableId = hex16( FNV1a64( title, author, fileStem(path) ) )
 
 ## Migration
 
-- On first Rivulet open: if Casper stats empty, **import once** via `BookReadingStats::loadForBook(path)` (classic/CrossInk) and save into `book_<id>/`.
-- Full CrossInk → Casper bulk convert: deferred external tool (as requested).
+- On first Rivulet open: if CrossPoint stats empty, **import once** via `BookReadingStats::loadForBook(path)` (classic/CrossInk) and save into `book_<id>/`.
+- Full CrossInk → CrossPoint bulk convert: deferred external tool (as requested).
 
 ## Code
 
-- `src/util/CasperBookStore.h/.cpp`
-- `RivuletReaderActivity` uses `CasperBook::openBook` on enter.
+- `src/util/CrossPointBookStore.h/.cpp`
+- `RivuletReaderActivity` uses `CrossPointBook::openBook` on enter.
 
 ## App root (settings & state)
 

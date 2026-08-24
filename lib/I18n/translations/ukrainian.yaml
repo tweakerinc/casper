@@ -2,7 +2,7 @@ _language_name: "Українська"
 _language_code: "UK"
 _order: "10"
 
-STR_CASPER: "CrossPoint"
+STR_CROSSPOINT: "CrossPoint"
 STR_BOOTING: "ЗАВАНТАЖЕННЯ"
 STR_SLEEPING: "СПИТЬ"
 STR_ENTERING_SLEEP: "Перехід у режим сну"
@@ -65,7 +65,8 @@ STR_QUICK_RESUME_TIMEOUT: "Швидке поверн. після таймаут�
 STR_SLEEP_COVER_MODE: "Режим заповнення"
 STR_HIDE_BATTERY: "Приховати % батареї"
 STR_EXTRA_SPACING: "Додатковий інтервал між абзацами"
-STR_TEXT_AA: "Згладжування тексту"
+STR_TEXT_AA: "Згладжування тексту"
+
 STR_READER_DARK_MODE: "Темний режим"
 STR_DARK_MODE_READER_ONLY: "Лише читання"
 STR_IMAGES: "Зображення"

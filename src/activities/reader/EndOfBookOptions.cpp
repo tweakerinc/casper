@@ -4,7 +4,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "ReaderUtils.h"
 // ReaderUtils.h pulls in ActivityManager.h, which only forward-declares Activity while holding
 // std::unique_ptr<Activity> members. Destroying that unique_ptr needs the complete type, so the
@@ -67,8 +67,8 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   // configured, same rule as ReaderUtils::detectPageTurn). This matters on entry: with
   // press-triggered turns, the press that turned the final page already fired in the
   // reader, and its release must not double-fire into this menu.
-  const bool usePress = SETTINGS.longPressSideA == CasperSettings::LP_MENU_DISABLED &&
-                        SETTINGS.longPressSideB == CasperSettings::LP_MENU_DISABLED;
+  const bool usePress = SETTINGS.longPressSideA == CrossPointSettings::LP_MENU_DISABLED &&
+                        SETTINGS.longPressSideB == CrossPointSettings::LP_MENU_DISABLED;
   const auto triggered = [&](const MappedInputManager::Button button) {
     return usePress ? input.wasPressed(button) : input.wasReleased(button);
   };

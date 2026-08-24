@@ -14,8 +14,8 @@
 
 #include <algorithm>
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -135,11 +135,10 @@ void XtcReaderActivity::loop() {
   }
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
-  const bool skipPages =
-      !fromTilt &&
-      (SETTINGS.longPressSideA == SETTINGS.LP_MENU_CHAPTER_SKIP ||
-       SETTINGS.longPressSideB == SETTINGS.LP_MENU_CHAPTER_SKIP) &&
-      heldMs > ReaderUtils::SKIP_HOLD_MS;
+  const bool skipPages = !fromTilt &&
+                         (SETTINGS.longPressSideA == SETTINGS.LP_MENU_CHAPTER_SKIP ||
+                          SETTINGS.longPressSideB == SETTINGS.LP_MENU_CHAPTER_SKIP) &&
+                         heldMs > ReaderUtils::SKIP_HOLD_MS;
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {
@@ -211,9 +210,9 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
 
 void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition position) const {
   const auto sb = SETTINGS.statusBarSpec();
-  const bool drawBottom = sb.xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM &&
+  const bool drawBottom = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_BOTTOM &&
                           position == StatusBarOverlayPosition::Bottom;
-  const bool drawTop = sb.xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP &&
+  const bool drawTop = sb.xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP &&
                        position == StatusBarOverlayPosition::Top;
   if (!drawBottom && !drawTop) {
     return;
@@ -348,8 +347,8 @@ void XtcReaderActivity::renderPage() {
     // XTC grayscale path: same device split as EPUB (YACP-compatible).
     // X3: soft reinforce; X4: stock HALF scrub (SSD1677 clean primitive).
     if (pagesUntilFullRefresh <= 1 &&
-        SETTINGS.getRefreshFrequency() != CasperSettings::REFRESH_COUNTDOWN_DISABLED) {
-      if (gpio.deviceIsX3() && pagesUntilFullRefresh != CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
+        SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
+      if (gpio.deviceIsX3() && pagesUntilFullRefresh != CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
         renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
       } else {
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -358,7 +357,7 @@ void XtcReaderActivity::renderPage() {
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
-      if (SETTINGS.getRefreshFrequency() != CasperSettings::REFRESH_COUNTDOWN_DISABLED) {
+      if (SETTINGS.getRefreshFrequency() != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED) {
         pagesUntilFullRefresh--;
       }
     }
@@ -433,7 +432,7 @@ void XtcReaderActivity::renderPage() {
 
   free(pageBuffer);
 
-  if (SETTINGS.statusBarSpec().xtcMode == CasperSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
+  if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(StatusBarOverlayPosition::Top);
   } else {
     renderStatusBarOverlay(StatusBarOverlayPosition::Bottom);

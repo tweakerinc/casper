@@ -3,17 +3,17 @@ PlatformIO pre-build script.
 
 Two jobs:
 
-1. CASPER_VERSION -- the *product* version, e.g. "v0.1.9". Injected here for the
+1. CROSSPOINT_VERSION -- the *product* version, e.g. "v0.1.9". Injected here for the
    default (dev) environment; release environments set it in platformio.ini.
 
-2. CASPER_BUILD_ID -- the *build* fingerprint, e.g. "05c6cf8" or "05c6cf8-dirty".
+2. CROSSPOINT_BUILD_ID -- the *build* fingerprint, e.g. "05c6cf8" or "05c6cf8-dirty".
    Injected for every environment.
 
-The distinction matters for support. CASPER_VERSION only changes when the
+The distinction matters for support. CROSSPOINT_VERSION only changes when the
 product version is bumped, so consecutive test builds all report the same
 string: a device log reading "ver=v0.1.9" could have come from any of them, and
-there was no way to tell which firmware produced a capture. CASPER_BUILD_ID
-pins a log to a commit, and matches the short SHA in dist/Casper-NNNN-<sha>.bin.
+there was no way to tell which firmware produced a capture. CROSSPOINT_BUILD_ID
+pins a log to a commit, and matches the short SHA in dist/CrossPoint-NNNN-<sha>.bin.
 """
 
 import configparser
@@ -121,9 +121,9 @@ def inject_version(env):
     # Build fingerprint: every environment, so any capture identifies its build.
     build_id = get_build_id(project_dir)
     env.Append(CPPDEFINES=[
-        ('CASPER_BUILD_ID', f'\\"{build_id}\\"'),
+        ('CROSSPOINT_BUILD_ID', f'\\"{build_id}\\"'),
     ])
-    print(f'Casper build id: {build_id}')
+    print(f'CrossPoint build id: {build_id}')
 
     # Product version: dev only; release envs set it via build_flags.
     if env['PIOENV'] != 'default':
@@ -131,9 +131,9 @@ def inject_version(env):
 
     version_string = get_base_version(project_dir)
     env.Append(CPPDEFINES=[
-        ('CASPER_VERSION', f'\\"{version_string}\\"'),
+        ('CROSSPOINT_VERSION', f'\\"{version_string}\\"'),
     ])
-    print(f'Casper build version: {version_string}')
+    print(f'CrossPoint build version: {version_string}')
 
 
 # PlatformIO/SCons entry point — Import and env are SCons builtins injected at runtime.

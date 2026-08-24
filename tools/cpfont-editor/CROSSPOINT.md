@@ -1,4 +1,4 @@
-# Casper notes — iwalton3/cpfont-editor
+# CrossPoint notes — iwalton3/cpfont-editor
 
 Cloned from https://github.com/iwalton3/cpfont-editor
 
@@ -8,9 +8,9 @@ Cloned from https://github.com/iwalton3/cpfont-editor
 - **Stem calibration** + **gap-fix**: rasterizes small sizes at a ppem where stems hit whole pixels → cleaner on X3/X4 e-ink.
 - Pixel editor / nudge tools for hand-tuning.
 
-## Casper Literata (incl. 10 pt)
+## CrossPoint Literata (incl. 10 pt)
 
-`sd-fonts.yaml` Literata `sizes` includes **10** (Casper reader ladder uses 10/12/14/16).
+`sd-fonts.yaml` Literata `sizes` includes **10** (CrossPoint reader ladder uses 10/12/14/16).
 
 ```bat
 cd tools\cpfont-editor\build

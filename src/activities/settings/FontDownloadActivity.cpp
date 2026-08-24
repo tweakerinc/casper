@@ -30,8 +30,7 @@ bool isFirmwareBuiltinFamily(const char* name) {
   if (name == nullptr || name[0] == '\0') return false;
   return strcasecmp(name, "Literata") == 0 || strcasecmp(name, "SourceSerif4") == 0 ||
          strcasecmp(name, "Source Serif 4") == 0 || strcasecmp(name, "Sourcerer") == 0 ||
-         strcasecmp(name, "Bitter") == 0 ||
-         strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
+         strcasecmp(name, "Bitter") == 0 || strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
 }
 
 // --- Minimal fonts.json (schema v1) scanner ---------------------------------
@@ -161,7 +160,7 @@ FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputMan
 // --- Lifecycle ---
 
 void FontDownloadActivity::prepareHeapForNetwork() {
-  // legacy: drop SD faces + catalog before Wi‑Fi. Casper also clears the
+  // legacy: drop SD faces + catalog before Wi‑Fi. CrossPoint also clears the
   // glyph cache — it fragments maxAlloc and competes with HTTP buffers.
   sdFontSystem.releaseForNetwork(renderer);
   if (FontCacheManager* fcm = renderer.getFontCacheManager()) {

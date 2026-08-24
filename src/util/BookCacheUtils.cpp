@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 
 bool wipeCacheDirectory(const std::string& path);
 
@@ -274,7 +274,7 @@ bool wipeCacheDirectory(const std::string& path) {
 
 bool isBookCacheDirectoryName(const char* name) {
   if (!name) return false;
-  // Unified Casper ownership (Rivulet + package).
+  // Unified CrossPoint ownership (Rivulet + package).
   if (startsWith(name, "book_")) return true;
   // Legacy path-hash packages.
   return startsWith(name, "epub_") || startsWith(name, "txt_") || startsWith(name, "xtc_");
@@ -285,7 +285,7 @@ void clearBookCache(const std::string& path) {
 
   if (FsHelpers::hasEpubExtension(path) || FsHelpers::hasXtcExtension(path) || FsHelpers::hasTxtExtension(path)) {
     // v0.1.8 primary: epub_/xtc_/txt_<std::hash> under /.crosspoint
-    const char* root = CasperPaths::kPackageCacheRoot;
+    const char* root = CrossPointPaths::kPackageCacheRoot;
     std::string cachePath;
     if (FsHelpers::hasEpubExtension(path)) {
       cachePath = root + std::string("/epub_") + std::to_string(std::hash<std::string>{}(path));
@@ -305,7 +305,7 @@ void clearBookCache(const std::string& path) {
       LOG_INF("BookCache", "wiped rivulet=%d path=%s", rivOk ? 1 : 0, rivulet.c_str());
     }
     // Optional WIP book_<fnv> folder (never created by v0.1.8 / this build).
-    if (BookPathId::isCasperPackageRoot(root)) {
+    if (BookPathId::isCrossPointPackageRoot(root)) {
       const std::string bookRoot = BookPathId::bookRoot(path, root);
       if (!bookRoot.empty() && Storage.exists(bookRoot.c_str())) {
         (void)clearBookOwnershipDir(bookRoot);

@@ -16,7 +16,7 @@ namespace rivulet {
 // Facade: one chapter open, Tier A page window, Tier B IR on SD, thin page maps.
 //
 // v1: Latin, Source Serif 4 + Literata ladders, no RTL / auto-turn.
-// Paint via GfxRenderer; integration with Casper activities is separate.
+// Paint via GfxRenderer; integration with CrossPoint activities is separate.
 class RivuletEngine {
  public:
   // legacy-style look-ahead for the thin page index (not painted pages).

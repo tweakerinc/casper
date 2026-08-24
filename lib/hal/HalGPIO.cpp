@@ -123,7 +123,7 @@ const char* displayControllerName(BoardConfig::DisplayController c) {
 // freeink-sdk (CP 1.5+): live bus probe is ground truth — never trust NVS
 // hw_calib/screenType alone (full-flash of another unit can write the wrong
 // panel type and soft-brick / drain battery with the wrong driver).
-// Field: new X3 UC8279d often returns VER=FF FF FF FF FF FLG=13; older Casper
+// Field: new X3 UC8279d often returns VER=FF FF FF FF FF FLG=13; older CrossPoint
 // freeink treated that as classic UC8253. Current freeink confirms via RMTP 0xA5.
 void selectBoardAndPanelController(bool isX3) {
   BoardConfig::selectDevice(isX3 ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);

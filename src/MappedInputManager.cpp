@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "components/UITheme.h"
 
 bool MappedInputManager::isNavDirectionSwapped() const {
@@ -32,7 +32,7 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
   // Orient Front Buttons must only re-map the front cluster — side polarity stays
   // under Side Button Layout so Landscape CCW does not invert page-turn sides.
   constexpr uint8_t kFrontCount = 4;
-  constexpr uint8_t kHwCount = CasperSettings::HW_REMAP_BUTTON_COUNT;
+  constexpr uint8_t kHwCount = CrossPointSettings::HW_REMAP_BUTTON_COUNT;
 
   auto anyFrontWithFunc = [&](const uint8_t func) -> bool {
     for (uint8_t hw = 0; hw < kFrontCount && hw < kHwCount; hw++) {
@@ -47,43 +47,39 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
     return false;
   };
   // Any physical key (front or side) assigned this function.
-  auto anyWithFunc = [&](const uint8_t func) -> bool {
-    return anyFrontWithFunc(func) || anySideWithFunc(func);
-  };
+  auto anyWithFunc = [&](const uint8_t func) -> bool { return anyFrontWithFunc(func) || anySideWithFunc(func); };
 
   switch (button) {
     case Button::Back:
-      return anyWithFunc(CasperSettings::BTN_FUNC_BACK);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_BACK);
     case Button::Confirm:
-      return anyWithFunc(CasperSettings::BTN_FUNC_CONFIRM);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_CONFIRM);
     // Left/Right/Up/Down are *logical* screen directions. When Orient Front
     // Buttons follows Portrait 180° / Landscape CCW, front slots are mirrored
     // so the pill labeled "Up" moves up (mapLabels already swaps captions).
     // Side keys keep their assigned function — side polarity is Side Button Layout.
     case Button::Left:
       if (orientSwap) {
-        return anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT) ||
-               anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+        return anyFrontWithFunc(CrossPointSettings::BTN_FUNC_RIGHT) ||
+               anySideWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
       }
-      return anyWithFunc(CasperSettings::BTN_FUNC_LEFT);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
     case Button::Right:
       if (orientSwap) {
-        return anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT) ||
-               anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+        return anyFrontWithFunc(CrossPointSettings::BTN_FUNC_LEFT) ||
+               anySideWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
       }
-      return anyWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
     case Button::Up:
       if (orientSwap) {
-        return anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) ||
-               anySideWithFunc(CasperSettings::BTN_FUNC_UP);
+        return anyFrontWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anySideWithFunc(CrossPointSettings::BTN_FUNC_UP);
       }
-      return anyWithFunc(CasperSettings::BTN_FUNC_UP);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_UP);
     case Button::Down:
       if (orientSwap) {
-        return anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) ||
-               anySideWithFunc(CasperSettings::BTN_FUNC_DOWN);
+        return anyFrontWithFunc(CrossPointSettings::BTN_FUNC_UP) || anySideWithFunc(CrossPointSettings::BTN_FUNC_DOWN);
       }
-      return anyWithFunc(CasperSettings::BTN_FUNC_DOWN);
+      return anyWithFunc(CrossPointSettings::BTN_FUNC_DOWN);
     case Button::Power:
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
@@ -96,16 +92,19 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       bool hit = false;
       const bool frontPrevIsUpLeft = !orientSwap;
       if (frontPrevIsUpLeft) {
-        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) || anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
+        hit = anyFrontWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyFrontWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
       } else {
-        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+        hit =
+            anyFrontWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
       }
-      if (sideLayout == CasperSettings::PREV_NEXT || sideLayout == CasperSettings::NEXT_PREV) {
-        const bool sidePrevIsUpLeft = (sideLayout == CasperSettings::PREV_NEXT);
+      if (sideLayout == CrossPointSettings::PREV_NEXT || sideLayout == CrossPointSettings::NEXT_PREV) {
+        const bool sidePrevIsUpLeft = (sideLayout == CrossPointSettings::PREV_NEXT);
         if (sidePrevIsUpLeft) {
-          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+          hit = hit || anySideWithFunc(CrossPointSettings::BTN_FUNC_UP) ||
+                anySideWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
         } else {
-          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+          hit = hit || anySideWithFunc(CrossPointSettings::BTN_FUNC_DOWN) ||
+                anySideWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
         }
       }
       return hit;
@@ -114,16 +113,19 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       bool hit = false;
       const bool frontNextIsDownRight = !orientSwap;
       if (frontNextIsDownRight) {
-        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+        hit =
+            anyFrontWithFunc(CrossPointSettings::BTN_FUNC_DOWN) || anyFrontWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
       } else {
-        hit = anyFrontWithFunc(CasperSettings::BTN_FUNC_UP) || anyFrontWithFunc(CasperSettings::BTN_FUNC_LEFT);
+        hit = anyFrontWithFunc(CrossPointSettings::BTN_FUNC_UP) || anyFrontWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
       }
-      if (sideLayout == CasperSettings::PREV_NEXT || sideLayout == CasperSettings::NEXT_PREV) {
-        const bool sideNextIsDownRight = (sideLayout == CasperSettings::PREV_NEXT);
+      if (sideLayout == CrossPointSettings::PREV_NEXT || sideLayout == CrossPointSettings::NEXT_PREV) {
+        const bool sideNextIsDownRight = (sideLayout == CrossPointSettings::PREV_NEXT);
         if (sideNextIsDownRight) {
-          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_DOWN) || anySideWithFunc(CasperSettings::BTN_FUNC_RIGHT);
+          hit = hit || anySideWithFunc(CrossPointSettings::BTN_FUNC_DOWN) ||
+                anySideWithFunc(CrossPointSettings::BTN_FUNC_RIGHT);
         } else {
-          hit = hit || anySideWithFunc(CasperSettings::BTN_FUNC_UP) || anySideWithFunc(CasperSettings::BTN_FUNC_LEFT);
+          hit = hit || anySideWithFunc(CrossPointSettings::BTN_FUNC_UP) ||
+                anySideWithFunc(CrossPointSettings::BTN_FUNC_LEFT);
         }
       }
       return hit;
@@ -373,19 +375,19 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
 
   // Label each physical front slot by the function assigned to it.
   auto labelForHardware = [&](uint8_t hw) -> const char* {
-    if (hw >= CasperSettings::HW_REMAP_BUTTON_COUNT) return "";
+    if (hw >= CrossPointSettings::HW_REMAP_BUTTON_COUNT) return "";
     switch (SETTINGS.hwButtonFunction[hw]) {
-      case CasperSettings::BTN_FUNC_BACK:
+      case CrossPointSettings::BTN_FUNC_BACK:
         return back;
-      case CasperSettings::BTN_FUNC_CONFIRM:
+      case CrossPointSettings::BTN_FUNC_CONFIRM:
         return confirm;
-      case CasperSettings::BTN_FUNC_LEFT:
+      case CrossPointSettings::BTN_FUNC_LEFT:
         return leftLabel;
-      case CasperSettings::BTN_FUNC_RIGHT:
+      case CrossPointSettings::BTN_FUNC_RIGHT:
         return rightLabel;
-      case CasperSettings::BTN_FUNC_UP:
+      case CrossPointSettings::BTN_FUNC_UP:
         return upLabel;
-      case CasperSettings::BTN_FUNC_DOWN:
+      case CrossPointSettings::BTN_FUNC_DOWN:
         return downLabel;
       default:
         return "";
@@ -398,7 +400,7 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
 
 namespace {
 const char* directionFuncCaption(const uint8_t func, const char* backAction, const char* confirmAction) {
-  using F = CasperSettings::BUTTON_FUNCTION;
+  using F = CrossPointSettings::BUTTON_FUNCTION;
   switch (func) {
     case F::BTN_FUNC_BACK:
       return backAction ? backAction : tr(STR_BACK);
@@ -426,7 +428,7 @@ MappedInputManager::Labels MappedInputManager::mapDirectionLabels(const char* ba
   const bool swap = isNavDirectionSwapped();
   auto logicalFunc = [swap](uint8_t func) -> uint8_t {
     if (!swap) return func;
-    using F = CasperSettings::BUTTON_FUNCTION;
+    using F = CrossPointSettings::BUTTON_FUNCTION;
     switch (func) {
       case F::BTN_FUNC_UP:
         return F::BTN_FUNC_DOWN;
@@ -441,10 +443,10 @@ MappedInputManager::Labels MappedInputManager::mapDirectionLabels(const char* ba
     }
   };
   const auto& map = SETTINGS.hwButtonFunction;
-  return {directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_BACK]), backAction, confirmAction),
-          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_CONFIRM]), backAction, confirmAction),
-          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_LEFT]), backAction, confirmAction),
-          directionFuncCaption(logicalFunc(map[CasperSettings::FRONT_HW_RIGHT]), backAction, confirmAction)};
+  return {directionFuncCaption(logicalFunc(map[CrossPointSettings::FRONT_HW_BACK]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CrossPointSettings::FRONT_HW_CONFIRM]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CrossPointSettings::FRONT_HW_LEFT]), backAction, confirmAction),
+          directionFuncCaption(logicalFunc(map[CrossPointSettings::FRONT_HW_RIGHT]), backAction, confirmAction)};
 }
 
 void MappedInputManager::mapSideDirectionLabels(const char*& sideA, const char*& sideB) const {

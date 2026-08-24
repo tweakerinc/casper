@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <iterator>
 
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 
 bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentBook>& out) {
   out.clear();
@@ -22,7 +22,7 @@ bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentB
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
-    // Casper progress field (missing → unknown).
+    // CrossPoint progress field (missing → unknown).
     if (obj["progressMilli"].is<int>() || obj["progressMilli"].is<unsigned int>()) {
       const int m = obj["progressMilli"] | -1;
       book.progressPercentMilli = (m >= 0 && m <= 10000) ? static_cast<uint16_t>(m) : 0xFFFF;
@@ -95,7 +95,7 @@ void RecentBooksStore::ensureLoaded() {
 }
 
 void RecentBooksStore::mergeMissingFromDisk() {
-  // Merge Casper + legacy foreign-root recent only before v2 migrate completes.
+  // Merge CrossPoint + legacy foreign-root recent only before v2 migrate completes.
   auto mergeFile = [this](const char* path) -> size_t {
     JsonDocument doc;
     if (!PersistableStoreBase::readDocFromFile(path, doc)) return 0;
@@ -247,12 +247,12 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
   // blank until the book is opened, and entries with missing title are omitted from recent list.
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
-    Epub epub(path, CasperPaths::kPackageCacheRoot);
+    Epub epub(path, CrossPointPaths::kPackageCacheRoot);
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
     // Handle XTC file
-    Xtc xtc(path, CasperPaths::kPackageCacheRoot);
+    Xtc xtc(path, CrossPointPaths::kPackageCacheRoot);
     if (xtc.load()) {
       return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
     }

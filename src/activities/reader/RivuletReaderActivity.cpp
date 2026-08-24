@@ -23,10 +23,10 @@
 #include <functional>
 
 #include "BookStatsActivity.h"
-#include "CasperSettings.h"
-#include "CasperState.h"
 #include "ChapterLoader.h"
 #include "ClippingStore.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
 #include "Epub/hyphenation/Hyphenator.h"
 #include "EpubReaderBookmarksActivity.h"
@@ -57,17 +57,17 @@
 #include "activities/settings/StatusBarSettingsActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
-#include "casper/CasperStats.h"
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
+#include "crosspoint/CrossPointStats.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
 #include "util/QrTimingLog.h"
@@ -126,7 +126,7 @@ void RivuletReaderActivity::configureRenderKey() {
 }
 
 bool RivuletReaderActivity::saveProgress(const ProgressFlush flush) const {
-  if (!epub_ || casperBookDir_.empty()) return false;
+  if (!epub_ || crosspointBookDir_.empty()) return false;
   // Allow save while chapter IR is released for a child UI (menu / fonts) —
   // heldSpine/heldPage are the source of truth then. Block only when we have
   // neither a live chapter nor a held place (avoids writing spine 0 by accident).
@@ -156,14 +156,14 @@ bool RivuletReaderActivity::saveProgress(const ProgressFlush flush) const {
   data[3] = static_cast<uint8_t>((page >> 8) & 0xFF);
   data[4] = static_cast<uint8_t>(pageCount & 0xFF);
   data[5] = static_cast<uint8_t>((pageCount >> 8) & 0xFF);
-  if (!ProgressFile::writeAtomic(casperBookDir_, data, sizeof(data))) {
-    LOG_ERR("RVR", "progress save fail %s", casperBookDir_.c_str());
+  if (!ProgressFile::writeAtomic(crosspointBookDir_, data, sizeof(data))) {
+    LOG_ERR("RVR", "progress save fail %s", crosspointBookDir_.c_str());
     return false;
   }
   lastSavedSpine_ = spine;
   lastSavedPage_ = page;
   lastSavedPageCount_ = pageCount;
-  LOG_INF("RVR", "progress saved casper spine=%d page=%d dir=%s", spine, page, casperBookDir_.c_str());
+  LOG_INF("RVR", "progress saved spine=%d page=%d dir=%s", spine, page, crosspointBookDir_.c_str());
   return true;
 }
 
@@ -220,8 +220,8 @@ void RivuletReaderActivity::loadProgress(int& outSpine, int& outPage) {
   };
 
   // v0.1.8 layout: progress.bin lives in the same folder as package cache
-  // (/.crosspoint/epub_<hash>/). casperBookDir_ is that path.
-  if (tryRead(casperBookDir_, "cache")) return;
+  // (/.crosspoint/epub_<hash>/). crosspointBookDir_ is that path.
+  if (tryRead(crosspointBookDir_, "cache")) return;
   if (epub_ && tryRead(epub_->getCachePath(), "epub-cache")) return;
 }
 
@@ -237,13 +237,13 @@ void RivuletReaderActivity::persistHomeProgress(const bool writeToDisk) {
   }
   const float saved = readingStats_.getProgressPercent();
   PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), saved);
-  CasperStats::setHomeProgress(epub_->getPath(), saved);
-  if (!writeToDisk || casperBookDir_.empty()) return;
+  CrossPointStats::setHomeProgress(epub_->getPath(), saved);
+  if (!writeToDisk || crosspointBookDir_.empty()) return;
   if (oldPct >= 0.0f && saved >= 0.0f && std::fabs(oldPct - saved) < 0.05f && !readingStats_.isCompleted) {
     return;
   }
-  CasperStats::saveBook(epub_->getPath(), readingStats_);
-  LOG_INF("RVR", "Home progress %.1f%% → CasperStats %s", static_cast<double>(saved), casperBookDir_.c_str());
+  CrossPointStats::saveBook(epub_->getPath(), readingStats_);
+  LOG_INF("RVR", "Home progress %.1f%% → CrossPointStats %s", static_cast<double>(saved), crosspointBookDir_.c_str());
 }
 
 void RivuletReaderActivity::noteForwardPageTurn() {
@@ -309,12 +309,12 @@ void RivuletReaderActivity::openBookStats() {
   const float pct = readingStats_.getProgressPercent();
   const bool hasEta = readingStats_.estimatedTimeLeftSeconds > 0;
   startActivityForResult(
-      std::make_unique<BookStatsActivity>(renderer, mappedInput, epub_->getTitle(), casperBookDir_, readingStats_, pct,
-                                          hasEta, readingStats_.estimatedTimeLeftSeconds, globalReadingStats_),
+      std::make_unique<BookStatsActivity>(renderer, mappedInput, epub_->getTitle(), crosspointBookDir_, readingStats_,
+                                          pct, hasEta, readingStats_.estimatedTimeLeftSeconds, globalReadingStats_),
       [this](const ActivityResult&) {
         // Reload in case user edited dates/completed.
-        if (!casperBookDir_.empty()) {
-          readingStats_ = BookReadingStats::load(casperBookDir_);
+        if (!crosspointBookDir_.empty()) {
+          readingStats_ = BookReadingStats::load(crosspointBookDir_);
         }
         requestUpdate();
       });
@@ -1158,11 +1158,11 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
       ready_ = false;
       const std::string moved = FinishedBooks::moveToFinished(src);
       if (!moved.empty() && moved != src) {
-        epub_ = std::make_shared<Epub>(moved, CasperPaths::kPackageCacheRoot);
+        epub_ = std::make_shared<Epub>(moved, CrossPointPaths::kPackageCacheRoot);
         epub_->load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
-        stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-        casperBookDir_ = CasperBook::bookDir(stableId_);
-        irDir_ = CasperBook::rivuletDir(stableId_);
+        stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+        crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+        irDir_ = CrossPointBook::rivuletDir(stableId_);
         APP_STATE.openEpubPath = moved;
         APP_STATE.saveToFile();
         ImageBlock::setExtractor(this, &RivuletReaderActivity::extractEpubItem);
@@ -1184,11 +1184,11 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
       ready_ = false;
       const std::string restored = FinishedBooks::restoreFromFinished(cur);
       if (!restored.empty() && restored != cur) {
-        epub_ = std::make_shared<Epub>(restored, CasperPaths::kPackageCacheRoot);
+        epub_ = std::make_shared<Epub>(restored, CrossPointPaths::kPackageCacheRoot);
         epub_->load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
-        stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-        casperBookDir_ = CasperBook::bookDir(stableId_);
-        irDir_ = CasperBook::rivuletDir(stableId_);
+        stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+        crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+        irDir_ = CrossPointBook::rivuletDir(stableId_);
         APP_STATE.openEpubPath = restored;
         APP_STATE.saveToFile();
         ImageBlock::setExtractor(this, &RivuletReaderActivity::extractEpubItem);
@@ -1206,7 +1206,7 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
     }
   }
 
-  if (!casperBookDir_.empty()) readingStats_.save(casperBookDir_);
+  if (!crosspointBookDir_.empty()) readingStats_.save(crosspointBookDir_);
   PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), readingStats_.getProgressPercent());
   GUI.drawPopup(renderer, completed ? "Marked finished" : "Marked unfinished", BaseTheme::kPopupCenterY, true);
   delay(400);
@@ -1366,7 +1366,7 @@ void RivuletReaderActivity::flushExitProgressAndStats() {
       readingStats_.estimatedTimeLeftSeconds = smoothedBookTimeLeftSeconds_;
     }
     PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), readingStats_.getProgressPercent());
-    CasperStats::saveBook(epub_->getPath(), readingStats_);
+    CrossPointStats::saveBook(epub_->getPath(), readingStats_);
     globalReadingStats_.save();
     int logSpine = spineIndex_;
     int logPage = engine_.hasChapter() ? engine_.currentPage() : 0;
@@ -2831,8 +2831,8 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
   auto& blocks = chapter.blocksMutable();
   if (blocks.empty()) return;
   // Suppress / Placeholder bake at convert; still zero plates if stale IR slipped through.
-  if (SETTINGS.imageRendering == CasperSettings::IMAGES_SUPPRESS ||
-      SETTINGS.imageRendering == CasperSettings::IMAGES_PLACEHOLDER) {
+  if (SETTINGS.imageRendering == CrossPointSettings::IMAGES_SUPPRESS ||
+      SETTINGS.imageRendering == CrossPointSettings::IMAGES_PLACEHOLDER) {
     int n = 0;
     for (auto& b : blocks) {
       if (b.kind != rivulet::BlockKind::Image) continue;
@@ -3003,8 +3003,8 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
 
 void RivuletReaderActivity::paintPageImages() {
   if (!epub_ || !ready_) return;
-  if (SETTINGS.imageRendering == CasperSettings::IMAGES_SUPPRESS ||
-      SETTINGS.imageRendering == CasperSettings::IMAGES_PLACEHOLDER) {
+  if (SETTINGS.imageRendering == CrossPointSettings::IMAGES_SUPPRESS ||
+      SETTINGS.imageRendering == CrossPointSettings::IMAGES_PLACEHOLDER) {
     return;  // convert already omitted/replaced plates; never decode
   }
   const auto& plates = engine_.page().images;
@@ -3020,7 +3020,7 @@ void RivuletReaderActivity::paintPageImages() {
     if (slash != std::string::npos) baseDir = item.href.substr(0, slash + 1);
   }
   // Prefer rivulet/img; fall back to package-adjacent if irDir was empty.
-  std::string imgCacheDir = irDir_.empty() ? (casperBookDir_ + "/rivulet/img/") : (irDir_ + "/img/");
+  std::string imgCacheDir = irDir_.empty() ? (crosspointBookDir_ + "/rivulet/img/") : (irDir_ + "/img/");
   if (!imgCacheDirReady_) {
     Storage.ensureDirectoryExists(imgCacheDir.c_str());
     imgCacheDirReady_ = true;
@@ -3118,9 +3118,9 @@ void RivuletReaderActivity::onEnter() {
   ImageBlock::clearSessionRenderFailures();
 
   // --- Ownership pillars: stable id + /.crosspoint/book_<id>/ + ledger ---
-  stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-  casperBookDir_ = CasperBook::bookDir(stableId_);
-  irDir_ = CasperBook::rivuletDir(stableId_);
+  stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+  crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+  irDir_ = CrossPointBook::rivuletDir(stableId_);
 
   configureRenderKey();
   epub_->setupCacheDir();  // package book.bin under /.crosspoint (or legacy hit)
@@ -3130,7 +3130,7 @@ void RivuletReaderActivity::onEnter() {
   // book stats + global stats (0.1.5 opened the page first).
   const bool snappyOpen = ReaderActivity::hasOpenHints();
   if (!snappyOpen) {
-    readingStats_ = CasperStats::loadBook(epub_->getPath());
+    readingStats_ = CrossPointStats::loadBook(epub_->getPath());
     if (SETTINGS.readingStatsTrackingEnabled()) {
       globalReadingStats_ = GlobalReadingStats::load();
     }
@@ -3165,11 +3165,11 @@ void RivuletReaderActivity::onEnter() {
   // Hyphenation language from OPF (Liang patterns).
   Hyphenator::setPreferredLanguage(epub_->getLanguage());
 
-  LOG_INF("RVR", "onEnter path=%s id=%s casper=%s spines=%d free=%u maxAlloc=%u", epub_->getPath().c_str(),
-          stableId_.c_str(), casperBookDir_.c_str(), epub_->getSpineItemsCount(),
+  LOG_INF("RVR", "onEnter path=%s id=%s dir=%s spines=%d free=%u maxAlloc=%u", epub_->getPath().c_str(),
+          stableId_.c_str(), crosspointBookDir_.c_str(), epub_->getSpineItemsCount(),
           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
-  // Resume: casper progress.bin → legacy package/Casper progress.bin →
+  // Resume: CrossPoint progress.bin → legacy package progress.bin →
   // stats % (home ring) → first-open land past cover spines.
   int resumeSpine = -1;
   int resumePage = 0;
@@ -3181,7 +3181,7 @@ void RivuletReaderActivity::onEnter() {
     const float statsPct = readingStats_.getProgressPercent();
     if (statsPct >= 1.0f) {
       LOG_INF("RVR", "progress.bin missing; resuming from stats %.1f%%", static_cast<double>(statsPct));
-      // jumpToPercent loads spine + page and saves casper progress.bin.
+      // jumpToPercent loads spine + page and saves progress.bin.
       jumpToPercent(static_cast<int>(statsPct + 0.5f));
       if (ready_) {
         requestUpdate();
@@ -3229,8 +3229,8 @@ void RivuletReaderActivity::onEnter() {
   // Path-keyed bookmarks under /.crosspoint/bookmarks (migrate + classic share this).
   loadCachedBookmarks();
   // QR slept on the book menu: reopen it after first paint so wake lands in-menu.
-  if (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU) {
-    APP_STATE.sleepResumeTarget = CasperState::RESUME_READER;
+  if (APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER_MENU) {
+    APP_STATE.sleepResumeTarget = CrossPointState::RESUME_READER;
     openReaderMenu();
     return;
   }
@@ -3295,7 +3295,7 @@ void RivuletReaderActivity::openReaderMenu() {
             GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
             SETTINGS.orientation = menu->orientation;
             SETTINGS.frontButtonFollowOrientation =
-                CasperSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
+                CrossPointSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
             SETTINGS.saveToFile();
             ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
             configureRenderKey();
@@ -3320,7 +3320,7 @@ void RivuletReaderActivity::openReaderMenu() {
         // Live Dark Mode toggle never returns an action — scrub polarity on leave.
         if (SETTINGS.readerDarkMode != darkModeOnOpen) {
           firstPaint_ = true;
-          pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+          pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
         }
 
         // Leave reader: no restore needed (onExit / leave path handles cleanup).
@@ -3513,9 +3513,9 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       if (epub_) {
         (void)stashDeletedBookStats(epub_->getPath().c_str());
         LOG_INF("RVR", "stashed stats for %s", epub_->getPath().c_str());
-      } else if (!casperBookDir_.empty()) {
-        (void)BookReadingStats::stashToTrash(casperBookDir_);
-        LOG_INF("RVR", "stashed casper stats %s", casperBookDir_.c_str());
+      } else if (!crosspointBookDir_.empty()) {
+        (void)BookReadingStats::stashToTrash(crosspointBookDir_);
+        LOG_INF("RVR", "stashed stats %s", crosspointBookDir_.c_str());
       }
       readingStats_ = BookReadingStats{};
       PenumbraThemeUi::invalidateRecentsProgressCache();
@@ -3531,7 +3531,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
         requestUpdate();
         return;
       }
-      readingStats_ = CasperStats::loadBook(epub_->getPath());
+      readingStats_ = CrossPointStats::loadBook(epub_->getPath());
       PenumbraThemeUi::invalidateRecentsProgressCache();
       GUI.drawPopup(renderer, tr(STR_BOOK_STATS_RESTORED), BaseTheme::kPopupCenterY, true);
       delay(400);
@@ -3542,7 +3542,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       readingStats_.avgSecondsPerForwardPage = 0;
       readingStats_.paceSampleCount = 0;
       readingStats_.estimatedTimeLeftSeconds = 0;
-      if (!casperBookDir_.empty()) readingStats_.save(casperBookDir_);
+      if (!crosspointBookDir_.empty()) readingStats_.save(crosspointBookDir_);
       GUI.drawPopup(renderer, "Pace reset", BaseTheme::kPopupCenterY, true);
       delay(400);
       requestUpdate();
@@ -3747,7 +3747,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
   if (crossedChapter && !cachedHop) ignoreNextSideRelease_ = true;
   pageTurnLatch_.waitingRelease = true;
   (void)saveProgress(crossedChapter ? ProgressFlush::Now : ProgressFlush::Deferred);
-  // In-chapter turns: update the in-memory home percent only. CasperStats /
+  // In-chapter turns: update the in-memory home percent only. CrossPointStats /
   // recents hits SD on chapter change, sleep, and leave (Resource Protocol 8).
   persistHomeProgress(/*writeToDisk=*/crossedChapter);
   updateBookmarkFlag();
@@ -3836,7 +3836,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
                              static_cast<unsigned>(engine_.chapter().textSize()),
                              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       }
-      // These land in /.casper-logs so a user capture shows exactly which step
+      // These land in /.crosspoint-logs so a user capture shows exactly which step
       // failed — LOG_INF only reaches serial, which is why earlier captures had
       // no evidence for "Back does nothing".
       SystemLog::logTiming("BACK", "load spine=%d ok=%d partial=%d text=%u blocks=%u ms=%lu fre=%u", targetSpine,
@@ -3922,39 +3922,39 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
 
 bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
   switch (function) {
-    case CasperSettings::LP_MENU_DICTIONARY:
+    case CrossPointSettings::LP_MENU_DICTIONARY:
       openDictionary();
       return true;
-    case CasperSettings::LP_MENU_CLIPPINGS:
+    case CrossPointSettings::LP_MENU_CLIPPINGS:
       openClippingTool();
       return true;
-    case CasperSettings::LP_MENU_BOOKMARK:
+    case CrossPointSettings::LP_MENU_BOOKMARK:
       toggleBookmark();
       return true;
-    case CasperSettings::LP_MENU_KOSYNC:
+    case CrossPointSettings::LP_MENU_KOSYNC:
       return launchKOReaderSync();
-    case CasperSettings::LP_MENU_READING_STATS:
+    case CrossPointSettings::LP_MENU_READING_STATS:
       if (!SETTINGS.readingStatsTrackingEnabled()) return false;
       openBookStats();
       return true;
-    case CasperSettings::LP_MENU_SLEEP:
+    case CrossPointSettings::LP_MENU_SLEEP:
       activityManager.goToSleep();
       return true;
-    case CasperSettings::LP_MENU_FORCE_REFRESH:
+    case CrossPointSettings::LP_MENU_FORCE_REFRESH:
       pagesUntilFullRefresh_ = 0;
       firstPaint_ = true;
       requestUpdate();
       return true;
-    case CasperSettings::LP_MENU_FILE_BROWSER:
+    case CrossPointSettings::LP_MENU_FILE_BROWSER:
       activityManager.goToFileBrowser();
       return true;
-    case CasperSettings::LP_MENU_FILE_TRANSFER:
+    case CrossPointSettings::LP_MENU_FILE_TRANSFER:
       activityManager.goToFileTransfer();
       return true;
-    case CasperSettings::LP_MENU_SCREENSHOT:
+    case CrossPointSettings::LP_MENU_SCREENSHOT:
       takeReaderScreenshot();
       return true;
-    case CasperSettings::LP_MENU_FOOTNOTES:
+    case CrossPointSettings::LP_MENU_FOOTNOTES:
       // Same as power FOOTNOTES / menu: restore stack, jump one, or open list.
       if (footnoteDepth_ > 0) {
         restoreFootnotePosition();
@@ -3962,16 +3962,16 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
         openFootnotesMenu();
       }
       return true;
-    case CasperSettings::LP_MENU_CHAPTER_SKIP:
+    case CrossPointSettings::LP_MENU_CHAPTER_SKIP:
       chapterSkipNext();
       return true;
-    case CasperSettings::LP_MENU_ORIENTATION_CHANGE:
+    case CrossPointSettings::LP_MENU_ORIENTATION_CHANGE:
       cycleReadingOrientation(/*nextTriggered=*/false);
       return true;
-    case CasperSettings::LP_MENU_ORIENTATION_FLIP:
+    case CrossPointSettings::LP_MENU_ORIENTATION_FLIP:
       flipReadingOrientation();
       return true;
-    case CasperSettings::LP_MENU_DARK_MODE: {
+    case CrossPointSettings::LP_MENU_DARK_MODE: {
       // In-reader shortcut: toggle reader-scoped dark (book dark, Home stays light).
       const bool on = !(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0);
       SETTINGS.readerDarkMode = on ? 1 : 0;
@@ -3982,14 +3982,14 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
       requestUpdate();
       return true;
     }
-    case CasperSettings::LP_MENU_DISABLED:
+    case CrossPointSettings::LP_MENU_DISABLED:
     default:
       return false;
   }
 }
 
 void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
-  if (neu >= CasperSettings::ORIENTATION_COUNT || neu == SETTINGS.orientation) return;
+  if (neu >= CrossPointSettings::ORIENTATION_COUNT || neu == SETTINGS.orientation) return;
 
   const int keepSpine = spineIndex_;
   const int keepPage = engine_.currentPage();
@@ -3999,7 +3999,7 @@ void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
   GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
 
   SETTINGS.orientation = neu;
-  SETTINGS.frontButtonFollowOrientation = CasperSettings::defaultFrontButtonFollowForOrientation(neu);
+  SETTINGS.frontButtonFollowOrientation = CrossPointSettings::defaultFrontButtonFollowForOrientation(neu);
   SETTINGS.saveToFile();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   configureRenderKey();
@@ -4020,7 +4020,7 @@ void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
 }
 
 void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
-  const uint8_t count = static_cast<uint8_t>(CasperSettings::ORIENTATION_COUNT);
+  const uint8_t count = static_cast<uint8_t>(CrossPointSettings::ORIENTATION_COUNT);
   if (count == 0) return;
   const uint8_t cur = SETTINGS.orientation;
   const uint8_t neu =
@@ -4032,11 +4032,12 @@ void RivuletReaderActivity::flipReadingOrientation() {
   // Portrait ↔ Flip With. Either side long-press toggles; if currently elsewhere,
   // first flip lands on Portrait so the pair is always reachable in one hold.
   uint8_t other = SETTINGS.orientationFlipWith;
-  if (other == CasperSettings::PORTRAIT || other >= CasperSettings::ORIENTATION_COUNT) {
-    other = CasperSettings::LANDSCAPE_CCW;
+  if (other == CrossPointSettings::PORTRAIT || other >= CrossPointSettings::ORIENTATION_COUNT) {
+    other = CrossPointSettings::LANDSCAPE_CCW;
   }
-  const uint8_t neu =
-      (SETTINGS.orientation == CasperSettings::PORTRAIT) ? other : static_cast<uint8_t>(CasperSettings::PORTRAIT);
+  const uint8_t neu = (SETTINGS.orientation == CrossPointSettings::PORTRAIT)
+                          ? other
+                          : static_cast<uint8_t>(CrossPointSettings::PORTRAIT);
   applyReadingOrientation(neu);
 }
 
@@ -4190,11 +4191,11 @@ void RivuletReaderActivity::chapterSkipPrev() {
 }
 
 bool RivuletReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
-  if (function == CasperSettings::LP_MENU_DISABLED) return false;
+  if (function == CrossPointSettings::LP_MENU_DISABLED) return false;
   // Already fired this hold (or release still pending after child activity).
   if (suppressRelease) return false;
   const unsigned long needHold =
-      (function == CasperSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+      (function == CrossPointSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
   if (mappedInput.getHeldTime() < needHold) return false;
   if (!fireMenuShortcut(function)) return false;
   suppressRelease = true;
@@ -4212,14 +4213,14 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
   if (!sideA && !sideB) return false;
 
   const uint8_t action = sideA ? SETTINGS.longPressSideA : SETTINGS.longPressSideB;
-  if (action == CasperSettings::LP_MENU_DISABLED) return false;
+  if (action == CrossPointSettings::LP_MENU_DISABLED) return false;
 
   const unsigned long needHold =
-      (action == CasperSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+      (action == CrossPointSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
   if (mappedInput.getHeldTime() < needHold) return false;
 
   bool ok = false;
-  if (action == CasperSettings::LP_MENU_CHAPTER_SKIP) {
+  if (action == CrossPointSettings::LP_MENU_CHAPTER_SKIP) {
     // Physical side A (left/up) = back; side B (right/down) = forward.
     if (sideA) {
       chapterSkipPrev();
@@ -4227,7 +4228,7 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
       chapterSkipNext();
     }
     ok = true;
-  } else if (action == CasperSettings::LP_MENU_ORIENTATION_CHANGE) {
+  } else if (action == CrossPointSettings::LP_MENU_ORIENTATION_CHANGE) {
     cycleReadingOrientation(/*nextTriggered=*/sideB);
     ok = true;
   } else {
@@ -4297,7 +4298,7 @@ void RivuletReaderActivity::loop() {
   }
 
   // Confirm: long-press = SETTINGS.longPressMenuFunction (Dictionary default);
-  // double-tap = SETTINGS.doublePressMenuFunction (Clipping Tool default on Casper);
+  // double-tap = SETTINGS.doublePressMenuFunction (Clipping Tool default on CrossPoint);
   // single short = menu (deferred when double-press is enabled).
   if (ignoreNextConfirmRelease_) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -4307,7 +4308,7 @@ void RivuletReaderActivity::loop() {
     }
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const uint8_t dbl = SETTINGS.doublePressMenuFunction;
-    if (dbl != CasperSettings::LP_MENU_DISABLED) {
+    if (dbl != CrossPointSettings::LP_MENU_DISABLED) {
       if (pendingConfirmMenuOpen_ && (millis() - lastConfirmReleaseMs_) < ReaderUtils::DOUBLE_PRESS_MENU_MS) {
         pendingConfirmMenuOpen_ = false;
         LOG_INF("RVR", "double-press Confirm → shortcut %u", static_cast<unsigned>(dbl));
@@ -4357,9 +4358,9 @@ void RivuletReaderActivity::loop() {
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     const unsigned long held = mappedInput.getHeldTime();
     const auto pwrAction = held < SETTINGS.getPowerButtonLongPressDuration()
-                               ? static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
-                               : static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
-    if (pwrAction == CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
+                               ? static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
+                               : static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+    if (pwrAction == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
       if (footnoteDepth_ > 0) {
         // Quick-return from footnote body (Settings → Pwr Btn Footnote Back is product default on).
         if (SETTINGS.pwrBtnFootnoteBack != 0 || footnoteDepth_ > 0) {
@@ -4591,7 +4592,7 @@ bool RivuletReaderActivity::handleForcedRefresh() {
   if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
   {
     RenderLock lock(*this);
-    pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+    pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
   }
   requestUpdate();
   return true;
@@ -4707,14 +4708,14 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     if (hadOpenHints) {
       if (preferFastFirst) {
         // Cached open / clean BW home: FAST first ink (0.1.5 snappy open).
-        if (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
+        if (pagesUntilFullRefresh_ == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
           pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
         }
       } else {
         // Home only declines preferFast when greys are still mid-flight.
         // book.bin missing is not a residual — that used to HALF every cache
         // delete (device: preferFast=0 refresh=3182ms).
-        pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+        pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
       }
     }
   }
@@ -4736,7 +4737,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // AA goes through renderAntiAliased, which now pushes the BW page onto the
   // panel (displayGrayscaleBase) before the greys — that was the missing step
   // that made every AA-on turn look like "page did not load" until a scrub.
-  const bool forceScrub = (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool forceScrub = (pagesUntilFullRefresh_ == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
   const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
   // Catch-up flag kept for a heap-recovery retry; it no longer has to paper over
@@ -4767,7 +4768,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     aaRan = ReaderUtils::renderAntiAliased(renderer, [&]() { paintTextForAa(); }, HalDisplay::FAST_REFRESH);
     if (aaRan) {
       const int freq = SETTINGS.getRefreshFrequency();
-      if (freq != CasperSettings::REFRESH_COUNTDOWN_DISABLED && pagesUntilFullRefresh_ > 1) {
+      if (freq != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED && pagesUntilFullRefresh_ > 1) {
         pagesUntilFullRefresh_--;
       }
     }
@@ -4775,7 +4776,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   bool asyncRefresh = false;
   if (!aaRan) {
     const int freq = SETTINGS.getRefreshFrequency();
-    const bool disabled = (freq == CasperSettings::REFRESH_COUNTDOWN_DISABLED);
+    const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
     const bool maintDue = !disabled && pagesUntilFullRefresh_ <= 1 && pagesUntilFullRefresh_ >= 0;
     // Async FAST only: reader-only dark inverts the FB around the push, and a
     // HALF/soft maintain must stay blocking so we never draw during the waveform.
@@ -4807,7 +4808,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
             openWallMs != 0 ? static_cast<unsigned long>(millis() - openWallMs) : 0UL);
   }
 
-  // The Rivulet reader had no render-path entry in /.casper-logs at all — the old
+  // The Rivulet reader had no render-path entry in /.crosspoint-logs at all — the old
   // PAGE/ERS lines belonged to the classic reader and went away with it. That is
   // why a report of "pages do not load" could not be checked against a capture.
   // One line per painted page: which page, whether AA ran, and the heap it ran on.
@@ -4841,7 +4842,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // After glass has the page: stats + path + recents (never on critical open).
   if (pendingStatsLoad_) {
     pendingStatsLoad_ = false;
-    readingStats_ = CasperStats::loadBook(epub_->getPath());
+    readingStats_ = CrossPointStats::loadBook(epub_->getPath());
     if (SETTINGS.readingStatsTrackingEnabled()) {
       globalReadingStats_ = GlobalReadingStats::load();
     }

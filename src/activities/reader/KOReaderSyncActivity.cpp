@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
-#include "util/CasperPaths.h"
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
@@ -26,6 +25,7 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/CrossPointPaths.h"
 
 namespace {
 std::string calculateDocumentHashForMethod(const std::string& path, const DocumentMatchMethod method) {
@@ -71,7 +71,7 @@ void syncTimeWithNTP() {
 void KOReaderSyncActivity::ensureEpubLoaded() {
   if (!epub) {
     LOG_DBG("KOSync", "Loading epub for progress mapping (heap: %u)", (unsigned)ESP.getFreeHeap());
-    epub = std::make_shared<Epub>(epubPath, CasperPaths::kPackageCacheRoot);
+    epub = std::make_shared<Epub>(epubPath, CrossPointPaths::kPackageCacheRoot);
     epub->setupCacheDir();
     // Load metadata only (no CSS needed for progress mapping, don't rebuild if cache is missing).
     if (!epub->load(false, true)) {
@@ -384,8 +384,8 @@ void KOReaderSyncActivity::performSync() {
     return;
   }
 
-  // Prefer the exact spine/page from a Casper-sync rich position (lossless
-  // Casper<->Casper sync); fall back to the approximate XPath mapping
+  // Prefer the exact spine/page from a CrossPoint-sync rich position (lossless
+  // CrossPoint<->CrossPoint sync); fall back to the approximate XPath mapping
   // for plain kosync servers or when the rich position cannot be applied.
   std::optional<BookPosition> richMapped;
   if (remoteProgress.position.has_value()) {
@@ -445,8 +445,8 @@ void KOReaderSyncActivity::performUpload() {
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
 
-  // Rich Casper position for Casper-sync servers (lossless
-  // Casper<->Casper sync); plain kosync servers ignore the extra field.
+  // Rich CrossPoint position for CrossPoint-sync servers (lossless
+  // CrossPoint<->CrossPoint sync); plain kosync servers ignore the extra field.
   {
     KOReaderRichPosition pos;
     const float pct = localProgress.percentage < 0.0f   ? 0.0f

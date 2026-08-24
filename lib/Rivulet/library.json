@@ -1,7 +1,7 @@
 {
   "name": "Rivulet",
   "version": "0.1.0",
-  "description": "Rivulet EPUB content engine — IR + page-window layout for Casper",
+  "description": "Rivulet EPUB content engine — IR + page-window layout for CrossPoint",
   "build": {
     "libArchive": false
   }

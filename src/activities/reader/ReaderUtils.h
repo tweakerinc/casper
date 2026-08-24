@@ -1,6 +1,6 @@
 #pragma once
 
-#include <CasperSettings.h>
+#include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalTiltSensor.h>
@@ -72,9 +72,9 @@ constexpr unsigned long DOUBLE_PRESS_MENU_MS = 220;
 // readers (Txt/Xtc) that still use fixed chrome padding.
 inline int readerTopChromeExtra() {
   switch (SETTINGS.statusBarFontSize) {
-    case CasperSettings::STATUS_BAR_FONT_10:
+    case CrossPointSettings::STATUS_BAR_FONT_10:
       return 28;
-    case CasperSettings::STATUS_BAR_FONT_12:
+    case CrossPointSettings::STATUS_BAR_FONT_12:
       return 32;
     default:
       return 24;
@@ -92,16 +92,16 @@ enum ReaderTouchAction : freeink::ui::ActionId {
 
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
-    case CasperSettings::ORIENTATION::PORTRAIT:
+    case CrossPointSettings::ORIENTATION::PORTRAIT:
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
       break;
-    case CasperSettings::ORIENTATION::LANDSCAPE_CW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
       break;
-    case CasperSettings::ORIENTATION::INVERTED:
+    case CrossPointSettings::ORIENTATION::INVERTED:
       renderer.setOrientation(GfxRenderer::Orientation::PortraitInverted);
       break;
-    case CasperSettings::ORIENTATION::LANDSCAPE_CCW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CCW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
       break;
     default:
@@ -125,9 +125,9 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
                                           : input.wasReleased(MappedInputManager::Button::PageBack));
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
   const unsigned long held = input.getHeldTime();
-  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                               held < SETTINGS.getPowerButtonLongPressDuration();
-  const bool longPowerTurn = SETTINGS.longPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                              held >= SETTINGS.getPowerButtonLongPressDuration();
   const bool powerTurn = shortPowerTurn || longPowerTurn;
   const bool next = tiltNext || powerTurn ||
@@ -254,8 +254,8 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 // Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
   const int freq = SETTINGS.getRefreshFrequency();  // -1 = Never
-  const bool disabled = (freq == CasperSettings::REFRESH_COUNTDOWN_DISABLED);
-  const bool forceScrub = (pagesUntilFullRefresh == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
+  const bool forceScrub = (pagesUntilFullRefresh == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   // Countdown hits 1 on the page that should maintain; also treat 0 as due.
   const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1 && pagesUntilFullRefresh >= 0;
 
@@ -279,7 +279,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
       UiGhostPolicy::noteHalf();
     }
     UiGhostPolicy::noteHalf();
-    pagesUntilFullRefresh = disabled ? CasperSettings::REFRESH_COUNTDOWN_DISABLED : freq;
+    pagesUntilFullRefresh = disabled ? CrossPointSettings::REFRESH_COUNTDOWN_DISABLED : freq;
     if (pagesUntilFullRefresh < 1 && !disabled) pagesUntilFullRefresh = 1;
   } else {
     if (async) {

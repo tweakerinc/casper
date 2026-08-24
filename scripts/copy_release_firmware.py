@@ -1,7 +1,7 @@
 """
-PlatformIO post-build: copy gh_release firmware.bin to dist/Casper-<version>.bin.
+PlatformIO post-build: copy gh_release firmware.bin to dist/CrossPoint-<version>.bin.
 
-Naming matches shipping releases, e.g. Casper-v0.1.2.bin from [casper] version = v0.1.2.
+Naming matches shipping releases, e.g. CrossPoint-v0.1.2.bin from [casper] version = v0.1.2.
 """
 
 Import("env")  # pylint: disable=undefined-variable
@@ -23,8 +23,8 @@ def _casper_version(project_dir: str) -> str:
 def copy_release_firmware(source, target, env):  # pylint: disable=unused-argument
     project_dir = env["PROJECT_DIR"]
     version = _casper_version(project_dir)
-    # [casper] version already includes the "v" prefix → Casper-v0.1.2.bin
-    out_name = f"Casper-{version}.bin"
+    # [casper] version already includes the "v" prefix → CrossPoint-v0.1.2.bin
+    out_name = f"CrossPoint-{version}.bin"
     dist_dir = os.path.join(project_dir, "dist")
     os.makedirs(dist_dir, exist_ok=True)
     src = env.subst("$BUILD_DIR/firmware.bin")

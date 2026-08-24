@@ -9,7 +9,7 @@
 #include "KOReaderSyncClient.h"
 
 /**
- * Casper position representation.
+ * CrossPoint position representation.
  */
 struct BookPosition {
   int spineIndex;                  // Current spine item (chapter) index
@@ -31,28 +31,28 @@ struct SavedProgressPosition {
 };
 
 /**
- * Maps between Casper and SavedProgress position formats, such as those used by KOReader.
+ * Maps between CrossPoint and SavedProgress position formats, such as those used by KOReader.
  *
- * Casper tracks position as (spineIndex, pageNumber).
+ * CrossPoint tracks position as (spineIndex, pageNumber).
  * SavedProgress uses XPath-like strings + percentage.
  *
- * Since Casper discards HTML structure during parsing, we generate
+ * Since CrossPoint discards HTML structure during parsing, we generate
  * synthetic XPath strings based on spine index, using percentage as the
  * primary sync mechanism.
  */
 class ProgressMapper {
  public:
   /**
-   * Convert Casper position to SavedProgress format.
+   * Convert CrossPoint position to SavedProgress format.
    *
    * @param epub The EPUB book
-   * @param pos Casper position
+   * @param pos CrossPoint position
    * @return SavedProgress position
    */
   static SavedProgressPosition toSavedProgress(const std::shared_ptr<Epub>& epub, const BookPosition& pos);
 
   /**
-   * Convert SavedProgress position to Casper format.
+   * Convert SavedProgress position to CrossPoint format.
    *
    * Note: The returned pageNumber may be approximate since different
    * rendering settings produce different page counts.
@@ -62,15 +62,15 @@ class ProgressMapper {
    * @param renderer GfxRenderer for page count estimation
    * @param currentSpineIndex Index of the currently open spine item (for density estimation)
    * @param totalPagesInCurrentSpine Total pages in the current spine item (for density estimation)
-   * @return Casper position
+   * @return CrossPoint position
    */
   static BookPosition toBookPosition(const std::shared_ptr<Epub>& epub, const SavedProgressPosition& savedPos,
-                                         GfxRenderer& renderer, int currentSpineIndex = -1,
-                                         int totalPagesInCurrentSpine = 0, int fallbackTotalPages = 0);
+                                     GfxRenderer& renderer, int currentSpineIndex = -1,
+                                     int totalPagesInCurrentSpine = 0, int fallbackTotalPages = 0);
 
   /**
-   * Convert a rich Casper position (downloaded from a Casper-sync
-   * server) directly to a Casper position, without XPath approximation.
+   * Convert a rich CrossPoint position (downloaded from a CrossPoint-sync
+   * server) directly to a CrossPoint position, without XPath approximation.
    * When the local layout matches the uploader's (same spine page count) the
    * page transfers losslessly; otherwise the paragraph LUT or the intra-spine
    * page fraction is used.
@@ -80,7 +80,7 @@ class ProgressMapper {
    *         should fall back to toBookPosition().
    */
   static std::optional<BookPosition> fromRichPosition(const std::shared_ptr<Epub>& epub,
-                                                            const KOReaderRichPosition& rich, GfxRenderer& renderer);
+                                                      const KOReaderRichPosition& rich, GfxRenderer& renderer);
 
  private:
   /**

@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "FontDownloadActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
@@ -29,12 +29,12 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontF
     const auto& families = registry->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       if (families[i].name == sdFontFamilyName) {
-        return CasperSettings::BUILTIN_FONT_COUNT + i;
+        return CrossPointSettings::BUILTIN_FONT_COUNT + i;
       }
     }
   }
 
-  return fontFamily < CasperSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
 }
 
 // Map SETTINGS.fontSize (FONT_SIZE enum, not list position) → index in a size list.
@@ -53,9 +53,9 @@ constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId
 // Storage: JUSTIFIED=0, LEFT=1, CENTER=2, RIGHT=3, BOOK_STYLE=4.
 constexpr StrId ALIGNMENT_DISPLAY_IDS[] = {StrId::STR_BOOK_S_STYLE, StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT,
                                            StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT};
-constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {CasperSettings::BOOK_STYLE, CasperSettings::JUSTIFIED,
-                                                    CasperSettings::LEFT_ALIGN, CasperSettings::CENTER_ALIGN,
-                                                    CasperSettings::RIGHT_ALIGN};
+constexpr uint8_t ALIGNMENT_DISPLAY_TO_SETTING[] = {CrossPointSettings::BOOK_STYLE, CrossPointSettings::JUSTIFIED,
+                                                    CrossPointSettings::LEFT_ALIGN, CrossPointSettings::CENTER_ALIGN,
+                                                    CrossPointSettings::RIGHT_ALIGN};
 static_assert(std::size(ALIGNMENT_DISPLAY_IDS) == std::size(ALIGNMENT_DISPLAY_TO_SETTING));
 
 int alignmentDisplayIndex(const uint8_t setting) {
@@ -68,12 +68,12 @@ int alignmentDisplayIndex(const uint8_t setting) {
 // Book's Style = publisher CSS (embedded on). Any forced alignment = plain body (embedded off).
 void applyAlignmentAndEmbedded(const uint8_t paragraphAlignment) {
   SETTINGS.paragraphAlignment = paragraphAlignment;
-  SETTINGS.embeddedStyle = (paragraphAlignment == CasperSettings::BOOK_STYLE) ? 1 : 0;
+  SETTINGS.embeddedStyle = (paragraphAlignment == CrossPointSettings::BOOK_STYLE) ? 1 : 0;
 }
 
-constexpr int MARGIN_MIN = CasperSettings::SCREEN_MARGIN_MIN;
-constexpr int MARGIN_MAX = CasperSettings::SCREEN_MARGIN_MAX;
-constexpr int MARGIN_STEP = CasperSettings::SCREEN_MARGIN_STEP;
+constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
+constexpr int MARGIN_MAX = CrossPointSettings::SCREEN_MARGIN_MAX;
+constexpr int MARGIN_STEP = CrossPointSettings::SCREEN_MARGIN_STEP;
 }  // namespace
 
 TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -259,7 +259,7 @@ void TextSettingsActivity::loop() {
 
   // Finish on release, not press. When this screen is opened from the reader
   // menu, a press-to-finish leaves a Back release for the reader — and the
-  // reader treats any Back release as "go home" after reflow. Match Casper.
+  // reader treats any Back release as "go home" after reflow. Match CrossPoint.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -423,8 +423,7 @@ void TextSettingsActivity::render(RenderLock&&) {
       if (onTabBar)
         confirmLabel = tr(STR_STYLE);
       else  // Extra Paragraph Spacing toggles; the rest open a picker
-        confirmLabel =
-            (layoutRowAt(selectedItem) == LayoutRow::ParaSpacing) ? tr(STR_TOGGLE) : tr(STR_SELECT);
+        confirmLabel = (layoutRowAt(selectedItem) == LayoutRow::ParaSpacing) ? tr(STR_TOGGLE) : tr(STR_SELECT);
       break;
     }
 
@@ -469,7 +468,7 @@ void TextSettingsActivity::render(RenderLock&&) {
   const bool builtinPreview = SETTINGS.sdFontFamilyName[0] == '\0';
   const GfxRenderer::BwGlyphWeight prevWeight = renderer.bwGlyphWeight();
   renderer.setBwGlyphWeight(builtinPreview && SETTINGS.textAntiAliasing == 0 ? GfxRenderer::BwGlyphWeight::Mild
-                                                                            : GfxRenderer::BwGlyphWeight::Normal);
+                                                                             : GfxRenderer::BwGlyphWeight::Normal);
   const textsettings::PreviewPaint previewPaint =
       textsettings::renderPreview(renderer, previewLayout_, geo.previewTop, geo.previewHeight, familyName, sizeName);
   renderer.setBwGlyphWeight(prevWeight);
@@ -523,15 +522,15 @@ void TextSettingsActivity::render(RenderLock&&) {
 // arrays out from under prewarmStyle() (crash: null s.miniGlyphs mid-read/sort).
 void TextSettingsActivity::rebuildFontList() {
   fonts_.clear();
-  fonts_.reserve(CasperSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
+  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0) + 1);
   // Brand names are fixed product labels (not translated). Literal avoids stale i18n
   // blobs / partial flashes still saying "Source Serif 4".
-  fonts_.push_back({"Sourcerer", true, static_cast<uint8_t>(CasperSettings::SOURCESERIF4)});
-  fonts_.push_back({"Literata", true, static_cast<uint8_t>(CasperSettings::LITERATA)});
+  fonts_.push_back({"Sourcerer", true, static_cast<uint8_t>(CrossPointSettings::SOURCESERIF4)});
+  fonts_.push_back({"Literata", true, static_cast<uint8_t>(CrossPointSettings::LITERATA)});
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CasperSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
     }
   }
   // Last row: open catalog / Wi‑Fi download (keeps tab bar to four labels so type stays large).
@@ -540,7 +539,7 @@ void TextSettingsActivity::rebuildFontList() {
 
 void TextSettingsActivity::rebuildSizeList() {
   sizes_.clear();
-  sizes_.reserve(CasperSettings::FONT_SIZE_COUNT);
+  sizes_.reserve(CrossPointSettings::FONT_SIZE_COUNT);
 
   // Built-in reader faces ship 10/12/14/16 only (8/18 flash cut). SD packs may list any size.
   const bool usingSd = SETTINGS.sdFontFamilyName[0] != '\0' && registry_;
@@ -549,40 +548,40 @@ void TextSettingsActivity::rebuildSizeList() {
     if (fam) {
       const std::vector<uint8_t> pts = fam->availableSizes();
       for (const uint8_t pt : pts) {
-        uint8_t enumIdx = CasperSettings::SIZE_12;
+        uint8_t enumIdx = CrossPointSettings::SIZE_12;
         switch (pt) {
           case 8:
-            enumIdx = CasperSettings::SIZE_8;
+            enumIdx = CrossPointSettings::SIZE_8;
             break;
           case 10:
-            enumIdx = CasperSettings::SIZE_10;
+            enumIdx = CrossPointSettings::SIZE_10;
             break;
           case 12:
-            enumIdx = CasperSettings::SIZE_12;
+            enumIdx = CrossPointSettings::SIZE_12;
             break;
           case 14:
-            enumIdx = CasperSettings::SIZE_14;
+            enumIdx = CrossPointSettings::SIZE_14;
             break;
           case 16:
-            enumIdx = CasperSettings::SIZE_16;
+            enumIdx = CrossPointSettings::SIZE_16;
             break;
           case 18:
-            enumIdx = CasperSettings::SIZE_18;
+            enumIdx = CrossPointSettings::SIZE_18;
             break;
           default:
             // Map odd SD sizes onto nearest enum slot by point value for resolver.
             if (pt < 9)
-              enumIdx = CasperSettings::SIZE_8;
+              enumIdx = CrossPointSettings::SIZE_8;
             else if (pt < 11)
-              enumIdx = CasperSettings::SIZE_10;
+              enumIdx = CrossPointSettings::SIZE_10;
             else if (pt < 13)
-              enumIdx = CasperSettings::SIZE_12;
+              enumIdx = CrossPointSettings::SIZE_12;
             else if (pt < 15)
-              enumIdx = CasperSettings::SIZE_14;
+              enumIdx = CrossPointSettings::SIZE_14;
             else if (pt < 17)
-              enumIdx = CasperSettings::SIZE_16;
+              enumIdx = CrossPointSettings::SIZE_16;
             else
-              enumIdx = CasperSettings::SIZE_18;
+              enumIdx = CrossPointSettings::SIZE_18;
             break;
         }
         char label[8];
@@ -601,10 +600,10 @@ void TextSettingsActivity::rebuildSizeList() {
   }
   if (sizes_.empty()) {
     // Builtin ship set.
-    sizes_.push_back({"10", static_cast<uint8_t>(CasperSettings::SIZE_10)});
-    sizes_.push_back({"12", static_cast<uint8_t>(CasperSettings::SIZE_12)});
-    sizes_.push_back({"14", static_cast<uint8_t>(CasperSettings::SIZE_14)});
-    sizes_.push_back({"16", static_cast<uint8_t>(CasperSettings::SIZE_16)});
+    sizes_.push_back({"10", static_cast<uint8_t>(CrossPointSettings::SIZE_10)});
+    sizes_.push_back({"12", static_cast<uint8_t>(CrossPointSettings::SIZE_12)});
+    sizes_.push_back({"14", static_cast<uint8_t>(CrossPointSettings::SIZE_14)});
+    sizes_.push_back({"16", static_cast<uint8_t>(CrossPointSettings::SIZE_16)});
   }
 
   // If saved fontSize is not in the list, snap to nearest listed enum.
@@ -619,7 +618,7 @@ void TextSettingsActivity::rebuildSizeList() {
     // Prefer 12 if present, else first entry.
     uint8_t pick = sizes_[0].settingIndex;
     for (const auto& s : sizes_) {
-      if (s.settingIndex == CasperSettings::SIZE_12) {
+      if (s.settingIndex == CrossPointSettings::SIZE_12) {
         pick = s.settingIndex;
         break;
       }
@@ -639,7 +638,7 @@ void TextSettingsActivity::applyFamily(int listIndex) {
     sdFontSystem.ensureLoaded(renderer);  // unloads the previously resident SD font
     currentFamilyIndex_ = listIndex;
   } else if (registry_) {
-    const int sdIdx = font.settingIndex - CasperSettings::BUILTIN_FONT_COUNT;
+    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
     const auto& families = registry_->getFamilies();
     if (sdIdx < static_cast<int>(families.size())) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -696,7 +695,7 @@ std::vector<TextSettingsActivity::StyleRow> TextSettingsActivity::visibleStyleRo
   std::vector<StyleRow> rows;
   rows.reserve(static_cast<size_t>(StyleRow::Count));
   // Bionic + Guide Dots do nothing under Book's Style — hide so users aren't confused.
-  if (SETTINGS.paragraphAlignment != CasperSettings::BOOK_STYLE) {
+  if (SETTINGS.paragraphAlignment != CrossPointSettings::BOOK_STYLE) {
     rows.push_back(StyleRow::BionicReading);
     rows.push_back(StyleRow::GuideDots);
   }
@@ -768,8 +767,8 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
     case LayoutRow::SpacingHeight: {
       // Popup order: Quarter → Half → Full (lightest first). Values stay 2/0/1.
       static constexpr StrId HEIGHT_IDS[] = {StrId::STR_QUARTER, StrId::STR_HALF, StrId::STR_FULL};
-      static constexpr uint8_t HEIGHT_VALUES[] = {CasperSettings::SPACING_QUARTER, CasperSettings::SPACING_HALF,
-                                                  CasperSettings::SPACING_FULL};
+      static constexpr uint8_t HEIGHT_VALUES[] = {CrossPointSettings::SPACING_QUARTER, CrossPointSettings::SPACING_HALF,
+                                                  CrossPointSettings::SPACING_FULL};
       int cur = 1;  // Half
       for (int i = 0; i < 3; ++i) {
         if (SETTINGS.extraParagraphSpacingHeight == HEIGHT_VALUES[i]) {
@@ -820,8 +819,8 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     case LayoutRow::ParaSpacing:
       return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case LayoutRow::SpacingHeight:
-      if (SETTINGS.extraParagraphSpacingHeight == CasperSettings::SPACING_FULL) return tr(STR_FULL);
-      if (SETTINGS.extraParagraphSpacingHeight == CasperSettings::SPACING_QUARTER) return tr(STR_QUARTER);
+      if (SETTINGS.extraParagraphSpacingHeight == CrossPointSettings::SPACING_FULL) return tr(STR_FULL);
+      if (SETTINGS.extraParagraphSpacingHeight == CrossPointSettings::SPACING_QUARTER) return tr(STR_QUARTER);
       return tr(STR_HALF);
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;

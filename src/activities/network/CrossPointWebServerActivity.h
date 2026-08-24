@@ -6,7 +6,7 @@
 
 #include "NetworkModeSelectionActivity.h"
 #include "activities/Activity.h"
-#include "network/CasperWebServer.h"
+#include "network/CrossPointWebServer.h"
 
 // Web server activity states
 enum class WebServerActivityState {
@@ -18,16 +18,16 @@ enum class WebServerActivityState {
 };
 
 /**
- * CasperWebServerActivity is the entry point for file transfer functionality.
+ * CrossPointWebServerActivity is the entry point for file transfer functionality.
  * It:
  * - First presents a choice between "Join a Network" (STA), "Connect to Calibre", and "Create Hotspot" (AP)
  * - For STA mode: Launches WifiSelectionActivity to connect to an existing network
  * - For AP mode: Creates an Access Point that clients can connect to
- * - Starts the CasperWebServer when connected
+ * - Starts the CrossPointWebServer when connected
  * - Handles client requests in its loop() function
  * - Cleans up the server and shuts down WiFi on exit
  */
-class CasperWebServerActivity final : public Activity {
+class CrossPointWebServerActivity final : public Activity {
   WebServerActivityState state = WebServerActivityState::MODE_SELECTION;
 
   // Network mode
@@ -35,7 +35,7 @@ class CasperWebServerActivity final : public Activity {
   bool isApMode = false;
 
   // Web server - owned by this activity
-  std::unique_ptr<CasperWebServer> webServer;
+  std::unique_ptr<CrossPointWebServer> webServer;
 
   // Server status
   std::string connectedIP;
@@ -61,8 +61,8 @@ class CasperWebServerActivity final : public Activity {
   void startWebServer();
 
  public:
-  explicit CasperWebServerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("CasperWebServer", renderer, mappedInput) {}
+  explicit CrossPointWebServerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("CrossPointWebServer", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -4,10 +4,10 @@
 
 #include <algorithm>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 // ReaderUtils.h pulls ActivityManager, which holds a unique_ptr<Activity>.
-#include "activities/Activity.h"
 #include "ReaderUtils.h"
+#include "activities/Activity.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
@@ -19,17 +19,17 @@ namespace {
 // closest to the chosen size. Builtin ladder is 10/12/14/16 only; 8 maps to 10
 // and 18 maps to 16.
 int32_t builtinLadderFontId() {
-  const bool literata = SETTINGS.fontFamily == CasperSettings::LITERATA;
+  const bool literata = SETTINGS.fontFamily == CrossPointSettings::LITERATA;
   switch (SETTINGS.fontSize) {
-    case CasperSettings::SIZE_8:
-    case CasperSettings::SIZE_10:
+    case CrossPointSettings::SIZE_8:
+    case CrossPointSettings::SIZE_10:
       return literata ? LITERATA_10_FONT_ID : SOURCESERIF4_10_FONT_ID;
-    case CasperSettings::SIZE_14:
+    case CrossPointSettings::SIZE_14:
       return literata ? LITERATA_14_FONT_ID : SOURCESERIF4_14_FONT_ID;
-    case CasperSettings::SIZE_16:
-    case CasperSettings::SIZE_18:
+    case CrossPointSettings::SIZE_16:
+    case CrossPointSettings::SIZE_18:
       return literata ? LITERATA_16_FONT_ID : SOURCESERIF4_16_FONT_ID;
-    case CasperSettings::SIZE_12:
+    case CrossPointSettings::SIZE_12:
     default:
       return literata ? LITERATA_12_FONT_ID : SOURCESERIF4_12_FONT_ID;
   }
@@ -79,9 +79,9 @@ Layout compute(const GfxRenderer& renderer) {
   // Top: only reserve chrome height when an upper status slot is actually shown.
   // Readers who put everything in the bottom lane get that space back as text.
   const auto sbSpec = SETTINGS.statusBarSpec();
-  const bool topChromeVisible = sbSpec.upperLeft != CasperSettings::CORNER_HIDE ||
-                                sbSpec.upperMiddle != CasperSettings::CORNER_HIDE ||
-                                sbSpec.upperRight != CasperSettings::CORNER_HIDE;
+  const bool topChromeVisible = sbSpec.upperLeft != CrossPointSettings::CORNER_HIDE ||
+                                sbSpec.upperMiddle != CrossPointSettings::CORNER_HIDE ||
+                                sbSpec.upperRight != CrossPointSettings::CORNER_HIDE;
   const int topChromeBottom =
       BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight, renderer.getLineHeight(SMALL_FONT_ID));
   const int marginT =
@@ -122,11 +122,11 @@ Layout compute(const GfxRenderer& renderer) {
   // bits 2-3 = forced align enum (JUSTIFIED=0 … RIGHT=3). bit1 = extra paragraph spacing.
   // pad low nibble = Images mode; pad[5:4] = spacing height; bit7 legacy full.
   key.flags = 0;
-  if (SETTINGS.paragraphAlignment == CasperSettings::BOOK_STYLE) {
+  if (SETTINGS.paragraphAlignment == CrossPointSettings::BOOK_STYLE) {
     key.flags |= 1;
   } else {
     // JUSTIFIED..RIGHT are 0..3; mask so BOOK_STYLE (4) never leaks into force bits.
-    const uint8_t force = static_cast<uint8_t>(SETTINGS.paragraphAlignment % CasperSettings::BOOK_STYLE);
+    const uint8_t force = static_cast<uint8_t>(SETTINGS.paragraphAlignment % CrossPointSettings::BOOK_STYLE);
     key.flags |= static_cast<uint8_t>((force & 0x3) << 2);
   }
   // Fingerprint Images mode + extra-para height so page maps invalidate on change.
@@ -134,10 +134,10 @@ Layout compute(const GfxRenderer& renderer) {
   if (SETTINGS.extraParagraphSpacing != 0) {
     key.flags |= 2;
     const uint8_t h = SETTINGS.extraParagraphSpacingHeight;
-    if (h == CasperSettings::SPACING_FULL) {
+    if (h == CrossPointSettings::SPACING_FULL) {
       key.flags |= 0x80;
       key.pad = static_cast<uint8_t>(key.pad | (1u << 4));
-    } else if (h == CasperSettings::SPACING_QUARTER) {
+    } else if (h == CrossPointSettings::SPACING_QUARTER) {
       key.pad = static_cast<uint8_t>(key.pad | (2u << 4));
     }
     // half: pad height bits stay 0, bit7 clear

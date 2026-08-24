@@ -8,7 +8,7 @@
 
 #include <optional>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "Epub.h"
 #include "RivuletReaderActivity.h"
 #include "SdCardFontSystem.h"
@@ -21,8 +21,8 @@
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "util/BookCacheUtils.h"
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
 #include "util/QrTimingLog.h"
 #include "util/SystemLog.h"
 
@@ -75,13 +75,13 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // Live layout is CrossPoint/CrossInk `epub_<hash>` (same as Epub::getCachePath).
   // The book_<id>/package import was abandoned — do not probe that tree.
   // Warm HIT: book.bin already on disk, so skip mkdir (three ~120ms scans).
-  const std::string bookBin = CasperBook::packageDirForPath(path) + "/book.bin";
+  const std::string bookBin = CrossPointBook::packageDirForPath(path) + "/book.bin";
   if (!Storage.exists(bookBin.c_str())) {
-    (void)CasperBook::openBook(path, "", "");
+    (void)CrossPointBook::openBook(path, "", "");
   }
   const uint32_t tMkdir = millis();
 
-  const char* cacheRoot = CasperPaths::kPackageCacheRoot;
+  const char* cacheRoot = CrossPointPaths::kPackageCacheRoot;
   auto epub = makeUniqueNoThrow<Epub>(path, cacheRoot);
   if (!epub) {
     LOG_ERR("READER", "Failed to allocate EPUB object");
@@ -96,7 +96,7 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (uncached) {
     // Delete Cache used to drop book.bin and leave rivulet/*.rvpm (open-handle
     // rmdir). Resume then reloaded a finished chapter map and never rebuilt.
-    const std::string rivulet = CasperBook::rivuletDirForPath(path);
+    const std::string rivulet = CrossPointBook::rivuletDirForPath(path);
     if (Storage.exists(rivulet.c_str())) {
       const bool wiped = wipeCacheDirectory(rivulet);
       LOG_INF("READER", "book.bin miss — wipe leftover rivulet=%d %s", wiped ? 1 : 0, rivulet.c_str());
@@ -141,7 +141,7 @@ std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
     return nullptr;
   }
 
-  auto xtc = makeUniqueNoThrow<Xtc>(path, CasperPaths::kPackageCacheRoot);
+  auto xtc = makeUniqueNoThrow<Xtc>(path, CrossPointPaths::kPackageCacheRoot);
   if (!xtc) {
     LOG_ERR("READER", "Failed to allocate XTC object");
     return nullptr;
@@ -160,7 +160,7 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
     return nullptr;
   }
 
-  auto txt = makeUniqueNoThrow<Txt>(path, CasperPaths::kPackageCacheRoot);
+  auto txt = makeUniqueNoThrow<Txt>(path, CrossPointPaths::kPackageCacheRoot);
   if (!txt) {
     LOG_ERR("READER", "Failed to allocate TXT object");
     return nullptr;

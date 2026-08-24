@@ -25,5 +25,5 @@ bool wipeCacheDirectory(const std::string& path);
 bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath);
 
 // Returns true if the directory name matches a book cache entry under /.crosspoint
-// (or legacy /.casper): book_*, epub_*, txt_*, xtc_*.
+// (or leftover /.casper): book_*, epub_*, txt_*, xtc_*.
 bool isBookCacheDirectoryName(const char* name);

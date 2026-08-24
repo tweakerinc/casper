@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-// Path helpers. Product on-disk layout matches shipped Casper v0.1.8:
+// Path helpers. Product on-disk layout matches shipped CrossPoint v0.1.8:
 //   /.crosspoint/epub_<std::hash(path)>/   package + progress + stats
 //   /.crosspoint/epub_<hash>/rivulet/      Rivulet IR only (additive)
 //
@@ -14,7 +14,7 @@
 
 namespace BookPathId {
 
-inline constexpr const char* kCasperRoot = "/.crosspoint";
+inline constexpr const char* kCrossPointRoot = "/.crosspoint";
 inline constexpr size_t kIdHexLen = 16;
 
 // Shared normalize: ignore H: vs device mount — path of the book on the SD only.
@@ -27,18 +27,18 @@ uint64_t fnv1a64(const std::string& s);
 std::string idHex(const std::string& path);
 
 // /.crosspoint/book_<id>
-std::string bookRoot(const std::string& path, const char* casperRoot = kCasperRoot);
+std::string bookRoot(const std::string& path, const char* casperRoot = kCrossPointRoot);
 
 // /.crosspoint/book_<id>/package
-std::string packageDir(const std::string& path, const char* casperRoot = kCasperRoot);
+std::string packageDir(const std::string& path, const char* casperRoot = kCrossPointRoot);
 
 // /.crosspoint/book_<id>/rivulet
-std::string rivuletDir(const std::string& path, const char* casperRoot = kCasperRoot);
+std::string rivuletDir(const std::string& path, const char* casperRoot = kCrossPointRoot);
 
 // True when cacheDir is the package root (use unified book_ layout).
-bool isCasperPackageRoot(const std::string& cacheDir);
+bool isCrossPointPackageRoot(const std::string& cacheDir);
 
-// Legacy Casper/legacy package dir using std::hash (import-only).
+// Legacy CrossPoint/legacy package dir using std::hash (import-only).
 // Only valid on-device (same std::hash as firmware that wrote the cache).
 std::string legacyEpubHashDir(const std::string& path, const char* root);
 

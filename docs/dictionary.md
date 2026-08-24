@@ -1,8 +1,8 @@
 # Dictionary
 
-Casper looks up words while reading using **offline StarDict packs** on the SD card. This document describes the **current on-device file structure**, how packs are discovered, and how lookup works in firmware.
+CrossPoint looks up words while reading using **offline StarDict packs** on the SD card. This document describes the **current on-device file structure**, how packs are discovered, and how lookup works in firmware.
 
-Casper does **not** use CXDict (the experimental single-binary format). Everything is **one folder per dictionary** under `/dictionaries/` (or `/.dictionaries/`).
+CrossPoint does **not** use CXDict (the experimental single-binary format). Everything is **one folder per dictionary** under `/dictionaries/` (or `/.dictionaries/`).
 
 ---
 
@@ -50,7 +50,7 @@ Discovery scans both roots. Folder names must not start with `.` and must not co
 
 #### `.ifo` (optional text)
 
-StarDict info file. Casper release packs use:
+StarDict info file. CrossPoint release packs use:
 
 ```text
 version=2.4.2
@@ -167,7 +167,7 @@ Move with Left/Right (and Up/Down by line). **Select** looks up. **Back** clears
 
 | Item | Behavior |
 |------|----------|
-| CXDict (`.cxdict`) | Not used by Casper |
+| CXDict (`.cxdict`) | Not used by CrossPoint |
 | `.idx.gz` | Must decompress first |
 | `idxoffsetbits=64` | Rejected |
 | `.syn` | Ignored |

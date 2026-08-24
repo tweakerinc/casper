@@ -545,12 +545,12 @@ TEST(ReleaseJsonParser, FirmwareBinExactMatch) {
   EXPECT_EQ(p.getFirmwareSize(), 200u);
 }
 
-TEST(ReleaseJsonParser, CasperAssetNameNoExtension) {
+TEST(ReleaseJsonParser, CrossPointAssetNameNoExtension) {
   const char* json = R"({
       "tag_name": "v0.1.0",
       "assets": [
         {"name": "source.zip", "browser_download_url": "https://src", "size": 1},
-        {"name": "Casper-v0.1.0", "browser_download_url": "https://casper/fw", "size": 5435808}
+        {"name": "CrossPoint-v0.1.0", "browser_download_url": "https://casper/fw", "size": 5435808}
       ]
     })";
 
@@ -563,11 +563,11 @@ TEST(ReleaseJsonParser, CasperAssetNameNoExtension) {
   EXPECT_EQ(p.getFirmwareSize(), 5435808u);
 }
 
-TEST(ReleaseJsonParser, CasperAssetNameWithBinExtension) {
+TEST(ReleaseJsonParser, CrossPointAssetNameWithBinExtension) {
   const char* json = R"({
       "tag_name": "v0.1.1",
       "assets": [
-        {"name": "Casper-v0.1.1.bin", "browser_download_url": "https://casper/bin", "size": 1000}
+        {"name": "CrossPoint-v0.1.1.bin", "browser_download_url": "https://casper/bin", "size": 1000}
       ]
     })";
 
@@ -579,12 +579,28 @@ TEST(ReleaseJsonParser, CasperAssetNameWithBinExtension) {
   EXPECT_EQ(p.getFirmwareSize(), 1000u);
 }
 
-TEST(ReleaseJsonParser, CasperAssetNameRejectsZip) {
+TEST(ReleaseJsonParser, CasperAssetNameStillAccepted) {
+  const char* json = R"({
+      "tag_name": "v0.1.9",
+      "assets": [
+        {"name": "Casper-v0.1.9.bin", "browser_download_url": "https://example/old", "size": 2000}
+      ]
+    })";
+
+  ReleaseJsonParser p;
+  p.feed(json, strlen(json));
+
+  EXPECT_TRUE(p.foundFirmware());
+  EXPECT_STREQ(p.getFirmwareUrl(), "https://example/old");
+  EXPECT_EQ(p.getFirmwareSize(), 2000u);
+}
+
+TEST(ReleaseJsonParser, CrossPointAssetNameRejectsZip) {
   const char* json = R"({
       "tag_name": "v0.1.0",
       "assets": [
-        {"name": "Casper-v0.1.0.zip", "browser_download_url": "https://zip", "size": 50},
-        {"name": "Casper-dictionaries.zip", "browser_download_url": "https://dicts", "size": 60}
+        {"name": "CrossPoint-v0.1.0.zip", "browser_download_url": "https://zip", "size": 50},
+        {"name": "CrossPoint-dictionaries.zip", "browser_download_url": "https://dicts", "size": 60}
       ]
     })";
 

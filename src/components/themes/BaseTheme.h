@@ -198,7 +198,7 @@ class BaseTheme {
 
   // Component drawing methods
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
-  // displayMode: CasperSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
+  // displayMode: CrossPointSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
                        uint8_t displayMode = 2) const;  // Left aligned (reader mode)
   void drawBatteryRight(const GfxRenderer& renderer, Rect rect,

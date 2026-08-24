@@ -43,7 +43,7 @@ struct Request {
   GfxRenderer* renderer = nullptr;
   std::string irDir;  // <book>/rivulet
   int spineIndex = 0;
-  uint8_t imageRendering = 0;  // CasperSettings::IMAGE_RENDERING
+  uint8_t imageRendering = 0;  // CrossPointSettings::IMAGE_RENDERING
   // Refuse a partial (OOM-truncated) convert. Used where a false chapter end
   // would be actively wrong, e.g. seeking the true last page of a chapter.
   bool requireCompleteIr = false;

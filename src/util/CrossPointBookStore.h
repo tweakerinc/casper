@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-// Book cache paths — same layout as shipped Casper v0.1.8.
+// Book cache paths — same layout as shipped CrossPoint v0.1.8.
 //
 // Under /.crosspoint:
 //   epub_<std::hash(path)>/   (or xtc_ / txt_)
@@ -12,7 +12,7 @@
 //
 // No book_<fnv> rekey and no path-layout migration. Upgrades keep existing folders.
 
-namespace CasperBook {
+namespace CrossPointBook {
 
 inline constexpr const char* kRoot = "/.crosspoint";
 inline constexpr const char* kLedgerName = "ledger.tsv";  // unused for layout; kept for API compat
@@ -54,4 +54,4 @@ void writeMeta(const std::string& idHex, const std::string& bookPath, const std:
 uint64_t hashIdentity(const char* title, const char* author, const char* fileStem);
 std::string legacyTitleIdHex(const std::string& title, const std::string& author, const std::string& filePath);
 
-}  // namespace CasperBook
+}  // namespace CrossPointBook

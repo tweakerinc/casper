@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build clean Casper StarDict packs for ESP32-C3 e-readers.
+"""Build clean CrossPoint StarDict packs for ESP32-C3 e-readers.
 
 Design goals (device stays thin):
   - Plain ASCII/UTF-8 headwords: no Wiktionary sort-key prefixes (8bay, Cbayed).
@@ -9,7 +9,7 @@ Design goals (device stays thin):
   - sametypesequence=m plain text, 32-bit offsets, plain .dict (not .dict.dz).
 
 Sources:
-  EN:     CrossInk/Casper en.cxdict (Wiktionary + OEWN + Webster)
+  EN:     CrossInk/CrossPoint en.cxdict (Wiktionary + OEWN + Webster)
   EN-ES:  open-dsl-dict en-es.txt
   ES-EN:  open-dsl-dict es-en.txt
 
@@ -17,7 +17,7 @@ Usage:
   python scripts/build_stardict_packs.py \\
     --cxdict-dir E:/casper/docs \\
     --data-dir C:/Users/m/CrossInk/scripts/data \\
-    -o C:/Users/m/Documents/Casper/dist/dictionaries
+    -o C:/Users/m/Documents/CrossPoint/dist/dictionaries
 """
 from __future__ import annotations
 
@@ -490,7 +490,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cxdict-dir", type=Path, default=Path(r"E:\casper\docs"))
     ap.add_argument("--data-dir", type=Path, default=Path(r"C:\Users\m\CrossInk\scripts\data"))
-    ap.add_argument("-o", "--out", type=Path, default=Path(r"C:\Users\m\Documents\Casper\dist\dictionaries"))
+    ap.add_argument("-o", "--out", type=Path, default=Path(r"C:\Users\m\Documents\CrossPoint\dist\dictionaries"))
     args = ap.parse_args()
 
     # Fallbacks for sources
@@ -519,9 +519,9 @@ def main() -> int:
     write_stardict(
         args.out / "English",
         "english",
-        "Casper English (clean)",
+        "CrossPoint English (clean)",
         en,
-        "Clean English monolingual for Casper. Plain keys, verb-first multi-sense, "
+        "Clean English monolingual for CrossPoint. Plain keys, verb-first multi-sense, "
         "short past-tense forms. Sources: Wiktionary + WordNet + Webster (via CXDict).",
     )
 
@@ -540,7 +540,7 @@ def main() -> int:
         write_stardict(
             args.out / "English-Spanish",
             "english-spanish",
-            "Casper English-Spanish (clean)",
+            "CrossPoint English-Spanish (clean)",
             en_es,
             "English to Spanish. Wiktionary open-dsl-dict (CC BY-SA / GFDL). Plain keys.",
         )
@@ -560,7 +560,7 @@ def main() -> int:
         write_stardict(
             args.out / "Spanish-English",
             "spanish-english",
-            "Casper Spanish-English (clean)",
+            "CrossPoint Spanish-English (clean)",
             es_en,
             "Spanish to English. Wiktionary open-dsl-dict (CC BY-SA / GFDL). Plain keys.",
         )
@@ -577,7 +577,7 @@ def main() -> int:
 
     readme = args.out / "README.txt"
     readme.write_text(
-        """Casper clean StarDict packs
+        """CrossPoint clean StarDict packs
 ===========================
 
 Copy folders to the SD card:
@@ -593,7 +593,7 @@ Or hide them:
 
 On device: Settings -> Reader -> Dictionary -> multi-select packs -> Save.
 
-These packs are CLEANED for Casper:
+These packs are CLEANED for CrossPoint:
   - Plain headwords (no 8bay / Cbayed sort keys)
   - Case-insensitive sort for firmware binary search
   - bayed / lolled etc. are short past-tense verb entries, not full dumps of bay

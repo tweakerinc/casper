@@ -1,14 +1,14 @@
 ---
-title: Casper tour
+title: CrossPoint tour
 nav_order: 2
-description: Visual tour of Casper themes, reader, stats, controls, and dictionary
+description: Visual tour of CrossPoint themes, reader, stats, controls, and dictionary
 ---
 
-# Casper tour
+# CrossPoint tour
 
-**Casper** is personal firmware for the **Xteink X3/X4**, built on
+**CrossPoint** is personal firmware for the **Xteink X3/X4**, built on
 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
-It keeps a solid EPUB/TXT reading core, then layers Casper branding and a
+It keeps a solid EPUB/TXT reading core, then layers CrossPoint branding and a
 reading-first UI: **Penumbra** and **Bare** home themes, redesigned reader
 chrome, reading stats, flexible controls, and offline dictionary lookup with
 multi-word selection.
@@ -27,7 +27,7 @@ multi-word selection.
 
 | Penumbra (X3) | Penumbra (X4) | Bare |
 |:-------------:|:-------------:|:----:|
-| <img src="./images/casper/x3-penumbra-home.jpg" alt="Penumbra home on X3" width="240" /> | <img src="./images/casper/x4-penumbra-home.jpg" alt="Penumbra home on X4" width="240" /> | <img src="./images/casper/bare-home.jpg" alt="Casper Bare theme home" width="240" /> |
+| <img src="./images/casper/x3-penumbra-home.jpg" alt="Penumbra home on X3" width="240" /> | <img src="./images/casper/x4-penumbra-home.jpg" alt="Penumbra home on X4" width="240" /> | <img src="./images/casper/bare-home.jpg" alt="CrossPoint Bare theme home" width="240" /> |
 
 ### Penumbra
 
@@ -56,7 +56,7 @@ From the book quick menu (or library long-press), open a short description of
 the current book without diving into the file browser. Needs synopsis metadata
 (easy to add in Calibre).
 
-<img src="./images/casper/synopsis-view.jpg" alt="Casper book synopsis view" width="360" />
+<img src="./images/casper/synopsis-view.jpg" alt="CrossPoint book synopsis view" width="360" />
 
 *Synopsis — title and blurb for the focused book.*
 
@@ -68,7 +68,7 @@ Chrome stays small so the page stays the focus: battery, clock, progress,
 time left, chapter, and page number. Six independent slots (upper / lower ×
 left / middle / right) are editable under **Customize Reader UI**.
 
-<img src="./images/casper/reader-ui.jpg" alt="Casper reading view with status bar chrome" width="360" />
+<img src="./images/casper/reader-ui.jpg" alt="CrossPoint reading view with status bar chrome" width="360" />
 
 *Reader — top battery / clock / percent; bottom time left, chapter, Pg. n/m.*
 
@@ -106,7 +106,7 @@ long-press menu opens the dictionary. Buttons are fully remappable.
 
 Tabbed **Settings** with Display, Reader, Controls, and System categories.
 
-<img src="./images/casper/settings.jpg" alt="Casper Settings screen" width="360" />
+<img src="./images/casper/settings.jpg" alt="CrossPoint Settings screen" width="360" />
 
 *Settings — Display tab with Theme, Status Bar, Sleep Screen, and more.*
 
@@ -179,7 +179,7 @@ More install detail: [Dictionary](./dictionary.md).
 
 ## Highlights at a glance
 
-- **Casper** branding (boot, portal, serial / **v0.1.x**)
+- **CrossPoint** branding (boot, portal, serial / **v0.1.x**)
 - **Bare · Stats · Stats-Life** home themes
 - Quiet reader chrome + customizable system / reader status bars
 - **Reading stats** per book and this device (optional tracking off)

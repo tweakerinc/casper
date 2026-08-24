@@ -19,6 +19,7 @@ TEST(StatsBackupLayout, TrashFileKeepsLiveName) {
 }
 
 TEST(StatsBackupLayout, GlobalBackupDirUnchanged) {
-  EXPECT_STREQ(statsbackup::kDir, "/.casper-stats-backup");
+  EXPECT_STREQ(statsbackup::kDir, "/.crosspoint-stats-backup");
+  EXPECT_STREQ(statsbackup::kLegacyCasperDir, "/.casper-stats-backup");
   EXPECT_STREQ(statsbackup::kTrashFolder, ".trash");
 }

@@ -27,8 +27,8 @@
 // Pulls lib/Rivulet into the link for bring-up (not the active reader path yet).
 static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -41,8 +41,8 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "activities/reader/ReadingStatsUtils.h"
 #include "activities/reader/StatsBackup.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
-#include "casper/CasperProduct.h"
 #include "components/UITheme.h"
+#include "crosspoint/CrossPointProduct.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "images/MoonIcon.h"
@@ -65,31 +65,33 @@ static bool longPowerButtonHandled = false;
 void enterDeepSleep(bool fromTimeout = false, bool powerQuickResume = false);
 
 // Global long-press power actions that fire while still held (sleep / QR / refresh).
-static bool isGlobalPowerButtonAction(const CasperSettings::SHORT_PWRBTN action) {
-  return action == CasperSettings::SHORT_PWRBTN::SLEEP || action == CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME ||
-         action == CasperSettings::SHORT_PWRBTN::FORCE_REFRESH;
+static bool isGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
+  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME ||
+         action == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH;
 }
 
-static bool isSleepStylePowerAction(const CasperSettings::SHORT_PWRBTN action) {
-  return action == CasperSettings::SHORT_PWRBTN::SLEEP || action == CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
+static bool isSleepStylePowerAction(const CrossPointSettings::SHORT_PWRBTN action) {
+  return action == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+         action == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
 }
 
-static CasperSettings::SHORT_PWRBTN getPowerButtonAction() {
+static CrossPointSettings::SHORT_PWRBTN getPowerButtonAction() {
   const unsigned long held = gpio.getPowerButtonHeldTime();
-  const auto shortAction = static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn);
-  const auto longAction = static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+  const auto shortAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn);
+  const auto longAction = static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
   const unsigned long longMs = SETTINGS.getPowerButtonLongPressDuration();
 
   if (mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     if (longPowerButtonHandled) {
       // Wake latch or long-hold action already ran while pressed (e.g. Force Refresh).
       longPowerButtonHandled = false;
-      return CasperSettings::SHORT_PWRBTN::IGNORE;
+      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
     }
     // Long hold past threshold with a while-held global action: that action should
     // have fired on the hold. Never also run short sleep/QR on release.
     if (held >= longMs && isGlobalPowerButtonAction(longAction)) {
-      return CasperSettings::SHORT_PWRBTN::IGNORE;
+      return CrossPointSettings::SHORT_PWRBTN::IGNORE;
     }
     // Sleep / Quick Resume short actions fire on release for true short taps.
     if (isSleepStylePowerAction(shortAction)) {
@@ -99,26 +101,26 @@ static CasperSettings::SHORT_PWRBTN getPowerButtonAction() {
   }
 
   if (longPowerButtonHandled || !gpio.isPressed(HalGPIO::BTN_POWER) || held < longMs) {
-    return CasperSettings::SHORT_PWRBTN::IGNORE;
+    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
 
   // While held past threshold: only fire long if it is a global sleep/QR/refresh.
   if (!isGlobalPowerButtonAction(longAction)) {
-    return CasperSettings::SHORT_PWRBTN::IGNORE;
+    return CrossPointSettings::SHORT_PWRBTN::IGNORE;
   }
   longPowerButtonHandled = true;
   return longAction;
 }
 
-static bool handleGlobalPowerButtonAction(const CasperSettings::SHORT_PWRBTN action) {
+static bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action) {
   switch (action) {
-    case CasperSettings::SHORT_PWRBTN::SLEEP:
+    case CrossPointSettings::SHORT_PWRBTN::SLEEP:
       enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/false);
       return true;
-    case CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME:
+    case CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME:
       enterDeepSleep(/*fromTimeout=*/false, /*powerQuickResume=*/true);
       return true;
-    case CasperSettings::SHORT_PWRBTN::FORCE_REFRESH: {
+    case CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
       SystemLog::logTiming("MAIN", "force_refresh long-power held=%lums",
                            static_cast<unsigned long>(gpio.getPowerButtonHeldTime()));
@@ -383,16 +385,17 @@ void enterDeepSleep(bool fromTimeout, bool powerQuickResume) {
   const bool isQuickResumeSleep =
       powerQuickResume ||
       (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CasperSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
-      (!fromTimeout && !powerQuickResume && SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
+       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT) ||
+      (!fromTimeout && !powerQuickResume &&
+       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME);
 
   // Classify resume target while activities still exist (reader / menu / settings / home).
   // Must run before the moon so SleepChromeIcon uses the correct context + orientation
   // (Landscape CCW moon must sit on the same edge as the reader status bar).
   activityManager.persistForSleep();
   APP_STATE.sleepResumeTarget = activityManager.classifySleepResumeTarget();
-  APP_STATE.lastSleepFromReader = (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER ||
-                                   APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU);
+  APP_STATE.lastSleepFromReader = (APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER ||
+                                   APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER_MENU);
   // Successful sleep from reader: clear crash-loop counter so the next QR can
   // open the book (loadCount guard forces Home only after repeated mid-open panics).
   if (APP_STATE.lastSleepFromReader) {
@@ -563,9 +566,9 @@ void setup() {
   // after settings so UTC offset is correct for crash_report and all later files.
   Storage.installDateTimeCallback(nullptr);
 
-  // Casper product: no boot migrate, no dual-read (see CasperProduct.h).
-  static_assert(!CasperProduct::kHasBootForeignMigrate, "boot migrate must stay off");
-  static_assert(!CasperProduct::kRuntimeDualReadForeign, "dual-read must stay off");
+  // CrossPoint product: no boot migrate, no dual-read (see CrossPointProduct.h).
+  static_assert(!CrossPointProduct::kHasBootForeignMigrate, "boot migrate must stay off");
+  static_assert(!CrossPointProduct::kRuntimeDualReadForeign, "dual-read must stay off");
 
   SETTINGS.loadFromFile();
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
@@ -585,9 +588,9 @@ void setup() {
   const bool qrToBook =
       wakeupReason == HalGPIO::WakeupReason::PowerButton && !APP_STATE.openEpubPath.empty() &&
       APP_STATE.readerActivityLoadCount < 3 &&
-      (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER ||
-       APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU ||
-       (APP_STATE.lastSleepFromReader && APP_STATE.sleepResumeTarget != CasperState::RESUME_SETTINGS));
+      (APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER ||
+       APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER_MENU ||
+       (APP_STATE.lastSleepFromReader && APP_STATE.sleepResumeTarget != CrossPointState::RESUME_SETTINGS));
 
   // Defer recents/KOReader/OPDS SD reads until after first ink on QR→book
   // (saves ~50–150ms and SD contention before the page is readable).
@@ -600,7 +603,7 @@ void setup() {
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
-  // Buffered rotating SD log for field performance captures (/.casper-logs/).
+  // Buffered rotating SD log for field performance captures (/.crosspoint-logs/).
   SystemLog::begin();
   const auto resetReason = esp_reset_reason();
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
@@ -613,12 +616,12 @@ void setup() {
   // Do NOT clear on PowerButton — that is a real sleep wake (incl. X4 battery).
   auto clearStickyReaderWake = []() {
     if (!APP_STATE.lastSleepFromReader && APP_STATE.showBootScreen &&
-        APP_STATE.sleepResumeTarget == CasperState::RESUME_HOME && !APP_STATE.lastSleepRenderedQuickResume) {
+        APP_STATE.sleepResumeTarget == CrossPointState::RESUME_HOME && !APP_STATE.lastSleepRenderedQuickResume) {
       return;
     }
     APP_STATE.lastSleepFromReader = false;
     APP_STATE.showBootScreen = true;
-    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
+    APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
     APP_STATE.lastSleepRenderedQuickResume = false;
     APP_STATE.saveToFile();
     LOG_DBG("MAIN", "Cleared sticky lastSleepFromReader (non power-button boot)");
@@ -672,7 +675,7 @@ void setup() {
   }
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
-  LOG_DBG("MAIN", "Starting Casper version " CASPER_VERSION);
+  LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -696,7 +699,7 @@ void setup() {
                                               : BootResume::Splash;
 
   if (resume == BootResume::QuickResume) {
-    // SD: /.casper-logs/qr_timing.log — pull after a QR wake and paste the latest block.
+    // SD: /.crosspoint-logs/qr_timing.log — pull after a QR wake and paste the latest block.
     QrTimingLog::begin("QuickResume");
     QrTimingLog::line("after SETTINGS/APP_STATE load (pre display)");
     SystemLog::logTiming("QR", "wake start");
@@ -721,7 +724,7 @@ void setup() {
       APP_STATE.lastSleepRenderedQuickResume = false;
       // Resume destination from sleep: book, book menu, settings, or home.
       const bool qrOpenBook = qrToBook && !mappedInputManager.isPressed(MappedInputManager::Button::Back);
-      const bool qrOpenSettings = !qrOpenBook && APP_STATE.sleepResumeTarget == CasperState::RESUME_SETTINGS &&
+      const bool qrOpenSettings = !qrOpenBook && APP_STATE.sleepResumeTarget == CrossPointState::RESUME_SETTINGS &&
                                   !mappedInputManager.isPressed(MappedInputManager::Button::Back);
       SystemLog::logTiming("QR", "power wake openBook=%d settings=%d target=%u lastReader=%d pathEmpty=%d",
                            qrOpenBook ? 1 : 0, qrOpenSettings ? 1 : 0,
@@ -797,10 +800,10 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
-  } else if (resume == BootResume::QuickResume && APP_STATE.sleepResumeTarget == CasperState::RESUME_SETTINGS &&
+  } else if (resume == BootResume::QuickResume && APP_STATE.sleepResumeTarget == CrossPointState::RESUME_SETTINGS &&
              !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
     // Slept in Settings — land back in Settings without a Loading flash.
-    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
+    APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
     activityManager.goHome();
     activityManager.goToSettings();
     // Drain deferred Push (Home may enter sync; Settings is always pushed).
@@ -821,7 +824,7 @@ void setup() {
       OPDS_STORE.loadFromFile();
       WIFI_STORE.loadFromFile();
     }
-    APP_STATE.sleepResumeTarget = CasperState::RESUME_HOME;
+    APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
     activityManager.goHome();
   } else {
     // Sleep-from-reader QuickResume: open book (and optionally book menu).
@@ -832,8 +835,8 @@ void setup() {
     // path restore had not run yet — QR dumped users on Home.
     const auto path = APP_STATE.openEpubPath;
     // Preserve menu target for Rivulet onEnter (openReaderMenu after load).
-    if (APP_STATE.sleepResumeTarget != CasperState::RESUME_READER_MENU) {
-      APP_STATE.sleepResumeTarget = CasperState::RESUME_READER;
+    if (APP_STATE.sleepResumeTarget != CrossPointState::RESUME_READER_MENU) {
+      APP_STATE.sleepResumeTarget = CrossPointState::RESUME_READER;
     }
     APP_STATE.readerActivityLoadCount++;
     // Non-QR: persist loadCount before open so a mid-open crash trips the guard.
@@ -931,9 +934,9 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CasperSettings::SHORT_PWRBTN::SLEEP ||
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
                                                  SETTINGS.shortPwrBtn ==
-                                                     CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
+                                                     CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 

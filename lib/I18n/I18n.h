@@ -4,7 +4,7 @@
 
 #include "I18nKeys.h"
 /**
- * Internationalization (i18n) system for Casper
+ * Internationalization (i18n) system for CrossPoint
  */
 
 class I18n {

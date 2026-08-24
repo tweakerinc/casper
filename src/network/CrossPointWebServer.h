@@ -17,7 +17,7 @@ struct FileInfo {
   bool isDirectory;
 };
 
-class CasperWebServer {
+class CrossPointWebServer {
  public:
   struct WsUploadStatus {
     bool inProgress = false;
@@ -48,8 +48,8 @@ class CasperWebServer {
     UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
   } upload;
 
-  CasperWebServer();
-  ~CasperWebServer();
+  CrossPointWebServer();
+  ~CrossPointWebServer();
 
   // Start the web server (call after WiFi is connected)
   void begin();

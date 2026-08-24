@@ -2,7 +2,7 @@
  * Xtc.cpp
  *
  * Main XTC ebook class implementation
- * XTC ebook support for Casper Reader
+ * XTC ebook support for CrossPoint Reader
  */
 
 #include "Xtc.h"

@@ -1,4 +1,4 @@
-# Casper ownership pass (2026-08)
+# CrossPoint ownership pass (2026-08)
 
 ## Goals
 - `/.casper` owns all **new** writes (config, package cache, book state).
@@ -16,7 +16,7 @@
 | Rivulet IR + progress + per-book stats | `/.casper/book_<id>/` |
 | Legacy (read if present, then migrate) | `/.crosspoint/…` |
 
-**One-shot migrate (preferred):** `CasperOneTimeMigrate::runOnceIfNeeded()` runs at boot after SD init, **before** settings load. It moves/copies everything under `/.crosspoint` into `/.casper` (never overwrites existing Casper files), then writes:
+**One-shot migrate (preferred):** `CrossPointOneTimeMigrate::runOnceIfNeeded()` runs at boot after SD init, **before** settings load. It moves/copies everything under `/.crosspoint` into `/.casper` (never overwrites existing CrossPoint files), then writes:
 
 ```
 /.casper/crosspoint_migrate_v1.done

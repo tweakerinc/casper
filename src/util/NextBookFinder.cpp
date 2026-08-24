@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <string_view>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 
 namespace {
 constexpr size_t NAME_BUFFER_SIZE = 500;

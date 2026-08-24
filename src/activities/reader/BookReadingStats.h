@@ -38,7 +38,7 @@ struct BookReadingStats {
   static std::string cachePathForBook(const std::string& bookPath);
 
   // Load stats for a book from the primary cache path.
-  // Prefer CasperStats::loadBook for new product code.
+  // Prefer CrossPointStats::loadBook for new product code.
   static BookReadingStats loadForBook(const std::string& bookPath);
 
   // Saves stats to cachePath/stats_vN.bin (current format).
@@ -48,7 +48,7 @@ struct BookReadingStats {
   // Also wipes cachePath/.trash/. Missing files are treated as success.
   static bool remove(const std::string& cachePath);
 
-  // Deletes stats under every known cache path for this book (Casper + legacy).
+  // Deletes stats under every known cache path for this book (CrossPoint + legacy).
   static bool removeForBook(const std::string& bookPath);
 
   // Rename live stats*.bin into cachePath/.trash/ so Delete Book Stats is undoable.

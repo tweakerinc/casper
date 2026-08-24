@@ -1,9 +1,9 @@
-# Rivulet Layout Core (RLC): Casper Robust Original EPUB Rendering Engine
+# Rivulet Layout Core (RLC): CrossPoint Robust Original EPUB Rendering Engine
 
 | Field | Value |
 |-------|--------|
 | **Document** | Rivulet Layout Core design |
-| **Author** | TBD (Casper / CrossPoint contributor) |
+| **Author** | TBD (CrossPoint / CrossPoint contributor) |
 | **Date** | 2026-08-08 |
 | **Status** | Draft (rev 4 — quality pass: SD ladder, paint parity, small-caps, half-leading) |
 | **Scope** | `lib/Epub/` render path only — no new top-level activities |
@@ -13,9 +13,9 @@
 
 ## Overview
 
-Casper already ships a capable stream-oriented EPUB pipeline (SAX HTML → CSS cascade → `ParsedText` → page lines → SD section `.bin` cache) with strengths Witchhunt Reader explicitly lacks: full BiDi/RTL, FreeInk/Casper UI discipline, hyphenation, focus/guide reading, and incremental section build with partial resume. A Calibre library probe (`scripts/_probe_calibre_epubs.py` over `e:\Calibre eBooks`, 141 EPUBs, 21 sampled) shows nearly every modern book depends on **CSS font-size** and **line-height**, with frequent small-caps, float figures, and occasional drop caps / tables that currently degrade reading quality.
+CrossPoint already ships a capable stream-oriented EPUB pipeline (SAX HTML → CSS cascade → `ParsedText` → page lines → SD section `.bin` cache) with strengths Witchhunt Reader explicitly lacks: full BiDi/RTL, FreeInk/CrossPoint UI discipline, hyphenation, focus/guide reading, and incremental section build with partial resume. A Calibre library probe (`scripts/_probe_calibre_epubs.py` over `e:\Calibre eBooks`, 141 EPUBs, 21 sampled) shows nearly every modern book depends on **CSS font-size** and **line-height**, with frequent small-caps, float figures, and occasional drop caps / tables that currently degrade reading quality.
 
-**Rivulet Layout Core (RLC)** is an original architecture for Casper: a **stream-first, style-interned, float-aware line boxer** that never builds a full-chapter DOM, replaces multi-vector `ParsedText` pressure over time with compact **flow runs**, and applies a measured CSS subset chosen by corpus frequency and RAM cost. Competitive bar is Witchhunt’s *public* feature list only — **no Witchhunt source is copied**; Casper invents cleaner, more measurable structures that fit ESP32-C3 budgets and retain BiDi, SD caching, and progressive indexing.
+**Rivulet Layout Core (RLC)** is an original architecture for CrossPoint: a **stream-first, style-interned, float-aware line boxer** that never builds a full-chapter DOM, replaces multi-vector `ParsedText` pressure over time with compact **flow runs**, and applies a measured CSS subset chosen by corpus frequency and RAM cost. Competitive bar is Witchhunt’s *public* feature list only — **no Witchhunt source is copied**; CrossPoint invents cleaner, more measurable structures that fit ESP32-C3 budgets and retain BiDi, SD caching, and progressive indexing.
 
 **Rev 2** hardens the implementation contract: end-to-end multi-font measure/paint/serialize, SD font ladders, mixed-size line boxes, float page-carry and paint order, table Tier B vs SAX resume, honest RAM peaks, cache version matrix, and a split PR plan. **Rev 3** fixes paint fallback to always use `BlockStyle.sizeStep` when the per-word slab is absent, and resolves `line-height` percent against font metrics (not viewport).
 
@@ -60,14 +60,14 @@ Page { PageLine | PageImage | PageHorizontalRule } → Section .bin (v69)
 | Multi-spine stress | Omnibus 250–508 HTML files | Indexing UX |
 | Build-time heap | Parallel vectors in `ParsedText` | Soft-fail / abort risk |
 
-### What Casper already does well (retain)
+### What CrossPoint already does well (retain)
 
 - **Strikethrough paint path is present** — `TextBlock::render` `DecorationLineTracker` for `UNDERLINE` and `STRIKETHROUGH` (`TextBlock.cpp` L155–162); section v28+ serializes decoration bits. PR2 is audit/fixtures, not greenfield.
 - BiDi/RTL, multi-language hyphenation, focus + guide dots, incremental section build + partial suspend, image dims probe + lazy extract, TextBlock **arena** anti-fragmentation pattern.
 
 ### Competitive bar (Witchhunt public README only)
 
-| Capability | Witchhunt (public) | Casper target via Rivulet |
+| Capability | Witchhunt (public) | CrossPoint target via Rivulet |
 |------------|--------------------|---------------------------|
 | Float L/R wrap | Yes | Yes (cap-2 exclusion zones + page-carry) |
 | Real tables | Yes | Tier A first; Tier B simple streaming grid |
@@ -77,7 +77,7 @@ Page { PageLine | PageImage | PageHorizontalRule } → Section .bin (v69)
 | Drop caps | Yes | Float-zone initial via `float`+large size (not pseudo) |
 | GIF | Yes | **Defer** |
 | Background multi-section index | Yes (up to 3) | **One** neighbor, default **off** |
-| BiDi/RTL | **No** | **Casper wins** — never regress |
+| BiDi/RTL | **No** | **CrossPoint wins** — never regress |
 
 Out of scope by `SCOPE.md`: weather, captive portal, Markdown app surface, interactive apps, PDF, browser, RSS.
 
@@ -272,7 +272,7 @@ static constexpr uint8_t SIZE_STEP_MAX  = 4;   // two steps larger
 
 struct StyleResolveContext {
   int baseFontId;                 // ReaderRenderSpec.fontId
-  float baseEmPx;                 // Casper em unit — see "Em unit" section
+  float baseEmPx;                 // CrossPoint em unit — see "Em unit" section
   float userLineCompression;      // ReaderRenderSpec.lineCompression
   uint16_t viewportW, viewportH;
   bool embeddedStyle;
@@ -288,7 +288,7 @@ void initStyleResolveContext(StyleResolveContext& ctx, const ReaderRenderSpec&, 
 
 ### Rules
 
-**(a) Builtin families** (`CasperSettings::getReaderFontId` ladders: Bitter / Source Serif 4 at 12/14/16/18):
+**(a) Builtin families** (`CrossPointSettings::getReaderFontId` ladders: Bitter / Source Serif 4 at 12/14/16/18):
 
 | User `fontSize` enum | step0 | step1 | step2 (base) | step3 | step4 |
 |----------------------|-------|-------|--------------|-------|-------|
@@ -316,9 +316,9 @@ Clamp to nearest existing face; never invent a size. Map `fontId` → family enu
 
 ---
 
-## Em unit (intentional Casper approximation)
+## Em unit (intentional CrossPoint approximation)
 
-**Documented policy:** Casper resolves CSS `em` / `rem` using **`renderer.getFontAscenderSize(fontId)`** as `emSize`, matching today’s `ChapterHtmlSlimParser` / `BlockStyle::fromCssStyle` call sites. This is **not** CSS2 font-size em; it is an existing firmware convention.
+**Documented policy:** CrossPoint resolves CSS `em` / `rem` using **`renderer.getFontAscenderSize(fontId)`** as `emSize`, matching today’s `ChapterHtmlSlimParser` / `BlockStyle::fromCssStyle` call sites. This is **not** CSS2 font-size em; it is an existing firmware convention.
 
 **RLC rule:** one shared helper, e.g. `casperEmPx(renderer, fontId)`, used for:
 
@@ -357,7 +357,7 @@ else if kind == Length:
       blockLineHeightPx = round(factor * refLinePx)
     case Em:
     case Rem:
-      // casperEmPx = ascender; intentional Casper em (see Em unit section)
+      // casperEmPx = ascender; intentional CrossPoint em (see Em unit section)
       blockLineHeightPx = round(lineHeightLength.toPixels(casperEmPx(blockFontId), /*container unused*/ 0))
       blockLineHeightPx = clamp(blockLineHeightPx, round(0.85f * refLinePx), round(1.6f * refLinePx))
     case Points:
@@ -855,7 +855,7 @@ Do not claim golden page metrics CI until a harness exists; track as follow-up.
 2. **No full DOM**; SAX + ephemeral stacks + SD pages.
 3. **CSS subset by corpus frequency**; GIF deferred.
 4. **font-size → discrete sizeStep relative to user base**; resolve via `resolveRelativeFontId`; SD single-size collapses steps.
-5. **Casper `em` ≡ font ascender** (shared helper); intentional, not CSS-perfect.
+5. **CrossPoint `em` ≡ font ascender** (shared helper); intentional, not CSS-perfect.
 6. **Float cap 2**, page-carry of exclusion without re-blitting image; paint image then lines.
 7. **Tables: Tier A first; Tier B streaming per row only**; no colspan v1.
 8. **Strikethrough largely done** — PR2 non-blocking audit.
@@ -1023,7 +1023,7 @@ flowchart LR
 ## References
 
 - `lib/Epub/Epub/parsers/ChapterHtmlSlimParser.*`, `css/CssStyle.h`, `css/CssParser.*`, `ParsedText.*`, `blocks/TextBlock.*`, `blocks/ImageBlock.*`, `blocks/BlockStyle.h`, `Section.*`, `Page.*`, `ReaderRenderSpec.h`
-- `src/activities/reader/EpubReaderActivity.*`, `src/CasperSettings.cpp` (`getReaderFontId`), `src/SdCardFontSystem.h`
+- `src/activities/reader/EpubReaderActivity.*`, `src/CrossPointSettings.cpp` (`getReaderFontId`), `src/SdCardFontSystem.h`
 - `lib/EpdFont/EpdFontFamily.h`, `lib/GfxRenderer/GfxRenderer.cpp` (SUP/SUB 50% scale)
 - `scripts/_probe_calibre_epubs.py`, `test/epubs/*`
 - Witchhunt public README only — https://github.com/jpirnay/witchhunt-reader

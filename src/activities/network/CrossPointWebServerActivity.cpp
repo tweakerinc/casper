@@ -1,4 +1,4 @@
-#include "CasperWebServerActivity.h"
+#include "CrossPointWebServerActivity.h"
 
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -20,9 +20,9 @@
 
 namespace {
 // AP Mode configuration
-constexpr const char* AP_SSID = "Casper-Reader";
+constexpr const char* AP_SSID = "CrossPoint-Reader";
 constexpr const char* AP_PASSWORD = nullptr;  // Open network for ease of use
-constexpr const char* AP_HOSTNAME = "casper";
+constexpr const char* AP_HOSTNAME = "crosspoint";
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 4;
 constexpr int QR_CODE_WIDTH = 198;
@@ -60,7 +60,7 @@ int barsForRssi(int rssi, int currentBars) {
 }
 }  // namespace
 
-void CasperWebServerActivity::onEnter() {
+void CrossPointWebServerActivity::onEnter() {
   Activity::onEnter();
 
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
@@ -86,7 +86,7 @@ void CasperWebServerActivity::onEnter() {
                          });
 }
 
-void CasperWebServerActivity::onExit() {
+void CrossPointWebServerActivity::onExit() {
   Activity::onExit();
 
   LOG_DBG("WEBACT", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
@@ -109,7 +109,7 @@ void CasperWebServerActivity::onExit() {
   LOG_DBG("WEBACT", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
 
-void CasperWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
+void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
   const char* modeName = "Join Network";
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     modeName = "Connect to Calibre";
@@ -162,7 +162,7 @@ void CasperWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
   }
 }
 
-void CasperWebServerActivity::onWifiSelectionComplete(const bool connected) {
+void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) {
   LOG_DBG("WEBACT", "WifiSelectionActivity completed, connected=%d", connected);
 
   if (connected) {
@@ -189,7 +189,7 @@ void CasperWebServerActivity::onWifiSelectionComplete(const bool connected) {
   }
 }
 
-void CasperWebServerActivity::startAccessPoint() {
+void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Starting Access Point mode...");
   LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
 
@@ -248,12 +248,12 @@ void CasperWebServerActivity::startAccessPoint() {
   startWebServer();
 }
 
-void CasperWebServerActivity::startWebServer() {
+void CrossPointWebServerActivity::startWebServer() {
   LOG_DBG("WEBACT", "Starting web server...");
 
   // Create the web server instance. nothrow: the failure path below already
   // surfaces "could not start" to the user, which beats abort()ing.
-  webServer.reset(new (std::nothrow) CasperWebServer());
+  webServer.reset(new (std::nothrow) CrossPointWebServer());
   if (webServer) webServer->begin();
 
   if (webServer && webServer->isRunning()) {
@@ -272,7 +272,7 @@ void CasperWebServerActivity::startWebServer() {
   }
 }
 
-void CasperWebServerActivity::loop() {
+void CrossPointWebServerActivity::loop() {
   // Handle different states
   if (state == WebServerActivityState::SERVER_RUNNING) {
     // Handle DNS requests for captive portal (AP mode only)
@@ -370,7 +370,7 @@ void CasperWebServerActivity::loop() {
   }
 }
 
-void CasperWebServerActivity::render(RenderLock&&) {
+void CrossPointWebServerActivity::render(RenderLock&&) {
   // Only render our own UI when server is running
   // Subactivities handle their own rendering
   if (state == WebServerActivityState::SERVER_RUNNING || state == WebServerActivityState::AP_STARTING) {
@@ -395,7 +395,7 @@ void CasperWebServerActivity::render(RenderLock&&) {
   }
 }
 
-void CasperWebServerActivity::renderServerRunning() const {
+void CrossPointWebServerActivity::renderServerRunning() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
 
@@ -474,7 +474,7 @@ void CasperWebServerActivity::renderServerRunning() const {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void CasperWebServerActivity::renderWifiIndicator(int subHeaderTop) const {
+void CrossPointWebServerActivity::renderWifiIndicator(int subHeaderTop) const {
   constexpr int BAR_COUNT = 4;
   constexpr int BAR_WIDTH = 4;
   constexpr int BAR_GAP = 2;

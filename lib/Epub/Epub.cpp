@@ -920,7 +920,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
   return false;
 }
 
-// c30: Casper v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
+// c30: CrossPoint v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
 // Stats + Stats-Life share one height key (same thumb file). Bare 420×560 1:1.
 // c24 (480×640) forced Bare to scale down and looked griddy — do not reintroduce.
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c30_[HEIGHT].bmp"; }

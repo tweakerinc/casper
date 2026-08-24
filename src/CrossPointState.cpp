@@ -1,11 +1,11 @@
-#include "CasperState.h"
+#include "CrossPointState.h"
 
 #include <Logging.h>
 
 #include <algorithm>
 #include <cstring>
 
-bool CasperState::isRecentSleep(uint16_t idx, uint8_t checkCount) const {
+bool CrossPointState::isRecentSleep(uint16_t idx, uint8_t checkCount) const {
   const uint8_t effectiveCount = std::min(checkCount, recentSleepFill);
   for (uint8_t i = 0; i < effectiveCount; i++) {
     const uint8_t slot = (recentSleepPos + SLEEP_RECENT_COUNT - 1 - i) % SLEEP_RECENT_COUNT;
@@ -14,13 +14,13 @@ bool CasperState::isRecentSleep(uint16_t idx, uint8_t checkCount) const {
   return false;
 }
 
-void CasperState::pushRecentSleep(uint16_t idx) {
+void CrossPointState::pushRecentSleep(uint16_t idx) {
   recentSleepImages[recentSleepPos] = idx;
   recentSleepPos = (recentSleepPos + 1) % SLEEP_RECENT_COUNT;
   if (recentSleepFill < SLEEP_RECENT_COUNT) recentSleepFill++;
 }
 
-void CasperState::toJson(JsonDocument& doc) const {
+void CrossPointState::toJson(JsonDocument& doc) const {
   doc["openEpubPath"] = openEpubPath;
   JsonArray recentArr = doc["recentSleepImages"].to<JsonArray>();
   for (int i = 0; i < SLEEP_RECENT_COUNT; i++) recentArr.add(recentSleepImages[i]);
@@ -33,7 +33,7 @@ void CasperState::toJson(JsonDocument& doc) const {
   doc["lastSleepRenderedQuickResume"] = lastSleepRenderedQuickResume;
 }
 
-bool CasperState::fromJson(JsonVariantConst doc) {
+bool CrossPointState::fromJson(JsonVariantConst doc) {
   openEpubPath = doc["openEpubPath"] | "";
   memset(recentSleepImages, 0, sizeof(recentSleepImages));
   JsonArrayConst recentArr = doc["recentSleepImages"];

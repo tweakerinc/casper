@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"

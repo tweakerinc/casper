@@ -6,14 +6,16 @@
 // On-disk layout for stats (no heap, no Arduino). Device I/O lives in
 // StatsBackup.cpp / BookReadingStats.cpp. Host tests pin the names.
 //
-//   /.casper-stats-backup/stats_YYYY-MM-DD.bin   lifetime global only
+//   /.crosspoint-stats-backup/stats_YYYY-MM-DD.bin   lifetime global only
 //   /.crosspoint/epub_<hash>/.trash/stats_vN.bin  Delete Book Stats (rename)
 //
 // Never walk the library to copy every book's stats — that is a sleep-path
 // stall and a crash risk on a large SD card. Recover Stats moves .trash back.
 namespace statsbackup {
 
-inline constexpr const char* kDir = "/.casper-stats-backup";
+inline constexpr const char* kDir = "/.crosspoint-stats-backup";
+// Leftover Casper-branded backup folder — rename once if kDir is absent.
+inline constexpr const char* kLegacyCasperDir = "/.casper-stats-backup";
 inline constexpr const char* kTrashFolder = ".trash";
 inline constexpr int kKeepSnaps = 7;
 

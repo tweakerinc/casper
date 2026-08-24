@@ -13,14 +13,14 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 #include "util/SleepChromeIcon.h"
 #include "util/UiGhostPolicy.h"
 
@@ -39,7 +39,7 @@ void SleepActivity::onEnter() {
   // useQuickResume is decided by enterDeepSleep (power QR action and/or timeout QR).
   // Legacy: Sleep Screen == QUICK_RESUME still maps to last-frame until migrated.
   const bool renderQuickResume =
-      useQuickResume || SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
+      useQuickResume || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
 
   if (renderQuickResume) {
     // Keep system-wide Dark Mode invert ON. The framebuffer stays in light paint
@@ -64,16 +64,16 @@ void SleepActivity::onEnter() {
   }
 
   switch (SETTINGS.sleepScreen) {
-    case (CasperSettings::SLEEP_SCREEN_MODE::BLANK):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
       renderBlankSleepScreen();
       break;
-    case (CasperSettings::SLEEP_SCREEN_MODE::CUSTOM):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
       renderCustomSleepScreen();
       break;
-    case (CasperSettings::SLEEP_SCREEN_MODE::COVER):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER):
       renderCoverSleepScreen();
       break;
-    case (CasperSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
       if (APP_STATE.lastSleepFromReader) {
         renderCoverSleepScreen();
       } else {
@@ -243,15 +243,15 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // Casper: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
+  // CrossPoint: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
   // (1.5 has no drawImageInverted — invertScreen flips logo + name together).
   renderer.clearScreen();
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
-  renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CASPER), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
 
-  if (SETTINGS.sleepScreen == CasperSettings::SLEEP_SCREEN_MODE::DARK) {
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::DARK) {
     renderer.invertScreen();
   }
 
@@ -273,7 +273,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
     LOG_DBG("SLP", "bitmap ratio: %f, screen ratio: %f", ratio, screenRatio);
     if (ratio > screenRatio) {
       // image wider than viewport ratio, scaled down image needs to be centered vertically
-      if (SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
+      if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropX = 1.0f - (screenRatio / ratio);
         LOG_DBG("SLP", "Cropping bitmap x: %f", cropX);
         ratio = (1.0f - cropX) * static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
@@ -283,7 +283,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
       LOG_DBG("SLP", "Centering with ratio %f to y=%d", ratio, y);
     } else {
       // image taller than viewport ratio, scaled down image needs to be centered horizontally
-      if (SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
+      if (SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP) {
         cropY = 1.0f - (ratio / screenRatio);
         LOG_DBG("SLP", "Cropping bitmap y: %f", cropY);
         ratio = static_cast<float>(bitmap.getWidth()) / ((1.0f - cropY) * static_cast<float>(bitmap.getHeight()));
@@ -301,12 +301,12 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
   renderer.clearScreen();
 
-  const bool hasGreyscale =
-      bitmap.hasGreyscale() && SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
+  const bool hasGreyscale = bitmap.hasGreyscale() &&
+                            SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
 
-  if (SETTINGS.sleepScreenCoverFilter == CasperSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
+  if (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
     renderer.invertScreen();
   }
 
@@ -347,7 +347,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
 void SleepActivity::renderCoverSleepScreen() const {
   void (SleepActivity::*renderNoCoverSleepScreen)() const;
   switch (SETTINGS.sleepScreen) {
-    case (CasperSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
       renderNoCoverSleepScreen = &SleepActivity::renderCustomSleepScreen;
       break;
     default:
@@ -360,12 +360,12 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   std::string coverBmpPath;
-  bool cropped = SETTINGS.sleepScreenCoverMode == CasperSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+  bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
   // Check if the current book is XTC, TXT, or EPUB
   if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
     // Handle XTC file
-    Xtc lastXtc(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
+    Xtc lastXtc(APP_STATE.openEpubPath, CrossPointPaths::kPackageCacheRoot);
     if (!lastXtc.load()) {
       LOG_ERR("SLP", "Failed to load last XTC");
       return (this->*renderNoCoverSleepScreen)();
@@ -379,7 +379,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastXtc.getCoverBmpPath();
   } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
     // Handle TXT file - looks for cover image in the same folder
-    Txt lastTxt(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
+    Txt lastTxt(APP_STATE.openEpubPath, CrossPointPaths::kPackageCacheRoot);
     if (!lastTxt.load()) {
       LOG_ERR("SLP", "Failed to load last TXT");
       return (this->*renderNoCoverSleepScreen)();
@@ -393,7 +393,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastTxt.getCoverBmpPath();
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
     // Handle EPUB file
-    Epub lastEpub(APP_STATE.openEpubPath, CasperPaths::kPackageCacheRoot);
+    Epub lastEpub(APP_STATE.openEpubPath, CrossPointPaths::kPackageCacheRoot);
     // Skip loading css since we only need metadata here
     if (!lastEpub.load(true, true)) {
       LOG_ERR("SLP", "Failed to load last epub");

@@ -17,9 +17,9 @@
 #include "activities/Activity.h"
 #include "activities/ActivityResult.h"
 
-// Rivulet EPUB reader (CASPER_RIVULET_READER=1).
+// Rivulet EPUB reader (CROSSPOINT_RIVULET_READER=1).
 // Layout engine: lib/Rivulet. Ownership: /.crosspoint/book_<stableId>/ for progress,
-// stats, and IR (path-independent id + ledger — see util/CasperBookStore).
+// stats, and IR (path-independent id + ledger — see util/CrossPointBookStore).
 class RivuletReaderActivity final : public Activity {
  public:
   RivuletReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::shared_ptr<Epub> epub);
@@ -74,7 +74,7 @@ class RivuletReaderActivity final : public Activity {
   void openClippingTool();
   // Manage Reader UI: time-left slots (same model as classic EpubReader).
   bool formatTimeLeftLabel(char* buf, size_t len, bool bookEstimate) const;
-  const std::string& casperDir() const { return casperBookDir_; }
+  const std::string& crosspointDir() const { return crosspointBookDir_; }
   // Resolve img hrefs, probe dims, scale to viewport; rewrite IR paths.
   void prepareChapterImages(const std::string& spineHref);
   void paintPageImages();
@@ -196,8 +196,8 @@ class RivuletReaderActivity final : public Activity {
   SavedPos footnoteStack_[kMaxFootnoteDepth]{};
   int footnoteDepth_ = 0;
   std::string stableId_;
-  std::string casperBookDir_;  // /.crosspoint/book_<id>
-  std::string irDir_;          // casperBookDir_/rivulet
+  std::string crosspointBookDir_;  // /.crosspoint/book_<id>
+  std::string irDir_;              // crosspointBookDir_/rivulet
   int spineIndex_ = 0;
   int marginX_ = 16;
   int marginY_ = 16;
@@ -275,7 +275,7 @@ class RivuletReaderActivity final : public Activity {
   bool pendingScreenshot_ = false;
   bool pendingOpenStateSave_ = false;  // flush APP_STATE after first ink
   bool pendingRecentsTouch_ = false;   // RECENT_BOOKS.addBook after first ink
-  bool pendingStatsLoad_ = false;      // CasperStats after first ink (QR open)
+  bool pendingStatsLoad_ = false;      // CrossPointStats after first ink (QR open)
   // leaveReaderToHome already wrote progress/stats under "Saving stats" chrome.
   bool leaveExitFlushed_ = false;
   // True after releaseHeavyForUi() until restoreAfterUi() reloads the chapter.

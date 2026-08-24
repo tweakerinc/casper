@@ -14,7 +14,7 @@
 #include <cstring>
 #include <string>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
@@ -334,8 +334,8 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const auto& metrics = PenumbraMetrics::values;
   const int footerH = metrics.buttonHintsHeight;
   b.centerX = pageW / 2;
-  const bool hasChrome = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                         SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
+  const bool hasChrome = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
+                         SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
   b.contentTop =
       hasChrome
           ? (BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)
@@ -787,7 +787,7 @@ void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int 
       }
     }
     if (pct < -900.0f) {
-      // Prefer progress embedded in recent.json (CasperStats); one book-dir load only if unknown.
+      // Prefer progress embedded in recent.json (CrossPointStats); one book-dir load only if unknown.
       pct = books[static_cast<size_t>(i)].progressPercentMilli == 0xFFFF
                 ? BookReadingStats::loadForBook(path).getProgressPercent()
                 : static_cast<float>(books[static_cast<size_t>(i)].progressPercentMilli) / 100.0f;

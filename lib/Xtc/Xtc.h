@@ -1,7 +1,7 @@
 /**
  * Xtc.h
  *
- * Main XTC ebook class for Casper Reader
+ * Main XTC ebook class for CrossPoint Reader
  * Provides EPUB-like interface for XTC file handling
  */
 

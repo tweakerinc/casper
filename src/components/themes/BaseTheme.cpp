@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -155,10 +155,10 @@ void BaseTheme::batteryIconSizeForStatusFont(const GfxRenderer& renderer, int& o
 }
 
 int BaseTheme::batteryGroupWidth(const GfxRenderer& renderer, const uint8_t displayMode) {
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode =
-      displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT ? displayMode
-                                                               : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                           ? displayMode
+                           : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
   const bool showPct = mode != M::BATTERY_DISPLAY_ICON;
   int iconW = 0, iconH = 0;
@@ -234,8 +234,8 @@ void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t
 void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const uint8_t displayMode) const {
   // Left aligned: icon on left, percentage on right (or percent-only text at rect.x).
   // rect.x / rect.y are the group origin; icon size follows status-bar font (not fixed metrics).
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode = displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                            ? displayMode
                            : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
@@ -269,8 +269,8 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const ui
 void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const uint8_t displayMode) const {
   // Right aligned: percentage on left of icon, icon flush right (or percent-only flush right).
   // rect's right edge is the flush-right anchor when width is the icon slot.
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode = displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                            ? displayMode
                            : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
@@ -538,16 +538,16 @@ int BaseTheme::getListRowStep(bool hasSubtitle) const {
   // measures with the live font for multi-line wrap.
   int rowHeight = hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   switch (SETTINGS.menuFontSize) {
-    case CasperSettings::MENU_FONT_XSMALL:
+    case CrossPointSettings::MENU_FONT_XSMALL:
       rowHeight = std::max(26, rowHeight - 4);
       break;
-    case CasperSettings::MENU_FONT_SMALL:
+    case CrossPointSettings::MENU_FONT_SMALL:
       rowHeight = std::max(28, rowHeight - 2);
       break;
-    case CasperSettings::MENU_FONT_MEDIUM:
+    case CrossPointSettings::MENU_FONT_MEDIUM:
       rowHeight += 8;
       break;
-    case CasperSettings::MENU_FONT_LARGE:
+    case CrossPointSettings::MENU_FONT_LARGE:
       rowHeight += 14;
       break;
     default:
@@ -735,9 +735,9 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = centered ? listSectionHeaderHeight(renderer)
-                                   : computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb,
-                                                                  nTitleLines);
+    const int rowHeight =
+        centered ? listSectionHeaderHeight(renderer)
+                 : computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
     }
@@ -1321,14 +1321,14 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Master battery visibility (Settings → Display → Battery Show/Hide). Preview
   // can ignore the master so Customize Reader UI still shows Battery slots.
   const bool batteryMasterOn =
-      SETTINGS.hideBatteryPercentage == CasperSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
+      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
   const bool batteryAllowed = batteryMasterOn || previewIgnoreBatteryMasterHide;
   // Preview can ignore master hide but still uses the reader's battery display mode.
-  const uint8_t batteryDisplay = sb.batteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  const uint8_t batteryDisplay = sb.batteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                                      ? sb.batteryDisplay
-                                     : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
-  const bool showBattIcon = batteryAllowed && batteryDisplay != CasperSettings::BATTERY_DISPLAY_PERCENT;
-  const bool showBattPct = batteryAllowed && batteryDisplay != CasperSettings::BATTERY_DISPLAY_ICON;
+                                     : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+  const bool showBattIcon = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
+  const bool showBattPct = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_ICON;
 
   const int topTextY = metrics.topPadding + kTopChromeBatteryY;
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
@@ -1378,7 +1378,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // align: 0=left, 1=center, 2=right. Returns drawn width (0 if empty).
   auto drawSlot = [&](uint8_t content, int anchorX, int y, int align, int maxWidth) -> int {
-    using C = CasperSettings::STATUS_BAR_CORNER_CONTENT;
+    using C = CrossPointSettings::STATUS_BAR_CORNER_CONTENT;
     if (content == C::CORNER_HIDE) return 0;
 
     if (content == C::CORNER_BATTERY) {
@@ -1489,7 +1489,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                              paddingBottom + (fillMargin ? 1 : 0);
     // bookProgress is 0–100 float; never cast through size_t (truncates 0–1 by mistake to 0).
     float progressPct = 0.0f;
-    if (sb.progressBarMode == CasperSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
+    if (sb.progressBarMode == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
       progressPct = bookProgress;
     } else if (pageCount > 0) {
       progressPct = (static_cast<float>(currentPage) / static_cast<float>(pageCount)) * 100.0f;
@@ -1523,7 +1523,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   }
 
   // Lower middle — centered in remaining lane (title-aware truncation).
-  if (sb.lowerMiddle != CasperSettings::CORNER_HIDE) {
+  if (sb.lowerMiddle != CrossPointSettings::CORNER_HIDE) {
     const int midY = textY - textYOffset;
     const int usable = screenW - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
     const int sidePad = std::max(leftClusterWidth, rightClusterWidth) + 24;
@@ -1570,18 +1570,18 @@ int BaseTheme::systemStatusSideReserve(const GfxRenderer& renderer) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int reserve = kTopChromeInsetX + metrics.contentSidePadding;
   // Battery with percent is the widest typical side content (icon scales with status font).
-  const uint8_t battMode = SETTINGS.systemBatteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  const uint8_t battMode = SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                                ? SETTINGS.systemBatteryDisplay
-                               : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
+                               : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
   const int battW = batteryGroupWidth(renderer, battMode);
   // Clock sample for 12h (wider) — "12:00 PM".
   const int clockW = renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
   const int sideContent = std::max(battW, clockW);
   // If either outer slot has content, reserve for title centering.
-  if (SETTINGS.systemStatusBarLeft != CasperSettings::SYS_SLOT_HIDE ||
-      SETTINGS.systemStatusBarRight != CasperSettings::SYS_SLOT_HIDE) {
+  if (SETTINGS.systemStatusBarLeft != CrossPointSettings::SYS_SLOT_HIDE ||
+      SETTINGS.systemStatusBarRight != CrossPointSettings::SYS_SLOT_HIDE) {
     reserve += sideContent;
-  } else if (SETTINGS.systemStatusBarMiddle != CasperSettings::SYS_SLOT_HIDE) {
+  } else if (SETTINGS.systemStatusBarMiddle != CrossPointSettings::SYS_SLOT_HIDE) {
     // Middle-only: still leave a modest margin so title does not collide with center chrome.
     reserve += sideContent / 2;
   }
@@ -1614,7 +1614,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
 
   char timeBuf[16];
   const char* timeText = previewTime;
-  if (timeText == nullptr && SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK)) {
+  if (timeText == nullptr && SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
     if (halClock.isAvailable()) {
       if (halClock.formatTime(timeBuf, sizeof(timeBuf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) {
         timeText = timeBuf;
@@ -1647,10 +1647,10 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
   auto drawBatteryAt = [&](int align) {
     int battW = 0, battH = 0;
     batteryIconSizeForStatusFont(renderer, battW, battH);
-    const uint8_t mode = SETTINGS.systemBatteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+    const uint8_t mode = SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                              ? SETTINGS.systemBatteryDisplay
-                             : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
-    const bool showIcon = mode != CasperSettings::BATTERY_DISPLAY_PERCENT;
+                             : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+    const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
     const int groupW = batteryGroupWidth(renderer, mode);
     if (align == 2) {
       const int iconX = showIcon ? (rightX - battW) : (rightX - groupW);
@@ -1683,7 +1683,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
   };
 
   auto drawSlot = [&](uint8_t content, int align) {
-    using S = CasperSettings::SYSTEM_STATUS_SLOT;
+    using S = CrossPointSettings::SYSTEM_STATUS_SLOT;
     if (content == S::SYS_SLOT_BATTERY) {
       drawBatteryAt(align);
     } else if (content == S::SYS_SLOT_CLOCK) {
@@ -1704,7 +1704,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
 
   // Settings preview: if no slot has Battery Warning yet, sample it in Middle
   // so the user still sees the message while configuring.
-  if (forceBatteryWarningPreview && !SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY_WARNING)) {
+  if (forceBatteryWarningPreview && !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY_WARNING)) {
     drawBatteryWarningAt(/*align=*/1);
   }
 }

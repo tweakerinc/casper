@@ -1,11 +1,11 @@
-#include "casper/CasperStats.h"
+#include "crosspoint/CrossPointStats.h"
 
 #include <Logging.h>
 
 #include "RecentBooksStore.h"
-#include "util/CasperBookStore.h"
+#include "util/CrossPointBookStore.h"
 
-namespace CasperStats {
+namespace CrossPointStats {
 namespace {
 
 uint16_t milliFromPercent(float percent) {
@@ -25,7 +25,7 @@ float percentFromMilli(uint16_t milli) {
 
 std::string bookDir(const std::string& bookFilePath) {
   if (bookFilePath.empty()) return {};
-  return CasperBook::bookDirForPath(bookFilePath);
+  return CrossPointBook::bookDirForPath(bookFilePath);
 }
 
 BookReadingStats loadBook(const std::string& bookFilePath) {
@@ -79,4 +79,4 @@ bool removeBook(const std::string& bookFilePath) {
   return BookReadingStats::remove(dir);
 }
 
-}  // namespace CasperStats
+}  // namespace CrossPointStats

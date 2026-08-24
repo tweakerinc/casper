@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/bluetooth.h"
@@ -277,16 +277,16 @@ int LyraTheme::getListRowStep(bool hasSubtitle) const {
   int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
   // Match compute path: larger menu list fonts grow title line height.
   switch (SETTINGS.menuFontSize) {
-    case CasperSettings::MENU_FONT_XSMALL:
+    case CrossPointSettings::MENU_FONT_XSMALL:
       rowHeight = std::max(26, rowHeight - 4);
       break;
-    case CasperSettings::MENU_FONT_SMALL:
+    case CrossPointSettings::MENU_FONT_SMALL:
       rowHeight = std::max(28, rowHeight - 2);
       break;
-    case CasperSettings::MENU_FONT_MEDIUM:
+    case CrossPointSettings::MENU_FONT_MEDIUM:
       rowHeight += 8;  // ~14 pt Source Serif list titles
       break;
-    case CasperSettings::MENU_FONT_LARGE:
+    case CrossPointSettings::MENU_FONT_LARGE:
       rowHeight += 14;  // ~16 pt
       break;
     default:

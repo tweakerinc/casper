@@ -1,4 +1,4 @@
-#include "CasperBookStore.h"
+#include "CrossPointBookStore.h"
 
 #include <BookPathId.h>
 #include <FsHelpers.h>
@@ -10,7 +10,7 @@
 #include <functional>
 #include <string>
 
-namespace CasperBook {
+namespace CrossPointBook {
 namespace {
 
 void toLowerHex16(const uint64_t h, char out[17]) {
@@ -141,4 +141,4 @@ std::string legacyTitleIdHex(const std::string& title, const std::string& author
   return std::string(hex);
 }
 
-}  // namespace CasperBook
+}  // namespace CrossPointBook

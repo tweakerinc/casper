@@ -174,6 +174,9 @@ bool writeBackupFile(const char* path, const uint8_t* data, const size_t size) {
 }  // namespace
 
 bool backupGlobalStats(const bool manual, char* outFileName, const size_t outFileNameLen) {
+  if (!Storage.exists(BACKUP_DIR) && Storage.exists(statsbackup::kLegacyCasperDir)) {
+    Storage.rename(statsbackup::kLegacyCasperDir, BACKUP_DIR);
+  }
   if (!Storage.ensureDirectoryExists(BACKUP_DIR)) {
     LOG_ERR(LOG_TAG, "Could not create stats backup directory: %s", BACKUP_DIR);
     return false;

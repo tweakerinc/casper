@@ -19,7 +19,7 @@ namespace {
 constexpr const char* DICT_TMP_FILE = "/.crosspoint/dict.tmp";
 
 // Optional strip for older dumps that still use sort-key prefixes ("8bay", "Cbayed").
-// Clean Casper packs use plain keys; this stays so third-party .idx files still match.
+// Clean CrossPoint packs use plain keys; this stays so third-party .idx files still match.
 const char* stripSortKeyPrefix(const char* head) {
   if (!head || !head[0] || !head[1]) return head;
   const unsigned char h0 = static_cast<unsigned char>(head[0]);
@@ -606,7 +606,7 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out) 
     path = basePath + ".dict";
     offset = location.offset;
   } else {
-    // Ensure Casper root exists (first dict use may precede other stores).
+    // Ensure CrossPoint root exists (first dict use may precede other stores).
     Storage.mkdir("/.crosspoint");
     HalFile tmp = Storage.open(DICT_TMP_FILE, O_WRITE | O_CREAT | O_TRUNC);
     if (!tmp) {
@@ -651,7 +651,7 @@ bool Dictionary::readDefinition(const DictLocation& location, std::string& out) 
 std::string Dictionary::cleanWord(const char* word) {
   if (!word || !*word) return "";
 
-  // Port of Casper/legacy normalizeWord for StarDict keys:
+  // Port of CrossPoint/legacy normalizeWord for StarDict keys:
   // - lowercase ASCII letters
   // - keep Spanish letters (UTF-8 C3 accents + ñ)
   // - keep ASCII hyphens in compounds (well-known)

@@ -4,7 +4,7 @@
 
 #include "StatsBackupLayout.h"
 
-// Copies /.crosspoint/global_stats.bin to /.casper-stats-backup/ using a dated
+// Copies /.crosspoint/global_stats.bin to /.crosspoint-stats-backup/ using a dated
 // or incrementing filename. Does not walk per-book cache folders.
 bool backupGlobalStats(bool manual, char* outFileName = nullptr, size_t outFileNameLen = 0);
 

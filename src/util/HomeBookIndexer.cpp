@@ -10,11 +10,11 @@
 
 #include <cstdio>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "activities/reader/ChapterLoader.h"
 #include "activities/reader/ReaderRenderKey.h"
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
 #include "util/SystemLog.h"
 
 // Heap floors. Indexing is strictly optional work, so it gets out of the way well
@@ -59,8 +59,7 @@ void HomeBookIndexer::reset() {
 }
 
 void HomeBookIndexer::mapPathFor(const int spine, char* out, const size_t outSize) const {
-  std::snprintf(out, outSize, "%s/s%d_m%u.rvpm", irDir_.c_str(), spine,
-                static_cast<unsigned>(SETTINGS.imageRendering));
+  std::snprintf(out, outSize, "%s/s%d_m%u.rvpm", irDir_.c_str(), spine, static_cast<unsigned>(SETTINGS.imageRendering));
 }
 
 bool HomeBookIndexer::ensureOpen() {
@@ -73,13 +72,13 @@ bool HomeBookIndexer::ensureOpen() {
     return false;
   }
 
-  irDir_ = CasperBook::rivuletDirForPath(bookPath_);
+  irDir_ = CrossPointBook::rivuletDirForPath(bookPath_);
   if (irDir_.empty()) {
     openFailed_ = true;
     return false;
   }
 
-  auto epub = makeUniqueNoThrow<Epub>(bookPath_, CasperPaths::kPackageCacheRoot);
+  auto epub = makeUniqueNoThrow<Epub>(bookPath_, CrossPointPaths::kPackageCacheRoot);
   if (!epub) {
     LOG_ERR("HIDX", "OOM allocating Epub");
     openFailed_ = true;

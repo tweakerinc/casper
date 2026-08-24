@@ -18,42 +18,42 @@
 UITheme UITheme::instance;
 
 UITheme::UITheme() {
-  auto themeType = static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme);
+  auto themeType = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
   setTheme(themeType);
 }
 
 void UITheme::reload() {
-  auto themeType = static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme);
+  auto themeType = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
   setTheme(themeType);
 }
 
-void UITheme::setTheme(CasperSettings::UI_THEME type) {
+void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   switch (type) {
-    case CasperSettings::UI_THEME::BARE:
+    case CrossPointSettings::UI_THEME::BARE:
       LOG_DBG("UI", "Using Bare theme");
       currentTheme = std::make_unique<BareTheme>();
       currentMetrics = &BareMetrics::values;
       break;
-    case CasperSettings::UI_THEME::PENUMBRA:
+    case CrossPointSettings::UI_THEME::PENUMBRA:
       // X3: large clock + under-panel. X4: title/author top + progress ring bottom.
       LOG_DBG("UI", "Using Penumbra theme (%s)", gpio.deviceIsX3() ? "X3 clock" : "X4 progress");
       currentTheme = std::make_unique<PenumbraTheme>();
       currentMetrics = &PenumbraMetrics::values;
       break;
     // Legacy JSON theme ids → Bare (picker only offers Bare + Penumbra).
-    case CasperSettings::UI_THEME::GHOST:
-    case CasperSettings::UI_THEME::STATS:
-    case CasperSettings::UI_THEME::STATS_LIFE:
-    case CasperSettings::UI_THEME::DASHBOARD_RECENTS:
-    case CasperSettings::UI_THEME::DASHBOARD_SCROLL:
-    case CasperSettings::UI_THEME::DASHBOARD_MAGAZINE:
-    case CasperSettings::UI_THEME::DASHBOARD_CARD:
-    case CasperSettings::UI_THEME::MINIMAL:
-    case CasperSettings::UI_THEME::LYRA_CAROUSEL:
-    case CasperSettings::UI_THEME::CLASSIC:
-    case CasperSettings::UI_THEME::LYRA:
-    case CasperSettings::UI_THEME::LYRA_3_COVERS:
-    case CasperSettings::UI_THEME::ROUNDEDRAFF:
+    case CrossPointSettings::UI_THEME::GHOST:
+    case CrossPointSettings::UI_THEME::STATS:
+    case CrossPointSettings::UI_THEME::STATS_LIFE:
+    case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
+    case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
+    case CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE:
+    case CrossPointSettings::UI_THEME::DASHBOARD_CARD:
+    case CrossPointSettings::UI_THEME::MINIMAL:
+    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
+    case CrossPointSettings::UI_THEME::CLASSIC:
+    case CrossPointSettings::UI_THEME::LYRA:
+    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
+    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     default:
       LOG_DBG("UI", "Using Bare theme (legacy id remapped)");
       currentTheme = std::make_unique<BareTheme>();

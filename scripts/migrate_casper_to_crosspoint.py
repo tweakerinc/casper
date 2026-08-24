@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""One-shot host migrate: <root>/.crosspoint -> <root>/.casper
+"""One-shot host migrate: leftover <root>/.casper -> <root>/.crosspoint
 
-Same policy as on-device CasperOneTimeMigrate:
-  - Never overwrite an existing Casper file
-  - Fill missing files inside shared dirs (e.g. thin epub_* under .casper)
-  - Write /.casper/crosspoint_migrate_v1.done when finished
+Firmware reads and writes /.crosspoint only. This copies files that were
+moved into /.casper during the short-lived Casper branding pass, without
+overwriting anything already in /.crosspoint.
 
 Usage:
-  python scripts/migrate_crosspoint_to_casper.py H:
-  python scripts/migrate_crosspoint_to_casper.py /media/sd
-  python scripts/migrate_crosspoint_to_casper.py H: --dry-run
+  python scripts/migrate_casper_to_crosspoint.py H:
+  python scripts/migrate_casper_to_crosspoint.py /media/sd
+  python scripts/migrate_casper_to_crosspoint.py H: --dry-run
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ import time
 from pathlib import Path
 
 
-MARKER_NAME = "crosspoint_migrate_v1.done"
+MARKER_NAME = "casper_migrate_v1.done"
 
 
 def iter_files(root: Path):
@@ -43,8 +42,7 @@ def migrate(src_root: Path, dst_root: Path, dry_run: bool) -> tuple[int, int, in
 
     for src in iter_files(src_root):
         rel = src.relative_to(src_root)
-        # Skip transient junk
-        if rel.name == "dict.tmp":
+        if rel.name in (MARKER_NAME, "dict.tmp", "crosspoint_migrate_v1.done"):
             skipped += 1
             continue
         dst = dst_root / rel
@@ -68,17 +66,14 @@ def migrate(src_root: Path, dst_root: Path, dry_run: bool) -> tuple[int, int, in
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Migrate .crosspoint → .casper on an SD root")
+    ap = argparse.ArgumentParser(description="Migrate leftover .casper data into .crosspoint on an SD root")
     ap.add_argument("sd_root", help="SD root (e.g. H: or /media/foo)")
     ap.add_argument("--dry-run", action="store_true", help="List actions only")
-    ap.add_argument("--force-marker", action="store_true", help="Write marker even if source missing")
     args = ap.parse_args()
 
     root = Path(args.sd_root)
-    # Windows "H:" is a drive; Path("H:") / ".casper" can be odd — normalize.
     root = root.resolve() if root.exists() else Path(str(root).rstrip("\\/") + "\\")
     if not root.exists():
-        # Drive letter alone
         candidate = Path(args.sd_root.rstrip("\\/") + "\\")
         if candidate.exists():
             root = candidate
@@ -86,8 +81,8 @@ def main() -> int:
             print(f"SD root not found: {args.sd_root}", file=sys.stderr)
             return 2
 
-    src = root / ".crosspoint"
-    dst = root / ".casper"
+    src = root / ".casper"
+    dst = root / ".crosspoint"
     marker = dst / MARKER_NAME
 
     print(f"SD root:     {root}")
@@ -97,20 +92,25 @@ def main() -> int:
     print(f"Mode:        {'DRY-RUN' if args.dry_run else 'WRITE'}")
     print()
 
-    if marker.exists() and not args.dry_run:
-        print("Marker already present — one-shot already considered done.")
-        print("Delete the marker and re-run if you want to fill remaining gaps.")
-        # Still allow fill-in of missing files even with marker? User said things
-        # weren't migrated — re-run fill without requiring delete if we always
-        # merge missing. Proceed with merge; refresh marker after.
-        print("Continuing with fill-missing merge anyway…")
+    def maybe_rename(src_name: str, dst_name: str) -> None:
+        s = root / src_name
+        d = root / dst_name
+        if not s.is_dir():
+            return
+        if d.exists():
+            print(f"Keep {dst_name} (already present); leftover {src_name} left in place")
+            return
+        if args.dry_run:
+            print(f"RENAME {src_name} -> {dst_name}")
+            return
+        s.rename(d)
+        print(f"Renamed {src_name} -> {dst_name}")
+
+    maybe_rename(".casper-logs", ".crosspoint-logs")
+    maybe_rename(".casper-stats-backup", ".crosspoint-stats-backup")
 
     if not src.is_dir():
-        print("No .crosspoint folder — nothing to migrate.")
-        if not args.dry_run and (args.force_marker or True):
-            dst.mkdir(parents=True, exist_ok=True)
-            marker.write_text(f"v1 host no-source {int(time.time())}\n", encoding="utf-8")
-            print(f"Wrote marker {marker}")
+        print("No leftover .casper folder — nothing to migrate.")
         return 0
 
     t0 = time.time()
@@ -122,16 +122,13 @@ def main() -> int:
 
     if not args.dry_run:
         dst.mkdir(parents=True, exist_ok=True)
-        marker.write_text(f"v1 host {int(time.time())} copied={copied} skipped={skipped} errors={errors}\n", encoding="utf-8")
+        marker.write_text(
+            f"v1 host {int(time.time())} copied={copied} skipped={skipped} errors={errors}\n", encoding="utf-8"
+        )
         print(f"Wrote marker {marker}")
-
-        # Spot-check important files
         for name in ("wifi.json", "settings.json", "recent.json", "global_stats.bin"):
             p = dst / name
             print(f"  check {name}: {'OK' if p.exists() else 'MISSING'}")
-        epub_c = len(list(dst.glob("epub_*")))
-        epub_x = len(list(src.glob("epub_*")))
-        print(f"  epub_* dirs: casper={epub_c} crosspoint={epub_x}")
 
     return 1 if errors else 0
 

@@ -39,7 +39,7 @@ struct LayoutParams {
   bool measureOnly = false;
 };
 
-// Pixel gap for extra paragraph spacing (matches CasperSettings height enum).
+// Pixel gap for extra paragraph spacing (matches CrossPointSettings height enum).
 inline int extraParaGapPx(int bodyLine, uint8_t height) {
   if (bodyLine <= 0) return 1;
   switch (height) {

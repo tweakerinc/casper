@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "components/themes/minimal/MinimalTheme.h"
 
 class GfxRenderer;

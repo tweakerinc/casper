@@ -80,7 +80,7 @@ std::string idHex(const std::string& path) {
 }
 
 std::string bookRoot(const std::string& path, const char* casperRoot) {
-  std::string d = casperRoot ? casperRoot : kCasperRoot;
+  std::string d = casperRoot ? casperRoot : kCrossPointRoot;
   d += "/book_";
   d += idHex(path);
   return d;
@@ -94,20 +94,19 @@ std::string rivuletDir(const std::string& path, const char* casperRoot) {
   return bookRoot(path, casperRoot) + "/rivulet";
 }
 
-bool isCasperPackageRoot(const std::string& cacheDir) {
+bool isCrossPointPackageRoot(const std::string& cacheDir) {
   if (cacheDir.empty()) return false;
   // Exact or trailing match for "/.crosspoint"
-  if (cacheDir == kCasperRoot) return true;
+  if (cacheDir == kCrossPointRoot) return true;
   if (cacheDir == "/.crosspoint/") return true;
   static constexpr const char kTail[] = "/.crosspoint";
   constexpr size_t kTailLen = sizeof(kTail) - 1;
   return cacheDir.size() >= kTailLen &&
-         (cacheDir.compare(cacheDir.size() - kTailLen, kTailLen, kTail) == 0 ||
-          cacheDir == ".crosspoint");
+         (cacheDir.compare(cacheDir.size() - kTailLen, kTailLen, kTail) == 0 || cacheDir == ".crosspoint");
 }
 
 std::string legacyEpubHashDir(const std::string& path, const char* root) {
-  std::string d = root ? root : kCasperRoot;
+  std::string d = root ? root : kCrossPointRoot;
   d += "/epub_";
   d += std::to_string(std::hash<std::string>{}(path));
   return d;

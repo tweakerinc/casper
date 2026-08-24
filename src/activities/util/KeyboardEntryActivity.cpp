@@ -112,7 +112,7 @@ const fui::KeyboardLayout URL_SNIPPET_LAYOUT{URL_SNIP_ROWS, 4};
 
 fui::KeyboardLayoutId layoutForLanguage(const Language language) {
   // EN-only product builds only define Language::EN in the generated enum.
-#ifndef CASPER_I18N_ENGLISH_ONLY
+#ifndef CROSSPOINT_I18N_ENGLISH_ONLY
   switch (language) {
     case Language::FR:
       return fui::KeyboardLayoutId::AzertyFr;

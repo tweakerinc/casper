@@ -1,23 +1,23 @@
-# Casper (on CrossPoint Reader 1.5.0)
+# CrossPoint (on CrossPoint Reader 1.5.0)
 
-**Location:** `C:\Users\m\Documents\Casper`  
+**Location:** `C:\Users\m\Documents\CrossPoint`  
 **Base:** [crosspoint-reader `release/1.5.0`](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)  
 **Branch:** `casper/ui-on-1.5`  
 **Photo tour:** [docs/casper.md](./docs/casper.md)
 
 ## Goal
 
-Stable **CrossPoint 1.5 engine**, with a **Casper UI overlay**:
-- Product branding (logo, “Casper” strings, web portal titles, User-Agent)
+Stable **CrossPoint 1.5 engine**, with a **CrossPoint UI overlay**:
+- Product branding (logo, “CrossPoint” strings, web portal titles, User-Agent)
 - Factory look-and-feel defaults
 - **Dashboard / Minimal home themes** + reading stats (ported onto 1.5 APIs)
 - CrossInk-style home interaction, reader chrome, and dictionary presentation
 
 | In scope | Out of scope (intentionally) |
 |----------|------------------------------|
-| Boot logo + “Casper” wordmark | Custom dictionary stack / multi-word selection from old fork |
+| Boot logo + “CrossPoint” wordmark | Custom dictionary stack / multi-word selection from old fork |
 | Product name strings, web titles, User-Agent | Battery gauge poll changes / HalPowerManager rewrites |
-| Serial / settings version labels as Casper | CrossInk KOReader Auto Upload Options rewrites |
+| Serial / settings version labels as CrossPoint | CrossInk KOReader Auto Upload Options rewrites |
 | Default settings that affect look/feel | Side-button release-only / hybrid page-turn experiments |
 | Light sleep wallpaper default; clean default sleep screen | Full CrossInk HomeActivity rewrite / carousel artwork |
 | Dashboard + Minimal themes + book/global reading stats | CXDict / `lib/Dictionary` experimental stack |
@@ -26,7 +26,7 @@ Stable **CrossPoint 1.5 engine**, with a **Casper UI overlay**:
 
 ## Strategy: 1.5 bones + UI overlay
 
-Casper does **not** replace the CrossPoint 1.5 reader pipeline. It:
+CrossPoint does **not** replace the CrossPoint 1.5 reader pipeline. It:
 
 1. Keeps stock EPUB/TXT/XTC, dictionary folder (`/dictionaries` StarDict), KOReader sync, and HAL as shipped in 1.5.
 2. Extends theme APIs only where needed (`drawRecentBookCover` optional stats args; `drawStatusBar` optional time-left).
@@ -37,7 +37,7 @@ CrossInk is a **reference design**, not a tree to robocopy.
 
 ## Critical API differences (1.5 vs CrossInk)
 
-| Area | CrossPoint 1.5 | CrossInk / Casper overlay |
+| Area | CrossPoint 1.5 | CrossInk / CrossPoint overlay |
 |------|----------------|---------------------------|
 | `drawRecentBookCover` | base signature without stats | extended with defaulted `stats`, `progressPercent`, `globalStats`, `chapterTitle` |
 | MinimalTheme | n/a | metrics + `drawButtonHints` selection highlight |
@@ -108,9 +108,9 @@ There is **no** automatic copy from older CrossInk FNV-64 folders (that was remo
 
 ### Sleep-screen stats (docs only — not implemented)
 
-CrossInk can show book cover + reading stats on the sleep screen (Dashboard/Minimal stats sleep modes) instead of logo/blank. Casper does **not** implement those modes unless they become trivial later.
+CrossInk can show book cover + reading stats on the sleep screen (Dashboard/Minimal stats sleep modes) instead of logo/blank. CrossPoint does **not** implement those modes unless they become trivial later.
 
-### Dashboard layout (Casper tweak)
+### Dashboard layout (CrossPoint tweak)
 
 **Book column:**
 
@@ -127,7 +127,7 @@ CrossInk can show book cover + reading stats on the sleep screen (Dashboard/Mini
 | Sessions | Reading Time | Pages/Min |
 | Avg Session | Books Read | X3: Streak / X4: Pages Turned |
 
-## Reader chrome (Casper redesign)
+## Reader chrome (CrossPoint redesign)
 
 All top-row text uses **SMALL_FONT_ID** (same as battery %).
 
@@ -177,7 +177,7 @@ Global long hold while pressed triggers sleep/refresh immediately (CrossInk-styl
 
 ## Dictionary presentation
 
-### StarDict folder structure (Casper / CrossPoint 1.5)
+### StarDict folder structure (CrossPoint / CrossPoint 1.5)
 
 **One folder per pack** under `/dictionaries/` or `/.dictionaries/`:
 
@@ -208,14 +208,14 @@ Global long hold while pressed triggers sleep/refresh immediately (CrossInk-styl
 
 ## OTA updates (GitHub Releases)
 
-Casper pulls firmware from **this fork only** — never CrossPoint stock releases.
+CrossPoint pulls firmware from **this fork only** — never CrossPoint stock releases.
 
 | Item | Value |
 |------|--------|
 | API endpoint | `https://api.github.com/repos/TweakerInc/casper/releases/latest` |
-| Build flag | `-DCASPER_OTA_RELEASE_URL=...` in `platformio.ini` `[base]` |
+| Build flag | `-DCROSSPOINT_OTA_RELEASE_URL=...` in `platformio.ini` `[base]` |
 | Device menu | Settings → System → **Check for updates** |
-| Asset name | **`Casper-v0.1.0`** or **`Casper-v0.1.0.bin`** (also accepts `firmware.bin`) |
+| Asset name | **`CrossPoint-v0.1.0`** or **`CrossPoint-v0.1.0.bin`** (also accepts `firmware.bin`) |
 | Version compare | Semver tags `v0.1.0`, `v0.1.1`, … vs `CROSSPOINT_VERSION` |
 
 ### Publishing a release
@@ -228,20 +228,20 @@ GitHub’s “Source code” zip is **always** the **git tag’s commit**. Uploa
    ```bash
    pio run -e gh_release
    ```
-   Post-script copies to `dist/Casper-<version>.bin` (e.g. `dist/Casper-v0.1.8.bin`).
+   Post-script copies to `dist/CrossPoint-<version>.bin` (e.g. `dist/CrossPoint-v0.1.8.bin`).
 4. **Push source before or when creating the release** (remote `casper` = `tweakerinc/casper`):
    ```bash
    git push casper HEAD:main
-   git tag -a v0.1.8 -m "Casper v0.1.8"
+   git tag -a v0.1.8 -m "CrossPoint v0.1.8"
    git push casper v0.1.8
    ```
    If the tag already exists on an old commit and you are re-shipping that version:
    ```bash
-   git tag -f -a v0.1.8 -m "Casper v0.1.8"
+   git tag -f -a v0.1.8 -m "CrossPoint v0.1.8"
    git push casper v0.1.8 --force
    ```
 5. Create/edit the GitHub release on **TweakerInc/casper** with tag **exactly** matching the version (`v0.1.8`). Prefer “Choose a tag” → the tag you just pushed (not a floating “main” without a tag).
-6. Attach `dist/Casper-v0.1.8.bin` (or `Casper-v0.1.8` without extension if you prefer).
+6. Attach `dist/CrossPoint-v0.1.8.bin` (or `CrossPoint-v0.1.8` without extension if you prefer).
 7. On device: **Settings → System → Check for updates** → Wi‑Fi → confirm install.
    Device reboots into the new partition on success.
 
@@ -261,7 +261,7 @@ GitHub’s “Source code” zip is **always** the **git tag’s commit**. Uploa
 - **Source Serif 4** — UI chrome + alternate reader  
 - Bitter / Lexend are **not** shipping built-ins (Bitter removed; Lexend not product). SD packs still work for extra faces.
 
-## Factory defaults (Casper)
+## Factory defaults (CrossPoint)
 
 | Setting | Value |
 |---------|--------|
@@ -290,7 +290,7 @@ Home covers use **cover-fill** (scale = max of width/height ratios, centered ove
 
 - Full **Lyra Carousel** artwork and selection chrome (stub uses Lyra drawing + carousel metrics)
 - Multi-book home swap / carousel SD frame cache from CrossInk
-- Full CrossInk time-left estimator (session pace floors, progress floor); Casper uses simplified pace × remaining pages
+- Full CrossInk time-left estimator (session pace floors, progress floor); CrossPoint uses simplified pace × remaining pages
 - Extra built-in families beyond Literata + Source Serif (flash budget)
 - CXDict / multi-word selection stack
 - Sleep-screen stats modes (cover + stats on sleep)
@@ -299,7 +299,7 @@ Home covers use **cover-fill** (scale = max of width/height ratios, centered ove
 ## Build
 
 ```bat
-cd /d C:\Users\m\Documents\Casper
+cd /d C:\Users\m\Documents\CrossPoint
 "%USERPROFILE%\.platformio\penv\Scripts\pio.exe" run -e default
 ```
 
@@ -315,7 +315,7 @@ python scripts/gen_i18n.py lib/I18n/translations lib/I18n/
 
 | Path | Role |
 |------|------|
-| `C:\Users\m\Documents\Casper` | **Casper** = CrossPoint 1.5 + branding + Dashboard UI overlay |
+| `C:\Users\m\Documents\CrossPoint` | **CrossPoint** = CrossPoint 1.5 + branding + Dashboard UI overlay |
 | `E:\casper` | Experimental fork — reference only |
 | `C:\Users\m\CrossInk` | Daily experimental worktree / design reference |
 

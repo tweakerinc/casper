@@ -25,8 +25,7 @@ uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style st
 }
 
 // 2-bit glyph sample: returns draw-pipeline value (0 black … 3 white).
-inline uint8_t sample2BitBmpVal(const uint8_t* bitmap, const int width, const int height, const int x,
-                                const int y) {
+inline uint8_t sample2BitBmpVal(const uint8_t* bitmap, const int width, const int height, const int x, const int y) {
   if (x < 0 || y < 0 || x >= width || y >= height) return 3;
   const int pos = y * width + x;
   const uint8_t byte = bitmap[pos >> 2];
@@ -40,8 +39,8 @@ inline uint8_t sample2BitBmpVal(const uint8_t* bitmap, const int width, const in
 // thing that made capitals read bold under Dense).
 inline bool inkBw2Bit(const uint8_t bmpVal, const GfxRenderer::BwGlyphWeight weight, const uint8_t* bitmap,
                       const int width, const int height, const int x, const int y) {
-  if (bmpVal >= 3) return false;       // white
-  if (bmpVal < 2) return true;         // solid + dark fringe — all weights
+  if (bmpVal >= 3) return false;  // white
+  if (bmpVal < 2) return true;    // solid + dark fringe — all weights
   // bmpVal == 2: light fringe
   if (weight == GfxRenderer::BwGlyphWeight::Normal) return false;
   if (weight == GfxRenderer::BwGlyphWeight::Dense) return true;
@@ -610,9 +609,9 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
     // still reports its own defect but no frame can flood the link.
     if (g_outOfRangeLogs < kMaxOutOfRangeLogsPerFrame) {
       ++g_outOfRangeLogs;
-      LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)%s", x, y, phyX, phyY,
-              g_outOfRangeLogs == kMaxOutOfRangeLogsPerFrame ? " (further out-of-range pixels this frame suppressed)"
-                                                            : "");
+      LOG_ERR(
+          "GFX", "!! Outside range (%d, %d) -> (%d, %d)%s", x, y, phyX, phyY,
+          g_outOfRangeLogs == kMaxOutOfRangeLogsPerFrame ? " (further out-of-range pixels this frame suppressed)" : "");
     }
     return;
   }
@@ -2313,7 +2312,7 @@ int GfxRenderer::getLineHeight(const int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  // Pitch = advanceY × family scale (see CasperSettings::getReaderLineCompression).
+  // Pitch = advanceY × family scale (see CrossPointSettings::getReaderLineCompression).
   // Soft floor (~88% of max ink) only blocks pathological crush; denser faces
   // (Literata → Bookerly) must be allowed under full ascender+|descender|.
   const auto fontIt = fontMap.find(fontId);

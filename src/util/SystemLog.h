@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-// Buffered, rotating system log on SD: /.casper-logs/log_NNNNN.log
+// Buffered, rotating system log on SD: /.crosspoint-logs/log_NNNNN.log
 // Hidden folder (leading dot) for logs, QR timing, and crash reports.
 // Designed for multi-hour captures without tanking page turns:
 //   - lines go to a small RAM buffer
@@ -13,7 +13,7 @@
 //   0 = Off     (default; no field logs)
 //   1 = Timing  (boot, sleep/wake, open book, page turn, network, heap samples)
 //   2 = Verbose (+ activity enter/exit, extra detail)
-// Crash reports (/.casper-logs/crash_report.txt) are always written when a panic occurs.
+// Crash reports (/.crosspoint-logs/crash_report.txt) are always written when a panic occurs.
 
 namespace SystemLog {
 

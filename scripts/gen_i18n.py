@@ -143,7 +143,7 @@ def load_translations(
     if english_only and not parsed:
         raise ValueError("english_only set but no YAML with _language_code: EN found")
     if english_only and verbose:
-        print("I18n: ENGLISH ONLY (CASPER_I18N_ENGLISH_ONLY) — other languages omitted from flash")
+        print("I18n: ENGLISH ONLY (CROSSPOINT_I18N_ENGLISH_ONLY) — other languages omitted from flash")
 
     # Identify the English file (must exist)
     english_file = None
@@ -1006,7 +1006,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--english-only",
         action="store_true",
-        help="Emit only English strings (Casper thin product flash cut)",
+        help="Emit only English strings (CrossPoint thin product flash cut)",
     )
     args = parser.parse_args()
     main(
@@ -1021,7 +1021,7 @@ else:
     try:
         Import("env")  # type: ignore[name-defined]
         # Default: all languages (CrossPoint-compatible). Opt into EN-only with
-        # -DCASPER_I18N_ENGLISH_ONLY=1. CASPER_I18N_ALL forces full set if both set.
+        # -DCROSSPOINT_I18N_ENGLISH_ONLY=1. CROSSPOINT_I18N_ALL forces full set if both set.
         cpp = env.Flatten(env.get("CPPDEFINES", []))  # type: ignore[name-defined]
         def _has_define(name: str) -> bool:
             for d in cpp:
@@ -1033,7 +1033,7 @@ else:
                     return True
             return False
 
-        en_only = _has_define("CASPER_I18N_ENGLISH_ONLY") and not _has_define("CASPER_I18N_ALL")
+        en_only = _has_define("CROSSPOINT_I18N_ENGLISH_ONLY") and not _has_define("CROSSPOINT_I18N_ALL")
         main(strip_unused=True, english_only=en_only)
     except NameError:
         pass

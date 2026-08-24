@@ -20,7 +20,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -136,9 +136,9 @@ void FileBrowserActionActivity::activateSelected() {
     case FileBrowserAction::ReadingStats: {
       std::string cachePath = BookReadingStats::cachePathForBook(bookPath);
       if (cachePath.empty() && FsHelpers::hasEpubExtension(bookPath)) {
-        cachePath = Epub(bookPath, CasperPaths::kPackageCacheRoot).getCachePath();
+        cachePath = Epub(bookPath, CrossPointPaths::kPackageCacheRoot).getCachePath();
       } else if (cachePath.empty() && FsHelpers::hasXtcExtension(bookPath)) {
-        Xtc xtc(bookPath, CasperPaths::kPackageCacheRoot);
+        Xtc xtc(bookPath, CrossPointPaths::kPackageCacheRoot);
         if (xtc.load()) cachePath = xtc.getCachePath();
       }
       BookReadingStats stats = BookReadingStats::loadForBook(bookPath);
@@ -291,7 +291,7 @@ void FileBrowserActionActivity::loop() {
   if (bookMode && !synopsisWarmAttempted) {
     synopsisWarmAttempted = true;
     if (FsHelpers::hasEpubExtension(bookPath)) {
-      Epub epub(bookPath, CasperPaths::kPackageCacheRoot);
+      Epub epub(bookPath, CrossPointPaths::kPackageCacheRoot);
       const std::string descPath = epub.getCachePath() + "/description.html";
       if (Storage.exists(descPath.c_str())) {
         const uint32_t t0 = millis();

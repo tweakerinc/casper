@@ -8,8 +8,8 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -358,27 +358,27 @@ void TxtReaderActivity::renderPage() {
         int x = cachedOrientedMarginLeft;
         const bool lineIsRtl = BidiUtils::startsWithRtl(line.c_str(), BidiUtils::RTL_PARAGRAPH_PROBE_DEPTH);
         uint8_t effectiveAlignment = cachedParagraphAlignment;
-        if (lineIsRtl && (effectiveAlignment == CasperSettings::LEFT_ALIGN ||
-                          effectiveAlignment == CasperSettings::JUSTIFIED)) {
-          effectiveAlignment = CasperSettings::RIGHT_ALIGN;
+        if (lineIsRtl && (effectiveAlignment == CrossPointSettings::LEFT_ALIGN ||
+                          effectiveAlignment == CrossPointSettings::JUSTIFIED)) {
+          effectiveAlignment = CrossPointSettings::RIGHT_ALIGN;
         }
         const int textWidth = renderer.getTextAdvanceX(cachedFontId, line.c_str(), EpdFontFamily::REGULAR);
 
         // Apply text alignment
         switch (effectiveAlignment) {
-          case CasperSettings::LEFT_ALIGN:
+          case CrossPointSettings::LEFT_ALIGN:
           default:
             // x already set to left margin
             break;
-          case CasperSettings::CENTER_ALIGN: {
+          case CrossPointSettings::CENTER_ALIGN: {
             x = cachedOrientedMarginLeft + (contentWidth - textWidth) / 2;
             break;
           }
-          case CasperSettings::RIGHT_ALIGN: {
+          case CrossPointSettings::RIGHT_ALIGN: {
             x = cachedOrientedMarginLeft + contentWidth - textWidth;
             break;
           }
-          case CasperSettings::JUSTIFIED:
+          case CrossPointSettings::JUSTIFIED:
             // For plain text, justified is treated as left-aligned
             // (true justification would require word spacing adjustments)
             break;

@@ -1,4 +1,4 @@
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 
 #include <HalGPIO.h>
 #include <HalStorage.h>
@@ -29,7 +29,7 @@ void copyToField(char* dest, const char* src, const size_t maxLen) {
 
 }  // namespace
 
-void CasperSettings::setDefaultButtonFunctionMap(uint8_t* map, const uint8_t count) {
+void CrossPointSettings::setDefaultButtonFunctionMap(uint8_t* map, const uint8_t count) {
   if (map == nullptr || count == 0) return;
   const uint8_t defaults[HW_REMAP_BUTTON_COUNT] = {BTN_FUNC_BACK, BTN_FUNC_CONFIRM, BTN_FUNC_UP,
                                                    BTN_FUNC_DOWN, BTN_FUNC_LEFT,    BTN_FUNC_RIGHT};
@@ -38,7 +38,7 @@ void CasperSettings::setDefaultButtonFunctionMap(uint8_t* map, const uint8_t cou
   }
 }
 
-bool CasperSettings::isButtonFunctionMapValid(const uint8_t* map, const uint8_t count) {
+bool CrossPointSettings::isButtonFunctionMapValid(const uint8_t* map, const uint8_t count) {
   if (map == nullptr || count == 0) return false;
   bool hasBack = false;
   bool hasConfirm = false;
@@ -75,7 +75,7 @@ bool CasperSettings::isButtonFunctionMapValid(const uint8_t* map, const uint8_t 
   return hasBack && hasConfirm && hasPrev && hasNext;
 }
 
-void CasperSettings::syncLegacyFrontButtonsFromHwMap() {
+void CrossPointSettings::syncLegacyFrontButtonsFromHwMap() {
   auto findHw = [this](const uint8_t func, const uint8_t fallback) -> uint8_t {
     for (uint8_t hw = 0; hw < FRONT_BUTTON_HARDWARE_COUNT; hw++) {
       if (hwButtonFunction[hw] == func) return hw;
@@ -91,7 +91,7 @@ void CasperSettings::syncLegacyFrontButtonsFromHwMap() {
   frontButtonRight = findHw(BTN_FUNC_RIGHT, FRONT_HW_RIGHT);
 }
 
-bool CasperSettings::saveButtonMapSidecar() const {
+bool CrossPointSettings::saveButtonMapSidecar() const {
   // Tiny text file: "0,1,2,3,2,3\n" — independent of settings.json.
   char line[32];
   int n = 0;
@@ -108,7 +108,7 @@ bool CasperSettings::saveButtonMapSidecar() const {
   return Storage.writeFile(buttonMapSidecarPath(), String(line));
 }
 
-bool CasperSettings::loadButtonMapSidecar() {
+bool CrossPointSettings::loadButtonMapSidecar() {
   const char* path = buttonMapSidecarPath();
   if (!Storage.exists(path)) return false;
   const String raw = Storage.readFile(path);
@@ -144,7 +144,7 @@ bool CasperSettings::loadButtonMapSidecar() {
   return true;
 }
 
-void CasperSettings::applyButtonFunctionMap(const uint8_t* map) {
+void CrossPointSettings::applyButtonFunctionMap(const uint8_t* map) {
   if (map == nullptr || !isButtonFunctionMapValid(map)) return;
   for (uint8_t i = 0; i < HW_REMAP_BUTTON_COUNT; i++) {
     hwButtonFunction[i] = map[i];
@@ -157,7 +157,7 @@ void CasperSettings::applyButtonFunctionMap(const uint8_t* map) {
   }
 }
 
-void CasperSettings::validateFrontButtonMapping(CasperSettings& settings) {
+void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings) {
   // Prefer the physical→function map; repair to defaults if incomplete.
   // Never force Up/Down onto front keys when recovering from legacy fields —
   // that is what made Left/Right remaps look like they "reverted" after wake.
@@ -199,7 +199,7 @@ void CasperSettings::validateFrontButtonMapping(CasperSettings& settings) {
   settings.syncLegacyFrontButtonsFromHwMap();
 }
 
-uint8_t CasperSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue) {
+uint8_t CrossPointSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue) {
   switch (legacyValue) {
     case SLEEP_1_MIN:
       return 1;
@@ -215,8 +215,8 @@ uint8_t CasperSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue) {
   }
 }
 
-void CasperSettings::toJson(JsonDocument& doc) const {
-  const CasperSettings& s = *this;
+void CrossPointSettings::toJson(JsonDocument& doc) const {
+  const CrossPointSettings& s = *this;
 
   // Base list by const ref — never copy SettingInfo vectors during save (OOM
   // under reader heap pressure → bad_alloc → abort; see crash_report abort in
@@ -289,7 +289,7 @@ void CasperSettings::toJson(JsonDocument& doc) const {
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
   doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
 
-  // Casper migration flags (not in SettingsList).
+  // CrossPoint migration flags (not in SettingsList).
   doc["casperHomeMigrated"] = casperHomeMigrated;
   doc["casperControlsMigrated"] = casperControlsMigrated;
   doc["casperDoublePressClipMigrated"] = casperDoublePressClipMigrated;
@@ -351,8 +351,8 @@ void CasperSettings::toJson(JsonDocument& doc) const {
   doc["statusBarFontSize"] = statusBarFontSize;
 }
 
-bool CasperSettings::fromJson(JsonVariantConst doc) {
-  CasperSettings& s = *this;
+bool CrossPointSettings::fromJson(JsonVariantConst doc) {
+  CrossPointSettings& s = *this;
   bool needsResave = false;
 
   auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
@@ -519,7 +519,7 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
 
   // Compact builtins: Source Serif 4 (0) + Literata (1). Remap older multi-family IDs.
   // Old: 0=Lexend, 1=Bitter, 2=Source Serif, 3=Literata. Slot 1 is now Literata.
-  // Factory (no fontFamily key yet): Literata 12 — see CasperSettings member defaults.
+  // Factory (no fontFamily key yet): Literata 12 — see CrossPointSettings member defaults.
   const uint8_t slimMigrated = doc["casperBuiltinFontsSlimMigrated"] | (uint8_t)0;
   if (slimMigrated == 0) {
     if (doc["fontFamily"].isNull() && sdFontFamilyName[0] == '\0') {
@@ -635,7 +635,7 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
   statusBarTimeLeft =
       clamp(doc["statusBarTimeLeft"] | (uint8_t)TIME_LEFT_CHAPTER, STATUS_BAR_TIME_LEFT_COUNT, TIME_LEFT_CHAPTER);
 
-  // One-time Casper home migration flag. Never overwrite keys the user already saved —
+  // One-time CrossPoint home migration flag. Never overwrite keys the user already saved —
   // only seed factory defaults when a field is absent from settings.json.
   const uint8_t migrated = doc["casperHomeMigrated"] | (uint8_t)0;
   if (migrated == 0) {
@@ -1124,12 +1124,12 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
                                     LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["longPressSideA"].isNull()) {
-    longPressSideA =
-        clamp(doc["longPressSideA"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
+    longPressSideA = clamp(doc["longPressSideA"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT,
+                           (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["longPressSideB"].isNull()) {
-    longPressSideB =
-        clamp(doc["longPressSideB"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT, (uint8_t)LP_MENU_DISABLED);
+    longPressSideB = clamp(doc["longPressSideB"] | (uint8_t)LP_MENU_DISABLED, LONG_PRESS_MENU_FUNCTION_COUNT,
+                           (uint8_t)LP_MENU_DISABLED);
   }
   if (!doc["orientationFlipWith"].isNull()) {
     orientationFlipWith =
@@ -1216,24 +1216,24 @@ bool CasperSettings::fromJson(JsonVariantConst doc) {
   return true;
 }
 
-bool CasperSettings::readingStatsTrackingEnabled() const {
+bool CrossPointSettings::readingStatsTrackingEnabled() const {
   // X4 has no RTC — session/pace/time-left stats are not meaningful. Never track.
   if (!gpio.deviceIsX3()) return false;
   return readingStatsEnabled != 0;
 }
 
-bool CasperSettings::statusBarCornerHas(const uint8_t content) const {
+bool CrossPointSettings::statusBarCornerHas(const uint8_t content) const {
   if (content == CORNER_HIDE) return false;
   return statusBarUpperLeft == content || statusBarUpperMiddle == content || statusBarUpperRight == content ||
          statusBarLowerLeft == content || statusBarLowerMiddle == content || statusBarLowerRight == content;
 }
 
-bool CasperSettings::systemStatusBarHas(const uint8_t content) const {
+bool CrossPointSettings::systemStatusBarHas(const uint8_t content) const {
   if (content == SYS_SLOT_HIDE) return false;
   return systemStatusBarLeft == content || systemStatusBarMiddle == content || systemStatusBarRight == content;
 }
 
-void CasperSettings::syncSystemStatusLegacyFromSlots() {
+void CrossPointSettings::syncSystemStatusLegacyFromSlots() {
   // System clock show/hide follows whether Clock is placed on the system bar.
   // Battery display mode (systemBatteryDisplay) is independent of slot placement;
   // reader battery uses readerBatteryDisplay + hideBatteryPercentage master separately.
@@ -1241,7 +1241,7 @@ void CasperSettings::syncSystemStatusLegacyFromSlots() {
                                                    : static_cast<uint8_t>(STATUS_BAR_CLOCK_HIDE);
 }
 
-void CasperSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content) {
+void CrossPointSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t content) {
   if (content >= SYSTEM_STATUS_SLOT_COUNT) content = SYS_SLOT_HIDE;
   // Penumbra owns the clock/progress on the home screen — never place clock on the system bar.
   if (content == SYS_SLOT_CLOCK && !systemStatusBarAllowsClock()) {
@@ -1257,18 +1257,18 @@ void CasperSettings::assignSystemStatusBarSlot(uint8_t& slotField, uint8_t conte
   syncSystemStatusLegacyFromSlots();
 }
 
-bool CasperSettings::systemStatusBarAllowsClock() const {
+bool CrossPointSettings::systemStatusBarAllowsClock() const {
   return static_cast<UI_THEME>(uiTheme) != UI_THEME::PENUMBRA;
 }
 
-void CasperSettings::stripSystemStatusBarClock() {
+void CrossPointSettings::stripSystemStatusBarClock() {
   if (systemStatusBarLeft == SYS_SLOT_CLOCK) systemStatusBarLeft = SYS_SLOT_HIDE;
   if (systemStatusBarMiddle == SYS_SLOT_CLOCK) systemStatusBarMiddle = SYS_SLOT_HIDE;
   if (systemStatusBarRight == SYS_SLOT_CLOCK) systemStatusBarRight = SYS_SLOT_HIDE;
   syncSystemStatusLegacyFromSlots();
 }
 
-int CasperSettings::batteryWarningThresholdPercent() const {
+int CrossPointSettings::batteryWarningThresholdPercent() const {
   switch (batteryWarning) {
     case BATTERY_WARNING_5:
       return 5;
@@ -1286,7 +1286,7 @@ int CasperSettings::batteryWarningThresholdPercent() const {
   }
 }
 
-void CasperSettings::syncXtcStatusBarModeFromSlots() {
+void CrossPointSettings::syncXtcStatusBarModeFromSlots() {
   // Upper row → top overlay; lower row → bottom; not placed → hide (XTC reader only).
   if (statusBarUpperLeft == CORNER_XTC_STATUS_BAR || statusBarUpperMiddle == CORNER_XTC_STATUS_BAR ||
       statusBarUpperRight == CORNER_XTC_STATUS_BAR) {
@@ -1299,7 +1299,7 @@ void CasperSettings::syncXtcStatusBarModeFromSlots() {
   }
 }
 
-void CasperSettings::assignStatusBarCorner(uint8_t& cornerField, uint8_t content) {
+void CrossPointSettings::assignStatusBarCorner(uint8_t& cornerField, uint8_t content) {
   if (content >= STATUS_BAR_CORNER_CONTENT_COUNT) content = CORNER_HIDE;
   if (content != CORNER_HIDE) {
     uint8_t* slots[] = {&statusBarUpperLeft, &statusBarUpperMiddle, &statusBarUpperRight,
@@ -1325,7 +1325,7 @@ void CasperSettings::assignStatusBarCorner(uint8_t& cornerField, uint8_t content
   syncXtcStatusBarModeFromSlots();
 }
 
-CasperSettings::StatusBarSpec CasperSettings::statusBarSpec() const {
+CrossPointSettings::StatusBarSpec CrossPointSettings::statusBarSpec() const {
   StatusBarSpec spec;
   auto clampSlot = [](uint8_t v) -> uint8_t {
     return v < STATUS_BAR_CORNER_CONTENT_COUNT ? v : static_cast<uint8_t>(CORNER_HIDE);
@@ -1358,7 +1358,7 @@ CasperSettings::StatusBarSpec CasperSettings::statusBarSpec() const {
   return spec;
 }
 
-int CasperSettings::getStatusBarFontId() const {
+int CrossPointSettings::getStatusBarFontId() const {
   switch (statusBarFontSize) {
     case STATUS_BAR_FONT_10:
       return SOURCESERIF4_10_FONT_ID;
@@ -1370,7 +1370,7 @@ int CasperSettings::getStatusBarFontId() const {
   }
 }
 
-int CasperSettings::getStatusBarTextLaneHeight() const {
+int CrossPointSettings::getStatusBarTextLaneHeight() const {
   // Slightly taller than metrics.statusBarVerticalMargin (19) for larger type so
   // lower-lane titles do not collide with the progress bar / page edge.
   switch (statusBarFontSize) {
@@ -1384,7 +1384,7 @@ int CasperSettings::getStatusBarTextLaneHeight() const {
   }
 }
 
-ReaderRenderSpec CasperSettings::readerRenderSpec(const uint16_t viewportWidth,
+ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWidth,
                                                       const uint16_t viewportHeight) const {
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
@@ -1404,7 +1404,7 @@ ReaderRenderSpec CasperSettings::readerRenderSpec(const uint16_t viewportWidth,
   return spec;
 }
 
-float CasperSettings::getReaderLineCompression() const {
+float CrossPointSettings::getReaderLineCompression() const {
   // Multiplies font advanceY (line pitch). Bookerly (SD) is the density reference:
   // its baked advanceY already reads well at 1.0 Normal / 0.95 Tight / 1.1 Wide.
   //
@@ -1449,14 +1449,14 @@ float CasperSettings::getReaderLineCompression() const {
   }
 }
 
-unsigned long CasperSettings::getSleepTimeoutMs() const {
+unsigned long CrossPointSettings::getSleepTimeoutMs() const {
   if (sleepTimeoutMinutes >= SLEEP_TIMEOUT_NEVER_MINUTES) return 0UL;
   const uint8_t minutes =
       std::clamp(sleepTimeoutMinutes, MIN_SLEEP_TIMEOUT_MINUTES, static_cast<uint8_t>(SLEEP_TIMEOUT_NEVER_MINUTES - 1));
   return static_cast<unsigned long>(minutes) * 60UL * 1000UL;
 }
 
-int CasperSettings::getRefreshFrequency() const {
+int CrossPointSettings::getRefreshFrequency() const {
   // Returns pages between maintenance turns, or REFRESH_COUNTDOWN_DISABLED (-1).
   switch (refreshFrequency) {
     case REFRESH_1:
@@ -1477,7 +1477,7 @@ int CasperSettings::getRefreshFrequency() const {
   }
 }
 
-int CasperSettings::getReaderFontId() const {
+int CrossPointSettings::getReaderFontId() const {
   // Check SD card font first
   if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
     int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontSize);
@@ -1520,7 +1520,7 @@ int CasperSettings::getReaderFontId() const {
   }
 }
 
-int CasperSettings::getMenuListFontId() const {
+int CrossPointSettings::getMenuListFontId() const {
   // Fixed Source Serif UI sizes — independent of reader family / SD fonts.
   // Labels: 10pt / 12pt / 14pt / 16pt (shipping default is 12pt).
   switch (menuFontSize) {
@@ -1536,7 +1536,7 @@ int CasperSettings::getMenuListFontId() const {
   }
 }
 
-bool CasperSettings::anyDictionaryEnabled() const {
+bool CrossPointSettings::anyDictionaryEnabled() const {
   // Only multi-select list counts. dictionaryName is a legacy mirror of the first
   // enabled pack and is not used alone (avoids dict working after all bubbles cleared).
   const char* p = dictionaryList;
@@ -1549,7 +1549,7 @@ bool CasperSettings::anyDictionaryEnabled() const {
   return false;
 }
 
-bool CasperSettings::isDictionaryEnabled(const char* folderName) const {
+bool CrossPointSettings::isDictionaryEnabled(const char* folderName) const {
   if (!folderName || folderName[0] == '\0') {
     return false;
   }
@@ -1570,7 +1570,7 @@ bool CasperSettings::isDictionaryEnabled(const char* folderName) const {
   return false;
 }
 
-void CasperSettings::getEnabledDictionaries(std::vector<std::string>& out) const {
+void CrossPointSettings::getEnabledDictionaries(std::vector<std::string>& out) const {
   out.clear();
   const char* p = dictionaryList;
   while (*p) {
@@ -1587,7 +1587,7 @@ void CasperSettings::getEnabledDictionaries(std::vector<std::string>& out) const
   }
 }
 
-void CasperSettings::setEnabledDictionaries(const std::vector<std::string>& names) {
+void CrossPointSettings::setEnabledDictionaries(const std::vector<std::string>& names) {
   dictionaryList[0] = '\0';
   dictionaryName[0] = '\0';
   size_t pos = 0;

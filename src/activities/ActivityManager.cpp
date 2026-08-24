@@ -5,18 +5,16 @@
 
 #include <algorithm>
 
-#include "CasperState.h"
-
+#include "CrossPointState.h"
+#include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
-
-#include "OpdsServerStore.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
-#include "network/CasperWebServerActivity.h"
+#include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
@@ -277,7 +275,7 @@ void ActivityManager::swapActivity(std::unique_ptr<Activity>&& newActivity) {
 }
 
 void ActivityManager::goToFileTransfer() {
-  replaceActivity(std::make_unique<CasperWebServerActivity>(renderer, mappedInput));
+  replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToSettings() {
@@ -409,7 +407,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::RECENTS;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
-    } else if (activityName == "CasperWebServer") {
+    } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     }
     // Do not map Settings → SETTINGS_MENU: that selected the classic bottom-row
@@ -472,15 +470,15 @@ void ActivityManager::persistForSleep() {
 
 uint8_t ActivityManager::classifySleepResumeTarget() const {
   if (isReaderMenuActivity() && isReaderActivity()) {
-    return CasperState::RESUME_READER_MENU;
+    return CrossPointState::RESUME_READER_MENU;
   }
   if (isReaderActivity()) {
-    return CasperState::RESUME_READER;
+    return CrossPointState::RESUME_READER;
   }
   if (isSettingsActivity()) {
-    return CasperState::RESUME_SETTINGS;
+    return CrossPointState::RESUME_SETTINGS;
   }
-  return CasperState::RESUME_HOME;
+  return CrossPointState::RESUME_HOME;
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }

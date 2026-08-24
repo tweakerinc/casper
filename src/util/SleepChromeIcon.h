@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
@@ -54,16 +54,16 @@ inline void applyChromeOrientation(GfxRenderer& renderer) {
     return;
   }
   switch (SETTINGS.orientation) {
-    case CasperSettings::ORIENTATION::LANDSCAPE_CW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
       break;
-    case CasperSettings::ORIENTATION::INVERTED:
+    case CrossPointSettings::ORIENTATION::INVERTED:
       renderer.setOrientation(GfxRenderer::Orientation::PortraitInverted);
       break;
-    case CasperSettings::ORIENTATION::LANDSCAPE_CCW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CCW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
       break;
-    case CasperSettings::ORIENTATION::PORTRAIT:
+    case CrossPointSettings::ORIENTATION::PORTRAIT:
     default:
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
       break;
@@ -130,7 +130,7 @@ inline int batteryGroupWidth(const GfxRenderer& renderer, const uint8_t displayM
 // Width of whatever is drawn in the top-right slot for this chrome context.
 // 0 ⇒ right corner is free → moon flush right.
 inline int rightSlotWidth(const GfxRenderer& renderer, const ChromeContext ctx) {
-  using S = CasperSettings;
+  using S = CrossPointSettings;
   if (ctx == ChromeContext::Home) {
     const uint8_t slot = SETTINGS.systemStatusBarRight;
     if (slot == S::SYS_SLOT_HIDE) return 0;
@@ -185,16 +185,16 @@ inline int rightSlotWidth(const GfxRenderer& renderer, const ChromeContext ctx) 
 
 inline bool leftSlotEmpty(const ChromeContext ctx) {
   if (ctx == ChromeContext::Home) {
-    return SETTINGS.systemStatusBarLeft == CasperSettings::SYS_SLOT_HIDE;
+    return SETTINGS.systemStatusBarLeft == CrossPointSettings::SYS_SLOT_HIDE;
   }
-  return SETTINGS.statusBarUpperLeft == CasperSettings::CORNER_HIDE;
+  return SETTINGS.statusBarUpperLeft == CrossPointSettings::CORNER_HIDE;
 }
 
 inline bool midSlotEmpty(const ChromeContext ctx) {
   if (ctx == ChromeContext::Home) {
-    return SETTINGS.systemStatusBarMiddle == CasperSettings::SYS_SLOT_HIDE;
+    return SETTINGS.systemStatusBarMiddle == CrossPointSettings::SYS_SLOT_HIDE;
   }
-  return SETTINGS.statusBarUpperMiddle == CasperSettings::CORNER_HIDE;
+  return SETTINGS.statusBarUpperMiddle == CrossPointSettings::CORNER_HIDE;
 }
 
 // Under power (top-right). Free right → flush corner. Occupied → 8px left of that chrome.
@@ -282,8 +282,7 @@ inline void drawAtTopChrome(GfxRenderer& renderer, const uint8_t* src, const int
   drawMoonFitted(renderer, src, leftX(renderer), topY(renderer), size);
 }
 
-inline void replaceAtTopChrome(GfxRenderer& renderer, const uint8_t* /*src*/, const int /*srcW*/,
-                               const int /*srcH*/) {
+inline void replaceAtTopChrome(GfxRenderer& renderer, const uint8_t* /*src*/, const int /*srcW*/, const int /*srcH*/) {
   applyChromeOrientation(renderer);
   const int x = leftX(renderer);
   const int y = topY(renderer);

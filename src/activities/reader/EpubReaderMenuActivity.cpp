@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstring>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/icons/settings2.h"
@@ -263,7 +263,7 @@ void EpubReaderMenuActivity::activateSelected() {
                        pendingOrientation = static_cast<uint8_t>(idx);
                        // Same seed as Settings when Reading Orientation changes.
                        pendingFrontButtonFollow =
-                           CasperSettings::defaultFrontButtonFollowForOrientation(pendingOrientation);
+                           CrossPointSettings::defaultFrontButtonFollowForOrientation(pendingOrientation);
                        // Live so footer / list nav match before leaving the menu.
                        SETTINGS.frontButtonFollowOrientation = pendingFrontButtonFollow;
                        requestUpdate();

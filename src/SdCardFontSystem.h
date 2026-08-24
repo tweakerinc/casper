@@ -29,7 +29,7 @@ class SdCardFontSystem {
   void releaseForNetwork(GfxRenderer& renderer);
 
   /// Resolve an SD card font ID from family name + fontSize enum.
-  /// Returns 0 if not found. Used by CasperSettings::getReaderFontId().
+  /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).

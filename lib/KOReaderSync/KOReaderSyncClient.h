@@ -15,10 +15,10 @@ struct KOReaderMetadata {
 };
 
 /**
- * Rich Casper position sent alongside progress uploads. Maps 1:1 onto the
- * Casper-sync extended `position` object (see Casper-sync docs/API.md).
- * The official KOSync server ignores unknown fields; Casper-sync stores it
- * so Casper<->Casper sync is lossless instead of xpath-approximated.
+ * Rich CrossPoint position sent alongside progress uploads. Maps 1:1 onto the
+ * CrossPoint-sync extended `position` object (see CrossPoint-sync docs/API.md).
+ * The official KOSync server ignores unknown fields; CrossPoint-sync stores it
+ * so CrossPoint<->CrossPoint sync is lossless instead of xpath-approximated.
  */
 struct KOReaderRichPosition {
   uint32_t pctQ = 0;                       // Percentage quantized 0..1,000,000 (authoritative)
@@ -40,7 +40,7 @@ struct KOReaderProgress {
   std::string deviceId;                          // Device ID
   int64_t timestamp;                             // Unix timestamp of last update
   std::optional<KOReaderMetadata> metadata;      // Optional document metadata
-  std::optional<KOReaderRichPosition> position;  // Optional rich position (Casper-sync servers only)
+  std::optional<KOReaderRichPosition> position;  // Optional rich position (CrossPoint-sync servers only)
 };
 
 /**

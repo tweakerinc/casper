@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <Memory.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -13,9 +14,7 @@
 #include <cstring>
 #include <string>
 
-#include <HalDisplay.h>
-
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
@@ -692,8 +691,7 @@ void DictionaryWordSelectActivity::drawHints() const {
   // still get hardcoded Left/Right from mapLabels (word-step actions).
   // Passing Left/Right here made remapped Up/Down buttons read "Left"/"Right".
   // Clip mode mirrors classic: Select (mark start) then Done (confirm end).
-  const char* confirmLabel =
-      (mode_ == Mode::Clip && startMarkIdx >= 0) ? tr(STR_DONE) : tr(STR_SELECT);
+  const char* confirmLabel = (mode_ == Mode::Clip && startMarkIdx >= 0) ? tr(STR_DONE) : tr(STR_SELECT);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

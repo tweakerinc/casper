@@ -262,7 +262,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Instead, for large books we use a one-pass batch lookup that scans the ZIP
   // central directory once and matches against spine targets using hash comparison.
   // This is O(n*log(m)) instead of O(n*m) while avoiding memory exhaustion.
-  // See: https://github.com/Casper-reader/Casper-reader/issues/134
+  // See: https://github.com/CrossPoint-reader/CrossPoint-reader/issues/134
 
   std::deque<uint32_t> spineSizes;
   bool useBatchSizes = false;

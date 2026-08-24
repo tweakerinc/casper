@@ -7,12 +7,12 @@
 #include <string>
 #include <vector>
 
-class CasperSettings : public PersistableStore<CasperSettings> {
+class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
   // Private constructor for singleton
-  CasperSettings() = default;
+  CrossPointSettings() = default;
 
-  friend class PersistableStore<CasperSettings>;
+  friend class PersistableStore<CrossPointSettings>;
 
  public:
   enum SLEEP_SCREEN_MODE {
@@ -203,15 +203,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Reader body size (pt). Enum order after casperReaderFontSize8Migrated:
   // 0..5 = 8/10/12/14/16/18. Prior post-pt migr: 0..4 = 10/12/14/16/18.
-  enum FONT_SIZE {
-    SIZE_8 = 0,
-    SIZE_10 = 1,
-    SIZE_12 = 2,
-    SIZE_14 = 3,
-    SIZE_16 = 4,
-    SIZE_18 = 5,
-    FONT_SIZE_COUNT
-  };
+  enum FONT_SIZE { SIZE_8 = 0, SIZE_10 = 1, SIZE_12 = 2, SIZE_14 = 3, SIZE_16 = 4, SIZE_18 = 5, FONT_SIZE_COUNT };
   // Legacy aliases (pre-6-size enum used these names for 12/14/16/18).
   static constexpr uint8_t SMALL = SIZE_12;
   static constexpr uint8_t MEDIUM = SIZE_14;
@@ -381,7 +373,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   };
 
   // Sleep wallpaper style (Dark/Light/Cover/Custom/…). Not used when the sleep
-  // path is Quick Resume (power action or Timeout QR). Default: Casper Light.
+  // path is Quick Resume (power action or Timeout QR). Default: CrossPoint Light.
   uint8_t sleepScreen = LIGHT;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
@@ -419,7 +411,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   uint8_t readerBatteryDisplay = BATTERY_DISPLAY_ICON_PERCENT;
   // Low-battery center message threshold (Bare/Penumbra default 15%).
   uint8_t batteryWarning = BATTERY_WARNING_15;
-  // Field performance log on SD (/.casper-logs/). Off by default; Settings → Enable Logging
+  // Field performance log on SD (/.crosspoint-logs/). Off by default; Settings → Enable Logging
   // turns on Timing capture (SystemLog + QR timing). Crash reports always write regardless.
   uint8_t systemLogLevel = SYSTEM_LOG_OFF;
   // Derived from system status slots (synced on assign); kept for JSON/web + older readers.
@@ -455,7 +447,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // Short power: Quick Resume by default (wallpaper sleep is SHORT_PWRBTN::SLEEP).
   uint8_t shortPwrBtn = PWR_QUICK_RESUME;
   // Long power button press (held past getPowerButtonLongPressDuration); same SHORT_PWRBTN values.
-  // Casper default: force full refresh (short remains sleep).
+  // CrossPoint default: force full refresh (short remains sleep).
   uint8_t longPwrBtn = FORCE_REFRESH;
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
@@ -508,7 +500,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   static constexpr uint8_t SCREEN_MARGIN_MIN = 5;
   static constexpr uint8_t SCREEN_MARGIN_MAX = 40;
   static constexpr uint8_t SCREEN_MARGIN_STEP = 5;
-  // Casper default: 10 px side margin (MIN=5, step=5).
+  // CrossPoint default: 10 px side margin (MIN=5, step=5).
   uint8_t screenMargin = 10;
   // OPDS download destination folder ("" = SD root). Global; edited from the
   // OPDS server list. Persisted via a category-less SettingInfo::String in
@@ -533,14 +525,14 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // One-time: side long-press storage reinterpreted as LONG_PRESS_MENU_FUNCTION.
   uint8_t casperSideLongPressMenuFnMigrated = 0;
   // Long-press Confirm function in EPUB reader (cycles through LONG_PRESS_MENU_FUNCTION values).
-  // Casper: open stock Casper dictionary (not a custom dictionary stack).
+  // CrossPoint: open stock CrossPoint dictionary (not a custom dictionary stack).
   uint8_t longPressMenuFunction = LP_MENU_DICTIONARY;
   // Long-press Back while reading — same action enum as longPressMenuFunction.
   // Default Off: short Back release still leaves to Home.
   // Prefer Double-Press Menu for Clipping Tool (Back release cancels child UIs).
   uint8_t longPressBackFunction = LP_MENU_DISABLED;
   // Two quick Confirm releases (within ~400 ms). Same action enum.
-  // Casper default: Clipping Tool (classic readers often leave this Off; we want
+  // CrossPoint default: Clipping Tool (classic readers often leave this Off; we want
   // long-press Dictionary + double-tap Clip working out of the box).
   // First tap is delayed slightly when this is not Off so a double can be detected.
   uint8_t doublePressMenuFunction = LP_MENU_CLIPPINGS;
@@ -552,7 +544,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // JSON keys remain spectralSideLeft/Right for saved-settings compatibility.
   uint8_t spectralSideLeft = PENUMBRA_SIDE_PANEL;
   uint8_t spectralSideRight = PENUMBRA_SIDE_PANEL;
-  // One-time migration: force Casper home chrome defaults once on old SD cards.
+  // One-time migration: force CrossPoint home chrome defaults once on old SD cards.
   // Default 1 so a first save after factory defaults does not re-force Penumbra
   // if the user already switched theme before reboot.
   uint8_t casperHomeMigrated = 1;
@@ -614,7 +606,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   uint8_t embeddedStyle = 1;
   // Bionic Reading (UI label; JSON key remains focusReadingEnabled for migration).
   // Bolds the first portion of each word — legacy calls this Bionic Reading;
-  // upstream Casper called it Focus Reading. Default off.
+  // upstream CrossPoint called it Focus Reading. Default off.
   uint8_t focusReadingEnabled = 0;
   // Guide Dots (legacy): middle-dot between words to guide the eye. Default off.
   uint8_t guideReadingEnabled = 0;
@@ -642,7 +634,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   uint8_t removeReadBooksFromRecents = 0;
   // Move EPUB to /read/ when marked finished (0 = off by default, 1 = on)
   uint8_t moveFinishedToReadFolder = 0;
-  // X3 only: before deep sleep, copy lifetime stats to /.casper-stats-backup/
+  // X3 only: before deep sleep, copy lifetime stats to /.crosspoint-stats-backup/
   // (one dated file per calendar day when RTC is available). Default on.
   uint8_t autoBackupStats = 1;
   // Idle gap (minutes) for reading-stats sessions / pace samples. Time on a page
@@ -688,8 +680,8 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   // Short-press / wake verification duration. Stays short when short action is
   // Sleep or Quick Resume so a quick tap wakes and re-sleeps correctly.
   uint16_t getPowerButtonDuration() const {
-    const bool shortWake = shortPwrBtn == CasperSettings::SHORT_PWRBTN::SLEEP ||
-                           shortPwrBtn == CasperSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
+    const bool shortWake = shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP ||
+                           shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME;
     return shortWake ? POWER_BUTTON_WAKE_SHORT_MS : POWER_BUTTON_WAKE_LONG_MS;
   }
   uint16_t getPowerButtonWakeDuration() const { return getPowerButtonDuration(); }
@@ -794,7 +786,7 @@ class CasperSettings : public PersistableStore<CasperSettings> {
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 
-  static void validateFrontButtonMapping(CasperSettings& settings);
+  static void validateFrontButtonMapping(CrossPointSettings& settings);
   // True if map has Back, Confirm, and at least one Prev (Left|Up) and Next (Right|Down).
   static bool isButtonFunctionMapValid(const uint8_t* map, uint8_t count = HW_REMAP_BUTTON_COUNT);
   static void setDefaultButtonFunctionMap(uint8_t* map, uint8_t count = HW_REMAP_BUTTON_COUNT);
@@ -812,4 +804,4 @@ class CasperSettings : public PersistableStore<CasperSettings> {
 };
 
 // Helper macro to access settings
-#define SETTINGS CasperSettings::getInstance()
+#define SETTINGS CrossPointSettings::getInstance()

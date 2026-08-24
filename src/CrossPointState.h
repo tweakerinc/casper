@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <string>
 
-class CasperState : public PersistableStore<CasperState> {
-  CasperState() = default;
+class CrossPointState : public PersistableStore<CrossPointState> {
+  CrossPointState() = default;
 
-  friend class PersistableStore<CasperState>;
+  friend class PersistableStore<CrossPointState>;
 
  public:
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
@@ -46,4 +46,4 @@ class CasperState : public PersistableStore<CasperState> {
 };
 
 // Helper macro to access state
-#define APP_STATE CasperState::getInstance()
+#define APP_STATE CrossPointState::getInstance()

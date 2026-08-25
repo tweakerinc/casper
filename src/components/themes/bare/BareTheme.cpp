@@ -19,6 +19,7 @@
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
 #include "util/StringUtils.h"
+#include "util/SystemChromeLive.h"
 
 namespace {
 // Mockup book title/author: Source Serif 4. Footer chrome via MinimalTheme.
@@ -28,7 +29,7 @@ constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
 constexpr int kCoverCornerRadius = 4;
 // Narrow side margin so the cover can use almost the full screen width.
 constexpr int kSideInset = 12;
-constexpr int kTopPadNoChrome = 16;    // air above cover when battery + clock are hidden
+constexpr int kTopPadNoChrome = 16;    // air above cover when top chrome is hidden
 constexpr int kTopPadWithChrome = 10;  // gap under battery/clock row before cover zone
 // Tight title→author so the pair reads as one unit.
 constexpr int kTitleAuthorGap = 3;
@@ -37,13 +38,9 @@ constexpr int kMinGapCoverToText = 10;
 constexpr int kTitleMaxLines = 3;  // full-width wrap; long titles must not ellipsize early
 constexpr int kAuthorMaxLines = 2;
 
-bool bareShowsBattery() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY); }
-
-bool bareShowsClock() { return SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK); }
-
-// Y where content may begin: under optional battery/clock chrome.
+// Y where content may begin: under optional battery/clock/warning chrome.
 int bareContentTopY() {
-  if (!bareShowsBattery() && !bareShowsClock()) {
+  if (!homeNeedsSystemChrome()) {
     return kTopPadNoChrome;
   }
   // Match HomeActivity bare header height (battery row).

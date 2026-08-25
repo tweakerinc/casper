@@ -22,6 +22,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/StringUtils.h"
+#include "util/SystemChromeLive.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -334,8 +335,7 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const auto& metrics = PenumbraMetrics::values;
   const int footerH = metrics.buttonHintsHeight;
   b.centerX = pageW / 2;
-  const bool hasChrome = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                         SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
+  const bool hasChrome = homeNeedsSystemChrome();
   b.contentTop =
       hasChrome
           ? (BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)

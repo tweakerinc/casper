@@ -21,6 +21,7 @@
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
 #include "util/ReaderChromePolicy.h"
+#include "util/SystemChromePolicy.h"
 
 // Internal constants
 namespace {
@@ -1608,7 +1609,8 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
   (void)orientedMarginBottom;
 
   const int originY = topY < 0 ? orientedMarginTop + metrics.topPadding : (topY == 0 ? metrics.topPadding : topY);
-  const int batteryY = originY + kTopChromeBatteryY;
+  const int chromeY = systemchrome::textY(orientedMarginTop, renderer.getScreenHeight());
+  const int batteryY = chromeY;
   const int screenW = renderer.getScreenWidth();
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
   const int rightX = screenW - orientedMarginRight - kTopChromeInsetX;
@@ -1620,7 +1622,8 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     batteryIconSizeForStatusFont(renderer, iconW, iconH);
     (void)iconW;
     const int clearH = std::max(iconH + 10, metrics.statusBarVerticalMargin);
-    renderer.fillRect(orientedMarginLeft, originY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
+    const int clearY = std::min(originY, orientedMarginTop);
+    renderer.fillRect(orientedMarginLeft, clearY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
   }
 
   char timeBuf[16];
@@ -1645,13 +1648,12 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     if (timeText == nullptr || timeText[0] == '\0') return;
     constexpr int kClockFont = SMALL_FONT_ID;
     const int textWidth = renderer.getTextWidth(kClockFont, timeText);
-    const int textY = originY + kTopChromeBatteryY;
     int textX = centerX - textWidth / 2;
     if (align == 0)
       textX = leftX;
     else if (align == 2)
       textX = rightX - textWidth;
-    renderer.drawText(kClockFont, textX, textY, timeText);
+    renderer.drawText(kClockFont, textX, chromeY, timeText);
   };
 
   auto drawBatteryAt = [&](int align) {
@@ -1679,8 +1681,10 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     // "Battery 15% · Charge Soon"
     snprintf(warnBuf, sizeof(warnBuf), "Battery %d%% · %s", warnPctShow, tr(STR_CHARGE_SOON));
     constexpr int kFont = SMALL_FONT_ID;
-    const int textY = originY + kTopChromeBatteryY;
-    const int maxW = std::max(40, (screenW / 2) - 16);
+    using S = CrossPointSettings::SYSTEM_STATUS_SLOT;
+    const bool sidesOccupied =
+        SETTINGS.systemStatusBarLeft != S::SYS_SLOT_HIDE || SETTINGS.systemStatusBarRight != S::SYS_SLOT_HIDE;
+    const int maxW = systemchrome::warningMaxWidth(screenW, leftX, screenW - rightX, sidesOccupied);
     const std::string vis = renderer.truncatedText(kFont, warnBuf, maxW);
     const int tw = renderer.getTextWidth(kFont, vis.c_str());
     int textX = centerX - tw / 2;
@@ -1688,7 +1692,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
       textX = leftX;
     else if (align == 2)
       textX = rightX - tw;
-    renderer.drawText(kFont, textX, textY, vis.c_str());
+    renderer.drawText(kFont, textX, chromeY, vis.c_str());
   };
 
   auto drawSlot = [&](uint8_t content, int align) {

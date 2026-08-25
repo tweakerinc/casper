@@ -37,6 +37,7 @@
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
+#include "util/SystemChromeLive.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
 
@@ -1955,8 +1956,7 @@ void HomeActivity::render(RenderLock&& lock) {
 
     homeMenuShellOnPanel = false;
     renderer.clearScreen(0xFF);
-    const bool chromeOnly = SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                            SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK);
+    const bool chromeOnly = homeNeedsSystemChrome();
     if (chromeOnly) {
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
@@ -2109,16 +2109,13 @@ void HomeActivity::render(RenderLock&& lock) {
       bufferRestored = restoreCoverBuffer();
     }
 
-    // Top chrome (battery icon+% / clock). Bare / Penumbra default chrome off;
-    // Stats always draws the status-bar band (same plate packing on X3 + X4).
+    // Top chrome (battery / clock / Battery Warning). Bare / Penumbra default
+    // is Hide / Warning / Hide — still paint when the warning is live.
     const bool textOnlyHome = isBareTheme() || isPenumbraTheme();
-    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY) ||
-                                                    SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK));
-    // Bare / Penumbra: header only when the user has enabled battery/clock.
+    const bool chromeOnlyMinimal = textOnlyHome && homeNeedsSystemChrome();
+    // Bare / Penumbra: header when battery, clock, or a live Battery Warning.
     if (!textOnlyHome || chromeOnlyMinimal) {
-      // Bare's small status clock must sit at the same Y as the reader status
-      // clock (topPadding + kTopChromeBatteryY). Penumbra keeps y=0 so its
-      // 72pt hero clock layout is unchanged.
+      // Penumbra keeps header y=0 so its 72pt hero clock layout is unchanged.
       const int headerTop = isBareTheme() ? metrics.topPadding : (textOnlyHome ? 0 : metrics.topPadding);
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);

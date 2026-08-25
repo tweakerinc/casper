@@ -4,6 +4,7 @@
 
 #include "DictLookupLayout.h"
 #include "ReaderChromePolicy.h"
+#include "SystemChromePolicy.h"
 
 namespace {
 
@@ -115,4 +116,44 @@ TEST(ReaderChromePolicy, LandscapeLeavesHintStripToTheSide) {
   in.x4 = true;
   in.hintStrip = 0;
   EXPECT_EQ(readerchrome::marginBottom(in), 3 + 10 + (26 + 8));
+}
+
+TEST(SystemChromePolicy, BareDefaultPaintsWarningWhenLow) {
+  systemchrome::HomeTopBarIn in;
+  in.hasWarningSlot = true;
+  in.warnThresholdPercent = 15;
+  in.batteryPercent = 12;
+  EXPECT_TRUE(systemchrome::warningIsLive(in));
+  EXPECT_TRUE(systemchrome::needsHomeTopBar(in));
+}
+
+TEST(SystemChromePolicy, BareDefaultSkipsBarWhenCharged) {
+  systemchrome::HomeTopBarIn in;
+  in.hasWarningSlot = true;
+  in.warnThresholdPercent = 15;
+  in.batteryPercent = 80;
+  EXPECT_FALSE(systemchrome::warningIsLive(in));
+  EXPECT_FALSE(systemchrome::needsHomeTopBar(in));
+}
+
+TEST(SystemChromePolicy, BatterySlotStillShowsBarWhenCharged) {
+  systemchrome::HomeTopBarIn in;
+  in.hasBattery = true;
+  in.batteryPercent = 80;
+  EXPECT_TRUE(systemchrome::needsHomeTopBar(in));
+}
+
+TEST(SystemChromePolicy, ChromeTextClearsPortraitBezelOnBothPanels) {
+  constexpr int kViewableTop = 9;
+  EXPECT_GT(systemchrome::textY(kViewableTop, 800), kViewableTop);  // X4 portrait
+  EXPECT_GT(systemchrome::textY(kViewableTop, 792), kViewableTop);  // X3 portrait
+  EXPECT_GE(systemchrome::textY(kViewableTop, 800), 13);
+  EXPECT_EQ(systemchrome::textY(5, 800), 5 + systemchrome::textAir(800));  // old Y≈5 was inside the bezel
+}
+
+TEST(SystemChromePolicy, WarningUsesFullWidthWhenSidesEmpty) {
+  EXPECT_EQ(systemchrome::warningMaxWidth(480, 15, 15, false), 450);  // X4
+  EXPECT_EQ(systemchrome::warningMaxWidth(528, 15, 15, false), 498);  // X3
+  EXPECT_GT(systemchrome::warningMaxWidth(528, 15, 15, false), systemchrome::warningMaxWidth(480, 15, 15, false));
+  EXPECT_LT(systemchrome::warningMaxWidth(480, 15, 15, true), systemchrome::warningMaxWidth(480, 15, 15, false));
 }

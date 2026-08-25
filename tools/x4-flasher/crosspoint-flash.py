@@ -8,7 +8,8 @@ X3/X4 share the ESP32-C3 .bin. X4 Pro is ESP32-S3 and needs its own image.
 CachyOS:  sudo pacman -S tk esptool
            python3 tools/x4-flasher/crosspoint-flash.py
 
-USB-JTAG (ESP32-C3/S3 native USB) corrupts at 921600. Default baud is 460800.
+USB-JTAG (ESP32-C3/S3 native USB): stub+compress writes junk (same MD5
+mismatch every time). Default is 115200, --no-stub, --no-compress.
 If the serial node is not writable, the GUI asks for admin via pkexec.
 """
 
@@ -27,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 OFFSET = "0x10000"
-DEFAULT_BAUD = "460800"
+DEFAULT_BAUD = "115200"
 BAUDS = ("115200", "230400", "460800", "921600")
 ESP_IMAGE_MAGIC = 0xE9
 CHIP_ID_C3 = 0x0005
@@ -102,6 +103,9 @@ def port_writable(port: str) -> bool:
 
 
 def flash_command(device: Device, port: str, firmware: str, baud: str) -> list[str]:
+    # USB-JTAG on C3/S3: stub+compress writes the packed stream to flash.
+    # Verify then MD5-mismatches with the same hashes every time. ROM loader
+    # + uncompressed payload is slow and actually sticks.
     return find_esptool() + [
         "--chip",
         device.chip,
@@ -109,13 +113,17 @@ def flash_command(device: Device, port: str, firmware: str, baud: str) -> list[s
         port,
         "--baud",
         baud,
+        "--before",
+        "usb-reset",
+        "--no-stub",
         "write-flash",
+        "--no-compress",
         "--flash-mode",
         "dio",
         "--flash-size",
         "16MB",
         "--flash-freq",
-        "80m",
+        "40m",
         OFFSET,
         str(Path(firmware).resolve()),
     ]
@@ -177,7 +185,10 @@ def run_flash_maybe_pkexec(cmd: list[str], port: str, on_line) -> int:
             return run_flash(privileged, on_line)
         on_line("\nPermission denied. Run: sudo usermod -aG uucp $USER  (then log out/in)\n")
     if looks_like_md5_mismatch(blob):
-        on_line("\nFlash verify failed. USB-JTAG often corrupts at high baud — retry at 115200.\n")
+        on_line(
+            "\nFlash verify failed. USB-JTAG stub/compress wrote junk. "
+            "Use --no-stub --no-compress at 115200 (this GUI does that by default).\n"
+        )
     return code
 
 
@@ -400,7 +411,10 @@ def launch_gui() -> int:
             self._select_device("x4")
             self._refresh_ports()
             self.after(100, self._drain_log)
-            self._append("USB-JTAG: 460800 default (921600 often fails MD5). Admin prompt if the port is locked.\n", "warn")
+            self._append(
+                "USB-JTAG: uncompressed ROM loader at 115200. Expect several minutes. Admin prompt if the port is locked.\n",
+                "warn",
+            )
 
         def _device(self) -> Device:
             return DEVICE_BY_KEY[self.device_key.get()]
@@ -538,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Flash CrossPoint to X3, X4, or X4 Pro.")
     parser.add_argument("--device", choices=[d.key for d in DEVICES], help="x3, x4, or x4pro")
     parser.add_argument("--port", help="Serial port, e.g. /dev/ttyACM0")
-    parser.add_argument("--baud", default=DEFAULT_BAUD, help=f"Default {DEFAULT_BAUD} (safer on USB-JTAG than 921600)")
+    parser.add_argument("--baud", default=DEFAULT_BAUD, help=f"Default {DEFAULT_BAUD} (USB-JTAG; do not use 921600)")
     parser.add_argument("firmware", nargs="?", help="Path to the .bin")
     args = parser.parse_args(argv)
     if args.firmware or args.device:

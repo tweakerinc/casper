@@ -114,14 +114,15 @@ TEST(ReaderChromePolicy, X4FooterBandMatchesX3Air) {
 TEST(ReaderChromePolicy, X4PortraitFooterLiftsOffPanelEdge) {
   constexpr int kBareFooter = 34;
   constexpr int kX4Pad = readerchrome::kX4PortraitFooterEdgePad;
-  EXPECT_EQ(kX4Pad, 56);
+  EXPECT_EQ(kX4Pad, 20);
+  EXPECT_LT(kX4Pad, 34);  // must not steal a Recents row
   EXPECT_EQ(readerchrome::portraitFooterEdgePad(false), 0);
   EXPECT_EQ(readerchrome::portraitFooterEdgePad(true), kX4Pad);
   EXPECT_EQ(readerchrome::portraitFooterLayoutH(kBareFooter, false), kBareFooter);
   EXPECT_EQ(readerchrome::portraitFooterLayoutH(kBareFooter, true), kBareFooter + kX4Pad);
-  // X3: flush 34px band. X4: same band, 56px above the front-key housing.
+  // X3: flush 34px band. X4: same band, 20px bezel gap (bar at 746, not 710).
   EXPECT_EQ(readerchrome::portraitFooterBarY(792, kBareFooter, 0, false), 758);
-  EXPECT_EQ(readerchrome::portraitFooterBarY(800, kBareFooter, kX4Pad, false), 710);
+  EXPECT_EQ(readerchrome::portraitFooterBarY(800, kBareFooter, kX4Pad, false), 746);
   EXPECT_EQ(readerchrome::portraitFooterBarY(800, kBareFooter, kX4Pad, true), kX4Pad);
   EXPECT_EQ(readerchrome::portraitFooterBarY(792, kBareFooter, 0, true), 0);
 }

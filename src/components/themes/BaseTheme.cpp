@@ -415,8 +415,8 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     return;
   }
 
-  // Portrait / Portrait inverted. X4 lifts the 34px band above the front-key
-  // housing; X3 stays flush. Reader overlay still uses frontButtonHintReserve.
+  // Portrait / Portrait inverted. X4 adds a small bezel gap under the 34px
+  // band; X3 stays flush. Reader overlay still uses frontButtonHintReserve.
   const int edgePad = readerchrome::portraitFooterEdgePad(!gpio.deviceIsX3());
   const int barY = readerchrome::portraitFooterBarY(pageHeight, stripDepth, edgePad, inverted);
   const int stubY = inverted ? barY : (barY + stripDepth - smallButtonHeight);

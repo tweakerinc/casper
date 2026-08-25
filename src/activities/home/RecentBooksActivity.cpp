@@ -130,7 +130,7 @@ void RecentBooksActivity::loop() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
-      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+      renderer.getScreenHeight() - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing;
 
   if (awaitOpenButtonRelease) {
     if (anyOpenOrNavButtonHeld(mappedInput)) {
@@ -302,7 +302,8 @@ void RecentBooksActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, header);
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int contentHeight =
+      pageHeight - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing;
 
   const int rows = listRowCount();
   if (rows == 0) {

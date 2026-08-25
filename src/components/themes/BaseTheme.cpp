@@ -415,8 +415,8 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     return;
   }
 
-  // Portrait / Portrait inverted. X4 lifts the 34px band off the panel edge;
-  // X3 stays flush. Reader overlay still uses frontButtonHintReserve (no pad).
+  // Portrait / Portrait inverted. X4 lifts the 34px band above the front-key
+  // housing; X3 stays flush. Reader overlay still uses frontButtonHintReserve.
   const int edgePad = readerchrome::portraitFooterEdgePad(!gpio.deviceIsX3());
   const int barY = readerchrome::portraitFooterBarY(pageHeight, stripDepth, edgePad, inverted);
   const int stubY = inverted ? barY : (barY + stripDepth - smallButtonHeight);
@@ -1791,7 +1791,7 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   // Leave room for button hints below and a small top margin so the dialog never
   // spills past the screen edges (long pickers like Customize Reader slots).
   const int topMargin = 8;
-  const int bottomMargin = metrics.buttonHintsHeight + 8;
+  const int bottomMargin = frontButtonFooterLayoutH(renderer) + 8;
   const int maxDialogH = std::max(rowHeight + innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap,
                                   pageHeight - topMargin - bottomMargin);
   const int chromeH = innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap;

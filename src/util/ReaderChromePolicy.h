@@ -16,10 +16,12 @@ inline int portraitFooterLabelAir(const int bandH, const int lineH) {
 }
 
 // Extra px between the 34px label band and the panel edge.
-// X3 already looks spaced (3px coded bezel, most of the 8px band-air is visible).
-// X4's button-edge glass is closer to the 9px *top* bezel than VIEWABLE_MARGIN_BOTTOM
-// (3). Flush 34px still sits the UI_10 line in that hidden strip.
-constexpr int kX4PortraitFooterEdgePad = 9;
+// X3 stays flush: its front keys sit below the visible panel.
+// X4's keys overlay the bottom of the 800px portrait glass. 9px
+// (VIEWABLE_MARGIN_TOP, ~1mm at ~218 PPI) was tried on device and still
+// clipped the UI_10 line. This is a mechanical exclusion (~6.5mm), not the
+// 3px coded VIEWABLE_MARGIN_BOTTOM. Reader overlay stays on the 34px strip.
+constexpr int kX4PortraitFooterEdgePad = 56;
 
 inline int portraitFooterEdgePad(const bool x4) { return x4 ? kX4PortraitFooterEdgePad : 0; }
 

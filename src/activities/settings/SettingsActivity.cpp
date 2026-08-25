@@ -373,9 +373,9 @@ void SettingsActivity::loop() {
   const int listTop = tabTop + metrics.tabBarHeight + metrics.verticalSpacing;
   const int versionBand =
       (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(SMALL_FONT_ID) + 4) : 0;
-  const int listHeight =
-      renderer.getScreenHeight() - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
-                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
+  const int listHeight = renderer.getScreenHeight() -
+                         (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                          BaseTheme::frontButtonFooterLayoutH(renderer) + metrics.verticalSpacing * 2 + versionBand);
   int tx = 0, ty = 0;
   auto buildTabs = [this]() {
     std::vector<TabInfo> tabs;
@@ -447,9 +447,10 @@ void SettingsActivity::loop() {
   const auto& navMetrics = UITheme::getInstance().getMetrics();
   const int navSystemVersionBand =
       (selectedCategoryIndex == categoryCount - 1) ? (renderer.getLineHeight(UI_10_FONT_ID) + 10) : 0;
-  const int settingsListHeight = renderer.getScreenHeight() -
-                                 (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
-                                  navMetrics.buttonHintsHeight + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
+  const int settingsListHeight =
+      renderer.getScreenHeight() -
+      (navMetrics.topPadding + navMetrics.headerHeight + navMetrics.tabBarHeight +
+       BaseTheme::frontButtonFooterLayoutH(renderer) + navMetrics.verticalSpacing * 2 + navSystemVersionBand);
   const int settingsPageItems = GUI.getListPageItems(settingsListHeight, false);
   // Front Up/Down: within-category list ring only
   //   0 = this tab's label, 1..N = list rows (Down past last → tab label).
@@ -825,8 +826,9 @@ void SettingsActivity::render(RenderLock&&) {
   const bool systemTab = selectedCategoryIndex == categoryCount - 1;
   const int versionBand = systemTab ? (renderer.getLineHeight(SMALL_FONT_ID) + 4) : 0;
   const int listTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int listHeight = pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
-                                       metrics.buttonHintsHeight + metrics.verticalSpacing * 2 + versionBand);
+  const int listHeight =
+      pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                    BaseTheme::frontButtonFooterLayoutH(renderer) + metrics.verticalSpacing * 2 + versionBand);
 
   const auto& settings = *currentSettings;
   GUI.drawList(
@@ -889,7 +891,7 @@ void SettingsActivity::render(RenderLock&&) {
 
   if (systemTab) {
     const int bandTop = listTop + listHeight;
-    const int bandBottom = pageHeight - metrics.buttonHintsHeight;
+    const int bandBottom = pageHeight - BaseTheme::frontButtonFooterLayoutH(renderer);
     const int textH = renderer.getLineHeight(SMALL_FONT_ID);
     const int textY = bandTop + std::max(0, (bandBottom - bandTop - textH) / 2);
 #ifndef CROSSPOINT_VERSION

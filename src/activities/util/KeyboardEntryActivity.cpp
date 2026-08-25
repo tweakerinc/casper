@@ -491,8 +491,8 @@ fui::Rect KeyboardEntryActivity::keyboardRect() const {
   const int height = rows * metrics.keyboardKeyHeight + (rows > 1 ? (rows - 1) * gap : 0);
   const int width = pageWidth * metrics.keyboardWidthPercent / 100;
   const int x = (pageWidth - width) / 2;
-  const int y =
-      pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - height + metrics.keyboardVerticalOffset;
+  const int y = pageHeight - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing - height +
+                metrics.keyboardVerticalOffset;
   return fui::Rect{static_cast<int16_t>(x), static_cast<int16_t>(y), static_cast<int16_t>(width),
                    static_cast<int16_t>(height)};
 }
@@ -943,7 +943,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   props.padding = fui::Insets{0, 0, 0, 0};
   // Fingers land low on the bottom row (occlusion) and there is no key below
   // to catch the miss — extend its hit band down to the button hints bar.
-  const int hintsTop = renderer.getScreenHeight() - metrics.buttonHintsHeight;
+  const int hintsTop = renderer.getScreenHeight() - BaseTheme::frontButtonFooterLayoutH(renderer);
   props.bottomHitOverflow = static_cast<int16_t>(std::max(0, hintsTop - (kbRect.y + kbRect.height)));
   fui::keyboard(frame, kbRect, props);
   interactionsReady = true;

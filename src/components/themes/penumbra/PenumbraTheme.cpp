@@ -333,7 +333,7 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
   const auto& metrics = PenumbraMetrics::values;
-  const int footerH = metrics.buttonHintsHeight;
+  const int footerH = BaseTheme::frontButtonFooterLayoutH(renderer);
   b.centerX = pageW / 2;
   const bool hasChrome = homeNeedsSystemChrome();
   b.contentTop =

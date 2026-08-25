@@ -8,14 +8,31 @@
 namespace readerchrome {
 
 // Portrait front-label strip. Same theme height on X3 and X4 (Bare = 34).
-// A 24px X4 cap left ~3px under UI_10, which the 3px viewable bezel clipped
-// so Bare Menu/Library/Read sat on the panel edge. Overlay (no stacked
-// screenMargin) is what reclaims the reader hole, not a shorter footer.
 inline int portraitHintStrip(const int themeHintHeight, const bool /*x4*/) { return std::max(1, themeHintHeight); }
 
 // Leftover px above/below a footer label centered in the band.
 inline int portraitFooterLabelAir(const int bandH, const int lineH) {
   return std::max(0, (std::max(1, bandH) - std::max(1, lineH)) / 2);
+}
+
+// Extra px between the 34px label band and the panel edge.
+// X3 already looks spaced (3px coded bezel, most of the 8px band-air is visible).
+// X4's button-edge glass is closer to the 9px *top* bezel than VIEWABLE_MARGIN_BOTTOM
+// (3). Flush 34px still sits the UI_10 line in that hidden strip.
+constexpr int kX4PortraitFooterEdgePad = 9;
+
+inline int portraitFooterEdgePad(const bool x4) { return x4 ? kX4PortraitFooterEdgePad : 0; }
+
+inline int portraitFooterLayoutH(const int themeHintHeight, const bool x4) {
+  return portraitHintStrip(themeHintHeight, x4) + portraitFooterEdgePad(x4);
+}
+
+// Top of the 34px label band. inverted → pad at the logical top.
+inline int portraitFooterBarY(const int pageH, const int barH, const int edgePad, const bool inverted) {
+  const int pad = std::max(0, edgePad);
+  const int h = std::max(1, barH);
+  if (inverted) return pad;
+  return std::max(0, pageH - pad - h);
 }
 
 struct BottomIn {

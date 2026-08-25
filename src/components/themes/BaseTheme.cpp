@@ -341,6 +341,15 @@ int BaseTheme::frontButtonHintReserve(const GfxRenderer& renderer) {
   return std::max(metrics.sideButtonHintsWidth, kLandscapeFrontHintDepth);
 }
 
+int BaseTheme::frontButtonFooterLayoutH(const GfxRenderer& renderer) {
+  const int strip = frontButtonHintReserve(renderer);
+  const auto o = renderer.getOrientation();
+  const bool landscape =
+      o == GfxRenderer::Orientation::LandscapeClockwise || o == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  if (landscape) return strip;
+  return readerchrome::portraitFooterLayoutH(UITheme::getInstance().getMetrics().buttonHintsHeight, !gpio.deviceIsX3());
+}
+
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4) const {
   // Canonical front-button chrome — home, settings, dictionary, reader menus.
@@ -406,9 +415,15 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     return;
   }
 
-  // Portrait / Portrait inverted.
-  const int barY = inverted ? 0 : (pageHeight - stripDepth);
-  const int stubY = inverted ? 0 : (pageHeight - smallButtonHeight);
+  // Portrait / Portrait inverted. X4 lifts the 34px band off the panel edge;
+  // X3 stays flush. Reader overlay still uses frontButtonHintReserve (no pad).
+  const int edgePad = readerchrome::portraitFooterEdgePad(!gpio.deviceIsX3());
+  const int barY = readerchrome::portraitFooterBarY(pageHeight, stripDepth, edgePad, inverted);
+  const int stubY = inverted ? barY : (barY + stripDepth - smallButtonHeight);
+  if (edgePad > 0) {
+    const int padY = inverted ? 0 : (barY + stripDepth);
+    renderer.fillRect(0, padY, pageWidth, edgePad, false);
+  }
 
   for (int i = 0; i < 4; i++) {
     int x = buttonPositions[i];

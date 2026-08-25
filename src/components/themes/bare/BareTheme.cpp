@@ -16,6 +16,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
 #include "util/StringUtils.h"
@@ -184,12 +185,11 @@ void BareTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
-  const auto& metrics = BareMetrics::values;
 
   // Leave room for battery/clock when the user has them enabled; otherwise a
   // small top pad so the cover sits high but not under the bezel.
   const int contentTop = bareContentTopY();
-  const int footerH = metrics.buttonHintsHeight;
+  const int footerH = BaseTheme::frontButtonFooterLayoutH(renderer);
 
   if (recentBooks.empty()) {
     const char* msg = tr(STR_NO_OPEN_BOOK);

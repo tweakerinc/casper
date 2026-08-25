@@ -213,6 +213,8 @@ class BaseTheme {
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   // Portrait footer height, or thinner landscape side strip for front-key chrome.
   static int frontButtonHintReserve(const GfxRenderer& renderer);
+  // Home/settings layout: hint strip plus X4 edge pad (reader overlay stays on reserve).
+  static int frontButtonFooterLayoutH(const GfxRenderer& renderer);
   virtual int getListRowStep(bool hasSubtitle) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
   // rowApplied: when true, draws a filled radio circle on the right (current

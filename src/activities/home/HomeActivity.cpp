@@ -230,7 +230,7 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   const auto pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int bandTop = metrics.topPadding + metrics.homeTopPadding;
-  const int bandBottom = pageHeight - metrics.buttonHintsHeight;
+  const int bandBottom = pageHeight - BaseTheme::frontButtonFooterLayoutH(renderer);
 
   MinimalMenuItem menuItems[6];
   const int menuCount =
@@ -1658,7 +1658,7 @@ void HomeActivity::loop() {
       if (isPenumbraTheme()) {
         const int pageH = renderer.getScreenHeight();
         const int contentTop = metrics.homeTopPadding;
-        const int contentBottom = pageH - metrics.buttonHintsHeight;
+        const int contentBottom = pageH - BaseTheme::frontButtonFooterLayoutH(renderer);
         // Center band of the content area (title / now-reading block).
         const int bandH = contentBottom - contentTop;
         const int tapTop = contentTop + bandH / 4;
@@ -2276,7 +2276,7 @@ void HomeActivity::render(RenderLock&& lock) {
       renderer,
       Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
            pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                         metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
+                         metrics.homeMenuTopOffset + BaseTheme::frontButtonFooterLayoutH(renderer))},
       static_cast<int>(menuItems.size()),
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
       [&menuItems](int index) { return std::string(menuItems[index]); },

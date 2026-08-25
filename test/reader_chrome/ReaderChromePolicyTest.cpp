@@ -111,6 +111,27 @@ TEST(ReaderChromePolicy, X4FooterBandMatchesX3Air) {
   EXPECT_GT(readerchrome::portraitFooterLabelAir(kBareFooter, kUi10Line), 3);
 }
 
+TEST(ReaderChromePolicy, X4PortraitFooterLiftsOffPanelEdge) {
+  constexpr int kBareFooter = 34;
+  EXPECT_EQ(readerchrome::portraitFooterEdgePad(false), 0);
+  EXPECT_EQ(readerchrome::portraitFooterEdgePad(true), readerchrome::kX4PortraitFooterEdgePad);
+  EXPECT_EQ(readerchrome::portraitFooterLayoutH(kBareFooter, false), kBareFooter);
+  EXPECT_EQ(readerchrome::portraitFooterLayoutH(kBareFooter, true), kBareFooter + 9);
+  // X3: flush 34px band. X4: same band, 9px off the framebuffer edge.
+  EXPECT_EQ(readerchrome::portraitFooterBarY(792, kBareFooter, 0, false), 758);
+  EXPECT_EQ(readerchrome::portraitFooterBarY(800, kBareFooter, 9, false), 757);
+  EXPECT_EQ(readerchrome::portraitFooterBarY(800, kBareFooter, 9, true), 9);
+  EXPECT_EQ(readerchrome::portraitFooterBarY(792, kBareFooter, 0, true), 0);
+}
+
+TEST(ReaderChromePolicy, X4ReaderOverlayDoesNotIncludeFooterEdgePad) {
+  auto in = defaultPortrait();
+  in.x4 = true;
+  in.hintStrip = 34;
+  EXPECT_EQ(readerchrome::marginBottom(in), 37);
+  EXPECT_EQ(readerchrome::portraitFooterLayoutH(34, true) - in.hintStrip, 9);
+}
+
 TEST(ReaderChromePolicy, LandscapeLeavesHintStripToTheSide) {
   auto in = defaultPortrait();
   in.x4 = true;

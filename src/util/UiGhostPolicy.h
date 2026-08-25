@@ -46,9 +46,8 @@ inline void clearHardScrub() { detail::hardScrubArmed() = false; }
 
 inline bool hardScrubArmed() { return detail::hardScrubArmed(); }
 
-// Clock AA / reader AA leave greyscale on glass while FB is restored BW.
-// QR sleep FAST then diffs the two planes into a black/messed frame
-// (device v50: Home clock_aa then SLEEP).
+// Clock AA / reader AA / home covers leave greyscale on glass while FB is
+// restored BW. QR sleep must skip the panel push (see QrSleepPanelPolicy).
 inline void noteGreyscaleOnPanel() { detail::greyscaleOnPanel() = true; }
 inline bool panelHoldsGreyscale() { return detail::greyscaleOnPanel(); }
 // Reader/home BW FAST replaced the greys. Sleep HALF against a stale flag is

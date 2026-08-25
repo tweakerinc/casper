@@ -36,6 +36,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   // True when Sleep Screen was Quick Resume (last-frame + moon) so wake can
   // re-seed sleep_frame and swap moon → dots.
   bool lastSleepRenderedQuickResume = false;
+  // True when QR sleep left 2-bit greys on glass (home cover / AA). Wake must
+  // not window moon→dots; that FAST/window flattens the grey pass to BW.
+  bool lastSleepQrHeldGreyscale = false;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }
 

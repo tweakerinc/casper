@@ -46,6 +46,7 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "images/MoonIcon.h"
 #include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
+#include "util/QrSleepPanelPolicy.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SleepChromeIcon.h"
@@ -397,7 +398,9 @@ void enterDeepSleep(bool fromTimeout) {
     const int moonX = SleepChromeIcon::leftX(renderer);
     const int moonY = SleepChromeIcon::topY(renderer);
     const int moonSize = SleepChromeIcon::iconSize(renderer);
-    if (!UiGhostPolicy::panelHoldsGreyscale()) {
+    // Home cover greys: a windowed moon on X4 only resyncs RED and flattens the
+    // grey pass. Skip when glass still holds those planes.
+    if (qrsleep::shouldPushMoonWindow(UiGhostPolicy::panelHoldsGreyscale())) {
       UiGhostPolicy::displayPartialOrSoft(renderer, moonX, moonY, moonSize, moonSize);
     }
   }
@@ -405,15 +408,17 @@ void enterDeepSleep(bool fromTimeout) {
   // Skip BootActivity splash on power-button wake.
   APP_STATE.showBootScreen = false;
   APP_STATE.lastSleepRenderedQuickResume = isQuickResumeSleep;
+  APP_STATE.lastSleepQrHeldGreyscale = isQuickResumeSleep && UiGhostPolicy::panelHoldsGreyscale();
 
   APP_STATE.saveToFile();
   // Persist settings before power-off so remaps (and other in-RAM settings)
   // are not lost if a prior save failed or never ran.
   SETTINGS.saveToFile();
 
-  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d qr=%d target=%u lastReader=%d pathEmpty=%d", fromTimeout ? 1 : 0,
-                       isQuickResumeSleep ? 1 : 0, static_cast<unsigned>(APP_STATE.sleepResumeTarget),
-                       APP_STATE.lastSleepFromReader ? 1 : 0, APP_STATE.openEpubPath.empty() ? 1 : 0);
+  SystemLog::logTiming("SLEEP", "enter fromTimeout=%d qr=%d target=%u lastReader=%d pathEmpty=%d grey=%d",
+                       fromTimeout ? 1 : 0, isQuickResumeSleep ? 1 : 0,
+                       static_cast<unsigned>(APP_STATE.sleepResumeTarget), APP_STATE.lastSleepFromReader ? 1 : 0,
+                       APP_STATE.openEpubPath.empty() ? 1 : 0, APP_STATE.lastSleepQrHeldGreyscale ? 1 : 0);
   SystemLog::flush();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
@@ -601,6 +606,7 @@ void setup() {
     APP_STATE.showBootScreen = true;
     APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
     APP_STATE.lastSleepRenderedQuickResume = false;
+    APP_STATE.lastSleepQrHeldGreyscale = false;
     APP_STATE.saveToFile();
     LOG_DBG("MAIN", "Cleared sticky lastSleepFromReader (non power-button boot)");
   };
@@ -702,8 +708,10 @@ void setup() {
     case BootResume::QuickResume: {
       // Capture before clearing: last-frame QR wake re-seeds sleep_frame + moon→dots.
       wakeFromQrSleepScreen = APP_STATE.lastSleepRenderedQuickResume;
+      const bool wakeFromGreyscaleQr = APP_STATE.lastSleepQrHeldGreyscale;
       APP_STATE.showBootScreen = true;
       APP_STATE.lastSleepRenderedQuickResume = false;
+      APP_STATE.lastSleepQrHeldGreyscale = false;
       const bool qrOpenBook = qrToBook && !mappedInputManager.isPressed(MappedInputManager::Button::Back);
       const bool qrOpenSettings = !qrOpenBook && APP_STATE.sleepResumeTarget == CrossPointState::RESUME_SETTINGS &&
                                   !mappedInputManager.isPressed(MappedInputManager::Button::Back);
@@ -726,15 +734,20 @@ void setup() {
         const int dotsX = SleepChromeIcon::leftX(renderer);
         const int dotsY = SleepChromeIcon::topY(renderer);
         const int dotsSize = SleepChromeIcon::iconSize(renderer);
-        if (readerOnlyDarkWake) {
-          renderer.invertScreen();
-          UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
-          renderer.invertScreen();
-        } else {
-          UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
+        // Sleep left home-cover / AA greys on glass. Windowed dots on X4 would
+        // flatten that grey pass the same way the sleep moon window did.
+        if (qrsleep::shouldPushWakeDotsWindow(wakeFromGreyscaleQr)) {
+          if (readerOnlyDarkWake) {
+            renderer.invertScreen();
+            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
+            renderer.invertScreen();
+          } else {
+            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
+          }
         }
         if (QrTimingLog::active()) {
-          QrTimingLog::line("after moon→dots (openBook=%d)", qrOpenBook ? 1 : 0);
+          QrTimingLog::line("after moon→dots (openBook=%d skip=%d)", qrOpenBook ? 1 : 0,
+                            wakeFromGreyscaleQr ? 1 : 0);
         }
       }
       if (!qrOpenBook) {

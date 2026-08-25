@@ -31,6 +31,7 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["showBootScreen"] = showBootScreen;
   doc["sleepResumeTarget"] = sleepResumeTarget;
   doc["lastSleepRenderedQuickResume"] = lastSleepRenderedQuickResume;
+  doc["lastSleepQrHeldGreyscale"] = lastSleepQrHeldGreyscale;
 }
 
 bool CrossPointState::fromJson(JsonVariantConst doc) {
@@ -56,5 +57,6 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   sleepResumeTarget = doc["sleepResumeTarget"] | static_cast<uint8_t>(RESUME_HOME);
   if (sleepResumeTarget > RESUME_READER_MENU) sleepResumeTarget = RESUME_HOME;
   lastSleepRenderedQuickResume = doc["lastSleepRenderedQuickResume"] | false;
+  lastSleepQrHeldGreyscale = doc["lastSleepQrHeldGreyscale"] | false;
   return true;
 }

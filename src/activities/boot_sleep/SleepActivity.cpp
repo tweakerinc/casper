@@ -19,6 +19,7 @@
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
 #include "util/CrossPointPaths.h"
+#include "util/QrSleepPanelPolicy.h"
 #include "util/SleepChromeIcon.h"
 #include "util/UiGhostPolicy.h"
 
@@ -409,14 +410,11 @@ void SleepActivity::renderLastScreenSleepScreen() const {
   // top status-bar row (same edge as battery/clock in the live reading orientation).
   // Reader onExit forces Portrait; drawAtTopChrome re-applies SETTINGS.orientation
   // so Landscape CCW/CW does not place the moon on a portrait corner.
-  // Clock AA / reader AA leave greyscale on glass with a restored BW framebuffer.
-  // FAST then diffs those planes into a black/messed sleep image. HALF first so
-  // glass matches FB, then the moon is in the same plate. Pure BW last-frame
-  // stays differential FAST.
+  // Home covers / clock AA / reader AA leave greyscale on glass with a restored
+  // BW framebuffer. FAST diffs those planes dark; HALF replaces them with the
+  // 1-bit FB (cover loses its grey pass). Skip the push and leave the greys.
   SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
-  if (UiGhostPolicy::panelHoldsGreyscale()) {
-    UiGhostPolicy::displayHalf(renderer);
-  } else {
+  if (qrsleep::panelPush(UiGhostPolicy::panelHoldsGreyscale()) == qrsleep::PanelPush::Fast) {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   }
 }

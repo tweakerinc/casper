@@ -1096,6 +1096,8 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   renderer.restoreBwBuffer();
   // Re-sync controller RAM from BW UI for the next menu / diff paint.
   renderer.cleanupGrayscaleWithFrameBuffer();
+  // Glass still holds the 2-bit cover; FB is BW. QR sleep must not FAST/HALF.
+  UiGhostPolicy::noteGreyscaleOnPanel();
   coverGrayOnPanel = true;
   paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
   coverGrayNeedsRetry = false;

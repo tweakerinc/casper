@@ -19,9 +19,8 @@
 #include "util/UiGhostPolicy.h"
 
 namespace {
-// Match HomeActivity Read long-press (was 1000 ΓåÆ 500 ΓåÆ 300).
-// Match Home long-press (Menu/Read): short hold, not sticky.
-constexpr unsigned long LONG_PRESS_MS = 200;
+// Match HomeActivity Read long-press (FileBrowser / reader GO_HOME_MS).
+constexpr unsigned long LONG_PRESS_MS = 500;
 
 // True while any button that can open this screen or activate a row is held.
 // Bare long-press Library uses physical Confirm; release must not open a book.

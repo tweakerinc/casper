@@ -43,9 +43,9 @@
 namespace {
 
 // Home long-press (Menu→Settings, Read→book menu).
-// Keep clearly above debounce (~5–20ms) and below "sticky hold" feel.
-// 200ms: snappy hold; short taps still release before threshold.
-constexpr unsigned long READ_LONG_PRESS_MS = 200;
+// Match FileBrowser / reader GO_HOME_MS. 200ms was a slow tap and opened the
+// book-action menu instead of Read.
+constexpr unsigned long READ_LONG_PRESS_MS = 500;
 // Abort greys while still holding so ActivityManager idle wait is short.
 constexpr unsigned long LONG_PRESS_PRECANCEL_MS = 70;
 

@@ -103,9 +103,8 @@ def port_writable(port: str) -> bool:
 
 
 def flash_command(device: Device, port: str, firmware: str, baud: str) -> list[str]:
-    # USB-JTAG on C3/S3: stub+compress writes the packed stream to flash.
-    # Verify then MD5-mismatches with the same hashes every time. ROM loader
-    # + uncompressed payload is slow and actually sticks.
+    # USB-JTAG: compressed stub writes land as the packed stream (same MD5 every
+    # retry). --no-stub often does not program SPI flash at all. Stub + uncompressed.
     return find_esptool() + [
         "--chip",
         device.chip,
@@ -115,7 +114,6 @@ def flash_command(device: Device, port: str, firmware: str, baud: str) -> list[s
         baud,
         "--before",
         "usb-reset",
-        "--no-stub",
         "write-flash",
         "--no-compress",
         "--flash-mode",

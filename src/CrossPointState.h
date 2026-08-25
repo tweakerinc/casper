@@ -27,6 +27,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
+  // True except while sleeping. enterDeepSleep sets false; wake restores true.
+  // X4 battery POWERON cannot tell sleep-wake from EN-reset+power; this flag
+  // is the split (see bootwake::x4PowerOnIsSleepWake).
   bool showBootScreen = true;
   // Seamless sleep destination (home / reader / settings / reader menu).
   uint8_t sleepResumeTarget = RESUME_HOME;

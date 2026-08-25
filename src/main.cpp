@@ -44,6 +44,7 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "images/MoonIcon.h"
+#include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
@@ -546,7 +547,16 @@ void setup() {
   APP_STATE.loadFromFile();
 
   // Wake cause before QR planning — flash/USB must not look like sleep-from-reader.
-  const auto wakeupReason = gpio.getWakeupReason();
+  auto wakeupReason = gpio.getWakeupReason();
+  const auto resetReason = esp_reset_reason();
+  const auto wakeupCause = esp_sleep_get_wakeup_cause();
+  // X4 battery sleep is POWERON (latch off). EN reset then power is the same
+  // reason. showBootScreen false means enterDeepSleep actually ran.
+  if (wakeupReason == HalGPIO::WakeupReason::PowerButton && resetReason == ESP_RST_POWERON &&
+      wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && !bootwake::x4PowerOnIsSleepWake(APP_STATE.showBootScreen)) {
+    LOG_INF("MAIN", "POWERON with boot screen armed — splash (reset/cold), not QR");
+    wakeupReason = HalGPIO::WakeupReason::Other;
+  }
 
   // Detect sleep-wake → book early so we can skip non-critical boot work.
   // PowerButton covers: deep-sleep GPIO wake (X3 / X4+USB) and X4 battery latch
@@ -575,8 +585,6 @@ void setup() {
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   // Buffered rotating SD log for field performance captures (/.crosspoint-logs/).
   SystemLog::begin();
-  const auto resetReason = esp_reset_reason();
-  const auto wakeupCause = esp_sleep_get_wakeup_cause();
   SystemLog::logTiming("BOOT", "settings_loaded millis=%lu qrBook=%d wake=%d rst=%d cause=%d",
                        static_cast<unsigned long>(millis()), qrToBook ? 1 : 0, static_cast<int>(wakeupReason),
                        static_cast<int>(resetReason), static_cast<int>(wakeupCause));
@@ -658,11 +666,13 @@ void setup() {
   // (Do not require ESP_RST_DEEPSLEEP only — that forced a full reboot-feel on
   // X4 unplugged wake.)
   //
-  // X3 EN/CHIP_PU is Other (see HalGPIO::getWakeupReason). Splash must HALF the
-  // boot logo so a freeze-reset actually replaces the stuck page. Skipping that
-  // and FASTing Home over the retained frame left the frozen page on glass
-  // (user: three dots, no logo, no Home). Wait for Home first ink before
-  // allowSleepAt so a follow-up power press cannot sleep during the logo.
+  // X3 EN/CHIP_PU is Other (see HalGPIO::getWakeupReason). X4 EN reset then
+  // power is POWERON with showBootScreen still true — reclassified to Other
+  // above. Splash must HALF the boot logo so a freeze-reset actually replaces
+  // the stuck page. Skipping that and FASTing Home over the retained frame left
+  // the frozen page on glass (user: three dots, no logo, no Home). Wait for
+  // Home first ink before allowSleepAt so a follow-up power press cannot sleep
+  // during the logo.
   const bool powerButtonWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const BootResume resume = isSilentReboot    ? BootResume::Silent
                             : powerButtonWake ? BootResume::QuickResume

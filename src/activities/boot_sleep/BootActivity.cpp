@@ -14,7 +14,7 @@ void BootActivity::onEnter() {
 
   renderer.clearScreen();
 
-  // Centered CrossPoint sheet-ghost logo + name (no "BOOTING" caption).
+  // Centered Casper sheet-ghost logo + name (no "BOOTING" caption).
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);

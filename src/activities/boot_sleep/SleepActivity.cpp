@@ -230,7 +230,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // CrossPoint: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
+  // Casper: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
   // (1.5 has no drawImageInverted — invertScreen flips logo + name together).
   renderer.clearScreen();
   constexpr int kLogoSize = 120;

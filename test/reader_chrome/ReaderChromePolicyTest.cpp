@@ -92,11 +92,22 @@ TEST(ReaderChromePolicy, X4PortraitDropsStackedGap) {
   auto in = defaultPortrait();
   in.x4 = true;
   in.hintStrip = readerchrome::portraitHintStrip(34, true);
-  EXPECT_EQ(in.hintStrip, 24);
-  // max(status 26, hint 24) + oBottom 3 — no screenMargin, no clearance.
-  EXPECT_EQ(readerchrome::marginBottom(in), 29);
+  EXPECT_EQ(in.hintStrip, 34);
+  // Overlay: max(status 26, hint 34) + oBottom 3 — no screenMargin, no clearance.
+  EXPECT_EQ(readerchrome::marginBottom(in), 37);
   EXPECT_LT(readerchrome::marginBottom(in), 3 + 10 + 34);
-  EXPECT_GE(3 + 10 + 34 - readerchrome::marginBottom(in), 12);
+  EXPECT_GE(3 + 10 + 34 - readerchrome::marginBottom(in), 10);
+}
+
+TEST(ReaderChromePolicy, X4FooterBandMatchesX3Air) {
+  constexpr int kBareFooter = 34;
+  constexpr int kUi10Line = 17;
+  EXPECT_EQ(readerchrome::portraitHintStrip(kBareFooter, true), kBareFooter);
+  EXPECT_EQ(readerchrome::portraitHintStrip(kBareFooter, false), kBareFooter);
+  // 24px band: 3px air, eaten by the 3px bezel. 34px: same 8px as X3.
+  EXPECT_EQ(readerchrome::portraitFooterLabelAir(24, kUi10Line), 3);
+  EXPECT_EQ(readerchrome::portraitFooterLabelAir(kBareFooter, kUi10Line), 8);
+  EXPECT_GT(readerchrome::portraitFooterLabelAir(kBareFooter, kUi10Line), 3);
 }
 
 TEST(ReaderChromePolicy, LandscapeLeavesHintStripToTheSide) {

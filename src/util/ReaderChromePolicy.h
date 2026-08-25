@@ -7,13 +7,15 @@
 // top of that strip left a 1–2 line hole after the X3 48→34 hint shrink.
 namespace readerchrome {
 
-// Text-only UI_10 labels (~17px). 34px left empty pad the reader reserved
-// on every page so Dictionary never covered text.
-constexpr int kX4PortraitHintMax = 24;
+// Portrait front-label strip. Same theme height on X3 and X4 (Bare = 34).
+// A 24px X4 cap left ~3px under UI_10, which the 3px viewable bezel clipped
+// so Bare Menu/Library/Read sat on the panel edge. Overlay (no stacked
+// screenMargin) is what reclaims the reader hole, not a shorter footer.
+inline int portraitHintStrip(const int themeHintHeight, const bool /*x4*/) { return std::max(1, themeHintHeight); }
 
-inline int portraitHintStrip(const int themeHintHeight, const bool x4) {
-  if (!x4) return themeHintHeight;
-  return std::min(themeHintHeight, kX4PortraitHintMax);
+// Leftover px above/below a footer label centered in the band.
+inline int portraitFooterLabelAir(const int bandH, const int lineH) {
+  return std::max(0, (std::max(1, bandH) - std::max(1, lineH)) / 2);
 }
 
 struct BottomIn {

@@ -499,15 +499,18 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
 
 namespace {
 // Row height for shared lists (Library / Recents / Settings). Short titles stay
-// single-line dense; wrapped titles use tighter line step and a taller row only
-// for that item.
+// single-line dense; wrapped titles keep full leading (plus 4px) and a taller
+// row only for that item.
 constexpr int kBaseTitleSubtitleGap = 2;
 constexpr int kBaseRowPad = 8;
 
 int baseTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
   const int advanceY = renderer.getLineHeight(titleFont);
   if (nLines <= 1) return advanceY;
-  return std::max(18, (advanceY * 7) / 10);
+  // Device (X4 Settings, Text Wrapping): 70% of advanceY stacked the second
+  // line's ascenders into the first line's descenders. Keep full leading plus a
+  // few pixels so wrapped titles do not touch.
+  return advanceY + 4;
 }
 
 int baseTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {

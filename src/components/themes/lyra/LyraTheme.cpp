@@ -233,17 +233,17 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
 
 namespace {
 // Shared with Bare/Penumbra (they inherit LyraTheme::drawList).
-// Single-line row height for short titles/folders. Wrapped titles use a tighter
-// line step than full advanceY (body leading is too loose for list UI) and only
-// those rows grow taller so short names stay dense.
+// Single-line row height for short titles/folders. Wrapped titles keep full
+// leading (plus 4px) and only those rows grow taller so short names stay dense.
 constexpr int kLyraTitleSubtitleGap = 2;
 constexpr int kLyraRowPad = 10;
 
 int lyraTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
   const int advanceY = renderer.getLineHeight(titleFont);
   if (nLines <= 1) return advanceY;
-  // Bring the second line up toward the first (~70% of body leading).
-  return std::max(18, (advanceY * 7) / 10);
+  // Same as Bare/Penumbra: full leading. 70% of advanceY made wrapped
+  // Settings titles collide on X4 (Text Wrapping, and any 2-line list row).
+  return advanceY + 4;
 }
 
 int lyraTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {

@@ -54,7 +54,8 @@ def downloads_dir() -> Path:
 
 
 def find_esptool() -> list[str]:
-    for name in ("esptool.py", "esptool"):
+    # Prefer `esptool` (v5); `esptool.py` is deprecated.
+    for name in ("esptool", "esptool.py"):
         path = shutil.which(name)
         if path:
             return [path]
@@ -103,7 +104,7 @@ def flash_command(device: Device, port: str, firmware: str) -> list[str]:
         port,
         "--baud",
         BAUD,
-        "write_flash",
+        "write-flash",
         OFFSET,
         firmware,
     ]
@@ -121,6 +122,32 @@ def run_flash(cmd: list[str], on_line) -> int:
     for line in proc.stdout:
         on_line(line)
     return proc.wait()
+
+
+def looks_like_permission_denied(text: str) -> bool:
+    lower = text.lower()
+    return "permission denied" in lower or "errno 13" in lower
+
+
+def run_flash_maybe_pkexec(cmd: list[str], on_line) -> int:
+    collected: list[str] = []
+
+    def capture(line: str) -> None:
+        collected.append(line)
+        on_line(line)
+
+    code = run_flash(cmd, capture)
+    if code == 0 or not looks_like_permission_denied("".join(collected)):
+        return code
+    pkexec = shutil.which("pkexec")
+    if not pkexec:
+        on_line("\nPermission denied. Run: sudo usermod -aG uucp $USER\n")
+        on_line("Then open a new terminal, or flash this once with sudo esptool …\n")
+        return code
+    on_line("\nPermission denied. Asking for admin via pkexec…\n")
+    privileged = [pkexec] + cmd
+    on_line("$ " + " ".join(privileged) + "\n")
+    return run_flash(privileged, on_line)
 
 
 def chip_mismatch_message(device: Device, firmware: Path) -> str | None:
@@ -253,13 +280,15 @@ def launch_gui() -> int:
 
             def worker() -> None:
                 try:
-                    code = run_flash(cmd, self._log_q.put)
+                    code = run_flash_maybe_pkexec(cmd, self._log_q.put)
                     if code == 0:
                         self._log_q.put(f"\nDone. On the {device.label}: {device.after}\n")
                     else:
                         self._log_q.put(
-                            f"\nFailed (exit {code}). Permission denied → "
-                            "add your user to uucp, or rerun with sudo.\n"
+                            "\nFailed. Permission denied: sudo usermod -aG uucp $USER "
+                            "then open a new terminal, or:\n"
+                            "  sudo esptool --chip esp32c3 --port /dev/ttyACM0 --baud 921600 "
+                            "write-flash 0x10000 /path/to/firmware.bin\n"
                         )
                 except FileNotFoundError:
                     self._log_q.put("esptool not found. Install: sudo pacman -S esptool\n")
@@ -292,7 +321,7 @@ def launch_cli(device: Device, port: str, firmware: str) -> int:
     cmd = flash_command(device, port, str(path))
     print("$ " + " ".join(cmd), flush=True)
     try:
-        code = run_flash(cmd, lambda line: print(line, end="", flush=True))
+        code = run_flash_maybe_pkexec(cmd, lambda line: print(line, end="", flush=True))
     except FileNotFoundError:
         print("esptool not found. Install: sudo pacman -S esptool", file=sys.stderr)
         return 1

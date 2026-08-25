@@ -661,12 +661,16 @@ void TextSettingsActivity::activateRow(int row) {
       }
       if (row != currentFamilyIndex_) {
         applyFamily(row);
+        // X4 FAST only drives diffs; a same-layout preview swap (Sourcerer ↔
+        // Literata, or an SD face) can look like the font did not change.
+        UiGhostPolicy::requestHardScrub();
         requestUpdate();
       }
       break;
     case Tab::Size:
       if (row != currentSizeIndex_) {
         applySize(row);
+        UiGhostPolicy::requestHardScrub();
         requestUpdate();
       }
       break;

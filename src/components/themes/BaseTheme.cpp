@@ -1219,10 +1219,16 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   renderer.drawText(kFont, x, y, message, /*black=*/true);
 
   if (refresh) {
-    // Windowed FAST on the wipe only. A full displayBuffer(FAST) raced the reader
-    // activity swap and made "Opening" invisible (user never saw the cue even with
-    // Dark Mode off). Corner glyphs leave no residual worth a full-frame refresh.
-    renderer.displayWindow(x - 1, y - 1, wipeW + 2, wipeH + 2);
+    if (gpio.deviceIsX3()) {
+      // Windowed FAST on the wipe only. A full displayBuffer(FAST) raced the reader
+      // activity swap and made "Opening" invisible (user never saw the cue even with
+      // Dark Mode off). Corner glyphs leave no residual worth a full-frame refresh.
+      renderer.displayWindow(x - 1, y - 1, wipeW + 2, wipeH + 2);
+    } else {
+      // SSD1677 PART LUT on a strip only resyncs RED (UiGhostPolicy). Manage
+      // Fonts / chapter load then looked like "no loading" on X4.
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
   }
   return Rect{x - 1, y - 1, wipeW + 2, wipeH + 2};
 }

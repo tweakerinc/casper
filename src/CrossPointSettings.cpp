@@ -595,14 +595,6 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   if (!doc["sleepScreen"].isNull()) {
     sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(LIGHT), static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT),
                         static_cast<uint8_t>(LIGHT));
-    // Legacy enum value only: Sleep Screen no longer offers Quick Resume in the picker.
-    // Remap the obsolete value → Light wallpaper. Do NOT rewrite power-button settings —
-    // Timeout QR / Short Power are independent and must stay as the user left them.
-    if (sleepScreen == QUICK_RESUME) {
-      sleepScreen = LIGHT;
-      needsResave = true;
-      LOG_DBG("CPS", "migrated legacy sleepScreen QUICK_RESUME → LIGHT (power buttons unchanged)");
-    }
   }
   // Stat tracking: prefer readingStatsEnabled; migrate legacy disableReadingStats (inverted).
   if (!doc["readingStatsEnabled"].isNull()) {

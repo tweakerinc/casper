@@ -17,7 +17,10 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/Logo120.h"
+#include "images/MoonIcon.h"
 #include "util/CrossPointPaths.h"
+#include "util/SleepChromeIcon.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Temp 2-bit BMP written when painting a PNG sleep image (reuses BMP greyscale path).
@@ -31,9 +34,18 @@ bool isSleepImageName(const std::string& filename) {
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
-  // Wallpaper only (Dark/Light/Cover/Custom/Blank). No last-frame moon, no
-  // "Going to sleep" popup — those were extra full refreshes before the art.
-  // Suspend UI Dark Mode invert so Sleep Screen polarity is not double-inverted.
+  // Sleep Screen == Quick Resume: keep the last page and ink a moon. Other
+  // choices paint wallpaper once — no "Going to sleep" popup.
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME) {
+    // Keep system-wide Dark Mode invert ON. The framebuffer stays in light paint
+    // space after the last page refresh; invert-on-display is what made the glass
+    // dark. Suspending invert here re-pushed the light FB and washed QR sleep white.
+    renderLastScreenSleepScreen();
+    return;
+  }
+
+  // Wallpaper: suspend UI Dark Mode invert so Sleep Screen polarity is not
+  // double-inverted.
   const bool uiDark = renderer.getInvertOnDisplay();
   renderer.setInvertOnDisplay(false);
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -390,6 +402,23 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   return (this->*renderNoCoverSleepScreen)();
+}
+
+void SleepActivity::renderLastScreenSleepScreen() const {
+  // Keep the current page on-panel and only add a small ink-only moon in the
+  // top status-bar row (same edge as battery/clock in the live reading orientation).
+  // Reader onExit forces Portrait; drawAtTopChrome re-applies SETTINGS.orientation
+  // so Landscape CCW/CW does not place the moon on a portrait corner.
+  // Clock AA / reader AA leave greyscale on glass with a restored BW framebuffer.
+  // FAST then diffs those planes into a black/messed sleep image. HALF first so
+  // glass matches FB, then the moon is in the same plate. Pure BW last-frame
+  // stays differential FAST.
+  SleepChromeIcon::drawAtTopChrome(renderer, MoonIcon, MOONICON_WIDTH, MOONICON_HEIGHT);
+  if (UiGhostPolicy::panelHoldsGreyscale()) {
+    UiGhostPolicy::displayHalf(renderer);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
 }
 
 void SleepActivity::renderBlankSleepScreen() const {

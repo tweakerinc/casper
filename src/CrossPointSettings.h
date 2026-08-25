@@ -372,7 +372,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
-  // Sleep wallpaper style (Dark/Light/Cover/Custom/…). Default: CrossPoint Light.
+  // Sleep Screen: wallpaper styles, or QUICK_RESUME (keep last frame). Default: Light.
   uint8_t sleepScreen = LIGHT;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;

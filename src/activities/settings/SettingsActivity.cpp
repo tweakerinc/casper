@@ -82,6 +82,13 @@ void SettingsActivity::rebuildSettingsLists() {
       continue;
     }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
+      // Cover crop/filter only apply to wallpaper Sleep Screens, not last-frame QR.
+      if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME &&
+          (setting.nameId == StrId::STR_SLEEP_COVER_MODE || setting.nameId == StrId::STR_SLEEP_COVER_FILTER ||
+           (setting.key && (strcmp(setting.key, "sleepScreenCoverMode") == 0 ||
+                            strcmp(setting.key, "sleepScreenCoverFilter") == 0)))) {
+        continue;
+      }
       // Nested under Dark Mode — only list when Dark Mode is On.
       if ((setting.nameId == StrId::STR_DARK_MODE_READER_ONLY ||
            (setting.key && strcmp(setting.key, "darkModeReaderOnly") == 0)) &&

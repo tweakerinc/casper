@@ -30,7 +30,8 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   bool showBootScreen = true;
   // Seamless sleep destination (home / reader / settings / reader menu).
   uint8_t sleepResumeTarget = RESUME_HOME;
-  // Legacy last-frame-sleep flag. Always false; kept for state.json compatibility.
+  // True when Sleep Screen was Quick Resume (last-frame + moon) so wake can
+  // re-seed sleep_frame and swap moon → dots.
   bool lastSleepRenderedQuickResume = false;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

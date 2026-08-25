@@ -89,6 +89,16 @@ inline Result decide(const Request& in) {
 
   const bool swallowing = in.swallowUntilMs != 0 && in.nowMs < in.swallowUntilMs;
   if (swallowing) {
+    // No edge this sample — swallow is for ghost *edges*, not idle ticks.
+    // Device logs (X3 eb84fe08, X4 d4f402dc): prewarm_glyphs then a burst of
+    // TURN drop why=s with held=0 were the main loop polling during the 80ms
+    // window, not dropped taps. Classifying them as Swallow hid real presses
+    // behind noise and made "button did nothing" undiagnosable.
+    if (!in.prev && !in.next) {
+      out.why = Why::Idle;
+      if (in.waitingRelease && !in.held) out.waitingRelease = false;
+      return out;
+    }
     // Device (d354dcad): MAP prewarm_glyphs then a burst of TURN drop why=s ate
     // the same-direction Next the user meant — extra presses to turn a page.
     // Swallow exists to cover the X3 ADC Down→Up ghost (opposite of lastDir).

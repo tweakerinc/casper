@@ -160,6 +160,9 @@ class RivuletEngine {
   // Larger when the map is far behind the estimate so "~N" settles faster.
   [[nodiscard]] int idleMapPagesThisTick(const GfxRenderer* rendererForEstimate = nullptr) const;
   [[nodiscard]] const LaidOutPage& page() const { return laidOut_; }
+  // Laid-out next page (valid only when aheadWarm()). Idle glyph prewarm reads
+  // spans from here instead of painting the next page into the framebuffer.
+  [[nodiscard]] const LaidOutPage& aheadPage() const { return ahead_; }
   [[nodiscard]] const ChapterIr& chapter() const { return chapter_; }
   // Mutable chapter for post-convert image probe (dims) before first layout.
   [[nodiscard]] ChapterIr& chapterMutable() { return chapter_; }

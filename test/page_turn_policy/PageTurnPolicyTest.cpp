@@ -136,6 +136,18 @@ TEST(PageTurnPolicy, SwallowDoesNotDropFirstTapAfterOpen) {
   EXPECT_EQ(r.lastDir, Dir::Next);
 }
 
+TEST(PageTurnPolicy, SwallowIdleHasNoEdge) {
+  // Idle ticks during the swallow window must not log as why=s.
+  Request in;
+  in.lastDir = Dir::Next;
+  in.lastAcceptedMs = 1500;
+  in.swallowUntilMs = 2000 + Limits::kSwallowMs;
+  in.nowMs = 2000;
+  const Result r = decide(in);
+  EXPECT_FALSE(r.accept);
+  EXPECT_EQ(r.why, Why::Idle);
+}
+
 TEST(PageTurnPolicy, SwallowExpires) {
   Request in = backAt(2000 + Limits::kSwallowMs);
   in.swallowUntilMs = 2000 + Limits::kSwallowMs;

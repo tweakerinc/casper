@@ -2507,14 +2507,27 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
   const unsigned long t0 = millis();
   RenderLock lock(*this);
   if (!engine_.aheadWarm()) return;
-  auto scope = fcm->createPrewarmScope(/*clearOnEnter=*/true, /*clearOnExit=*/false);
-  engine_.paint(renderer, marginX_, marginY_, /*ahead=*/true);
-  const bool aborted = scope.endScanAndPrewarm(&gpioPeekHeldForIdleMap);
-  glyphCacheSpine_ = spineIndex_;
-  glyphCachePage_ = nextPage;
-  // Scan painted the next page into the FB. Put this page back so sleep / a
-  // later FAST diffs the page that is actually on glass, not white paper.
-  paintCurrentPageToFramebuffer();
+  // Record next-page spans into the scan buckets without painting. Scan-mode
+  // paint + clearOnEnter wiped the live page's glyphs and left a white plate
+  // on glass when a FAST landed mid-prewarm (X3 4.1s prewarm / X4 blank SD
+  // pages). clearOnEnter stays false so the page on glass keeps its cache.
+  auto scope = fcm->createPrewarmScope(/*clearOnEnter=*/false, /*clearOnExit=*/false);
+  bool aborted = false;
+  const auto& ahead = engine_.aheadPage();
+  for (const auto& sp : ahead.spans) {
+    if (gpioPeekHeldForIdleMap()) {
+      aborted = true;
+      break;
+    }
+    if (sp.text.empty()) continue;
+    renderer.ensureSdCardFontReady(sp.fontId, sp.text.c_str());
+    fcm->recordText(sp.text.c_str(), sp.fontId, static_cast<EpdFontFamily::Style>(sp.epdStyle));
+  }
+  aborted = scope.endScanAndPrewarm(&gpioPeekHeldForIdleMap) || aborted;
+  if (!aborted) {
+    glyphCacheSpine_ = spineIndex_;
+    glyphCachePage_ = nextPage;
+  }
   const unsigned long dt = millis() - t0;
   if (dt >= 50UL) {
     SystemLog::logTiming("MAP", "prewarm_glyphs page=%d abort=%d ms=%lu", nextPage + 1, aborted ? 1 : 0, dt);

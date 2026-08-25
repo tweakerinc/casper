@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+
 #include "DictLookupLayout.h"
 #include "ReaderChromePolicy.h"
 
@@ -29,6 +31,55 @@ TEST(DictLookupLayout, ModeTitleSitsInViewableBand) {
 TEST(DictLookupLayout, DefinitionCardClearsModeTitle) {
   const int top = dictlookup::definitionTopReserve(9, 18);
   EXPECT_GE(top, dictlookup::modeTitleY(9) + 18 + dictlookup::kTitleToCardGap);
+}
+
+TEST(DictLookupLayout, WordHighlightCentersOnInkAtSmallSize) {
+  // Size ~10: ascender 10, descender -3. Wide row pitch must not pull the bar down.
+  const int wordY = 100;
+  const int asc = 10;
+  const int desc = -3;
+  const auto box = dictlookup::wordHighlightRect(40, wordY, 48, /*linePitch=*/16, asc, desc, /*nextRowY=*/140);
+  const int inkH = asc + 3;
+  const int inkMid = wordY + inkH / 2;
+  const int boxMid = box.y + box.h / 2;
+  EXPECT_LE(box.y, wordY);
+  EXPECT_GE(box.y + box.h, wordY + inkH);
+  EXPECT_LE(std::abs(boxMid - inkMid), 1);
+  EXPECT_LT(box.y + box.h, 140);
+  EXPECT_EQ(box.y - wordY, (wordY + inkH) - (box.y + box.h));
+}
+
+TEST(DictLookupLayout, WordHighlightCentersOnInkAtLargeSize) {
+  const int wordY = 80;
+  const int asc = 18;
+  const int desc = -5;
+  const auto box = dictlookup::wordHighlightRect(12, wordY, 60, /*linePitch=*/24, asc, desc, /*nextRowY=*/130);
+  const int inkH = asc + 5;
+  const int inkMid = wordY + inkH / 2;
+  const int boxMid = box.y + box.h / 2;
+  EXPECT_LE(box.y, wordY);
+  EXPECT_GE(box.y + box.h, wordY + inkH);
+  EXPECT_LE(std::abs(boxMid - inkMid), 1);
+  EXPECT_EQ(box.y - wordY, (wordY + inkH) - (box.y + box.h));
+  EXPECT_GT(box.h, 18);
+}
+
+TEST(DictLookupLayout, WordHighlightDoesNotUseRowPitchAsHeight) {
+  const auto box = dictlookup::wordHighlightRect(0, 50, 20, /*linePitch=*/40, /*asc=*/12, /*desc=*/-3, /*nextRowY=*/90);
+  EXPECT_LT(box.h, 40);
+  EXPECT_LT(box.y + box.h, 90);
+}
+
+TEST(DictLookupLayout, WordHighlightStaysAboveNextRowWhenTight) {
+  const int wordY = 200;
+  const int asc = 16;
+  const int desc = -4;
+  const int inkH = asc + 4;
+  const int nextRowY = wordY + inkH + 1;
+  const auto box = dictlookup::wordHighlightRect(8, wordY, 30, inkH, asc, desc, nextRowY);
+  EXPECT_LT(box.y + box.h, nextRowY);
+  EXPECT_GE(box.y + box.h, wordY + inkH);
+  EXPECT_EQ(box.y - wordY, (wordY + inkH) - (box.y + box.h));
 }
 
 TEST(ReaderChromePolicy, X3PortraitKeepsStackedMargin) {

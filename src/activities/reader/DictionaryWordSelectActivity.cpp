@@ -577,39 +577,23 @@ void DictionaryWordSelectActivity::loop() {
 }
 
 void DictionaryWordSelectActivity::highlightBoxFor(const WordBox& word, int& hx, int& hy, int& hw, int& hh) const {
-  // Horizontal pad only. Fill must cover every white drawText pixel or ink
-  // outside the black rect is painted white (vanishes — bad in dark mode).
-  const int padX = std::max(1, std::min(2, lineHeight / 16));
-  hx = word.x - padX;
-  hw = word.width + padX * 2;
-
-  // One layout line: compressed pitch, or exact gap to the next row.
-  int cellH = lineHeight;
-  int nextRowY = INT_MAX;
+  // Fill must cover every white drawText pixel or ink outside the black rect
+  // is painted white (vanishes — bad in dark mode). Size the bar to the ink
+  // span (ascender + |descender|), not the row pitch — stretching to the next
+  // line hung the highlight below the letters.
+  int nextRowY = word.y;
   for (const auto& w : words) {
-    if (w.row == static_cast<uint16_t>(word.row + 1) && w.y < nextRowY) {
+    if (w.row == static_cast<uint16_t>(word.row + 1) && w.y > word.y && (nextRowY == word.y || w.y < nextRowY)) {
       nextRowY = w.y;
     }
   }
-  if (nextRowY != INT_MAX && nextRowY > word.y) {
-    cellH = nextRowY - word.y;
-  }
-
-  // drawText: baseline = word.y + ascender. Bottom of the band needs to clear
-  // descenders (g/y/p). Top of the line box is usually empty above Latin caps
-  // (ascender covers accents / max extent) — pull the top down so the bar looks
-  // centered on the word (still enough black above caps / accents).
-  const int asc = std::max(1, renderer.getFontAscenderSize(fontId));
-  const int minInk = asc + std::max(2, asc / 6);
-  const int bottom = word.y + std::max(cellH, minInk);
-  // ~30% of ascender is typical empty headroom above body caps.
-  const int topInset = std::max(2, (asc * 3) / 10);
-  hy = word.y + topInset;
-  hh = bottom - hy;
-  if (hh < 6) {
-    hy = word.y;
-    hh = bottom - hy;
-  }
+  const auto box =
+      dictlookup::wordHighlightRect(word.x, word.y, word.width, lineHeight, renderer.getFontAscenderSize(fontId),
+                                    renderer.getFontDescenderSize(fontId), nextRowY);
+  hx = box.x;
+  hy = box.y;
+  hw = box.w;
+  hh = box.h;
 
   // Landscape: front-button chrome sits on a logical side. Clamp so the black
   // bar does not run under the hint strip (looked like the menu overlapping).

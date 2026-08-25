@@ -276,6 +276,8 @@ class GfxRenderer {
   /// dropCapNnScale: when style has DROP_CAP, 0 → 2× (legacy); 2–4 → that nearest-neighbor scale.
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int dropCapNnScale = 0) const;
   int getFontAscenderSize(int fontId) const;
+  /// Signed extent below the baseline (typically ≤ 0). Matches EpdFontData::descender.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
@@ -311,9 +313,7 @@ class GfxRenderer {
   // maps to Dense for the one historical call site that used that name.
   void setBwGlyphWeight(const BwGlyphWeight w) { bwGlyphWeight_ = w; }
   [[nodiscard]] BwGlyphWeight bwGlyphWeight() const { return bwGlyphWeight_; }
-  void setBwLightFringe(const bool on) {
-    bwGlyphWeight_ = on ? BwGlyphWeight::Dense : BwGlyphWeight::Normal;
-  }
+  void setBwLightFringe(const bool on) { bwGlyphWeight_ = on ? BwGlyphWeight::Dense : BwGlyphWeight::Normal; }
   [[nodiscard]] bool bwLightFringe() const { return bwGlyphWeight_ == BwGlyphWeight::Dense; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the

@@ -20,6 +20,7 @@
 #include "components/UITheme.h"
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
+#include "util/ReaderChromePolicy.h"
 
 // Internal constants
 namespace {
@@ -331,7 +332,9 @@ int BaseTheme::frontButtonHintReserve(const GfxRenderer& renderer) {
   const bool landscape =
       o == GfxRenderer::Orientation::LandscapeClockwise || o == GfxRenderer::Orientation::LandscapeCounterClockwise;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  if (!landscape) return metrics.buttonHintsHeight;
+  if (!landscape) {
+    return readerchrome::portraitHintStrip(metrics.buttonHintsHeight, !gpio.deviceIsX3());
+  }
   // Landscape: thin side strip for stacked CAPS (10 pt bold) — one letter wide.
   constexpr int kLandscapeFrontHintDepth = 34;
   return std::max(metrics.sideButtonHintsWidth, kLandscapeFrontHintDepth);

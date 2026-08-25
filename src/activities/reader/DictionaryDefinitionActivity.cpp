@@ -14,6 +14,7 @@
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/DictLookupLayout.h"
 #include "util/HtmlToPlainText.h"
 #include "util/UiGhostPolicy.h"
 
@@ -591,7 +592,6 @@ void DictionaryDefinitionActivity::normalizeDefinition() {
 }
 
 void DictionaryDefinitionActivity::layoutPopup() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   // Orientation-aware content band: portrait reserves the bottom hint strip;
   // landscape CW/CCW reserves the logical side where drawButtonHints paints
   // front-button chrome (was full-width and underlapped the side strip).
@@ -609,8 +609,12 @@ void DictionaryDefinitionActivity::layoutPopup() {
   const int chromeH = kPopupPadY + titleLineH + kHeaderLineGap + 2 + kTitleBodyGap + kPopupPadY;
   constexpr int minBodyLines = 3;
 
-  // Free band inside safe rect: top status air + gap above bottom/side chrome.
-  const int topReserve = std::max(kPopupGapTop, metrics.topPadding + kPopupGapTop);
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oRight;
+  (void)oBottom;
+  (void)oLeft;
+  const int topReserve = std::max(kPopupGapTop, dictlookup::definitionTopReserve(oTop, lineH));
   const int bottomReserve = kPopupGapAboveHints;
   const int bandH = std::max(chromeH + lineH * minBodyLines, pageH - topReserve - bottomReserve);
 
@@ -618,8 +622,9 @@ void DictionaryDefinitionActivity::layoutPopup() {
   const int desiredH = chromeH + contentLines * lineH;
   popupH = std::clamp(desiredH, chromeH + minBodyLines * lineH, bandH);
 
-  // Center in the free band; clamp so we never leave the safe rect.
-  popupY = safe.y + topReserve + std::max(0, (bandH - popupH) / 2);
+  // Sit under the mode title. Centering short cards left a large hole above
+  // Back/Done on X4.
+  popupY = safe.y + topReserve;
   const int maxBottom = safe.y + pageH - bottomReserve;
   if (popupY + popupH > maxBottom) {
     popupY = maxBottom - popupH;

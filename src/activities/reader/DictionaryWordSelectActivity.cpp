@@ -21,6 +21,7 @@
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DictLookupLayout.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
 #include "util/UiGhostPolicy.h"
@@ -705,13 +706,16 @@ void DictionaryWordSelectActivity::drawModeTitle() const {
   } else {
     title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
   }
-  // UI_10 bold: a step up from SMALL_FONT so the mode label is easy to spot
-  // without colliding with body text (page still has top chrome headroom).
+  // UI_10 bold: sit in the viewable band (bezel + air), not y=2 inside it.
   constexpr int kTitleFont = UI_10_FONT_ID;
   const int lineH = renderer.getLineHeight(kTitleFont);
-  const int titleY = std::max(2, (marginTop - lineH) / 2);
-  // Light wipe so page ink under the title band does not show through.
-  renderer.fillRect(0, 0, renderer.getScreenWidth(), std::max(lineH + titleY + 2, marginTop - 2), false);
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oRight;
+  (void)oBottom;
+  (void)oLeft;
+  const int titleY = dictlookup::modeTitleY(oTop);
+  renderer.fillRect(0, 0, renderer.getScreenWidth(), dictlookup::modeTitleWipeH(titleY, lineH, marginTop), false);
   renderer.drawCenteredText(kTitleFont, titleY, title, true, EpdFontFamily::BOLD);
 }
 

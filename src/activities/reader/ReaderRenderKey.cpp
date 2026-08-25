@@ -1,6 +1,7 @@
 #include "ReaderRenderKey.h"
 
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 
 #include <algorithm>
 
@@ -11,6 +12,7 @@
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/ReaderChromePolicy.h"
 
 namespace readerkey {
 
@@ -31,9 +33,9 @@ Layout compute(const GfxRenderer& renderer) {
   const int screenMargin = static_cast<int>(SETTINGS.screenMargin);
   const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Air between chrome and body text. A third of a line reads as a clean gap
-  // without spending a line of text on padding (half a line was visibly loose
-  // on device photos). Same value top and bottom so the page looks balanced.
+  // Air between top chrome and body text. A third of a line reads as a clean
+  // gap without spending a line of text on padding. X4 bottom overlay does not
+  // reuse this as extra pad on top of the hint strip (see readerchrome).
   const float lcForLine = SETTINGS.getReaderLineCompression();
   const int bodyLine = std::max(12, renderer.getLineHeight(key.fontId, lcForLine));
   const int clearance = std::max(8, bodyLine / 3);
@@ -64,25 +66,20 @@ Layout compute(const GfxRenderer& renderer) {
   const int marginT =
       std::max(0, oTop + (topChromeVisible ? (topChromeBottom + clearance) : (screenMargin + clearance)));
 
-  // Bottom: whichever bottom chrome is actually taller — the status bar band or
-  // the front-button hint strip. These OVERLAY the same band (drawButtonHints
-  // paints at pageHeight - stripDepth, exactly where the status bar sits), so
-  // this is a max, never a sum, and Dictionary / Clip word-select can never
-  // cover body text. No content shifting is needed when a tool opens.
-  //
-  // The old formula stacked a second copy of the TOP chrome padding on top of
-  // statusBarHeight and then floored the result again — that double-count is
-  // what cost roughly a line of body text per page.
-  int chromeBand = statusBarHeight + clearance;
-  if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
-    chromeBand = std::max(chromeBand, statusBarHeight + metrics.statusBarVerticalMargin + clearance);
-  }
-  if (!landscape) {
-    // Real drawn strip height (portrait band). Landscape puts it on a side edge,
-    // already handled by frontSideReserve above.
-    chromeBand = std::max(chromeBand, BaseTheme::frontButtonHintReserve(renderer));
-  }
-  const int marginB = std::max(0, oBottom + screenMargin + chromeBand);
+  // Bottom: status lane and dictionary/clip hint strip overlay the same panel
+  // edge (max, never a sum). X4 does not also stack screenMargin + line
+  // clearance on that strip — that hole was ~1–2 body lines after the X3
+  // 48→34 hint shrink.
+  readerchrome::BottomIn bottom;
+  bottom.oBottom = oBottom;
+  bottom.screenMargin = screenMargin;
+  bottom.statusBarHeight = statusBarHeight;
+  bottom.progressBarHeight = UITheme::getInstance().getProgressBarHeight();
+  bottom.statusBarVerticalMargin = metrics.statusBarVerticalMargin;
+  bottom.clearance = clearance;
+  bottom.hintStrip = landscape ? 0 : BaseTheme::frontButtonHintReserve(renderer);
+  bottom.x4 = !gpio.deviceIsX3();
+  const int marginB = readerchrome::marginBottom(bottom);
 
   key.viewportW = static_cast<uint16_t>(std::max(32, renderer.getScreenWidth() - marginL - marginR));
   key.viewportH = static_cast<uint16_t>(std::max(32, renderer.getScreenHeight() - marginT - marginB));

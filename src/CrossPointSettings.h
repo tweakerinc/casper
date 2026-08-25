@@ -257,8 +257,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr int REFRESH_COUNTDOWN_FORCE_SCRUB = 0;
 
   // Short/long power button actions (append-only storage indices for settings.json).
-  // UI order is remapped in SettingsList::buildPwrBtnSetting (Ignore, Sleep, Quick
-  // Resume, Refresh Screen, Page Turn, Footnotes) — do not reorder these values.
+  // UI order is remapped in SettingsList::buildPwrBtnSetting (Ignore, Sleep,
+  // Refresh Screen, Page Turn, Footnotes) — do not reorder these values.
   // Note: cannot be named QUICK_RESUME — that enumerator already exists on SLEEP_SCREEN_MODE
   // (legacy value 6) and unscoped enums share the class scope.
   enum SHORT_PWRBTN {
@@ -267,7 +267,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PAGE_TURN = 2,
     FORCE_REFRESH = 3,
     FOOTNOTES = 4,
-    PWR_QUICK_RESUME = 5,  // last-frame + fast wake (not a Sleep Screen value)
+    PWR_QUICK_RESUME = 5,  // legacy stored value; treated as Sleep
     SHORT_PWRBTN_COUNT
   };
 
@@ -372,8 +372,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
-  // Sleep wallpaper style (Dark/Light/Cover/Custom/…). Not used when the sleep
-  // path is Quick Resume (power action or Timeout QR). Default: CrossPoint Light.
+  // Sleep wallpaper style (Dark/Light/Cover/Custom/…). Default: CrossPoint Light.
   uint8_t sleepScreen = LIGHT;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
@@ -444,7 +443,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t extraParagraphSpacingHeight = SPACING_HALF;
   // Off by default: AA greys are the main open/page-turn cost on e-ink.
   uint8_t textAntiAliasing = 0;
-  // Short power: Quick Resume by default (wallpaper sleep is SHORT_PWRBTN::SLEEP).
+  // Short power default is the legacy PWR_QUICK_RESUME index; treated as Sleep.
   uint8_t shortPwrBtn = PWR_QUICK_RESUME;
   // Long power button press (held past getPowerButtonLongPressDuration); same SHORT_PWRBTN values.
   // CrossPoint default: force full refresh (short remains sleep).
@@ -658,7 +657,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t touchReaderControls = TOUCH_READER_ON;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
-  // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
+  // Legacy timeout-QR toggle. Sleep always paints the Sleep Screen now.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;

@@ -62,9 +62,9 @@ inline SettingInfo buildUiThemeSetting() {
       "uiTheme", StrId::STR_CAT_DISPLAY);
 }
 
-// Sleep Screen picker — wallpaper styles only. Quick Resume is a power / timeout
-// action, not a sleep-screen value. Stored enum stays append-only (incl. legacy QR=6).
-// UI order: CrossPoint Dark, CrossPoint Light, Cover, Cover + Custom, Custom, None.
+// Sleep Screen picker — wallpaper styles only. Stored enum stays append-only
+// (incl. legacy QR=6, remapped to Light). UI order: Dark, Light, Cover,
+// Cover + Custom, Custom, None.
 inline SettingInfo buildSleepScreenSetting() {
   using M = CrossPointSettings::SLEEP_SCREEN_MODE;
   static constexpr M kOrder[] = {
@@ -83,26 +83,25 @@ inline SettingInfo buildSleepScreenSetting() {
   }
 
   return SettingInfo::DynamicEnum(
-             StrId::STR_SLEEP_SCREEN, std::move(labels),
-             [] {
-               const auto mode = static_cast<M>(SETTINGS.sleepScreen);
-               // Legacy QUICK_RESUME (6) displays as Light until next explicit pick.
-               if (mode == M::QUICK_RESUME) {
-                 for (uint8_t i = 0; i < kCount; ++i) {
-                   if (kOrder[i] == M::LIGHT) return i;
-                 }
-               }
-               for (uint8_t i = 0; i < kCount; ++i) {
-                 if (kOrder[i] == mode) return i;
-               }
-               return static_cast<uint8_t>(1);  // Light
-             },
-             [](uint8_t displayIdx) {
-               if (displayIdx >= kCount) displayIdx = 1;
-               SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
-             },
-             "sleepScreen", StrId::STR_CAT_DISPLAY)
-      .withNestedUnderParent();  // under Quick Resume on Timeout when that row is Off
+      StrId::STR_SLEEP_SCREEN, std::move(labels),
+      [] {
+        const auto mode = static_cast<M>(SETTINGS.sleepScreen);
+        // Legacy QUICK_RESUME (6) displays as Light until next explicit pick.
+        if (mode == M::QUICK_RESUME) {
+          for (uint8_t i = 0; i < kCount; ++i) {
+            if (kOrder[i] == M::LIGHT) return i;
+          }
+        }
+        for (uint8_t i = 0; i < kCount; ++i) {
+          if (kOrder[i] == mode) return i;
+        }
+        return static_cast<uint8_t>(1);  // Light
+      },
+      [](uint8_t displayIdx) {
+        if (displayIdx >= kCount) displayIdx = 1;
+        SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
+      },
+      "sleepScreen", StrId::STR_CAT_DISPLAY);
 }
 
 // Shared Reader Controls shortcut picker (side long-press + Confirm long/double).
@@ -199,19 +198,22 @@ inline SettingInfo buildLongPressActionSetting(StrId nameId, uint8_t CrossPointS
 
 // Short / Long power-button action picker.
 // Storage enum SHORT_PWRBTN is append-only (settings.json indices stay valid).
-// Display order (product): Off, Sleep, Quick Resume, Refresh Screen, Page Turn, Footnotes.
+// Display order (product): Off, Sleep, Refresh Screen, Page Turn, Footnotes.
+// Legacy stored PWR_QUICK_RESUME is shown and saved as Sleep.
 inline SettingInfo buildPwrBtnSetting(StrId nameId, uint8_t CrossPointSettings::* field, const char* key) {
   using A = CrossPointSettings::SHORT_PWRBTN;
   static constexpr A kOrder[] = {
-      A::IGNORE, A::SLEEP, A::PWR_QUICK_RESUME, A::FORCE_REFRESH, A::PAGE_TURN, A::FOOTNOTES,
+      A::IGNORE, A::SLEEP, A::FORCE_REFRESH, A::PAGE_TURN, A::FOOTNOTES,
   };
   static constexpr StrId kLabels[] = {
       // IGNORE storage value; caption unified to "Off" with other control pickers.
-      StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_SLEEP,     StrId::STR_QUICK_RESUME,
-      StrId::STR_FORCE_REFRESH,           StrId::STR_PAGE_TURN, StrId::STR_FOOTNOTES,
+      StrId::STR_LONG_PRESS_BEHAVIOR_OFF,
+      StrId::STR_SLEEP,
+      StrId::STR_FORCE_REFRESH,
+      StrId::STR_PAGE_TURN,
+      StrId::STR_FOOTNOTES,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
-  static_assert(kCount == CrossPointSettings::SHORT_PWRBTN_COUNT);
   static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kCount);
 
   std::vector<StrId> labels;
@@ -221,7 +223,8 @@ inline SettingInfo buildPwrBtnSetting(StrId nameId, uint8_t CrossPointSettings::
   return SettingInfo::DynamicEnum(
       nameId, std::move(labels),
       [field] {
-        const auto mode = static_cast<A>(SETTINGS.*field);
+        auto mode = static_cast<A>(SETTINGS.*field);
+        if (mode == A::PWR_QUICK_RESUME) mode = A::SLEEP;
         for (uint8_t i = 0; i < kCount; ++i) {
           if (kOrder[i] == mode) return i;
         }
@@ -373,14 +376,11 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
         // Picker: Bare · Penumbra (X3 clock face / X4 title+progress).
         buildUiThemeSetting(),
         // No Penumbra side-button remap rows (X3 L/R cycle panels; X4 U/D scroll recents).
-        // Idle timeout sits with sleep chrome: Time to Sleep → Quick Resume on Timeout → Sleep Screen.
+        // Idle timeout sits with sleep chrome: Time to Sleep → Sleep Screen.
         SettingInfo::Value(
             StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
             {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
             "sleepTimeoutMinutes", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                          StrId::STR_CAT_DISPLAY),
         buildSleepScreenSetting(),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                           {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY)
@@ -508,7 +508,7 @@ inline const std::vector<SettingInfo>& getSettingsListBase() {
 
         // --- System ---
         // On-device order is rebuilt in SettingsActivity (Network → … → Language → Hidden → Logging → …).
-        // Time to Sleep lives under Display (above Quick Resume on Timeout).
+        // Time to Sleep lives under Display (above Sleep Screen).
         // Parent of Clear Read from Recents (nested + shown only when this is On).
         // Moves finished EPUBs into hidden /read (browse via Recents → Show Read Books).
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,

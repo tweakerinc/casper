@@ -13,7 +13,7 @@ class CrossPointState : public PersistableStore<CrossPointState> {
  public:
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
 
-  // Where Quick Resume should land after power wake (persisted across deep sleep).
+  // Where sleep wake should land after power press (persisted across deep sleep).
   enum SleepResumeTarget : uint8_t {
     RESUME_HOME = 0,
     RESUME_READER = 1,
@@ -28,9 +28,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t readerActivityLoadCount = 0;
   bool lastSleepFromReader = false;
   bool showBootScreen = true;
-  // Seamless QR destination (home / reader / settings / reader menu).
+  // Seamless sleep destination (home / reader / settings / reader menu).
   uint8_t sleepResumeTarget = RESUME_HOME;
-  // True after a QR (last-frame) sleep paint so wake can swap moon → "..." dots.
+  // Legacy last-frame-sleep flag. Always false; kept for state.json compatibility.
   bool lastSleepRenderedQuickResume = false;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

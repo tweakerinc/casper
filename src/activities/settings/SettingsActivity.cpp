@@ -82,17 +82,6 @@ void SettingsActivity::rebuildSettingsLists() {
       continue;
     }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      // Sleep Screen (+ cover nest) only when Quick Resume on Timeout is Off.
-      // When Timeout QR is On, idle sleep is last-frame; wallpaper picker is hidden.
-      const bool timeoutQrOn =
-          SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-      if (timeoutQrOn && (setting.nameId == StrId::STR_SLEEP_SCREEN || setting.nameId == StrId::STR_SLEEP_COVER_MODE ||
-                          setting.nameId == StrId::STR_SLEEP_COVER_FILTER ||
-                          (setting.key && (strcmp(setting.key, "sleepScreen") == 0 ||
-                                           strcmp(setting.key, "sleepScreenCoverMode") == 0 ||
-                                           strcmp(setting.key, "sleepScreenCoverFilter") == 0)))) {
-        continue;
-      }
       // Nested under Dark Mode — only list when Dark Mode is On.
       if ((setting.nameId == StrId::STR_DARK_MODE_READER_ONLY ||
            (setting.key && strcmp(setting.key, "darkModeReaderOnly") == 0)) &&
@@ -130,7 +119,7 @@ void SettingsActivity::rebuildSettingsLists() {
       controlsSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
       // Capture for ordered System list (do not push yet).
-      // Time to Sleep is under Display (above Quick Resume on Timeout).
+      // Time to Sleep is under Display (above Sleep Screen).
       if (setting.nameId == StrId::STR_SESSION_TIME) {
         sessionTime = setting;
         haveSessionTime = true;
@@ -175,7 +164,7 @@ void SettingsActivity::rebuildSettingsLists() {
   //   [→ Clear Recents nested, only if Move On] → Language → Show Hidden →
   //   Enable Logging → SD firmware → Check for Updates.
   // Network folder: Wi‑Fi, KOReader Sync, OPDS. Session Time lives under Stats.
-  // Time to Sleep is under Display (above Quick Resume on Timeout).
+  // Time to Sleep is under Display (above Sleep Screen).
   systemSettings.push_back(SettingInfo::Action(StrId::STR_NETWORK, SettingAction::NetworkFolder));
   if (gpio.deviceIsX3()) {
     systemSettings.push_back(SettingInfo::Action(StrId::STR_STATS, SettingAction::Stats));
@@ -243,10 +232,6 @@ void SettingsActivity::onEnter() {
   // Reset selection to first category
   selectedCategoryIndex = 0;
   selectedSettingIndex = 0;
-  preserveQuickResumeTimeoutOn =
-      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-  quickResumeTimeoutAutoEnabled = false;
-  syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
   rebuildSettingsLists();
 
@@ -542,12 +527,6 @@ void SettingsActivity::toggleCurrentSetting() {
   if (setting.type == SettingType::HEADER) {
     return;
   }
-  // DynamicEnum sleep picker has no valuePtr — match by name/key as well.
-  const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen ||
-                                  setting.nameId == StrId::STR_SLEEP_SCREEN ||
-                                  (setting.key && strcmp(setting.key, "sleepScreen") == 0);
-  const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
-
   if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
     openSleepTimeoutPicker();
     return;
@@ -581,7 +560,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                    (setting.key && strcmp(setting.key, "systemLogLevel") == 0);
       optionPopup.show(
           setting.nameId, setting.enumValues.data(), static_cast<int>(setting.enumValues.size()), currentValue,
-          [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged, isEnableLogging](int idx) {
+          [this, valuePtr, isEnableLogging](int idx) {
             SETTINGS.*valuePtr = idx;
             // Larger menu fonts: turn Text Wrapping on by default (user can still toggle off).
             if (valuePtr == &CrossPointSettings::menuFontSize &&
@@ -597,7 +576,6 @@ void SettingsActivity::toggleCurrentSetting() {
             if (isEnableLogging) {
               SystemLog::reloadLevel();
             }
-            syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
             markSettingsDirty();
             rebuildSettingsLists();
           });
@@ -630,7 +608,7 @@ void SettingsActivity::toggleCurrentSetting() {
     } else if (totalValues >= 2) {
       const auto valueSetter = setting.valueSetter;
       const bool isUiTheme = setting.nameId == StrId::STR_UI_THEME;
-      auto onSelect = [this, valueSetter, sleepScreenChanged, quickResumeTimeoutChanged, isUiTheme](int idx) {
+      auto onSelect = [this, valueSetter, isUiTheme](int idx) {
         const uint8_t prevTheme = isUiTheme ? SETTINGS.uiTheme : 0;
         valueSetter(idx);
         if (isUiTheme) {
@@ -638,7 +616,6 @@ void SettingsActivity::toggleCurrentSetting() {
           UITheme::getInstance().reload();
           SystemLog::logThemeChange(prevTheme, SETTINGS.uiTheme, millis() - tReload);
         }
-        syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
         markSettingsDirty();
         rebuildSettingsLists();
       };
@@ -764,22 +741,9 @@ void SettingsActivity::toggleCurrentSetting() {
     return;
   }
 
-  syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   markSettingsDirty();
   rebuildSettingsLists();
   selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
-}
-
-void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged) {
-  // Timeout QR and Sleep Screen are independent of power Quick Resume.
-  // Sleep Screen rows are shown/hidden in rebuildSettingsLists() when Timeout QR toggles.
-  // Do not force Timeout On when Sleep Screen was historically QUICK_RESUME.
-  (void)sleepScreenChanged;
-  if (quickResumeTimeoutChanged) {
-    preserveQuickResumeTimeoutOn =
-        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
-    quickResumeTimeoutAutoEnabled = false;
-  }
 }
 
 void SettingsActivity::openSleepTimeoutPicker() {

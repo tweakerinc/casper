@@ -184,8 +184,6 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> systemSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
-  bool preserveQuickResumeTimeoutOn = false;
-  bool quickResumeTimeoutAutoEnabled = false;
   // First paint (and X4 resume from a child): SoftOpen. List nav stays FAST.
   bool softOpenPending_ = true;
 
@@ -205,7 +203,6 @@ class SettingsActivity final : public Activity {
   void openSleepTimeoutPicker();
   void openSessionTimePicker();
   void rebuildSettingsLists();
-  void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
   void applyCategorySelection();
 
  public:

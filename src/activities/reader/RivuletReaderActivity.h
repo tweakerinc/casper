@@ -112,6 +112,9 @@ class RivuletReaderActivity final : public Activity {
   bool launchLeaveKoSync(bool uploadOnly);
   bool tryStartAutoKoUpload();
   void leaveReaderToHome();
+  // Back release → home even while future-chapter index owns the engine.
+  [[nodiscard]] bool tryHandleBackExit();
+  [[nodiscard]] bool backHeldLeaving() const;
   // Progress + session stats to SD (leave path and onExit).
   void flushExitProgressAndStats();
   void takeReaderScreenshot();

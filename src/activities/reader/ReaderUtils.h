@@ -115,7 +115,24 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
+inline void drainPageTurnEdges(const MappedInputManager& input) {
+  (void)input.wasPressed(MappedInputManager::Button::PageBack);
+  (void)input.wasReleased(MappedInputManager::Button::PageBack);
+  (void)input.wasPressed(MappedInputManager::Button::PageForward);
+  (void)input.wasReleased(MappedInputManager::Button::PageForward);
+}
+
+// Back is held or just pressed. Page-turn uses press; Back-to-home uses release,
+// so the same physical tap otherwise turns then leaves.
+inline bool backExitActive(const MappedInputManager& input) {
+  return input.isPressed(MappedInputManager::Button::Back) || input.wasPressed(MappedInputManager::Button::Back);
+}
+
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+  if (backExitActive(input)) {
+    drainPageTurnEdges(input);
+    return {false, false, false};
+  }
   const bool usePress =
       SETTINGS.longPressSideA == SETTINGS.LP_MENU_DISABLED && SETTINGS.longPressSideB == SETTINGS.LP_MENU_DISABLED;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
@@ -181,6 +198,7 @@ struct PageTurnLatch {
     req.next = next;
     req.fromTilt = fromTilt;
     req.fromTouch = fromTouch;
+    req.backActive = backExitActive(input);
     req.held = anyPageTurnControlHeld(input);
     req.waitingRelease = waitingRelease;
     req.swallowUntilMs = swallowUntilMs;
@@ -206,7 +224,7 @@ struct TouchPageTurn {
 
 inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input) {
   TouchPageTurn result{false, false, 0};
-  if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
+  if (backExitActive(input) || !SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
   }
 
@@ -369,9 +387,11 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
     return false;
   }
   // Drain residual Back edges so the resumed Home does not treat this release
-  // as Menu (minimal front-button map: short Back = Menu).
+  // as Menu (minimal front-button map: short Back = Menu). Drain page-turn
+  // edges too: PageBack is press-edge, Back is release-edge, same tap.
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
   (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+  drainPageTurnEdges(mappedInput);
   goHome.fn(goHome.ctx);
   return true;
 }

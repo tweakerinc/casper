@@ -24,6 +24,7 @@ enum class Why : uint8_t {
   Opposite,
   Waiting,
   Interval,
+  Back,  // Back exit in progress — page-turn edges are ghosts of that gesture
 };
 
 struct Limits {
@@ -41,6 +42,7 @@ struct Request {
   bool next = false;
   bool fromTilt = false;
   bool fromTouch = false;
+  bool backActive = false;
   bool held = false;
   bool waitingRelease = false;
   unsigned long swallowUntilMs = 0;
@@ -75,6 +77,8 @@ inline char whyChar(const Why w) {
       return 'w';
     case Why::Interval:
       return 'i';
+    case Why::Back:
+      return 'b';
   }
   return '?';
 }
@@ -86,6 +90,17 @@ inline Result decide(const Request& in) {
   out.waitingRelease = in.waitingRelease;
   out.lastDir = in.lastDir;
   out.lastAcceptedMs = in.lastAcceptedMs;
+
+  // Back is handled on release; PageBack defaults to press. One physical Back
+  // tap (or an ADC-ladder neighbour on the same group-1 pin as Left) otherwise
+  // turns the page, then Saving paints over the previous page.
+  if (in.backActive && (in.prev || in.next)) {
+    out.why = Why::Back;
+    out.prev = false;
+    out.next = false;
+    if (in.waitingRelease && !in.held) out.waitingRelease = false;
+    return out;
+  }
 
   const bool swallowing = in.swallowUntilMs != 0 && in.nowMs < in.swallowUntilMs;
   if (swallowing) {

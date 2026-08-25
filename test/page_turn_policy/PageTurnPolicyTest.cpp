@@ -174,9 +174,29 @@ TEST(PageTurnPolicy, TiltDoesNotHoldWaitingRelease) {
   EXPECT_FALSE(r.waitingRelease);
 }
 
+TEST(PageTurnPolicy, BackDropsPageTurnEdges) {
+  Request in = backAt(1000);
+  in.backActive = true;
+  const Result r = decide(in);
+  EXPECT_FALSE(r.accept);
+  EXPECT_FALSE(r.prev);
+  EXPECT_FALSE(r.next);
+  EXPECT_EQ(r.why, Why::Back);
+}
+
+TEST(PageTurnPolicy, BackDropsForwardToo) {
+  Request in = forwardAt(1000);
+  in.backActive = true;
+  const Result r = decide(in);
+  EXPECT_FALSE(r.accept);
+  EXPECT_FALSE(r.next);
+  EXPECT_EQ(r.why, Why::Back);
+}
+
 TEST(PageTurnPolicy, WhyCharsAreStableForLogs) {
   EXPECT_EQ(pageturn::whyChar(Why::Idle), '-');
   EXPECT_EQ(pageturn::whyChar(Why::Swallow), 's');
   EXPECT_EQ(pageturn::whyChar(Why::Ambiguous), 'a');
   EXPECT_EQ(pageturn::whyChar(Why::Opposite), 'p');
+  EXPECT_EQ(pageturn::whyChar(Why::Back), 'b');
 }

@@ -1382,6 +1382,21 @@ void RivuletReaderActivity::flushExitProgressAndStats() {
   readingSessionStartMs_ = 0;
 }
 
+bool RivuletReaderActivity::tryHandleBackExit() {
+  if (footnoteDepth_ > 0 && ready_ && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    restoreFootnotePosition();
+    return true;
+  }
+  return ReaderUtils::handleBackNavigation(
+      mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
+      {this, [](void* ctx) { static_cast<RivuletReaderActivity*>(ctx)->leaveReaderToHome(); }});
+}
+
+bool RivuletReaderActivity::backHeldLeaving() const {
+  return mappedInput.isPressed(MappedInputManager::Button::Back) ||
+         mappedInput.wasPressed(MappedInputManager::Button::Back);
+}
+
 void RivuletReaderActivity::leaveReaderToHome() {
   if (futureIndexActive_) persistFutureMap(/*completeOnly=*/false);
   int leaveSpine = spineIndex_;
@@ -1405,6 +1420,7 @@ void RivuletReaderActivity::leaveReaderToHome() {
   }
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
   (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+  ReaderUtils::drainPageTurnEdges(mappedInput);
   Activity::onGoHome();
 }
 
@@ -1994,6 +2010,9 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
   const uint32_t t0 = millis();
   const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
   lastFutureWorkMs_ = millis();
+  // shouldAbort already sampled; a second update() would drop a Back release.
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
   gpio.update();
 
   if (!loaded.ok || loaded.partial || engine_.chapter().failed()) {
@@ -2027,6 +2046,8 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
     promoteFutureIndexToCurrent();
     return true;
   }
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
   if (futureIndexUserWantsControl()) {
     restoreAfterFutureIndex(/*forUser=*/true);
     return true;
@@ -2044,6 +2065,8 @@ bool RivuletReaderActivity::startFutureChapterIndex() {
     promoteFutureIndexToCurrent();
     return true;
   }
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
   if (futureIndexUserWantsControl() || !laid) {
     if (!laid && !futureIndexUserWantsControl()) futureSkipSpine_ = target;
     restoreAfterFutureIndex(/*forUser=*/futureIndexUserWantsControl());
@@ -2250,6 +2273,8 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       SystemLog::logTiming("FIDX", "measure spine=%d known=%d->%d complete=%d prog=%d stall=%d fre=%u",
                            futureIndexSpine_, knownBefore, engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
                            progressed ? 1 : 0, futureStallTicks_, static_cast<unsigned>(ESP.getFreeHeap()));
+      if (tryHandleBackExit()) return;
+      if (backHeldLeaving()) return;
       const bool userNow = futureIndexUserWantsControl();
       const bool wantNext = futureIndexForwardHeld() && heldAtChapterEndForFuture_;
       if (engine_.mapComplete()) {
@@ -2274,6 +2299,8 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       restoreAfterFutureIndex(/*forUser=*/false);
       return;
     case futureindex::Decision::AbortRestore:
+      if (tryHandleBackExit()) return;
+      if (backHeldLeaving()) return;
       if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
         promoteFutureIndexToCurrent();
         return;
@@ -4258,6 +4285,14 @@ bool RivuletReaderActivity::trySideLongPressShortcut() {
 }
 
 void RivuletReaderActivity::loop() {
+  // Back before future-index promote/restore: FIDX user-control used to
+  // restore+FAST (and turnPrev if PageBack ghosted) then return, so Back
+  // release never left and Saving painted the restored/previous page.
+  if (tryHandleBackExit()) return;
+  if (futureIndexActive_ && backHeldLeaving()) {
+    return;
+  }
+
   // Future-chapter IR is in the engine; glass still shows the reader's page.
   // PageForward on the last page is the hop (promote). Mid-chapter Next restores
   // then turns — promoting here would skip the rest of the chapter.
@@ -4277,19 +4312,6 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
-  // Back must work even during chapter load / !ready_ (device: PageBack into
-  // spine 21 painted, then no exit — loop returned before handleBackNavigation).
-  if (footnoteDepth_ > 0 && ready_ && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    restoreFootnotePosition();
-    return;
-  }
-  if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
-                                        {this, [](void* ctx) {
-                                           auto* self = static_cast<RivuletReaderActivity*>(ctx);
-                                           self->leaveReaderToHome();
-                                         }})) {
-    return;
-  }
   if (error_) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       onGoHome();
@@ -4396,7 +4418,7 @@ void RivuletReaderActivity::loop() {
   const bool fromTouch = touch.prev || touch.next;
   if (!pageTurnLatch_.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
     if (pageTurnLatch_.lastWhy == pageturn::Why::Swallow || pageTurnLatch_.lastWhy == pageturn::Why::Ambiguous ||
-        pageTurnLatch_.lastWhy == pageturn::Why::Opposite) {
+        pageTurnLatch_.lastWhy == pageturn::Why::Opposite || pageTurnLatch_.lastWhy == pageturn::Why::Back) {
       SystemLog::logTiming("TURN", "drop why=%c tilt=%d touch=%d held=%d", pageturn::whyChar(pageTurnLatch_.lastWhy),
                            fromTilt ? 1 : 0, fromTouch ? 1 : 0,
                            ReaderUtils::anyPageTurnControlHeld(mappedInput) ? 1 : 0);

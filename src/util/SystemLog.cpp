@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
+#include <Logging.h>
 #include <common/FsApiConstants.h>
 
 #include <cstdarg>
@@ -37,6 +38,23 @@ bool gOpen = false;
 bool gEnabled = false;
 uint8_t gLevel = 0;
 char gPath[48] = "/.crosspoint-logs/log_00001.log";
+bool gVisible = false;
+uint8_t gFlushFails = 0;
+
+constexpr oflag_t kAppendFlags = static_cast<oflag_t>(O_RDWR | O_CREAT | O_APPEND);
+
+void appendLine(const char* line);
+
+const char* activeDir() { return gVisible ? CrossPointLogPaths::kVisibleDir : CrossPointLogPaths::kDir; }
+const char* activeIndex() { return gVisible ? CrossPointLogPaths::kVisibleIndex : CrossPointLogPaths::kIndex; }
+const char* activePattern() {
+  return gVisible ? CrossPointLogPaths::kVisibleSystemLogPattern : CrossPointLogPaths::kSystemLogPattern;
+}
+
+void mirrorSerialLine(const char* line) {
+  if (!gEnabled || !line || !line[0]) return;
+  appendLine(line);
+}
 
 // Compact name for field logs (id still logged for exact SETTINGS.uiTheme).
 const char* themeNameForId(const uint8_t id) {
@@ -76,13 +94,11 @@ const char* themeNameForId(const uint8_t id) {
   }
 }
 
-void buildPath(const uint16_t index) {
-  snprintf(gPath, sizeof(gPath), CrossPointLogPaths::kSystemLogPattern, static_cast<unsigned>(index));
-}
+void buildPath(const uint16_t index) { snprintf(gPath, sizeof(gPath), activePattern(), static_cast<unsigned>(index)); }
 
 bool readIndexFile() {
   HalFile f;
-  if (!Storage.openFileForRead("SLOG", CrossPointLogPaths::kIndex, f)) return false;
+  if (!Storage.openFileForRead("SLOG", activeIndex(), f)) return false;
   char buf[16] = {};
   const int n = f.read(buf, sizeof(buf) - 1);
   f.close();
@@ -96,7 +112,7 @@ bool readIndexFile() {
 void writeIndexFile() {
   char buf[16];
   snprintf(buf, sizeof(buf), "%u\n", static_cast<unsigned>(gFileIndex));
-  Storage.writeFile(CrossPointLogPaths::kIndex, String(buf));
+  Storage.writeFile(activeIndex(), String(buf));
 }
 
 size_t fileSizeIfExists(const char* path) {
@@ -118,7 +134,7 @@ void rotateIfNeeded(const size_t upcoming) {
   if (gFileBytes + gBufLen + upcoming < kMaxFileBytes) return;
   // Flush current buffer into the old file first, then start a new one.
   if (gBufLen > 0 && gOpen) {
-    HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+    HalFile f = Storage.open(gPath, kAppendFlags);
     if (f) {
       f.write(gBuf, gBufLen);
       f.close();
@@ -133,7 +149,7 @@ void rotateIfNeeded(const size_t upcoming) {
   char hdr[96];
   snprintf(hdr, sizeof(hdr), "==== crosspoint system log file %05u (continued) ====\n",
            static_cast<unsigned>(gFileIndex));
-  HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(gPath, kAppendFlags);
   if (f) {
     f.print(hdr);
     gFileBytes += strlen(hdr);
@@ -147,12 +163,13 @@ void flushUnlocked() {
     return;
   }
   rotateIfNeeded(0);
-  HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(gPath, kAppendFlags);
   if (!f) {
-    // Drop buffer rather than blocking forever — logging must not brick sleep/wake.
-    gBufLen = 0;
+    if (gFlushFails < 8) ++gFlushFails;
+    if (gFlushFails >= 8) gBufLen = 0;
     return;
   }
+  gFlushFails = 0;
   f.write(reinterpret_cast<const uint8_t*>(gBuf), gBufLen);
   f.close();
   gFileBytes += gBufLen;
@@ -169,7 +186,7 @@ void appendLine(const char* line) {
   if (n + 1 >= kBufCapacity) {
     flushUnlocked();
     rotateIfNeeded(n + 1);
-    HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+    HalFile f = Storage.open(gPath, kAppendFlags);
     if (f) {
       f.print(line);
       if (line[n - 1] != '\n') f.print("\n");
@@ -208,6 +225,9 @@ void begin() {
   gLastFlushMs = gSessionT0;
   gLastHeapSampleMs = gSessionT0;
   gOpen = false;
+  gVisible = false;
+  gFlushFails = 0;
+  setLogMirror(nullptr);
 
   if (!gEnabled) return;
   if (!Storage.ready()) {
@@ -219,8 +239,11 @@ void begin() {
     Storage.rename(CrossPointLogPaths::kLegacyCasperDir, CrossPointLogPaths::kDir);
   }
   if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
-    gEnabled = false;
-    return;
+    gVisible = true;
+    if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kVisibleDir)) {
+      gEnabled = false;
+      return;
+    }
   }
   // Sweep a mistaken root qr_timing.log if an older build left one.
   if (Storage.exists(CrossPointLogPaths::kLegacyRootQrTiming)) {
@@ -267,6 +290,23 @@ void begin() {
            gPath);
   appendLine(hdr);
   flushUnlocked();
+  if (!Storage.exists(gPath)) {
+    // Hidden-dir append failed — retry in the visible /casper-logs folder.
+    gVisible = true;
+    if (Storage.ensureDirectoryExists(activeDir())) {
+      gFileIndex = 1;
+      writeIndexFile();
+      openForAppend();
+      appendLine(hdr);
+      flushUnlocked();
+    }
+  }
+  if (!Storage.exists(gPath)) {
+    gEnabled = false;
+    gOpen = false;
+    return;
+  }
+  setLogMirror(&mirrorSerialLine);
 }
 
 void reloadLevel() {
@@ -341,6 +381,7 @@ void end() {
   if (!gEnabled) return;
   log("SYS", "LOG_END");
   flushUnlocked();
+  setLogMirror(nullptr);
   gEnabled = false;
   gOpen = false;
 }
@@ -350,6 +391,9 @@ bool timingEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_L
 bool verboseEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_LOG_VERBOSE; }
 
 void maybeSampleHeap() {
+  if (!gEnabled && SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF && Storage.ready()) {
+    begin();
+  }
   if (!timingEnabled()) return;
   const uint32_t now = millis();
   const bool hangWatch = (gHangWatchUntilMs != 0 && now < gHangWatchUntilMs);

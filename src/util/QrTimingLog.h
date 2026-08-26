@@ -11,7 +11,7 @@
 #include "CrossPointSettings.h"
 #include "util/CrossPointLogPaths.h"
 
-// Append-only Quick Resume timing log: /.crosspoint-logs/qr_timing.log only.
+// Append-only Quick Resume timing log under the system log folder.
 // Gated by Settings → Enable Logging (same as SystemLog). Crash reports are separate.
 
 namespace QrTimingLog {
@@ -20,33 +20,38 @@ inline bool gActive = false;
 inline uint32_t gT0 = 0;
 inline bool gMigratedRoot = false;
 
-// Ensure /.crosspoint-logs is a directory. Never write logs to the volume root.
+// Ensure a log directory exists. Prefer the hidden folder; fall back to /casper-logs.
 inline bool ensureLogDir() {
   if (!Storage.exists(CrossPointLogPaths::kDir) && Storage.exists(CrossPointLogPaths::kLegacyCasperDir)) {
     Storage.rename(CrossPointLogPaths::kLegacyCasperDir, CrossPointLogPaths::kDir);
   }
-  if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
-    return false;
-  }
-  // One-shot: move a mistaken root /qr_timing.log into the log folder.
   if (!gMigratedRoot) {
     gMigratedRoot = true;
     if (Storage.exists(CrossPointLogPaths::kLegacyRootQrTiming)) {
-      // Prefer keep existing nested log; just delete root junk if nested already exists.
-      if (Storage.exists(CrossPointLogPaths::kQrTiming)) {
-        Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
-      } else if (!Storage.rename(CrossPointLogPaths::kLegacyRootQrTiming, CrossPointLogPaths::kQrTiming)) {
-        Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+      if (Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
+        if (Storage.exists(CrossPointLogPaths::kQrTiming)) {
+          Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+        } else if (!Storage.rename(CrossPointLogPaths::kLegacyRootQrTiming, CrossPointLogPaths::kQrTiming)) {
+          Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+        }
       }
     }
   }
-  return true;
+  if (Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) return true;
+  return Storage.ensureDirectoryExists(CrossPointLogPaths::kVisibleDir);
+}
+
+inline const char* qrTimingPath() {
+  if (Storage.exists(CrossPointLogPaths::kDir) || Storage.exists(CrossPointLogPaths::kQrTiming)) {
+    return CrossPointLogPaths::kQrTiming;
+  }
+  return CrossPointLogPaths::kVisibleQrTiming;
 }
 
 inline void appendRaw(const char* text) {
   if (!text || !text[0]) return;
   if (!ensureLogDir()) return;
-  HalFile f = Storage.open(CrossPointLogPaths::kQrTiming, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(qrTimingPath(), static_cast<oflag_t>(O_RDWR | O_CREAT | O_APPEND));
   if (!f) return;
   f.print(text);
   f.close();

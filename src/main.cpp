@@ -42,7 +42,6 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "components/UITheme.h"
 #include "crosspoint/CrossPointProduct.h"
 #include "fontIds.h"
-#include "images/LoadingIcon.h"
 #include "images/MoonIcon.h"
 #include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
@@ -733,24 +732,17 @@ void setup() {
       if (wakeFromQrSleepScreen && loadSleepFrameBuffer()) {
         if (QrTimingLog::active()) QrTimingLog::line("after loadSleepFrameBuffer");
         renderer.cleanupGrayscaleWithFrameBuffer();
-        const bool readerOnlyDarkWake = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0;
-        SleepChromeIcon::replaceAtTopChrome(renderer, LoadingIcon, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        const int dotsX = SleepChromeIcon::leftX(renderer);
-        const int dotsY = SleepChromeIcon::topY(renderer);
-        const int dotsSize = SleepChromeIcon::iconSize(renderer);
-        // Sleep left home-cover / AA greys on glass. Windowed dots on X4 would
-        // flatten that grey pass the same way the sleep moon window did.
-        if (qrsleep::shouldPushWakeDotsWindow(wakeFromGreyscaleQr)) {
-          if (readerOnlyDarkWake) {
-            renderer.invertScreen();
-            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
-            renderer.invertScreen();
-          } else {
-            UiGhostPolicy::displayPartialOrSoft(renderer, dotsX, dotsY, dotsSize, dotsSize);
-          }
+        // Do not FAST moon→dots: X4 RAM is white-filled after begin(), so a
+        // strip refresh whites the plate. X4 primes the sleep frame through
+        // displayWindow (FAST, no HALF) so the first page is a diff, not a
+        // 1.7s white clean. X3 skipInitialResync already allows that FAST.
+        const bool primed = qrsleep::shouldPrimeWakeBaseline(!gpio.deviceIsX3());
+        if (primed) {
+          display.displayWindow(0, 0, display.getDisplayWidth(), display.getDisplayHeight());
         }
         if (QrTimingLog::active()) {
-          QrTimingLog::line("after moon→dots (openBook=%d skip=%d)", qrOpenBook ? 1 : 0, wakeFromGreyscaleQr ? 1 : 0);
+          QrTimingLog::line("after wake_prime openBook=%d grey=%d primed=%d", qrOpenBook ? 1 : 0,
+                            wakeFromGreyscaleQr ? 1 : 0, primed ? 1 : 0);
         }
       }
       if (!qrOpenBook) {

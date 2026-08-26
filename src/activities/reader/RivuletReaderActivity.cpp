@@ -71,6 +71,7 @@
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
 #include "util/GlyphWeightPolicy.h"
+#include "util/OrientationPageRemap.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotInfo.h"
 #include "util/ScreenshotUtil.h"
@@ -1115,8 +1116,7 @@ void RivuletReaderActivity::navigateToHref(const std::string& hrefStr, const boo
     requestUpdate();
   } else {
     if (savePosition && footnoteDepth_ > 0) footnoteDepth_--;
-    GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
-    delay(400);
+    flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
   }
 }
 
@@ -1658,7 +1658,7 @@ bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
     lastSavedPageCount_ = -1;
     (void)saveProgress();
     heavyReleasedForUi_ = false;
-    showError("Could not restore page");
+    showError(tr(STR_COULD_NOT_RESTORE_PAGE));
     LOG_ERR("RVR", "restoreAfterUi failed spine=%d page=%d — progress pinned", spine, page);
     return false;
   }
@@ -2126,7 +2126,7 @@ void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
   // A following tap in this same loop() will layout the next page. Do not also
   // warm-ahead here — that was a second layout on a just-reloaded IR.
   if (!ok && forUser) {
-    showError("Could not restore page");
+    showError(tr(STR_COULD_NOT_RESTORE_PAGE));
   }
   SystemLog::logTiming("FIDX", "restore spine=%d page=%d ok=%d user=%d ms=%lu fre=%u", spine, page, ok ? 1 : 0,
                        forUser ? 1 : 0, static_cast<unsigned long>(millis() - t0),
@@ -3337,6 +3337,11 @@ void RivuletReaderActivity::openReaderMenu() {
           // Orientation / front-button follow apply even when cancelled.
           if (SETTINGS.orientation != menu->orientation) {
             GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+            const int keepSpine = spineIndex_;
+            const int keepPage = engine_.hasChapter() ? engine_.currentPage() : heldPageForUi_;
+            const int keepCount =
+                std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer)
+                                                 : (lastSavedPageCount_ > 0 ? lastSavedPageCount_ : keepPage + 1));
             SETTINGS.orientation = menu->orientation;
             SETTINGS.frontButtonFollowOrientation =
                 CrossPointSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
@@ -3346,10 +3351,7 @@ void RivuletReaderActivity::openReaderMenu() {
             if (heavyReleasedForUi_) {
               (void)restoreAfterUi(/*showLoading=*/false);
             } else {
-              // Chapter still warm — re-layout at the same place under the new key.
-              const int spine = spineIndex_;
-              const int pageNow = engine_.hasChapter() ? engine_.currentPage() : 0;
-              (void)loadSpine(spine, pageNow);
+              (void)relayoutChapterForViewport(keepSpine, keepPage, keepCount);
             }
             firstPaint_ = true;
           } else if (SETTINGS.frontButtonFollowOrientation != menu->frontButtonFollowOrientation) {
@@ -3421,10 +3423,13 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                   firstPaint_ = true;
                   (void)saveProgress();
                 } else {
-                  // loadTocChapter restores the previous spine; do not leave Empty page.
-                  GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
-                  delay(600);
+                  // loadTocChapter restores the previous spine. Paint it, then
+                  // hold the error on glass — requestUpdate after the popup
+                  // raced X3 HALF and the message never appeared.
                   firstPaint_ = true;
+                  requestUpdate();
+                  flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
+                  return;
                 }
               }
             }
@@ -3775,9 +3780,9 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
           (void)loadSpine(fromSpine, 0);
         }
       }
-      GUI.drawPopup(renderer, tr(STR_CHAPTER_NOT_READABLE), BaseTheme::kPopupCenterY, true);
-      delay(400);
+      firstPaint_ = true;
       requestUpdate();
+      flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
       return false;
     }
     crossedChapter = true;
@@ -3944,11 +3949,12 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
       // Tell the user. A bare repaint of the page they pressed Back on reads as
       // "the firmware is broken"; naming the reason is honest and debuggable.
       if (targetSpine >= 0) {
-        GUI.drawPopup(renderer, tr(STR_PREV_CHAPTER_UNAVAILABLE), BaseTheme::kPopupCenterY, true);
-        delay(700);
         firstPaint_ = true;
+        requestUpdate();
+        flashHeldReaderPopup(tr(STR_PREV_CHAPTER_UNAVAILABLE));
+      } else {
+        requestUpdate();
       }
-      requestUpdate();
       return true;
     }
   }
@@ -4032,12 +4038,29 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
   }
 }
 
+bool RivuletReaderActivity::relayoutChapterForViewport(const int keepSpine, const int keepPage, const int keepCount) {
+  // IR is still the old chapter; the render key is already the new viewport.
+  // Estimate the new page count from that pair — never from the 1-page live map
+  // that loadSpine leaves behind (that scaled every flip to page 0).
+  const int newCount = std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer) : keepCount);
+  const int page = orientpage::remap(keepPage, keepCount, newCount);
+  LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d", keepSpine, keepPage, keepCount, page, newCount);
+  if (loadSpine(keepSpine, page)) return true;
+  return loadSpine(keepSpine, 0);
+}
+
+void RivuletReaderActivity::flashHeldReaderPopup(const char* msg) {
+  if (!msg || !msg[0]) return;
+  activityManager.waitForRenderIdle();
+  GUI.drawPopup(renderer, msg, BaseTheme::kPopupCenterY, true);
+}
+
 void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
   if (neu >= CrossPointSettings::ORIENTATION_COUNT || neu == SETTINGS.orientation) return;
 
   const int keepSpine = spineIndex_;
   const int keepPage = engine_.currentPage();
-  const int keepCount = std::max(1, engine_.chapterPageCount(&renderer));
+  const int keepCount = std::max(1, engine_.chapterPageCountForEta(&renderer));
 
   // Corner status while still on the current orientation (see menu path).
   GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
@@ -4048,15 +4071,7 @@ void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   configureRenderKey();
 
-  if (loadSpine(keepSpine)) {
-    const int nowCount = std::max(1, engine_.chapterPageCount(&renderer));
-    int page = keepPage;
-    if (keepCount > 0 && nowCount != keepCount) {
-      page = static_cast<int>(
-          (static_cast<float>(keepPage) / static_cast<float>(keepCount)) * static_cast<float>(nowCount) + 0.5f);
-      page = std::clamp(page, 0, nowCount - 1);
-    }
-    (void)engine_.goToPage(renderer, page, /*maxWalkPages=*/512);
+  if (relayoutChapterForViewport(keepSpine, keepPage, keepCount)) {
     firstPaint_ = true;
     (void)saveProgress();
   }
@@ -4141,10 +4156,9 @@ void RivuletReaderActivity::chapterSkipNext() {
       (void)loadSpine(originSpine, 0);
     }
   }
-  GUI.drawPopup(renderer, targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_END_OF_BOOK),
-                BaseTheme::kPopupCenterY, true);
-  delay(400);
+  firstPaint_ = true;
   requestUpdate();
+  flashHeldReaderPopup(targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_END_OF_BOOK));
 }
 
 void RivuletReaderActivity::chapterSkipPrev() {
@@ -4228,10 +4242,9 @@ void RivuletReaderActivity::chapterSkipPrev() {
       (void)loadSpine(originSpine, 0);
     }
   }
-  GUI.drawPopup(renderer, targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_START_OF_BOOK),
-                BaseTheme::kPopupCenterY, true);
-  delay(400);
+  firstPaint_ = true;
   requestUpdate();
+  flashHeldReaderPopup(targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_START_OF_BOOK));
 }
 
 bool RivuletReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
@@ -4677,7 +4690,12 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // Corner cue only. Do not clearScreen + full FAST — that replaced Home or
   // the live page with white paper (exit Saving, book open, chapter Back).
   if (chapterNavBusy_ || error_ || !ready_) {
-    const char* msg = error_ ? errorMsg_.c_str() : tr(STR_LOADING_POPUP);
+    if (error_) {
+      renderer.clearScreen(0xFF);
+      GUI.drawPopup(renderer, errorMsg_.c_str(), BaseTheme::kPopupCenterY, true);
+      return;
+    }
+    const char* msg = tr(STR_LOADING_POPUP);
     GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/true);
     return;
   }

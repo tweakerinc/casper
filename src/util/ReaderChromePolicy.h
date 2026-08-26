@@ -16,11 +16,11 @@ inline int portraitFooterLabelAir(const int bandH, const int lineH) {
 }
 
 // Extra px between the 34px label band and the panel edge.
-// X3 stays flush. On X4, 0–9px still nicked the UI_10 line on the lip;
-// 56px cleared it but sat on Penumbra Recents (layoutH ate the list).
-// 20px is a small bezel gap (~2mm), not a second footer. Reader overlay
-// stays on the 34px strip.
-constexpr int kX4PortraitFooterEdgePad = 20;
+// X3 stays flush (bar at y=758 on 792). X4 portrait is 8px taller (800);
+// that delta is the only pad, so the band also starts at y=758 and the
+// labels sit on the bottom. 20/56px were over-lifts after USB flashes that
+// did not take. Reader overlay stays on the 34px strip.
+constexpr int kX4PortraitFooterEdgePad = 8;
 
 inline int portraitFooterEdgePad(const bool x4) { return x4 ? kX4PortraitFooterEdgePad : 0; }
 

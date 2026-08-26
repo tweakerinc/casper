@@ -18,6 +18,7 @@
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/GlyphWeightPolicy.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -467,8 +468,8 @@ void TextSettingsActivity::render(RenderLock&&) {
   // faces stay Normal — their files already carry the weight the user installed.
   const bool builtinPreview = SETTINGS.sdFontFamilyName[0] == '\0';
   const GfxRenderer::BwGlyphWeight prevWeight = renderer.bwGlyphWeight();
-  renderer.setBwGlyphWeight(builtinPreview && SETTINGS.textAntiAliasing == 0 ? GfxRenderer::BwGlyphWeight::Mild
-                                                                             : GfxRenderer::BwGlyphWeight::Normal);
+  renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(
+      builtinPreview ? glyphweight::reader(SETTINGS.textAntiAliasing != 0) : glyphweight::Bw::Normal));
   const textsettings::PreviewPaint previewPaint =
       textsettings::renderPreview(renderer, previewLayout_, geo.previewTop, geo.previewHeight, familyName, sizeName);
   renderer.setBwGlyphWeight(prevWeight);

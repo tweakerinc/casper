@@ -46,6 +46,7 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "images/MoonIcon.h"
 #include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
+#include "util/GlyphWeightPolicy.h"
 #include "util/QrSleepPanelPolicy.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
@@ -477,6 +478,8 @@ void setupDisplayAndFonts(bool seamless = false) {
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
 
+  renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(glyphweight::chrome(!gpio.deviceIsX3())));
+
   LOG_DBG("MAIN", "Fonts setup");
 }
 
@@ -746,8 +749,7 @@ void setup() {
           }
         }
         if (QrTimingLog::active()) {
-          QrTimingLog::line("after moon→dots (openBook=%d skip=%d)", qrOpenBook ? 1 : 0,
-                            wakeFromGreyscaleQr ? 1 : 0);
+          QrTimingLog::line("after moon→dots (openBook=%d skip=%d)", qrOpenBook ? 1 : 0, wakeFromGreyscaleQr ? 1 : 0);
         }
       }
       if (!qrOpenBook) {

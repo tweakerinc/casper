@@ -1,5 +1,6 @@
 add_executable(ReaderChromePolicyTest
   ReaderChromePolicyTest.cpp
+  GlyphWeightPolicyTest.cpp
 )
 
 target_include_directories(ReaderChromePolicyTest PRIVATE

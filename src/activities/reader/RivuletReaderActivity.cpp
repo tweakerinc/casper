@@ -70,6 +70,7 @@
 #include "util/CrossPointPaths.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
+#include "util/GlyphWeightPolicy.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotInfo.h"
 #include "util/ScreenshotUtil.h"
@@ -4786,9 +4787,9 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
                      : aaCatchUp    ? 'c'   // heap-recovery catch-up
                                     : '-';  // ran (or will run)
 
-  // BW glyph weight: Mild when AA is off (same default menus use), Normal when
-  // AA is on so the greyscale multipass still has light fringe to shade.
-  renderer.setBwGlyphWeight(aaWanted ? GfxRenderer::BwGlyphWeight::Normal : GfxRenderer::BwGlyphWeight::Mild);
+  // BW glyph weight: Mild when AA is off (fills holes, no bold capitals).
+  // Normal when AA is on so the greyscale multipass still has light fringe.
+  renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(glyphweight::reader(aaWanted)));
   paintPageContent();
   renderStatusBar();
 

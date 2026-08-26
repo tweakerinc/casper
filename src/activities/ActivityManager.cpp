@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <HalGPIO.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
@@ -19,7 +20,13 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/GlyphWeightPolicy.h"
 #include "util/SystemLog.h"
+
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Normal) ==
+              static_cast<uint8_t>(glyphweight::Bw::Normal));
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Mild) == static_cast<uint8_t>(glyphweight::Bw::Mild));
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Dense) == static_cast<uint8_t>(glyphweight::Bw::Dense));
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -68,6 +75,11 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      // X4 UI is FAST with no grey pass — Dense inks the light fringe so Source
+      // Serif chrome is not whispy. Reader overrides per AA in its own paint.
+      if (!currentActivity->isReaderActivity()) {
+        renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(glyphweight::chrome(!gpio.deviceIsX3())));
+      }
       const uint32_t tRender = millis();
       currentActivity->render(std::move(lock));
       const uint32_t renderMs = millis() - tRender;

@@ -45,9 +45,9 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
-  // See setBwGlyphWeight(). Default = Mild so menus / home chrome match AA-off
-  // reading weight. Reader AA-on sets Normal so the greyscale pass still has
-  // light fringe left to shade.
+  // See setBwGlyphWeight(). Default = Mild (X3 chrome / AA-off reading).
+  // ActivityManager sets Dense on X4 UI chrome (FAST, no grey pass).
+  // Reader AA-on sets Normal so the greyscale pass still has light fringe.
   BwGlyphWeight bwGlyphWeight_ = BwGlyphWeight::Mild;
   Orientation orientation;
   bool fadingFix;
@@ -309,8 +309,8 @@ class GfxRenderer {
   //           for body text; kept for UI that never runs a grayscale pass.
   //
   // With AA on, prefer Normal so the multipass has fringes left to shade. Mild
-  // is the default (menus, home chrome, AA-off reading). setBwLightFringe(true)
-  // maps to Dense for the one historical call site that used that name.
+  // is X3 chrome and AA-off reading. X4 menus use Dense (see GlyphWeightPolicy).
+  // setBwLightFringe(true) maps to Dense for the one historical call site.
   void setBwGlyphWeight(const BwGlyphWeight w) { bwGlyphWeight_ = w; }
   [[nodiscard]] BwGlyphWeight bwGlyphWeight() const { return bwGlyphWeight_; }
   void setBwLightFringe(const bool on) { bwGlyphWeight_ = on ? BwGlyphWeight::Dense : BwGlyphWeight::Normal; }

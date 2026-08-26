@@ -4,49 +4,54 @@
 //
 // InputManager commits a raw state change only after two consecutive matching
 // samples (DEBOUNCE_DELAY = 5ms). After IDLE_POWER_SAVING_MS with no *committed*
-// button event the loop drops the CPU clock and sleeps 50ms per iteration, so a
-// normal ~90ms tap is seen by exactly one sample: the next sample already reads
-// released, the raw state flips again, lastDebounceTime resets, and the press
-// never commits. Nothing is logged because nothing was ever detected, and a lost
-// press also never resets the inactivity timer — so the slow cadence persists
-// and the next taps are lost the same way. On glass that is "I pressed next
-// three or four times before the page turned" with no TURN line in the capture.
+// button event the loop used to drop the CPU to 10 MHz and sleep 50ms. A normal
+// ~90ms tap is then seen by one sample: the next already reads released, the
+// raw state flips, lastDebounceTime resets, and the press never commits. Lost
+// presses also never reset the inactivity timer, so the slow cadence sticks.
+// On glass that is "I pressed next a few times, then a long press turned the
+// page" with no TURN line — a long hold is the only gesture that survives two
+// 50ms samples at 10 MHz (device log 388a52d2, X4 DCC ch45, 41s gap then TURN).
 //
 // isDebouncePending() is the SDK's signal that a raw change has not committed
-// yet. Poll fast while it is set so the pending edge gets its second sample.
+// yet. Poll fast and keep the CPU at full speed while it is set, and also
+// while the reader is open: analogRead of the Xteink ADC ladder plus idle
+// footnote/map bites become multi-hundred-ms stalls at 10 MHz and swallow the
+// same taps. The 50ms idle sleep is gone everywhere; deep sleep still owns
+// long inactivity.
 namespace inputpoll {
 
 // Matches the pre-existing responsive cadence; > DEBOUNCE_DELAY so the next
-// sample can commit.
+// sample can commit. Idle uses the same value — a 50ms sleep cannot deliver
+// two matching samples inside a ~90ms tap.
 constexpr unsigned long kFastDelayMs = 10;
-constexpr unsigned long kIdleDelayMs = 50;
+constexpr unsigned long kIdleDelayMs = kFastDelayMs;
 
 struct Request {
   bool idle = false;             // past IDLE_POWER_SAVING_MS with no input
   bool debouncePending = false;  // raw sample differs from the committed state
-  bool powerHeld = false;        // power is down: release edge must stay crisp
+  bool readerActive = false;     // book is open: never drop the CPU
 };
 
 struct Result {
   unsigned long delayMs = kFastDelayMs;
   // Tri-state so the caller only touches the CPU clock when the cadence needs
-  // it: idle asks for low power, a pending edge insists on full speed, and the
-  // plain active path leaves whatever the activity handler set.
+  // it: idle on Home asks for low power, a pending edge or an open book
+  // insists on full speed, and the plain active path leaves whatever the
+  // activity handler set.
   bool wantsPowerSaving = false;
   bool wantsFullSpeed = false;
 };
 
 inline Result decide(const Request& in) {
   Result out;
-  // A pending edge outranks power saving. Dropping the clock and sleeping 50ms
-  // here is exactly what loses the tap.
-  if (in.debouncePending) {
+  // A pending edge and an open book both outrank power saving. Dropping the
+  // clock here is what makes ADC samples miss a short tap.
+  if (in.debouncePending || in.readerActive) {
     out.wantsFullSpeed = true;
     return out;
   }
   if (!in.idle) return out;
   out.wantsPowerSaving = true;
-  out.delayMs = in.powerHeld ? kFastDelayMs : kIdleDelayMs;
   return out;
 }
 

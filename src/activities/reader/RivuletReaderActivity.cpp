@@ -2643,6 +2643,9 @@ void RivuletReaderActivity::tickIdlePageMap() {
   const unsigned long quietFrom = lastPageTurnTime_ != 0UL ? lastPageTurnTime_ : firstInkAtMs_;
   if (footnoteScanDeferred_ && firstInkDone_ && quietFrom != 0UL && (now - quietFrom) >= kFootnoteIdleDelayMs &&
       ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
+    // Start-of-bite peek: a tap during the previous 600ms scan aborts and
+    // re-defers, and the next loop would immediately restart the scan.
+    if (gpioPeekHeldForIdleMap()) return;
     footnoteScanDeferred_ = false;
     const unsigned long t0 = millis();
     ensureChapterFootnotes();
@@ -4430,6 +4433,12 @@ void RivuletReaderActivity::loop() {
     // No page-turn edge (normal idle) — accept() returns false. This used to
     // return before tickIdlePageMap(), so sitting on a page never advanced the
     // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).
+    // A raw press that has not committed yet must not start a footnote/map
+    // bite: those run for hundreds of ms and the tap is gone before the next
+    // gpio.update() (device: long press then turned, no TURN for the shorts).
+    if (gpio.isDebouncePending() || gpio.peekRawHeld()) {
+      return;
+    }
     tickAaCatchUp();
     tickDeferredProgress();
     tickPendingChapterIr();

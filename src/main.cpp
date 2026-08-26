@@ -921,6 +921,15 @@ void loop() {
                                                  SETTINGS.shortPwrBtn ==
                                                      CrossPointSettings::SHORT_PWRBTN::PWR_QUICK_RESUME);
   gpio.update();
+  // A raw change that has not debounced yet needs its second sample before
+  // idle work (footnote scan, map bite) can run for hundreds of ms and miss
+  // the tap. delay+update here commits the edge so wasPressed is visible to
+  // this same loop's activity handler.
+  if (gpio.isDebouncePending()) {
+    powerManager.setPowerSaving(false);
+    delay(inputpoll::kFastDelayMs);
+    gpio.update();
+  }
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   renderer.setFadingFix(SETTINGS.fadingFix);
@@ -1069,15 +1078,14 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    // shortPwrBtn=SLEEP is release-edge. A 50ms sample while power is held
-    // makes short taps flaky (press+release between updates). Stay snappy
-    // while power is down so one short press reliably sleeps. Likewise a raw
-    // change that has not debounced yet needs its second sample before the
-    // idle cadence can swallow it whole (InputPollPolicy has the mechanism).
+    // shortPwrBtn=SLEEP is release-edge. Stay on the 10ms cadence so a short
+    // press cannot fall between samples. The reader also keeps the CPU at
+    // full speed — 10 MHz plus the old 50ms idle sleep is what dropped Next
+    // taps until a long press (InputPollPolicy has the mechanism).
     inputpoll::Request pollReq;
     pollReq.idle = (millis() - lastActivityTime) >= HalPowerManager::IDLE_POWER_SAVING_MS;
     pollReq.debouncePending = gpio.isDebouncePending();
-    pollReq.powerHeld = gpio.isPressed(HalGPIO::BTN_POWER);
+    pollReq.readerActive = activityManager.isReaderActivity();
     const inputpoll::Result poll = inputpoll::decide(pollReq);
     if (poll.wantsPowerSaving) {
       powerManager.setPowerSaving(true);

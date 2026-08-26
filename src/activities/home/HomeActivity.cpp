@@ -37,6 +37,7 @@
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
+#include "util/HomeSideStepPolicy.h"
 #include "util/SystemChromeLive.h"
 #include "util/SystemLog.h"
 #include "util/UiGhostPolicy.h"
@@ -518,6 +519,7 @@ void HomeActivity::onEnter() {
   UiGhostPolicy::clearHardScrub();
   deferScrubAfterFirstPaint_ = true;
   lastHomeInputMs_ = millis();
+  penumbraSideAwaitRelease_ = false;
   // Allow cover pass to run again after leaving reader / changing theme.
   // Clear settled multipass so a theme switch always redraws and re-multipasses.
   freeCoverBuffer();
@@ -686,6 +688,7 @@ void HomeActivity::onResume() {
   pendingClockAaAfterIdle_ = false;
   forcePenumbraClockBwOnly_ = false;
   lastHomeInputMs_ = millis();
+  penumbraSideAwaitRelease_ = false;
   deferredGreysOnly = false;
   softGrayscaleBase = false;
   recentsLoading = false;
@@ -1266,31 +1269,34 @@ void HomeActivity::loop() {
     // Penumbra text home: FB still holds the FAST shell — scrub residual with HALF
     // without a full redraw so first ink stayed snappy.
     if (deferredHalfScrubOnly && static_cast<long>(millis() - deferredHalfScrubAtMs) >= 0) {
-      deferredHalfScrubOnly = false;
-      if (homeControlsHeld(mappedInput)) {
+      const bool inputBusy =
+          homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+      if (inputBusy) {
+        // Short side taps are often already released this frame. Returning here
+        // used to drop the edge; gpio.update() then cleared it, and the next
+        // tap's bounce skipped two under-panel pages.
         lastHomeInputMs_ = millis();
-        deferredHalfScrubOnly = true;
         deferredHalfScrubAtMs = millis() + 100UL;
-        return;
-      }
-      if (!RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
+      } else if (!RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
+        deferredHalfScrubOnly = false;
         RenderLock lock;
         if (activityManager.isCurrentActivity(this) && !minimalMenuOpen) {
           UiGhostPolicy::displayHalf(renderer);
           penumbraHalfBaselineDone = true;
           LOG_DBG("HOME", "Deferred HALF scrub complete");
         }
+        return;
       } else {
-        // Retry next tick if render mutex busy or a child is about to launch.
-        deferredHalfScrubOnly = true;
         deferredHalfScrubAtMs = millis() + 100UL;
+        return;
       }
-      return;
     }
     // Full-frame clock AA after the shell is on glass — never while a button is
     // held (Read cancels via cancelHomeBackgroundPaint) and never before HALF.
     if (pendingClockAaAfterIdle_ && !deferredHalfScrubOnly) {
-      if (homeControlsHeld(mappedInput)) {
+      const bool inputBusy =
+          homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+      if (inputBusy) {
         lastHomeInputMs_ = millis();
       } else if (static_cast<long>(millis() - lastHomeInputMs_) >= static_cast<long>(kClockAaIdleMs) &&
                  !RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
@@ -1309,7 +1315,9 @@ void HomeActivity::loop() {
       if (now[0] != '\0' && (penumbraLastDrawnTime[0] == '\0' || strcmp(now, penumbraLastDrawnTime) != 0)) {
         forcePenumbraClockBwOnly_ = true;
         requestUpdate();
-        return;
+        const bool inputBusy =
+            homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+        if (!inputBusy) return;
       }
     }
     // Cover gen after first home paint so the Loading box floats over visible UI.
@@ -1547,10 +1555,15 @@ void HomeActivity::loop() {
         }
         requestUpdate();
       };
-      if (sidePrevPressed()) {
-        runPenumbraSide(true);
-      } else if (sideNextPressed()) {
-        runPenumbraSide(false);
+      homeside::Request sideReq;
+      sideReq.prev = sidePrevPressed();
+      sideReq.next = sideNextPressed();
+      sideReq.held = gpio.isPressed(HalGPIO::BTN_UP) || gpio.isPressed(HalGPIO::BTN_DOWN);
+      sideReq.waitingRelease = penumbraSideAwaitRelease_;
+      const homeside::Result side = homeside::decide(sideReq);
+      penumbraSideAwaitRelease_ = side.waitingRelease;
+      if (side.accept) {
+        runPenumbraSide(side.prev);
       }
     }
 

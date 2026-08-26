@@ -57,6 +57,8 @@ class HomeActivity final : public Activity {
   static constexpr unsigned long kClockAaIdleMs = 400;
   bool pendingClockAaAfterIdle_ = false;
   unsigned long lastHomeInputMs_ = 0;
+  // Side Up/Down: ignore bounce until both physical sides are released.
+  bool penumbraSideAwaitRelease_ = false;
   // Minute tick: BW window only. Unchanged digits keep the last AA raster.
   bool forcePenumbraClockBwOnly_ = false;
   // Soft FAST grayscale base (panel already shows matching BW shell).

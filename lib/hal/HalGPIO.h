@@ -94,6 +94,12 @@ class HalGPIO {
   // peeks this so a tap can abort a 1.7s measure without eating the turn edge.
   bool peekRawHeld();
 
+  // True while a raw button change has not committed yet (InputManager needs two
+  // consecutive matching samples). The main loop must poll fast while this is
+  // set or a tap shorter than the poll period is dropped outright — see
+  // util/InputPollPolicy.h.
+  bool isDebouncePending() const;
+
   // Check if USB is connected
   bool isUsbConnected() const;
 

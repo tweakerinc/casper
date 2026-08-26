@@ -47,6 +47,7 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
 #include "util/GlyphWeightPolicy.h"
+#include "util/InputPollPolicy.h"
 #include "util/QrSleepPanelPolicy.h"
 #include "util/QrTimingLog.h"
 #include "util/ScreenshotUtil.h"
@@ -1068,16 +1069,21 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
-      // If we've been inactive for a while, increase the delay to save power
-      powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      // shortPwrBtn=SLEEP is release-edge. A 50ms sample while power is held
-      // makes short taps flaky (press+release between updates). Stay snappy
-      // while power is down so one short press reliably sleeps.
-      delay(gpio.isPressed(HalGPIO::BTN_POWER) ? 10 : 50);
-    } else {
-      // Short delay to prevent tight loop while still being responsive
-      delay(10);
+    // shortPwrBtn=SLEEP is release-edge. A 50ms sample while power is held
+    // makes short taps flaky (press+release between updates). Stay snappy
+    // while power is down so one short press reliably sleeps. Likewise a raw
+    // change that has not debounced yet needs its second sample before the
+    // idle cadence can swallow it whole (InputPollPolicy has the mechanism).
+    inputpoll::Request pollReq;
+    pollReq.idle = (millis() - lastActivityTime) >= HalPowerManager::IDLE_POWER_SAVING_MS;
+    pollReq.debouncePending = gpio.isDebouncePending();
+    pollReq.powerHeld = gpio.isPressed(HalGPIO::BTN_POWER);
+    const inputpoll::Result poll = inputpoll::decide(pollReq);
+    if (poll.wantsPowerSaving) {
+      powerManager.setPowerSaving(true);
+    } else if (poll.wantsFullSpeed) {
+      powerManager.setPowerSaving(false);
     }
+    delay(poll.delayMs);
   }
 }

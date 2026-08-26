@@ -189,6 +189,8 @@ bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
 bool HalGPIO::peekRawHeld() { return inputMgr.getState() != 0; }
 
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
+
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
 
 bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }

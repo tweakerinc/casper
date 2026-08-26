@@ -87,9 +87,8 @@ constexpr int kX4TitleTopPad = 12;
 // Extra air below mid-hairline before the RECENTS caption (non-pinned layouts).
 constexpr int kRecentsTopInset = 28;
 constexpr int kRecentsTopInsetX4 = 12;
-// Air between "RECENTS" caption and the first book row.
+// Air between "RECENTS" caption and the first book row (X3). X4 uses equal-gap G.
 constexpr int kRecentsCaptionToListGap = 22;
-constexpr int kRecentsCaptionToListGapX4 = 12;
 // Gap between last book row and "View All" (X3 only; X4 has no View All).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
@@ -220,6 +219,14 @@ int measureWrappedHeight(const GfxRenderer& renderer, const int fontId, const in
   return static_cast<int>(lines.size()) * renderer.getLineHeight(fontId);
 }
 
+int measureWrappedInkHeight(const GfxRenderer& renderer, const int fontId, const int maxWidth, const char* text,
+                            const int maxLines, const EpdFontFamily::Style style) {
+  if (!text || !*text) return 0;
+  const auto lines = renderer.wrappedText(fontId, text, maxWidth, maxLines, style);
+  return penumbra::wrappedInkHeight(static_cast<int>(lines.size()), renderer.getLineHeight(fontId),
+                                    renderer.getFontAscenderSize(fontId));
+}
+
 // Always re-read the RTC (HalClock::formatTime can serve a 10s cache).
 bool formatHeroTime(char* buf, size_t bufSize) {
   if (!buf || bufSize < 6) return false;
@@ -325,6 +332,7 @@ struct ContentBand {
   // X4: pin upper/lower blocks so the hairline is centered between author and RECENTS.
   int upperTop = 0;
   int lowerTop = 0;
+  int pinGap = 0;  // X4 equal-gap G (Recents caption → first book uses this too).
   bool pinBlocks = false;
 };
 
@@ -505,8 +513,8 @@ int measureNowReadingBlockH(const GfxRenderer& renderer, const ContentBand& band
       measureWrappedHeight(renderer, titleFont, band.textMaxW, title, kTitleMaxLinesX4, EpdFontFamily::BOLD);
   const int authorH = authorDisplay.empty()
                           ? 0
-                          : measureWrappedHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
-                                                 kAuthorMaxLines, EpdFontFamily::REGULAR);
+                          : measureWrappedInkHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
+                                                    kAuthorMaxLines, EpdFontFamily::REGULAR);
   return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (penumbra::titleToAuthorGap() + authorH) : 0);
 }
 
@@ -528,11 +536,12 @@ int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band, c
                          const bool includeViewAll = false) {
   (void)band;
   const bool x4 = isX4Penumbra();
-  const int captionH = renderer.getLineHeight(x4 ? kLabelFontIdX4 : kLabelFontId);
+  const int captionH = x4 ? renderer.getFontAscenderSize(kLabelFontIdX4) : renderer.getLineHeight(kLabelFontId);
   const int titleLineH = renderer.getLineHeight(kRecentsTitleFontId);
   const int rowH = recentsRowHeight(renderer);
   const int rowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
-  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  // X4 caption→list air is equal-gap G (applyX4HairlineLayout), not this constant.
+  const int capToList = x4 ? 0 : kRecentsCaptionToListGap;
   const int viewAllGap = kRecentsViewAllGap;
   const int maxN = penumbraRecentsListCap();
   // Empty books: still reserve full list height so clock-minute re-layout does not jump midY.
@@ -621,26 +630,28 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band, c
   band.pinBlocks = true;
 }
 
-// X4 equal vertical rhythm (four matching air gaps G):
+// X4 equal vertical rhythm (five matching air gaps G):
 //   status bar → NOW READING
 //   author     → hairline
 //   hairline   → RECENTS
+//   RECENTS    → first book
 //   last book  → menu
 // List is up to 5 books; no View All (sides scroll; mid button opens full Recents).
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
+  const int recentsH = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
+  const int captionH = renderer.getFontAscenderSize(kLabelFontIdX4);
+  const int listH = std::max(0, recentsH - captionH);
   const int contentH = std::max(1, band.contentBottom - band.contentTop);
-  int free = contentH - Uh - Lh - kRuleThickness;
-  if (free < 0) free = 0;
-  const int G = free / 4;
+  const auto g = penumbra::x4HomeGaps(band.contentTop, contentH, Uh, captionH, listH, kRuleThickness);
 
-  band.upperTop = band.contentTop + G;
-  band.midY = band.upperTop + Uh + G;
+  band.upperTop = g.upperTop;
+  band.midY = g.midY;
   band.halfH = std::max(1, band.midY - band.contentTop);
-  band.lowerTop = band.midY + kRuleThickness + G;
+  band.lowerTop = g.recentsTop;
+  band.pinGap = g.G;
   band.pinBlocks = true;
 }
 
@@ -833,7 +844,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
   constexpr int kMicroBarH = 5;
   constexpr int kAuthorToBarGap = 4;
   const int kRowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
-  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  const int capToList = (x4 && band.pinBlocks && band.pinGap > 0) ? band.pinGap : kRecentsCaptionToListGap;
   const int viewAllGap = kRecentsViewAllGap;
   const int rowH = titleLineH + authorInkH + kAuthorToBarGap + kMicroBarH;
 
@@ -867,7 +878,8 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
   }
 
   drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS), captionFont);
-  y += captionH + capToList;
+  const int captionAdvance = (x4 && band.pinBlocks) ? renderer.getFontAscenderSize(captionFont) : captionH;
+  y += captionAdvance + capToList;
 
   if (n == 0) {
     const char* empty = tr(STR_NO_OPEN_BOOK);

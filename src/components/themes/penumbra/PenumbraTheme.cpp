@@ -21,6 +21,7 @@
 #include "activities/reader/ReadingStatsUtils.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/PenumbraNowReadingPolicy.h"
 #include "util/StringUtils.h"
 #include "util/SystemChromeLive.h"
 #include "util/UiGhostPolicy.h"
@@ -31,14 +32,15 @@ constexpr int kClockFontId = SOURCESERIF4_72_CLOCK_FONT_ID;
 constexpr int kDayFontId = SOURCESERIF4_12_FONT_ID;
 // All Penumbra home text is Source Serif 4.
 // X3 under-panel title stack: caption 14 / title 18 / author 14.
-// X4 Now Reading (v0.1.8): caption 12 / title 16 / author 12. 14/18 on this
-// stack crowded the author into the hairline and stole air from Recents.
+// X4 Now Reading: caption 12 / title 16 / author 14. Author used to be 12pt
+// with a 5px pair gap (v0.1.8 hairline dodge); that looked smaller and glued
+// the name to the title. Hairline air is equal-gap G, not the pair gap.
 constexpr int kLabelFontId = SOURCESERIF4_14_FONT_ID;
 constexpr int kLabelFontIdX4 = SOURCESERIF4_12_FONT_ID;
 constexpr int kTitleFontId = SOURCESERIF4_18_FONT_ID;
 constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
 constexpr int kTitleFontIdX4 = SOURCESERIF4_16_FONT_ID;
-constexpr int kAuthorFontIdX4 = SOURCESERIF4_12_FONT_ID;
+constexpr int kAuthorFontIdX4 = SOURCESERIF4_14_FONT_ID;
 // Recents list only: 10 pt title (bold when focused), 8 pt author.
 // (Must stay on SOURCESERIF4_10 / _8 — not UI_10 which aliases 12 pt.)
 constexpr int kRecentsTitleFontId = SOURCESERIF4_10_FONT_ID;
@@ -56,10 +58,8 @@ constexpr int kStatsBookTitleFontId = SOURCESERIF4_14_FONT_ID;
 // Title/author wrap inset — same band as Recents list so widths stay uniform.
 constexpr int kSideInset = 24;
 constexpr int kStatsSideInset = 8;
-// Title→author gap after the *last* title line (same for 1- or 2-line titles).
-constexpr int kPairGap = 10;
-constexpr int kPairGapX4 = 5;
-// Clock ink bottom → weekday — more air than title/author (was crowded).
+// Clock ink bottom → weekday. Title→author uses penumbra::kTitleToAuthorGap
+// (same 18px on X3 and X4) so the pair is not glued together on X4.
 constexpr int kClockToDayGap = 18;
 // NOW READING → book title.
 constexpr int kLabelToTitleGap = 14;
@@ -462,8 +462,8 @@ void drawTitleAuthorInZone(const GfxRenderer& renderer, const ContentBand& band,
       author ? measureWrappedHeight(renderer, authorFont, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
              : 0;
   // Plain gap after the wrapped title block (not ink-pull) so 2-line titles don't
-  // crowd the author.
-  const int authorGap = x4 ? kPairGapX4 : kClockToDayGap;
+  // crowd the author. Same air on X3 and X4 (X4 used to use 5px).
+  const int authorGap = penumbra::titleToAuthorGap();
   const int textBlockH = labelH + labelGap + titleH + (author ? (authorGap + authorH) : 0);
 
   int y = (x4 && band.pinBlocks) ? zoneTopAdj : (zoneTopAdj + std::max(4, (zoneH - textBlockH) / 2));
@@ -507,7 +507,7 @@ int measureNowReadingBlockH(const GfxRenderer& renderer, const ContentBand& band
                           ? 0
                           : measureWrappedHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
                                                  kAuthorMaxLines, EpdFontFamily::REGULAR);
-  return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (kPairGapX4 + authorH) : 0);
+  return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (penumbra::titleToAuthorGap() + authorH) : 0);
 }
 
 // Row: title (full width) · author+% on one line · gap · bar.
@@ -572,8 +572,7 @@ int measureX3TitleAuthorBlockH(const GfxRenderer& renderer, const ContentBand& b
                           ? 0
                           : measureWrappedHeight(renderer, kAuthorFontId, band.textMaxW, authorDisplay.c_str(),
                                                  kAuthorMaxLines, EpdFontFamily::REGULAR);
-  // drawTitleAuthorInZone uses kClockToDayGap for the non-X4 author gap.
-  return labelH + kLabelToTitleGap + titleH + (authorH > 0 ? (kClockToDayGap + authorH) : 0);
+  return labelH + kLabelToTitleGap + titleH + (authorH > 0 ? (penumbra::titleToAuthorGap() + authorH) : 0);
 }
 
 int measureX3StatsStyleBlockH(const GfxRenderer& renderer) {

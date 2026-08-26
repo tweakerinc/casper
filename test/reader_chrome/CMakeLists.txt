@@ -1,6 +1,8 @@
 add_executable(ReaderChromePolicyTest
   ReaderChromePolicyTest.cpp
   GlyphWeightPolicyTest.cpp
+  PenumbraNowReadingPolicyTest.cpp
+  HomeSideStepPolicyTest.cpp
 )
 
 target_include_directories(ReaderChromePolicyTest PRIVATE

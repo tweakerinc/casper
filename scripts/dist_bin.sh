@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Publish a built firmware into dist/ with a sequential, sortable name.
 #
-# Naming: dist/CrossPoint-<NNNN>-<shortsha>.bin
-#   NNNN is a zero-padded counter kept in dist/.build-number, so `ls` always
-#   lists builds oldest -> newest. The short SHA keeps each build traceable to
-#   a commit without having to remember which hash was which.
+# Naming: dist/Casper-v0.1.9.NNNN.bin
+#   Product version comes from [casper] version in platformio.ini (the leading
+#   "v" is kept). NNNN is a zero-padded counter kept in dist/.build-number, so
+#   `ls` always lists builds oldest -> newest.
 #
 # Usage:
 #   scripts/dist_bin.sh [env]        # env defaults to gh_release
 #
 # Example:
-#   scripts/dist_bin.sh gh_release   -> dist/CrossPoint-0007-79219c65.bin
+#   scripts/dist_bin.sh gh_release   -> dist/Casper-v0.1.9.0001.bin
 set -euo pipefail
 
 ENV_NAME="${1:-gh_release}"
@@ -30,8 +30,16 @@ mkdir -p "$DIST"
 NEXT=$(( $(cat "$COUNTER") + 1 ))
 echo "$NEXT" > "$COUNTER"
 
-SHA="$(cd "$REPO_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-OUT="$DIST/$(printf 'CrossPoint-%04d-%s.bin' "$NEXT" "$SHA")"
+VERSION="$(
+  python3 - "$REPO_ROOT" <<'PY'
+import configparser, sys
+config = configparser.ConfigParser()
+config.read(sys.argv[1] + "/platformio.ini")
+print(config.get("casper", "version", fallback="v0.0.0").strip())
+PY
+)"
+# [casper] version is already "v0.1.9"
+OUT="$DIST/$(printf 'Casper-%s.%04d.bin' "$VERSION" "$NEXT")"
 
 cp -f "$SRC" "$OUT"
 echo "$OUT"

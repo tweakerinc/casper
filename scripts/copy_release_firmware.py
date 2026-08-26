@@ -1,40 +1,17 @@
 """
-PlatformIO post-build: copy gh_release firmware.bin to dist/CrossPoint-<version>.bin.
+PlatformIO post-build: do not dump a second name into dist/.
 
-Naming matches shipping releases, e.g. CrossPoint-v0.1.2.bin from [casper] version = v0.1.2.
+Shipping / test bins are published only by scripts/dist_bin.sh as
+Casper-v0.1.9.NNNN.bin. A post-script copy of CrossPoint-<version>.bin used to
+land in dist/ on every gh_release compile and fight that numbering.
 """
 
 Import("env")  # pylint: disable=undefined-variable
 
-import configparser
-import os
-import shutil
-
-
-def _casper_version(project_dir: str) -> str:
-    ini_path = os.path.join(project_dir, "platformio.ini")
-    config = configparser.ConfigParser()
-    config.read(ini_path)
-    if config.has_option("casper", "version"):
-        return config.get("casper", "version").strip()
-    return "v0.0.0"
-
 
 def copy_release_firmware(source, target, env):  # pylint: disable=unused-argument
-    project_dir = env["PROJECT_DIR"]
-    version = _casper_version(project_dir)
-    # [casper] version already includes the "v" prefix → CrossPoint-v0.1.2.bin
-    out_name = f"CrossPoint-{version}.bin"
-    dist_dir = os.path.join(project_dir, "dist")
-    os.makedirs(dist_dir, exist_ok=True)
-    src = env.subst("$BUILD_DIR/firmware.bin")
-    dst = os.path.join(dist_dir, out_name)
-    if not os.path.isfile(src):
-        print(f"WARNING [copy_release_firmware]: missing {src}")
-        return
-    shutil.copy2(src, dst)
-    print(f"Copied release firmware → dist/{out_name}")
+    print("Release firmware is at $BUILD_DIR/firmware.bin — publish with scripts/dist_bin.sh")
 
 
-# Run after the firmware binary is produced.
+# Keep the hook so extra_scripts does not surprise anyone, but do not write dist/.
 env.AddPostAction("$BUILD_DIR/firmware.bin", copy_release_firmware)  # pylint: disable=undefined-variable

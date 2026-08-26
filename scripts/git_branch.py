@@ -13,7 +13,7 @@ The distinction matters for support. CROSSPOINT_VERSION only changes when the
 product version is bumped, so consecutive test builds all report the same
 string: a device log reading "ver=v0.1.9" could have come from any of them, and
 there was no way to tell which firmware produced a capture. CROSSPOINT_BUILD_ID
-pins a log to a commit, and matches the short SHA in dist/CrossPoint-NNNN-<sha>.bin.
+pins a log to a commit. Field bins are named dist/Casper-v0.1.9.NNNN.bin by scripts/dist_bin.sh.
 """
 
 import configparser

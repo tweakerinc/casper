@@ -4418,8 +4418,11 @@ void RivuletReaderActivity::loop() {
   nextTriggered = nextTriggered || touch.next;
   const bool fromTouch = touch.prev || touch.next;
   if (!pageTurnLatch_.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
-    if (pageTurnLatch_.lastWhy == pageturn::Why::Swallow || pageTurnLatch_.lastWhy == pageturn::Why::Ambiguous ||
-        pageTurnLatch_.lastWhy == pageturn::Why::Opposite || pageTurnLatch_.lastWhy == pageturn::Why::Back) {
+    // Log every rejected edge, not just the ghost classes. Waiting and Interval
+    // used to be silent, so a capture of "I pressed next three times" showed no
+    // TURN line at all and could not distinguish a dropped edge from an edge
+    // that never reached the reader (see InputPollPolicy).
+    if (pageTurnLatch_.lastWhy != pageturn::Why::Idle) {
       SystemLog::logTiming("TURN", "drop why=%c tilt=%d touch=%d held=%d", pageturn::whyChar(pageTurnLatch_.lastWhy),
                            fromTilt ? 1 : 0, fromTouch ? 1 : 0,
                            ReaderUtils::anyPageTurnControlHeld(mappedInput) ? 1 : 0);

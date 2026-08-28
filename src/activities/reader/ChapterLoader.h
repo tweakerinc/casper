@@ -11,9 +11,12 @@ class GfxRenderer;
 // Getting one chapter's IR into a RivuletEngine.
 //
 // This is the pipeline that used to live inside RivuletReaderActivity::loadSpine:
-//   cached .rvir (validated against the on-disk HTML)  ->  page map load + scrub
+//   cached .rvir (OOM deserialize retries; corrupt header may reconvert)
 //   else  ZIP inflate -> SD -> read into RAM under a framebuffer loan -> HtmlToIr
 //         -> persist IR, drop any map built from an older/partial convert
+//
+// A successfully loaded .rvir is trusted. HTML is markup, so html>>text is
+// normal EPUB, not a truncated convert (see util/CachedIrPolicy.h).
 //
 // It is separate from the reader activity so other callers can use it — the Home
 // screen indexes chapters while no book is open, where nothing has to be evicted

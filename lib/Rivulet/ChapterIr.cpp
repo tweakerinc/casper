@@ -1,10 +1,9 @@
 #include "ChapterIr.h"
 
+#include <Esp.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
-
-#include <Esp.h>
 
 #include <algorithm>
 #include <cstring>
@@ -186,8 +185,7 @@ void ChapterIr::endBlock() {
   const size_t end = runs_.size();
   b.runCount = static_cast<uint16_t>(end - b.runBegin);
   if (b.runCount == 0 &&
-      (b.kind == BlockKind::Paragraph ||
-       (b.kind >= BlockKind::Heading1 && b.kind <= BlockKind::Heading6))) {
+      (b.kind == BlockKind::Paragraph || (b.kind >= BlockKind::Heading1 && b.kind <= BlockKind::Heading6))) {
     blocks_.pop_back();
   }
   openBlock_ = false;
@@ -326,68 +324,68 @@ bool ChapterIr::writeTo(HalFile& f) const {
   return true;
 }
 
-bool ChapterIr::readFrom(HalFile& f) {
+ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
   clear();
   char magic[4] = {};
-  if (!serialization::tryReadPod(f, magic)) return false;
+  if (!serialization::tryReadPod(f, magic)) return LoadResult::Corrupt;
   if (std::memcmp(magic, kIrMagic, 4) != 0) {
     LOG_ERR("RVIR", "bad magic");
-    return false;
+    return LoadResult::Corrupt;
   }
   uint16_t ver = 0;
   if (!serialization::tryReadPod(f, ver) || ver < kIrFormatVersionMin || ver > kIrFormatVersionMax) {
     LOG_ERR("RVIR", "bad version %u", ver);
-    return false;
+    return LoadResult::Corrupt;
   }
   uint32_t nBlocks = 0, nRuns = 0, nText = 0;
-  if (!serialization::tryReadPod(f, nBlocks)) return false;
-  if (!serialization::tryReadPod(f, nRuns)) return false;
-  if (!serialization::tryReadPod(f, nText)) return false;
+  if (!serialization::tryReadPod(f, nBlocks)) return LoadResult::Corrupt;
+  if (!serialization::tryReadPod(f, nRuns)) return LoadResult::Corrupt;
+  if (!serialization::tryReadPod(f, nText)) return LoadResult::Corrupt;
   if (nBlocks > kMaxBlocks || nRuns > kMaxRuns || nText > kMaxTextBlob) {
     LOG_ERR("RVIR", "corrupt counts b=%u r=%u t=%u", nBlocks, nRuns, nText);
-    return false;
+    return LoadResult::Corrupt;
   }
   // resize can abort under -fno-exceptions if huge — cap checked above; probe first.
-  if (nBlocks > 0 && !canAlloc(nBlocks * sizeof(Block) + 64)) return false;
-  if (nRuns > 0 && !canAlloc(nRuns * sizeof(Run) + 64)) return false;
-  if (nText > 0 && !canAlloc(nText + 64)) return false;
+  if (nBlocks > 0 && !canAlloc(nBlocks * sizeof(Block) + 64)) return LoadResult::Oom;
+  if (nRuns > 0 && !canAlloc(nRuns * sizeof(Run) + 64)) return LoadResult::Oom;
+  if (nText > 0 && !canAlloc(nText + 64)) return LoadResult::Oom;
   blocks_.resize(nBlocks);
   runs_.resize(nRuns);
   for (uint32_t i = 0; i < nBlocks; ++i) {
     uint8_t kind = 0, align = 0;
-    if (!serialization::tryReadPod(f, kind)) return false;
-    if (!serialization::tryReadPod(f, align)) return false;
+    if (!serialization::tryReadPod(f, kind)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, align)) return LoadResult::Corrupt;
     Block& b = blocks_[i];
     b.kind = static_cast<BlockKind>(kind);
     b.align = static_cast<Align>(align);
-    if (!serialization::tryReadPod(f, b.flags)) return false;
-    if (!serialization::tryReadPod(f, b.indentEmQ4)) return false;
-    if (!serialization::tryReadPod(f, b.marginTopEmQ4)) return false;
-    if (!serialization::tryReadPod(f, b.marginBottomEmQ4)) return false;
-    if (!serialization::tryReadPod(f, b.runBegin)) return false;
-    if (!serialization::tryReadPod(f, b.runCount)) return false;
-    if (!serialization::tryReadPod(f, b.imageW)) return false;
-    if (!serialization::tryReadPod(f, b.imageH)) return false;
+    if (!serialization::tryReadPod(f, b.flags)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.indentEmQ4)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.marginTopEmQ4)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.marginBottomEmQ4)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.runBegin)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.runCount)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.imageW)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, b.imageH)) return LoadResult::Corrupt;
   }
   for (uint32_t i = 0; i < nRuns; ++i) {
     Run& r = runs_[i];
-    if (!serialization::tryReadPod(f, r.textOff)) return false;
-    if (!serialization::tryReadPod(f, r.textLen)) return false;
+    if (!serialization::tryReadPod(f, r.textOff)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, r.textLen)) return LoadResult::Corrupt;
     uint8_t st = 0;
     int8_t step = 2;
-    if (!serialization::tryReadPod(f, st)) return false;
-    if (!serialization::tryReadPod(f, step)) return false;
+    if (!serialization::tryReadPod(f, st)) return LoadResult::Corrupt;
+    if (!serialization::tryReadPod(f, step)) return LoadResult::Corrupt;
     r.style = static_cast<RunStyle>(st);
     r.sizeStep = static_cast<SizeStep>(step);
   }
   if (nText > 0) {
     textData_ = static_cast<char*>(std::malloc(nText));
-    if (!textData_) return false;
+    if (!textData_) return LoadResult::Oom;
     textCap_ = nText;
     textLen_ = nText;
-    if (f.read(reinterpret_cast<uint8_t*>(textData_), nText) != static_cast<int>(nText)) return false;
+    if (f.read(reinterpret_cast<uint8_t*>(textData_), nText) != static_cast<int>(nText)) return LoadResult::Corrupt;
   }
-  return true;
+  return LoadResult::Ok;
 }
 
 bool ChapterIr::saveToFile(const char* path) const {
@@ -403,15 +401,17 @@ bool ChapterIr::saveToFile(const char* path) const {
   return ok;
 }
 
-bool ChapterIr::loadFromFile(const char* path) {
-  if (!path || !*path) return false;
+ChapterIr::LoadResult ChapterIr::loadFromFileEx(const char* path) {
+  if (!path || !*path) return LoadResult::Corrupt;
   HalFile f;
-  if (!Storage.openFileForRead("RVIR", path, f)) return false;
-  const bool ok = readFrom(f);
+  if (!Storage.openFileForRead("RVIR", path, f)) return LoadResult::Corrupt;
+  const LoadResult st = readFrom(f);
   f.close();
-  if (!ok) clear();
-  return ok;
+  if (st != LoadResult::Ok) clear();
+  return st;
 }
+
+bool ChapterIr::loadFromFile(const char* path) { return loadFromFileEx(path) == LoadResult::Ok; }
 
 int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const int bodyEmPx,
                                  const float lineCompression) const {
@@ -462,7 +462,8 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
           bytes += runs_[ri].textLen;
         }
         int stepBoost = 0;
-        if (b.kind == BlockKind::Heading1) stepBoost = bodyLine;  // ~extra line of air
+        if (b.kind == BlockKind::Heading1)
+          stepBoost = bodyLine;  // ~extra line of air
         else if (b.kind == BlockKind::Heading2)
           stepBoost = bodyLine / 2;
         else if (b.kind >= BlockKind::Heading3 && b.kind <= BlockKind::Heading6)
@@ -474,8 +475,7 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
         else if (b.kind == BlockKind::Heading2)
           cpl = std::max(10, charsPerLine * 4 / 5);
         const int textLines =
-            bytes == 0 ? 1
-                       : static_cast<int>((bytes + static_cast<size_t>(cpl) - 1) / static_cast<size_t>(cpl));
+            bytes == 0 ? 1 : static_cast<int>((bytes + static_cast<size_t>(cpl) - 1) / static_cast<size_t>(cpl));
         contentLines += textLines + (stepBoost + bodyLine - 1) / bodyLine;
         if (b.kind == BlockKind::Paragraph) ++paraCount;
         break;
@@ -486,9 +486,9 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
 
   // Empty-run chapters (image-only): still at least the image lines above.
   if (contentLines <= 0) {
-    contentLines = static_cast<int>((textLen_ + static_cast<size_t>(charsPerLine) - 1) /
-                                    static_cast<size_t>(charsPerLine)) +
-                   static_cast<int>(blocks_.size()) / 2;
+    contentLines =
+        static_cast<int>((textLen_ + static_cast<size_t>(charsPerLine) - 1) / static_cast<size_t>(charsPerLine)) +
+        static_cast<int>(blocks_.size()) / 2;
   }
 
   int pages = std::max(1, (contentLines + linesPerPage - 1) / linesPerPage);

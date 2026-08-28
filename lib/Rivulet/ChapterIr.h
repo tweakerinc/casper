@@ -24,10 +24,10 @@ struct Block {
   BlockKind kind = BlockKind::Paragraph;
   Align align = Align::Left;
   uint16_t flags = 0;
-  uint8_t indentEmQ4 = 0;     // first-line indent in 1/16 em (0 = default policy)
-  int8_t marginTopEmQ4 = 0;   // before block, 1/16 em (signed for future)
+  uint8_t indentEmQ4 = 0;       // first-line indent in 1/16 em (0 = default policy)
+  int8_t marginTopEmQ4 = 0;     // before block, 1/16 em (signed for future)
   int8_t marginBottomEmQ4 = 4;  // after block (~0.25em default)
-  uint16_t runBegin = 0;      // index into ChapterIr::runs_
+  uint16_t runBegin = 0;        // index into ChapterIr::runs_
   uint16_t runCount = 0;
   // Image blocks only: display size after fit-to-viewport (0 = unknown / placeholder).
   uint16_t imageW = 0;
@@ -93,12 +93,13 @@ class ChapterIr {
   // Replace run text (append-only: old blob bytes are orphaned). Used after image
   // probe to store package-absolute hrefs so paint does not re-resolve baseDir.
   bool setRunText(size_t runIndex, const char* utf8, size_t len);
-  bool setRunText(size_t runIndex, const std::string& s) {
-    return setRunText(runIndex, s.data(), s.size());
-  }
+  bool setRunText(size_t runIndex, const std::string& s) { return setRunText(runIndex, s.data(), s.size()); }
 
   bool saveToFile(const char* path) const;
   bool loadFromFile(const char* path);
+  // Distinguish OOM from a bad header so callers can keep a just-read cache.
+  enum class LoadResult : uint8_t { Ok, Corrupt, Oom };
+  LoadResult loadFromFileEx(const char* path);
 
   [[nodiscard]] int estimatePageCount(int viewportW, int viewportH, int bodyEmPx, float lineCompression) const;
 
@@ -116,7 +117,7 @@ class ChapterIr {
   size_t textCap_ = 0;
 
   bool writeTo(HalFile& f) const;
-  bool readFrom(HalFile& f);
+  LoadResult readFrom(HalFile& f);
 };
 
 }  // namespace rivulet

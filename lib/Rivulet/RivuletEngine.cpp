@@ -310,7 +310,18 @@ bool RivuletEngine::ingestHtml(const char* html, const size_t len, const char* i
 
 bool RivuletEngine::loadIr(const char* irPath) {
   clear();
-  if (!chapter_.loadFromFile(irPath)) return false;
+  const ChapterIr::LoadResult st = chapter_.loadFromFileEx(irPath);
+  switch (st) {
+    case ChapterIr::LoadResult::Ok:
+      lastIrLoadResult_ = IrLoadResult::Ok;
+      break;
+    case ChapterIr::LoadResult::Oom:
+      lastIrLoadResult_ = IrLoadResult::Oom;
+      return false;
+    case ChapterIr::LoadResult::Corrupt:
+      lastIrLoadResult_ = IrLoadResult::Corrupt;
+      return false;
+  }
   map_.setRenderKey(key_);
   IrCursor start{};
   if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;

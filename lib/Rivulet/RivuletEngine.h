@@ -47,6 +47,9 @@ class RivuletEngine {
 
   // Load Tier B IR from SD.
   bool loadIr(const char* irPath);
+  // Valid after a failed loadIr: Oom means keep the file and retry after a scrub.
+  enum class IrLoadResult : uint8_t { Ok, Corrupt, Oom };
+  [[nodiscard]] IrLoadResult lastIrLoadResult() const { return lastIrLoadResult_; }
 
   // Load page map if key matches and cursors fit IR; otherwise false.
   bool loadPageMap(const char* mapPath);
@@ -228,6 +231,7 @@ class RivuletEngine {
   std::string pageCacheDir_;
   mutable bool pageCacheDirReady_ = false;  // dir created/verified this session
   int pageCacheSpine_ = -1;                 // namespaces .rvpg files; -1 disables cache I/O
+  IrLoadResult lastIrLoadResult_ = IrLoadResult::Ok;
   TurnFail lastTurnFail_ = TurnFail::None;
   int lastWalkPages_ = 0;
   int lastWalkBlock_ = 0;

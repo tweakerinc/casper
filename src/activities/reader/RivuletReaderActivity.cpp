@@ -1635,6 +1635,10 @@ bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
       ok = loadSpine(spine, page);
     }
     if (!ok) ok = loadSpine(spine, 0);
+    if (!ok && tryHopToCachedPage(spine, page)) {
+      ok = true;
+      LOG_INF("RVR", "restoreAfterUi page-cache hop spine=%d page=%d", spine, engine_.currentPage());
+    }
     // Never scan other spines here. Falling through to spine 0 is exactly what
     // sent readers to book page 1 after Manage Fonts / Reader UI (logs: ERS open
     // spine=0 after a child activity). CrossInk keeps the held place.
@@ -1680,33 +1684,54 @@ bool RivuletReaderActivity::loadTocChapter(const int tocSpineIndex, const int st
   const int n = epub_->getSpineItemsCount();
   if (tocSpineIndex < 0 || tocSpineIndex >= n) return false;
 
-  // Same model as every normal open: free prior chapter, load target, show
-  // page 0 (or startPage). Idle tickIdlePageMap builds the rest. No full-chapter
-  // walk, no jumping to later TOC entries.
   const int keepSpine = spineIndex_;
-  const int keepPage = engine_.currentPage();
+  const int keepPage = engine_.hasChapter() ? engine_.currentPage() : (heavyReleasedForUi_ ? heldPageForUi_ : 0);
   const bool canRestore = ready_ && engine_.hasChapter();
+  const bool canRestoreHeld = heavyReleasedForUi_ && heldSpineForUi_ >= 0;
 
-  prepareHeapForChapterLoad();
-  // Always open at the start of the chapter when picking from TOC (legacy).
+  // Already in RAM: this is the chapter they are reading. Do not clear + reload.
+  if (tocSpineIndex == spineIndex_ && engine_.hasChapter() && ready_) {
+    (void)startPage;
+    if (engine_.goToStart(renderer)) {
+      firstPaint_ = true;
+      heavyReleasedForUi_ = false;
+      LOG_INF("RVR", "loadTocChapter resident spine=%d", tocSpineIndex);
+      return true;
+    }
+  }
+
+  // Page cache from the sitting they just finished — no IR malloc, no convert.
+  if (tryHopToCachedPage(tocSpineIndex, 0)) {
+    LOG_INF("RVR", "loadTocChapter cached page0 spine=%d free=%u", tocSpineIndex,
+            static_cast<unsigned>(ESP.getFreeHeap()));
+    return true;
+  }
+
+  prepareHeapForChapterLoad(/*aggressive=*/true);
   (void)startPage;
   if (loadSpine(tocSpineIndex, /*startPage=*/0)) {
+    heavyReleasedForUi_ = false;
     LOG_INF("RVR", "loadTocChapter ok spine=%d page0 free=%u", tocSpineIndex, static_cast<unsigned>(ESP.getFreeHeap()));
     return true;
   }
 
-  // One retry after a harder heap scrub (font cache if still tight).
-  prepareHeapForChapterLoad();
-  if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
-    if (!fcm->isScanning() && ESP.getMaxAllocHeap() < 48 * 1024) fcm->clearCache();
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (loadSpine(tocSpineIndex, 0)) {
+    heavyReleasedForUi_ = false;
+    return true;
   }
-  yield();
-  if (loadSpine(tocSpineIndex, 0)) return true;
+  if (tryHopToCachedPage(tocSpineIndex, 0)) return true;
 
   LOG_ERR("RVR", "loadTocChapter failed spine=%d — restore %d", tocSpineIndex, keepSpine);
   if (canRestore && keepSpine >= 0 && keepSpine < n) {
-    prepareHeapForChapterLoad();
-    if (loadSpine(keepSpine, keepPage) || loadSpine(keepSpine, 0)) return false;
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    if (loadSpine(keepSpine, keepPage) || loadSpine(keepSpine, 0) || tryHopToCachedPage(keepSpine, keepPage)) {
+      return false;
+    }
+  }
+  if (canRestoreHeld) {
+    (void)restoreAfterUi(/*showLoading=*/false);
+    return false;
   }
   ready_ = false;
   return false;
@@ -2425,11 +2450,16 @@ void RivuletReaderActivity::bindEnginePageCacheDir() {
   engine_.setPageCacheDir(pagesDir.c_str());
 }
 
-bool RivuletReaderActivity::tryHopToCachedFirstPage(const int targetSpine) {
-  if (targetSpine < 0 || !engine_.hasPageCache(targetSpine, 0)) return false;
+bool RivuletReaderActivity::tryHopToCachedPage(const int targetSpine, const int page) {
+  if (targetSpine < 0) return false;
   bindEnginePageCacheDir();
+  int hop = std::max(0, page);
+  if (!engine_.hasPageCache(targetSpine, hop)) hop = 0;
+  if (!engine_.hasPageCache(targetSpine, hop)) return false;
   if (engine_.hasChapter()) prepareHeapForChapterLoad(/*aggressive=*/true);
-  if (!engine_.loadOrphanPageCache(targetSpine, 0)) return false;
+  if (!engine_.loadOrphanPageCache(targetSpine, hop)) {
+    if (hop == 0 || !engine_.loadOrphanPageCache(targetSpine, 0)) return false;
+  }
 
   pendingChapterIrLoad_ = targetSpine;
   spineIndex_ = targetSpine;
@@ -2443,9 +2473,14 @@ bool RivuletReaderActivity::tryHopToCachedFirstPage(const int targetSpine) {
   pageMapDirty_ = true;
   futureIndexedThisSession_ = 0;
   futureIndexAbortedThisSitting_ = false;
-  SystemLog::logTiming("TURN", "chapter_next_cached spine=%d page=1 spans=%u", targetSpine,
+  if (heavyReleasedForUi_) heavyReleasedForUi_ = false;
+  SystemLog::logTiming("TURN", "chapter_cached_hop spine=%d page=%d spans=%u", targetSpine, engine_.currentPage() + 1,
                        static_cast<unsigned>(engine_.page().spans.size()));
   return true;
+}
+
+bool RivuletReaderActivity::tryHopToCachedFirstPage(const int targetSpine) {
+  return tryHopToCachedPage(targetSpine, 0);
 }
 
 void RivuletReaderActivity::tickPendingChapterIr() {
@@ -3375,8 +3410,11 @@ void RivuletReaderActivity::openReaderMenu() {
           return;
         }
 
-        // Fonts / Reader UI need contiguous heap — release now, restore on child return.
-        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI)) {
+        // Fonts / Reader UI / chapter list need contiguous heap — release now.
+        // Chapter select then loads from .rvir / page cache instead of fighting
+        // the resident IR. Cancel restores the held place.
+        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI) ||
+            action == static_cast<int>(MA::SELECT_CHAPTER)) {
           releaseHeavyForUi();
           onReaderMenuAction(action);
           return;
@@ -3423,15 +3461,13 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                   firstPaint_ = true;
                   (void)saveProgress();
                 } else {
-                  // loadTocChapter restores the previous spine. Paint it, then
-                  // hold the error on glass — requestUpdate after the popup
-                  // raced X3 HALF and the message never appeared.
                   firstPaint_ = true;
                   requestUpdate();
-                  flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
                   return;
                 }
               }
+            } else if (heavyReleasedForUi_) {
+              (void)restoreAfterUi();
             }
             requestUpdate();
           });
@@ -4811,11 +4847,11 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   const bool aaCatchUp = forceAaThisRender_;
   forceAaThisRender_ = false;
   const bool aaThisFrame = aaWanted && heapOkForAa && !forceScrub;
-  const char aaWhy = !aaWanted      ? 'o'   // off in settings (or dark mode)
-                     : forceScrub   ? 's'   // long-press / interval scrub owns this frame
-                     : !heapOkForAa ? 'h'   // storeBwBuffer would not fit
-                     : aaCatchUp    ? 'c'   // heap-recovery catch-up
-                                    : '-';  // ran (or will run)
+  const char aaWhy = !aaWanted      ? 'o'  // off in settings (or dark mode)
+                     : forceScrub   ? 's'  // long-press / interval scrub owns this frame
+                     : !heapOkForAa ? 'h'  // storeBwBuffer would not fit
+                     : aaCatchUp    ? 'c'  // heap-recovery catch-up
+                                    : '-';    // ran (or will run)
 
   // BW glyph weight: Mild when AA is off (fills holes, no bold capitals).
   // Normal when AA is on so the greyscale multipass still has light fringe.

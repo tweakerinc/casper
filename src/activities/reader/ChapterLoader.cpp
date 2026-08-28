@@ -8,6 +8,7 @@
 
 #include <cstdio>
 
+#include "util/CachedIrPolicy.h"
 #include "util/TaskWatchdog.h"
 
 namespace chapterload {
@@ -85,10 +86,12 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
   std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir.c_str(), spineIndex, imgMode);
 
   // Always free retained chapter + image/font caches before a spine load, or a
-  // home-cover PNG / font cache keeps maxAlloc and the convert aborts midway.
+  // home-cover PNG / font cache keeps maxAlloc and the convert (or IR malloc)
+  // aborts. Cached deserialize is one contiguous text-blob alloc — 48KB looked
+  // "fine" after a menu on X3 and still failed, then the old code deleted .rvir.
   const bool hasCachedIr = Storage.exists(irPath);
   const bool needAggressive =
-      requireCompleteIr || !hasCachedIr || ESP.getMaxAllocHeap() < 48 * 1024 || ESP.getFreeHeap() < 60 * 1024;
+      requireCompleteIr || !hasCachedIr || ESP.getMaxAllocHeap() < 64 * 1024 || ESP.getFreeHeap() < 72 * 1024;
   if (!hasCachedIr || eng.hasChapter() || needAggressive) {
     prepHeap(needAggressive || requireCompleteIr);
   }
@@ -99,25 +102,11 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
   // --- Cached IR ------------------------------------------------------------
   if (Storage.exists(irPath)) {
     ok = eng.loadIr(irPath);
-    if (ok && Storage.exists(htmlPath)) {
-      // Reject truncated IR from an older OOM convert: if the HTML on SD is much
-      // larger than the IR text, the cache is a short chapter with a false end.
-      HalFile hf;
-      if (Storage.openFileForRead("CHLOAD", htmlPath, hf)) {
-        const size_t htmlSz = hf.size();
-        hf.close();
-        const size_t textSz = eng.chapter().textSize();
-        const bool shortVsHtml =
-            (htmlSz > 8000 && textSz > 0 && textSz * 5 / 2 < htmlSz) || (htmlSz > 20000 && textSz < 5000);
-        if (shortVsHtml) {
-          LOG_ERR("CHLOAD", "stale short IR spine=%d text=%u html=%u — reconvert", spineIndex,
-                  static_cast<unsigned>(textSz), static_cast<unsigned>(htmlSz));
-          eng.clear();
-          Storage.remove(irPath);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-          ok = false;
-        }
-      }
+    if (!ok && eng.lastIrLoadResult() == rivulet::RivuletEngine::IrLoadResult::Oom) {
+      LOG_ERR("CHLOAD", "IR OOM spine=%d — scrub and retry, keeping cache free=%u maxA=%u", spineIndex,
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      prepHeap(true);
+      ok = eng.loadIr(irPath);
     }
     if (ok) {
       fromIrCache = true;
@@ -132,8 +121,19 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
         }
       }
     } else if (Storage.exists(irPath)) {
-      LOG_DBG("CHLOAD", "stale/bad IR %s — reconvert", irPath);
-      Storage.remove(irPath);
+      const cachedir::LoadMiss miss = (eng.lastIrLoadResult() == rivulet::RivuletEngine::IrLoadResult::Oom)
+                                          ? cachedir::LoadMiss::Oom
+                                          : cachedir::LoadMiss::Corrupt;
+      if (cachedir::deleteFileOnLoadMiss(miss)) {
+        LOG_DBG("CHLOAD", "corrupt IR %s — reconvert", irPath);
+        Storage.remove(irPath);
+      } else {
+        // Deserialize lost to heap. Convert needs the HTML buffer on top of the
+        // same blob — it will lose too, and used to delete a chapter the user
+        // had just been reading. Keep the file for the caller's next scrub.
+        LOG_ERR("CHLOAD", "IR OOM spine=%d — keep cache, skip convert", spineIndex);
+        return out;
+      }
     }
   }
 

@@ -149,6 +149,9 @@ class RivuletReaderActivity final : public Activity {
   void promoteFutureIndexToCurrent();
   // Hop: paint page 1 from .rvpg with no IR in RAM, then load IR after ink.
   [[nodiscard]] bool tryHopToCachedFirstPage(int targetSpine);
+  // Paint a previously laid-out page from SD without converting. Used when the
+  // user just read that spine and IR deserialize is tight on X3.
+  [[nodiscard]] bool tryHopToCachedPage(int targetSpine, int page);
   void tickPendingChapterIr();
   void finishPendingChapterIr();
   void bindEnginePageCacheDir();

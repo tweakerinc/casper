@@ -85,6 +85,9 @@ constexpr size_t kInitialBookmarkCacheCapacity = 16;
 constexpr float kBookmarkProgressEpsilon = 0.0025f;
 // v49: 2s footnote scan after land blocked 1.8–2.0s and ate the next tap.
 constexpr unsigned long kFootnoteIdleDelayMs = 8000UL;
+// Device eb84fe08: MAP prewarm_glyphs abort=0 ms=4112 on the main loop, then
+// TURN drop why=s. Cap so a cold SD-font decompress cannot freeze taps.
+constexpr unsigned long kIdlePrewarmBudgetMs = 180UL;
 
 bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
                          const float pageProgress01) {
@@ -100,6 +103,13 @@ bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, co
 }
 
 bool gpioPeekHeldForIdleMap() { return gpio.peekRawHeld(); }
+
+unsigned long g_prewarmDeadlineMs = 0;
+
+bool gpioPeekOrPrewarmBudget() {
+  if (gpioPeekHeldForIdleMap()) return true;
+  return g_prewarmDeadlineMs != 0UL && millis() >= g_prewarmDeadlineMs;
+}
 
 void armSwallowAfterIdle(ReaderUtils::PageTurnLatch& latch, const unsigned long startedMs, const bool aborted) {
   if (aborted) return;
@@ -2568,8 +2578,12 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
   if (gpioPeekHeldForIdleMap()) return;
 
   const unsigned long t0 = millis();
+  g_prewarmDeadlineMs = t0 + kIdlePrewarmBudgetMs;
   RenderLock lock(*this);
-  if (!engine_.aheadWarm()) return;
+  if (!engine_.aheadWarm()) {
+    g_prewarmDeadlineMs = 0;
+    return;
+  }
   // Record next-page spans into the scan buckets without painting. Scan-mode
   // paint + clearOnEnter wiped the live page's glyphs and left a white plate
   // on glass when a FAST landed mid-prewarm (X3 4.1s prewarm / X4 blank SD
@@ -2578,7 +2592,7 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
   bool aborted = false;
   const auto& ahead = engine_.aheadPage();
   for (const auto& sp : ahead.spans) {
-    if (gpioPeekHeldForIdleMap()) {
+    if (gpioPeekOrPrewarmBudget()) {
       aborted = true;
       break;
     }
@@ -2586,12 +2600,16 @@ void RivuletReaderActivity::prewarmAheadGlyphs() {
     renderer.ensureSdCardFontReady(sp.fontId, sp.text.c_str());
     fcm->recordText(sp.text.c_str(), sp.fontId, static_cast<EpdFontFamily::Style>(sp.epdStyle));
   }
-  aborted = scope.endScanAndPrewarm(&gpioPeekHeldForIdleMap) || aborted;
-  if (!aborted) {
+  aborted = scope.endScanAndPrewarm(&gpioPeekOrPrewarmBudget) || aborted;
+  g_prewarmDeadlineMs = 0;
+  const unsigned long dt = millis() - t0;
+  const bool userAbort = gpioPeekHeldForIdleMap();
+  // Budget abort: do not retry this page — one 4s SD-font face would loop.
+  // GPIO abort: leave unmarked so a later idle tick can finish.
+  if (!aborted || (!userAbort && dt >= kIdlePrewarmBudgetMs)) {
     glyphCacheSpine_ = spineIndex_;
     glyphCachePage_ = nextPage;
   }
-  const unsigned long dt = millis() - t0;
   if (dt >= 50UL) {
     SystemLog::logTiming("MAP", "prewarm_glyphs page=%d abort=%d ms=%lu", nextPage + 1, aborted ? 1 : 0, dt);
   }
@@ -3377,6 +3395,8 @@ void RivuletReaderActivity::openReaderMenu() {
             const int keepCount =
                 std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer)
                                                  : (lastSavedPageCount_ > 0 ? lastSavedPageCount_ : keepPage + 1));
+            const bool keepCursorValid = engine_.hasCurrentStartCursor();
+            const rivulet::IrCursor keepCursor = engine_.currentStartCursor();
             SETTINGS.orientation = menu->orientation;
             SETTINGS.frontButtonFollowOrientation =
                 CrossPointSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
@@ -3386,7 +3406,7 @@ void RivuletReaderActivity::openReaderMenu() {
             if (heavyReleasedForUi_) {
               (void)restoreAfterUi(/*showLoading=*/false);
             } else {
-              (void)relayoutChapterForViewport(keepSpine, keepPage, keepCount);
+              (void)relayoutChapterForViewport(keepSpine, keepPage, keepCount, keepCursor, keepCursorValid);
             }
             firstPaint_ = true;
           } else if (SETTINGS.frontButtonFollowOrientation != menu->frontButtonFollowOrientation) {
@@ -4074,13 +4094,33 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
   }
 }
 
-bool RivuletReaderActivity::relayoutChapterForViewport(const int keepSpine, const int keepPage, const int keepCount) {
-  // IR is still the old chapter; the render key is already the new viewport.
-  // Estimate the new page count from that pair — never from the 1-page live map
-  // that loadSpine leaves behind (that scaled every flip to page 0).
+bool RivuletReaderActivity::relayoutChapterForViewport(const int keepSpine, const int keepPage, const int keepCount,
+                                                       const rivulet::IrCursor& keepCursor,
+                                                       const bool keepCursorValid) {
+  // Prefer the IR cursor of the page on glass. Scaling keepPage into
+  // chapterPageCountForEta after setRenderKey used the new-viewport heuristic
+  // (device eb84fe08: 23/46 → 41/~81, live portrait was 53 pages).
+  if (keepCursorValid && engine_.hasChapter() && keepSpine == spineIndex_) {
+    if (!irDir_.empty()) {
+      char mapPath[200];
+      std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), keepSpine,
+                    static_cast<unsigned>(SETTINGS.imageRendering));
+      if (Storage.exists(mapPath)) {
+        (void)engine_.loadPageMap(mapPath);
+        (void)engine_.scrubStaleCompleteMap(renderer);
+      }
+    }
+    if (engine_.resumeAtCursor(renderer, keepCursor)) {
+      LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d cursor=1", keepSpine, keepPage + 1, keepCount,
+              engine_.currentPage() + 1, std::max(1, engine_.chapterPageCountForEta(&renderer)));
+      firstPaint_ = true;
+      ready_ = true;
+      return true;
+    }
+  }
   const int newCount = std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer) : keepCount);
   const int page = orientpage::remap(keepPage, keepCount, newCount);
-  LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d", keepSpine, keepPage, keepCount, page, newCount);
+  LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d cursor=0", keepSpine, keepPage, keepCount, page, newCount);
   if (loadSpine(keepSpine, page)) return true;
   return loadSpine(keepSpine, 0);
 }
@@ -4097,6 +4137,8 @@ void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
   const int keepSpine = spineIndex_;
   const int keepPage = engine_.currentPage();
   const int keepCount = std::max(1, engine_.chapterPageCountForEta(&renderer));
+  const bool keepCursorValid = engine_.hasCurrentStartCursor();
+  const rivulet::IrCursor keepCursor = engine_.currentStartCursor();
 
   // Corner status while still on the current orientation (see menu path).
   GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
@@ -4107,7 +4149,7 @@ void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   configureRenderKey();
 
-  if (relayoutChapterForViewport(keepSpine, keepPage, keepCount)) {
+  if (relayoutChapterForViewport(keepSpine, keepPage, keepCount, keepCursor, keepCursorValid)) {
     firstPaint_ = true;
     (void)saveProgress();
   }

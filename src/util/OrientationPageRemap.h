@@ -4,21 +4,21 @@
 
 // Remap a 0-based in-chapter page across a viewport / render-key change.
 //
-// The live page map after loadSpine is often a single laid-out page (nowCount=1).
-// Scaling keepPage/keepCount * 1 lands at chapter start — the "flip orientation
-// and jump back many pages" report. Callers must pass the *heuristic* page count
-// for the new viewport (chapterPageCountForEta after setRenderKey, before the
-// chapter is cleared), never the 1-page live map.
+// Callers that still have the chapter IR must resume at the page's IR cursor
+// (RivuletEngine::resumeAtCursor) — that keeps the same text on glass.
+// This helper is only the fallback when no cursor exists (UI-released IR).
+//
+// Device eb84fe08 Flip Orientation: complete landscape 23/46 scaled into a
+// post-setRenderKey heuristic of ~81 → 41/~81. Live portrait was 53 pages, so
+// the reader jumped to 41/53 (~77% through) then a second flip 41/53 → 47/~61
+// and goToPage(47) failed (landed at chapter end). Never scale into the new
+// viewport heuristic; keep the old index clamped to the new count.
 namespace orientpage {
 
-inline int remap(const int page, const int oldCount, const int newCount) {
+inline int remap(const int page, const int /*oldCount*/, const int newCount) {
   if (page <= 0) return 0;
-  const int oldC = std::max(1, oldCount);
   const int newC = std::max(1, newCount);
-  if (oldC == newC) return std::clamp(page, 0, newC - 1);
-  const int mapped =
-      static_cast<int>((static_cast<float>(page) / static_cast<float>(oldC)) * static_cast<float>(newC) + 0.5f);
-  return std::clamp(mapped, 0, newC - 1);
+  return std::clamp(page, 0, newC - 1);
 }
 
 }  // namespace orientpage

@@ -626,6 +626,56 @@ bool RivuletEngine::goToStart(const GfxRenderer& renderer) {
   return true;
 }
 
+IrCursor RivuletEngine::currentStartCursor() const {
+  if (laidOutValid_) return laidOut_.start;
+  if (map_.hasPage(currentPage_)) return map_.pageStart(currentPage_);
+  return {};
+}
+
+bool RivuletEngine::hasCurrentStartCursor() const { return laidOutValid_ || map_.hasPage(currentPage_); }
+
+bool RivuletEngine::resumeAtCursor(const GfxRenderer& renderer, const IrCursor& cursor, const int maxWalkPages) {
+  if (chapter_.empty()) return false;
+  aheadValid_ = false;
+  ahead_.clear();
+  behindValid_ = false;
+  behind_.clear();
+
+  if (map_.knownPages() > 0) {
+    const int page = map_.pageContaining(cursor);
+    if (page >= 0 && goToPage(renderer, page, /*maxWalkPages=*/8)) return true;
+  }
+
+  seedMapIfEmpty();
+  const int budget = maxWalkPages > 0 ? maxWalkPages : 512;
+  int walked = 0;
+  while (map_.knownPages() > 0) {
+    const int last = map_.knownPages() - 1;
+    const IrCursor start = map_.pageStart(last);
+    LaidOutPage tmp;
+    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), start, tmp)) break;
+    // This page covers [start, end). Land when the kept cursor sits on it.
+    if (!(cursor < start) && (cursor < tmp.end || tmp.atChapterEnd)) {
+      currentPage_ = last;
+      laidOutValid_ = false;
+      return ensureLaidOut(renderer);
+    }
+    if (tmp.atChapterEnd) {
+      currentPage_ = last;
+      laidOutValid_ = false;
+      return ensureLaidOut(renderer);
+    }
+    if (tmp.end == start) break;
+    if (!map_.hasPage(last + 1)) map_.pushPageStart(tmp.end);
+    if (++walked > budget) break;
+    if ((walked & 7) == 0) yield();
+  }
+
+  currentPage_ = std::max(0, map_.knownPages() - 1);
+  laidOutValid_ = false;
+  return layoutAtCursor(renderer, cursor);
+}
+
 bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, const int maxWalkPages) {
   if (pageIndex < 0) return false;
   aheadValid_ = false;

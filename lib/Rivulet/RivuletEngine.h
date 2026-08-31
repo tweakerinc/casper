@@ -74,6 +74,12 @@ class RivuletEngine {
   // maxWalkPages caps progressive map fill so interactive calls cannot freeze.
   // Resume may pass a larger budget (with yield inside).
   bool goToPage(const GfxRenderer& renderer, int pageIndex, int maxWalkPages = 64);
+  // Re-layout this chapter under the current render key so the same IR place
+  // stays on glass (Flip Orientation). Uses a loaded map when the key matches;
+  // otherwise a measure-only walk until the cursor, not a page-count heuristic.
+  bool resumeAtCursor(const GfxRenderer& renderer, const IrCursor& cursor, int maxWalkPages = 512);
+  [[nodiscard]] IrCursor currentStartCursor() const;
+  [[nodiscard]] bool hasCurrentStartCursor() const;
   bool nextPage(const GfxRenderer& renderer);
   bool prevPage(const GfxRenderer& renderer);
   // Why a turn failed. Callers MUST distinguish these: treating a layout failure

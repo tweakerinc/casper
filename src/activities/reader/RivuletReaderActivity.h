@@ -87,8 +87,9 @@ class RivuletReaderActivity final : public Activity {
   void flipReadingOrientation();
   void applyReadingOrientation(uint8_t newOrientation);
   // Re-layout the current spine under the render key already on the engine.
-  // keepCount must be the *old* viewport estimate, captured before setRenderKey.
-  bool relayoutChapterForViewport(int keepSpine, int keepPage, int keepCount);
+  // keepCursor is the IR start of the page on glass (captured before setRenderKey).
+  bool relayoutChapterForViewport(int keepSpine, int keepPage, int keepCount, const rivulet::IrCursor& keepCursor,
+                                  bool keepCursorValid);
   // Paint a center popup on the page already on glass. Do not follow with
   // requestUpdate — that races the X3 HALF refresh and wipes the message.
   void flashHeldReaderPopup(const char* msg);

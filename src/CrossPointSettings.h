@@ -372,8 +372,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
-  // Sleep Screen: wallpaper styles, or QUICK_RESUME (keep last frame). Default: Light.
-  uint8_t sleepScreen = LIGHT;
+  // Sleep Screen: wallpaper styles, or QUICK_RESUME (keep last frame on glass).
+  // Factory default is last-frame (INX-style); Light/Dark still paint Casper art.
+  uint8_t sleepScreen = QUICK_RESUME;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
   // Sleep screen cover filter
@@ -482,6 +483,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t menuFontSize = MENU_FONT_XSMALL;  // 10pt Source Serif (shipping default)
   // One-time: old menuFontSize 0/1/2 (12/14/16) → 1/2/3 after inserting 10pt at 0.
   uint8_t casperMenuFont10ptMigrated = 0;
+  // One-time: factory Light (Casper ghost wallpaper) → last-frame Quick Resume.
+  // Dark / Cover / Custom / Blank were explicit choices and are left alone.
+  uint8_t casperQuickResumeDefaultMigrated = 0;
   // When 1, list titles wrap to two lines before ellipsis (UI: "Text Wrapping").
   // Default on (including 12pt) — long titles need it on X4 list width too.
   uint8_t splitBookTitleLines = 1;

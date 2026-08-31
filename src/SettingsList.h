@@ -62,16 +62,16 @@ inline SettingInfo buildUiThemeSetting() {
       "uiTheme", StrId::STR_CAT_DISPLAY);
 }
 
-// Sleep Screen picker. Stored enum stays append-only. UI order: Dark, Light,
-// Cover, Cover + Custom, Custom, None, Quick Resume (last-frame, opt-in).
+// Sleep Screen picker. Stored enum stays append-only. UI order: Quick Resume
+// first (last-frame factory default), then wallpaper styles.
 inline SettingInfo buildSleepScreenSetting() {
   using M = CrossPointSettings::SLEEP_SCREEN_MODE;
   static constexpr M kOrder[] = {
-      M::DARK, M::LIGHT, M::COVER, M::COVER_CUSTOM, M::CUSTOM, M::BLANK, M::QUICK_RESUME,
+      M::QUICK_RESUME, M::DARK, M::LIGHT, M::COVER, M::COVER_CUSTOM, M::CUSTOM, M::BLANK,
   };
   static constexpr StrId kLabels[] = {
-      StrId::STR_DARK,   StrId::STR_LIGHT,    StrId::STR_COVER,        StrId::STR_COVER_CUSTOM,
-      StrId::STR_CUSTOM, StrId::STR_NONE_OPT, StrId::STR_QUICK_RESUME,
+      StrId::STR_QUICK_RESUME, StrId::STR_DARK,   StrId::STR_LIGHT,    StrId::STR_COVER,
+      StrId::STR_COVER_CUSTOM, StrId::STR_CUSTOM, StrId::STR_NONE_OPT,
   };
   static constexpr uint8_t kCount = static_cast<uint8_t>(sizeof(kOrder) / sizeof(kOrder[0]));
 
@@ -88,10 +88,10 @@ inline SettingInfo buildSleepScreenSetting() {
         for (uint8_t i = 0; i < kCount; ++i) {
           if (kOrder[i] == mode) return i;
         }
-        return static_cast<uint8_t>(1);  // Light
+        return static_cast<uint8_t>(0);  // Quick Resume
       },
       [](uint8_t displayIdx) {
-        if (displayIdx >= kCount) displayIdx = 1;
+        if (displayIdx >= kCount) displayIdx = 0;
         SETTINGS.sleepScreen = static_cast<uint8_t>(kOrder[displayIdx]);
       },
       "sleepScreen", StrId::STR_CAT_DISPLAY);

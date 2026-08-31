@@ -14,6 +14,10 @@
 #include "I18nKeys.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "util/SleepScreenPolicy.h"
+
+static_assert(CrossPointSettings::LIGHT == sleepscreen::kLight, "SleepScreenPolicy Light id");
+static_assert(CrossPointSettings::QUICK_RESUME == sleepscreen::kQuickResume, "SleepScreenPolicy QR id");
 
 namespace {
 
@@ -311,6 +315,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["casperStatsThemeDisabledMigrated"] = casperStatsThemeDisabledMigrated;
   doc["casperX4SpectralDefaultMigrated"] = casperX4SpectralDefaultMigrated;
   doc["casperMenuFont10ptMigrated"] = casperMenuFont10ptMigrated;
+  doc["casperQuickResumeDefaultMigrated"] = casperQuickResumeDefaultMigrated;
   doc["casperBooksStyleOwnsEmbeddedMigrated"] = casperBooksStyleOwnsEmbeddedMigrated;
   // Embedded Style is no longer in SettingsList (owned by Alignment); still persist
   // for older firmware and web tools.
@@ -593,8 +598,22 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Sleep Screen was converted to DynamicEnum for alphabetical UI order; without this
   // load path CUSTOM (and every non-default mode) was lost on boot.
   if (!doc["sleepScreen"].isNull()) {
-    sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(LIGHT), static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT),
-                        static_cast<uint8_t>(LIGHT));
+    sleepScreen = clamp(doc["sleepScreen"] | static_cast<uint8_t>(QUICK_RESUME),
+                        static_cast<uint8_t>(SLEEP_SCREEN_MODE_COUNT), static_cast<uint8_t>(QUICK_RESUME));
+  }
+  // Factory default used to be Light (Casper ghost). Last-frame is the product
+  // default now. Do not rewrite Dark/Cover/Custom/Blank — those were chosen.
+  const uint8_t qrDefaultMigrated = doc["casperQuickResumeDefaultMigrated"] | (uint8_t)0;
+  const uint8_t migratedSleep = sleepscreen::migrateFactoryLightToQuickResume(sleepScreen, qrDefaultMigrated != 0);
+  if (qrDefaultMigrated == 0) {
+    if (migratedSleep != sleepScreen) {
+      LOG_DBG("CPS", "casperQuickResumeDefaultMigrated: Light → Quick Resume");
+    }
+    sleepScreen = migratedSleep;
+    casperQuickResumeDefaultMigrated = 1;
+    needsResave = true;
+  } else {
+    casperQuickResumeDefaultMigrated = 1;
   }
   // Stat tracking: prefer readingStatsEnabled; migrate legacy disableReadingStats (inverted).
   if (!doc["readingStatsEnabled"].isNull()) {

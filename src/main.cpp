@@ -377,9 +377,13 @@ void enterDeepSleep(bool fromTimeout) {
   // Render task holds the power lock and may be mid book.bin seek. Persist
   // used to race that HalFile and abort() in readString (v51 crash report).
   activityManager.waitForRenderIdle();
-  // Ink a corner cue before persist / onExit / wallpaper (those take seconds).
-  // Device logs: SLEEP enter with no prior chrome, so power-off felt frozen.
-  GUI.drawTopLeftStatus(renderer, tr(STR_SLEEPING), /*refresh=*/true);
+  const bool isQuickResumeSleep = sleepScreenIsQuickResume();
+  // Wallpaper persist / onExit can take seconds — stamp SLEEPING so power-off
+  // does not look frozen. Last-frame sleep keeps the page on glass; the moon
+  // is the cue. An extra HALF here is the Casper "loading" flash.
+  if (!isQuickResumeSleep) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_SLEEPING), /*refresh=*/true);
+  }
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
 
   // Classify resume target while activities still exist (reader / menu / settings / home).
@@ -394,7 +398,6 @@ void enterDeepSleep(bool fromTimeout) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  const bool isQuickResumeSleep = sleepScreenIsQuickResume();
   if (isQuickResumeSleep) {
     const bool sysWideDark = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
     renderer.setInvertOnDisplay(sysWideDark);
@@ -558,15 +561,25 @@ void setup() {
   APP_STATE.loadFromFile();
 
   // Wake cause before QR planning — flash/USB must not look like sleep-from-reader.
-  auto wakeupReason = gpio.getWakeupReason();
+  HalGPIO::WakeupReason wakeupReason = gpio.getWakeupReason();
   const auto resetReason = esp_reset_reason();
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
-  // X4 battery sleep is POWERON (latch off). EN reset then power is the same
-  // reason. showBootScreen false means enterDeepSleep actually ran.
-  if (wakeupReason == HalGPIO::WakeupReason::PowerButton && resetReason == ESP_RST_POWERON &&
-      wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && !bootwake::x4PowerOnIsSleepWake(APP_STATE.showBootScreen)) {
-    LOG_INF("MAIN", "POWERON with boot screen armed — splash (reset/cold), not QR");
+  // GPIO13-cut sleep (X3, and X4 after the SD rail is off) often comes back as
+  // ESP_RST_POWERON / WakeupReason::Other. HalGPIO maps X3 POWERON to Other
+  // because EN-while-awake used the same reset. After a real sleep,
+  // enterDeepSleep() cleared showBootScreen — resume the last activity instead
+  // of dumping through BootActivity (the Casper loading screen).
+  // X4 POWERON + boot screen still armed is an EN reset while awake: splash.
+  const bool gpioPowerButton = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const bool gpioOther = wakeupReason == HalGPIO::WakeupReason::Other;
+  const bool x4EnResetShape =
+      gpioPowerButton && resetReason == ESP_RST_POWERON && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED;
+  if (bootwake::isPowerButtonSleepWake(gpioPowerButton, gpioOther, APP_STATE.showBootScreen, x4EnResetShape)) {
+    wakeupReason = HalGPIO::WakeupReason::PowerButton;
+    LOG_INF("MAIN", "Sleep wake (boot screen disarmed) — QR, skip Casper splash");
+  } else if (x4EnResetShape && APP_STATE.showBootScreen) {
     wakeupReason = HalGPIO::WakeupReason::Other;
+    LOG_INF("MAIN", "POWERON with boot screen armed — splash (reset/cold), not QR");
   }
 
   // Detect sleep-wake → book early so we can skip non-critical boot work.

@@ -1227,7 +1227,8 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   // did not. A constant box also stops the wipe jittering as the word changes.
   int statusW = textW;
   for (const StrId id : {StrId::STR_LOADING_POPUP, StrId::STR_INDEXING, StrId::STR_STATUS_SAVING_STATS,
-                         StrId::STR_STATUS_OPENING, StrId::STR_STATUS_DELETING, StrId::STR_STATUS_DELETED}) {
+                         StrId::STR_STATUS_OPENING, StrId::STR_STATUS_DELETING, StrId::STR_STATUS_DELETED,
+                         StrId::STR_SLEEPING, StrId::STR_BOOTING, StrId::STR_ENTERING_SLEEP}) {
     statusW = std::max(statusW, renderer.getTextWidth(kFont, I18N.get(id)));
   }
   // Never eat into the middle slot — clamp to just short of centre.

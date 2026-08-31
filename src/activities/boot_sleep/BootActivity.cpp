@@ -14,13 +14,16 @@ void BootActivity::onEnter() {
 
   renderer.clearScreen();
 
-  // Centered Casper sheet-ghost logo + name (no "BOOTING" caption).
+  // Centered Casper sheet-ghost logo + name, with BOOTING so a slow first
+  // paint is not mistaken for a freeze.
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
 
   const int wordY = logoY + kLogoSize + 12;
   renderer.drawCenteredText(UI_12_FONT_ID, wordY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  const int cueY = wordY + renderer.getLineHeight(UI_12_FONT_ID) + 4;
+  renderer.drawCenteredText(SMALL_FONT_ID, cueY, tr(STR_BOOTING), true);
 
   const int versionY = pageHeight - renderer.getLineHeight(SMALL_FONT_ID) - 20;
   renderer.drawCenteredText(SMALL_FONT_ID, versionY, CROSSPOINT_VERSION, true);

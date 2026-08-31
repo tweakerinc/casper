@@ -377,6 +377,9 @@ void enterDeepSleep(bool fromTimeout) {
   // Render task holds the power lock and may be mid book.bin seek. Persist
   // used to race that HalFile and abort() in readString (v51 crash report).
   activityManager.waitForRenderIdle();
+  // Ink a corner cue before persist / onExit / wallpaper (those take seconds).
+  // Device logs: SLEEP enter with no prior chrome, so power-off felt frozen.
+  GUI.drawTopLeftStatus(renderer, tr(STR_SLEEPING), /*refresh=*/true);
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
 
   // Classify resume target while activities still exist (reader / menu / settings / home).
@@ -798,6 +801,9 @@ void setup() {
       WIFI_STORE.loadFromFile();
     }
     APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
+    if (resume == BootResume::QuickResume) {
+      GUI.drawTopLeftStatus(renderer, tr(STR_BOOTING), /*refresh=*/true);
+    }
     activityManager.goHome();
   } else {
     // Sleep-from-reader QuickResume: open book (and optionally book menu).
@@ -827,6 +833,9 @@ void setup() {
       QrTimingLog::line("before goToReader path=%s target=%u loadCount=%u stickyPath=1", path.c_str(),
                         static_cast<unsigned>(APP_STATE.sleepResumeTarget),
                         static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+    }
+    if (resume == BootResume::QuickResume) {
+      GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
     }
     activityManager.goToReader(path);
     if (QrTimingLog::active()) QrTimingLog::line("after goToReader returns (open may still paint)");

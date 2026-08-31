@@ -23,10 +23,12 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // chapters hold the flattened text and must be reconverted to get it back.
 // v24: HTML align="center|left|right" on p/h*/td/img (classic ChapterHtmlSlimParser
 // parity). v23 IR left-aligned chapter titles that only used the align= attribute.
-inline constexpr uint16_t kIrFormatVersion = 24;
+// v25: first-letter spans that wrap only "[" of DCC "Chapter [1]" no longer
+// emit a lone Bold/Plus2 run. v24 IR still has that split and must reconvert.
+inline constexpr uint16_t kIrFormatVersion = 25;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 24;
-inline constexpr uint16_t kIrFormatVersionMax = 24;
+inline constexpr uint16_t kIrFormatVersionMin = 25;
+inline constexpr uint16_t kIrFormatVersionMax = 25;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

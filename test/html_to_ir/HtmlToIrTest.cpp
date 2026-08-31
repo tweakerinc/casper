@@ -21,6 +21,7 @@
 #include "HtmlToIr.h"
 #include "IrFormat.h"
 #include "IrTokenizer.h"
+#include "PunctEmphasisPolicy.h"
 
 // The firmware links against Arduino's global ESP object; on the host we own it.
 EspStub ESP;
@@ -362,6 +363,100 @@ TEST(HtmlToIr, CssVerticalAlignMarksSubscript) {
     }
   }
   EXPECT_TRUE(sawSub);
+}
+
+TEST(PunctEmphasis, AsciiOpeningBracket) {
+  EXPECT_TRUE(punctemph::isOpeningPunctuation('['));
+  EXPECT_TRUE(punctemph::isOpeningPunctuation('('));
+  EXPECT_FALSE(punctemph::isOpeningPunctuation(']'));
+  EXPECT_FALSE(punctemph::isOpeningPunctuation('1'));
+  EXPECT_FALSE(punctemph::isOpeningPunctuation('C'));
+}
+
+TEST(PunctEmphasis, TextOnlyOpeningPunct) {
+  EXPECT_TRUE(punctemph::textIsOnlyOpeningPunctuation("[", 1));
+  EXPECT_TRUE(punctemph::textIsOnlyOpeningPunctuation(" [ ", 3));
+  EXPECT_FALSE(punctemph::textIsOnlyOpeningPunctuation("[1]", 3));
+  EXPECT_FALSE(punctemph::textIsOnlyOpeningPunctuation("C", 1));
+  EXPECT_FALSE(punctemph::textIsOnlyOpeningPunctuation("", 0));
+}
+
+TEST(HtmlToIr, DccChapterBracketSpanDoesNotLoneBoldOpeningBracket) {
+  // First-letter polyfill: only "[" is wrapped. Must not paint a heavy bracket.
+  const ChapterIr ir = convertOrDie("<p>Chapter <span style=\"font-weight:bold\">[</span>1]</p>");
+  EXPECT_EQ(flattenText(ir), "Chapter [1]\n");
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r).find('[') != std::string::npos) {
+      EXPECT_EQ(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0) << ir.runString(r);
+    }
+  }
+}
+
+TEST(HtmlToIr, DccChapterBoldTagOnOpeningBracket) {
+  const ChapterIr ir = convertOrDie("<p>Chapter <b>[</b>1]</p>");
+  EXPECT_EQ(flattenText(ir), "Chapter [1]\n");
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r).find('[') != std::string::npos) {
+      EXPECT_EQ(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0) << ir.runString(r);
+    }
+  }
+}
+
+TEST(HtmlToIr, DccChapterSizeSpanOnOpeningBracket) {
+  const ChapterIr ir = convertOrDie("<p>Chapter <span style=\"font-size:2em\">[</span>1]</p>");
+  EXPECT_EQ(flattenText(ir), "Chapter [1]\n");
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r).find('[') != std::string::npos) {
+      EXPECT_EQ(r.sizeStep, rivulet::SizeStep::Body) << ir.runString(r);
+    }
+  }
+}
+
+TEST(HtmlToIr, BoldBracketGroupStaysBold) {
+  const ChapterIr ir = convertOrDie("<p>See <b>[1]</b> later.</p>");
+  EXPECT_EQ(flattenText(ir), "See [1] later.\n");
+  bool sawBoldOne = false;
+  for (const auto& r : ir.runs()) {
+    const std::string t = ir.runString(r);
+    if (t.find('1') != std::string::npos) {
+      EXPECT_NE(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0) << t;
+      sawBoldOne = true;
+    }
+  }
+  EXPECT_TRUE(sawBoldOne);
+}
+
+TEST(HtmlToIr, DropCapLetterSpanStaysBold) {
+  const ChapterIr ir = convertOrDie("<p><span style=\"font-weight:bold;font-size:2em\">C</span>hapter</p>");
+  bool sawBoldC = false;
+  for (const auto& r : ir.runs()) {
+    if (ir.runString(r) == "C") {
+      EXPECT_NE(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0);
+      sawBoldC = true;
+    }
+  }
+  EXPECT_TRUE(sawBoldC);
+}
+
+TEST(HtmlToIr, DccH1BracketHeadingStaysUniformBold) {
+  const ChapterIr ir = convertOrDie("<h1>[ 1 ]</h1>");
+  EXPECT_EQ(flattenText(ir), "[ 1 ]\n");
+  ASSERT_FALSE(ir.blocks().empty());
+  EXPECT_EQ(ir.blocks().front().kind, BlockKind::Heading1);
+  for (const auto& r : ir.runs()) {
+    EXPECT_NE(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0) << ir.runString(r);
+  }
+}
+
+TEST(HtmlToIr, DccH1FirstLetterBracketStaysUniformBold) {
+  const ChapterIr ir = convertOrDie("<h1><span style=\"font-weight:bold;font-size:2em\">[</span>1]</h1>");
+  EXPECT_EQ(flattenText(ir), "[1]\n");
+  ASSERT_FALSE(ir.blocks().empty());
+  EXPECT_EQ(ir.blocks().front().kind, BlockKind::Heading1);
+  for (const auto& r : ir.runs()) {
+    EXPECT_NE(static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Bold), 0) << ir.runString(r);
+    EXPECT_EQ(r.sizeStep, rivulet::SizeStep::Plus2) << ir.runString(r);
+  }
 }
 
 std::string tokenText(const ChapterIr& ir, const rivulet::IrTok& t) {

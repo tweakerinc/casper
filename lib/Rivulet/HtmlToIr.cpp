@@ -10,6 +10,8 @@
 #include <new>
 #include <string>
 
+#include "PunctEmphasisPolicy.h"
+
 namespace rivulet {
 namespace {
 
@@ -298,9 +300,8 @@ bool attrHasClass(const Tag& tag, const char* needle) {
 bool isHiddenHost(const Tag& tag) {
   // CSS classes that mean "do not show" in many EPUBs (e.g. h1.oculto).
   if (attrHasClass(tag, "oculto") || attrHasClass(tag, "hidden") || attrHasClass(tag, "sr-only") ||
-      attrHasClass(tag, "screenreader") || attrHasClass(tag, "screen-reader") ||
-      attrHasClass(tag, "visually-hidden") || attrHasClass(tag, "hide") || attrHasClass(tag, "displaynone") ||
-      attrHasClass(tag, "display-none")) {
+      attrHasClass(tag, "screenreader") || attrHasClass(tag, "screen-reader") || attrHasClass(tag, "visually-hidden") ||
+      attrHasClass(tag, "hide") || attrHasClass(tag, "displaynone") || attrHasClass(tag, "display-none")) {
     return true;
   }
   // HTML5 hidden= / hidden="hidden" (EPUB nav landmarks & page-list).
@@ -333,16 +334,15 @@ bool looksLikeTitleHost(const Tag& tag) {
     if (!v || n == 0) return false;
     // Layout shells — never promote to a text block.
     if (containsI(v, n, "title-page") || containsI(v, n, "titlepage") || containsI(v, n, "contributor") ||
-        containsI(v, n, "heading-content") || containsI(v, n, "element-number") ||
-        containsI(v, n, "heading1") || containsI(v, n, "heading2") || containsI(v, n, "heading3") ||
-        containsI(v, n, "heading4") || containsI(v, n, "heading5") || containsI(v, n, "heading6")) {
+        containsI(v, n, "heading-content") || containsI(v, n, "element-number") || containsI(v, n, "heading1") ||
+        containsI(v, n, "heading2") || containsI(v, n, "heading3") || containsI(v, n, "heading4") ||
+        containsI(v, n, "heading5") || containsI(v, n, "heading6")) {
       return false;
     }
     return containsI(v, n, "chapter-title") || containsI(v, n, "chaptitle") || containsI(v, n, "book-title") ||
            containsI(v, n, "subtitle") || containsI(v, n, "caption") || containsI(v, n, "epigraph") ||
            // bare "chapter" / "title" only when not a compound layout name
-           (containsI(v, n, "chapter") && !containsI(v, n, "chapter-body")) ||
-           (containsI(v, n, "title") && n < 24);
+           (containsI(v, n, "chapter") && !containsI(v, n, "chapter-body")) || (containsI(v, n, "title") && n < 24);
   };
   return hit(c, clen) || hit(id, ilen);
 }
@@ -400,8 +400,7 @@ bool looksLikeDocumentAlt(const char* alt, size_t altLen) {
   if (altLen < 48) return false;
   return containsI(alt, altLen, "Briefing note") || containsI(alt, altLen, "briefing note") ||
          containsI(alt, altLen, "document title") || containsI(alt, altLen, "AFTER ACTION") ||
-         containsI(alt, altLen, "Intercepted Personal Message") ||
-         containsI(alt, altLen, "Surveillance footage") ||
+         containsI(alt, altLen, "Intercepted Personal Message") || containsI(alt, altLen, "Surveillance footage") ||
          (containsI(alt, altLen, "Briefing") && containsI(alt, altLen, "paperclip")) ||
          (containsI(alt, altLen, "background insignia") && altLen >= 80) ||
          (containsI(alt, altLen, "stamped text") && altLen >= 40) ||
@@ -541,16 +540,14 @@ void applyInlineStyle(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOut,
   // Paint already scales SUP/SUB to ~50% and raises the baseline; sizeStep on
   // the same span would shrink twice. Classic ChapterHtmlSlimParser glues these
   // the same way.
-  const bool isSuper =
-      containsI(v, vlen, "vertical-align:super") || containsI(v, vlen, "vertical-align: super");
+  const bool isSuper = containsI(v, vlen, "vertical-align:super") || containsI(v, vlen, "vertical-align: super");
   const bool isSub = containsI(v, vlen, "vertical-align:sub") || containsI(v, vlen, "vertical-align: sub");
   if (isSuper) styleInOut |= RunStyle::Superscript;
   if (isSub) styleInOut |= RunStyle::Subscript;
   // Size bumps never shrink an already-larger step (h1 Plus2 must stick).
   if (!isSuper && !isSub) {
-    if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") ||
-        containsI(v, vlen, "xx-large") || containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") ||
-        containsI(v, vlen, "font-size:1.5")) {
+    if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") || containsI(v, vlen, "xx-large") ||
+        containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") || containsI(v, vlen, "font-size:1.5")) {
       if (sizeInOut < SizeStep::Plus2) sizeInOut = SizeStep::Plus2;
     } else if (containsI(v, vlen, "font-size:1.4") || containsI(v, vlen, "font-size:1.3") ||
                containsI(v, vlen, "font-size:1.2") || containsI(v, vlen, "x-large") ||
@@ -592,6 +589,62 @@ void applyClassEmphasis(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOu
   } else if (classIsChapterLeftTitle(tag)) {
     if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
   }
+}
+
+// Peek the inner text of an open inline tag. First-letter polyfills wrap only
+// "[" of DCC "Chapter [1]" / "[ 1 ]"; applying bold/size there leaves one
+// heavy bracket. Abort quickly on a letter/digit so this is cheap per span.
+bool innerIsOnlyOpeningPunct(const char* p, const char* end, const char* closeName, const size_t closeNameLen) {
+  if (!p || !closeName || closeNameLen == 0 || closeNameLen >= 8) return false;
+  char close[8];
+  std::memcpy(close, closeName, closeNameLen);
+  close[closeNameLen] = '\0';
+  int depth = 1;
+  bool sawPunct = false;
+  int walked = 0;
+  constexpr int kPeekLimit = 64;
+  while (p < end && depth > 0 && walked < kPeekLimit) {
+    if (*p == '<') {
+      Tag tag;
+      const size_t used = parseTag(p, end, tag);
+      if (used == 0) return false;
+      if (tag.closing) {
+        // The matching close must be this tag's name; a stray </p> is not the end.
+        if (depth == 1 && !ieq(tag.name, tag.nameLen, close)) return false;
+        --depth;
+      } else if (!tag.selfClose) {
+        ++depth;
+      }
+      p += used;
+      walked += static_cast<int>(used);
+      continue;
+    }
+    if (*p == '&') {
+      std::string tmp;
+      tmp.reserve(8);
+      bool oom = false;
+      const size_t n = decodeEntity(p, end, tmp, &oom);
+      if (!n || oom || tmp.empty()) return false;
+      if (!punctemph::textIsOnlyOpeningPunctuation(tmp.data(), tmp.size())) return false;
+      sawPunct = true;
+      p += n;
+      walked += static_cast<int>(n);
+      continue;
+    }
+    if (punctemph::isAsciiWs(*p)) {
+      ++p;
+      ++walked;
+      continue;
+    }
+    const unsigned char* up = reinterpret_cast<const unsigned char*>(p);
+    const uint32_t cp = utf8NextCodepoint(&up);
+    if (cp == 0 || reinterpret_cast<const char*>(up) <= p) return false;
+    if (!punctemph::isOpeningPunctuation(cp)) return false;
+    sawPunct = true;
+    walked += static_cast<int>(reinterpret_cast<const char*>(up) - p);
+    p = reinterpret_cast<const char*>(up);
+  }
+  return sawPunct && depth == 0;
 }
 
 SizeStep sizeForHeading(const int level) {
@@ -688,9 +741,7 @@ bool classIsImplicitBreak(const Tag& tag, int& outTopEmQ4, int& outBottomEmQ4) {
   return false;
 }
 
-bool classIsAlignmentBlockContent(const Tag& tag) {
-  return attrHasClass(tag, "alignment-block-content");
-}
+bool classIsAlignmentBlockContent(const Tag& tag) { return attrHasClass(tag, "alignment-block-content"); }
 
 bool classIsBodyFirst(const Tag& tag) {
   // first2/first3: no indent, body size, margin 0 (Bedlam system + narrative open)
@@ -718,9 +769,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   // contiguous heap is tiny (crash was abort at maxA≈15KB with unchecked strings;
   // growth is now heap-checked — soft fail, not device abort).
   if (ESP.getMaxAllocHeap() < 10 * 1024 || ESP.getFreeHeap() < 12 * 1024) {
-    LOG_ERR("RVIR", "convert refuse: free=%u maxA=%u html=%u",
-            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-            static_cast<unsigned>(len));
+    LOG_ERR("RVIR", "convert refuse: free=%u maxA=%u html=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(len));
     return false;
   }
   // Pre-size text/runs/blocks once (malloc/realloc, heap-checked) so convert does
@@ -837,8 +887,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     // Only strip leading spaces on the first run of a block. After a style change
     // (</i> skill, </em> next) the inter-word space is often the first char of the
     // next run — stripping it glued "Vampire"+"skill" / italic+roman words.
-    const bool firstRun =
-        out.blocks().empty() || out.blocks().back().runCount == 0;
+    const bool firstRun = out.blocks().empty() || out.blocks().back().runCount == 0;
     size_t i = 0;
     if (firstRun) {
       while (i < textAcc.size() && textAcc[i] == ' ') ++i;
@@ -934,14 +983,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       // <nav><ol><li>…</li></ol></nav>). Without this, all chapter titles run into
       // one paragraph because we only broke on <p>/<h*>.
       if (!tag.closing && !tag.selfClose &&
-          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") ||
-           ieq(tag.name, tag.nameLen, "ul"))) {
+          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") || ieq(tag.name, tag.nameLen, "ul"))) {
         closeBlock();
         continue;
       }
       if (tag.closing &&
-          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") ||
-           ieq(tag.name, tag.nameLen, "ul"))) {
+          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") || ieq(tag.name, tag.nameLen, "ul"))) {
         closeBlock();
         continue;
       }
@@ -978,11 +1025,9 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
       if (tableDepth == 1 &&
-          (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th") ||
-           ieq(tag.name, tag.nameLen, "tr"))) {
+          (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th") || ieq(tag.name, tag.nameLen, "tr"))) {
         closeBlock();
-        if (!tag.closing && !tag.selfClose &&
-            (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th"))) {
+        if (!tag.closing && !tag.selfClose && (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th"))) {
           // One cell = one block. Tight stack, no first-line indent, same as <li>.
           Align cellAlign = Align::Left;
           if (styleSaysCenter(tag)) cellAlign = Align::Center;
@@ -1025,8 +1070,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       }
 
       // .orn wrapper (chapter ornament image, often inside h1).
-      if (!tag.closing && !tag.selfClose &&
-          (ieq(tag.name, tag.nameLen, "span") || ieq(tag.name, tag.nameLen, "div"))) {
+      if (!tag.closing && !tag.selfClose && (ieq(tag.name, tag.nameLen, "span") || ieq(tag.name, tag.nameLen, "div"))) {
         if (attrHasClass(tag, "orn") || attrHasClass(tag, "ornament") || attrHasClass(tag, "chapter-orn")) {
           ornamentDepth = 1;
         } else if (ornamentDepth > 0) {
@@ -1115,8 +1159,11 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       }
       if (tag.closing && tag.nameLen == 2 && (tag.name[0] == 'h' || tag.name[0] == 'H') && tag.name[1] >= '1' &&
           tag.name[1] <= '6') {
-        endBlockStyle();
+        // Flush while the heading face is still on the stack. endBlockStyle first
+        // used to dump the trailing run as Regular, so a first-letter span around
+        // "[" of "[ 1 ]" stayed Bold and "1]" went Regular.
         closeBlock();
+        endBlockStyle();
         headingLevelOpen = 0;
         // CSS: h2 + p, h3 + p, … { text-indent: 0 } — only when not inside hgroup
         // (hgroup's own close arms the flush for the first body para after the group).
@@ -1128,8 +1175,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       // Style frame stays on the stack from the original <hN> open (no extra push).
       auto reopenHeadingIfNeeded = [&]() {
         if (headingLevelOpen < 1 || headingLevelOpen > 6) return;
-        const BlockKind bk =
-            static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (headingLevelOpen - 1));
+        const BlockKind bk = static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (headingLevelOpen - 1));
         openBlock(bk, headingAlignOpen, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(2, 12);  // tight top after ornament / soft break
       };
@@ -1142,7 +1188,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (classIsImplicitBreak(tag, spTop, spBot)) {
           openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
           out.setCurrentMarginsEmQ4(static_cast<int8_t>(std::min(127, spTop)),
-                                   static_cast<int8_t>(std::min(127, spBot)));
+                                    static_cast<int8_t>(std::min(127, spBot)));
           closeBlock();
           continue;
         }
@@ -1190,9 +1236,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           if (align == Align::Justify) align = Align::Center;
         }
         // Explicit SE/calibre flush classes.
-        if (attrHasClass(tag, "continued") || attrHasClass(tag, "first-child") ||
-            attrHasClass(tag, "firstchild") || attrHasClass(tag, "noindent") ||
-            attrHasClass(tag, "no-indent")) {
+        if (attrHasClass(tag, "continued") || attrHasClass(tag, "first-child") || attrHasClass(tag, "firstchild") ||
+            attrHasClass(tag, "noindent") || attrHasClass(tag, "no-indent")) {
           flags |= kBlockNoIndent;
         }
         if (dropCapArmed && kind == BlockKind::Paragraph) {
@@ -1221,10 +1266,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           // .citaini { margin: 2rem 1.5em 0 }; .firma { margin: 0.5rem 0 1rem }
           if (attrHasClass(tag, "firma")) {
             out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(8)),
-                                     static_cast<int8_t>(scaleBookVSpaceQ4(16)));
+                                      static_cast<int8_t>(scaleBookVSpaceQ4(16)));
           } else {
             out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(16)),
-                                     static_cast<int8_t>(scaleBookVSpaceQ4(4)));
+                                      static_cast<int8_t>(scaleBookVSpaceQ4(4)));
           }
           out.setCurrentIndentEmQ4(0);
         } else if (classIsAlignmentBlockContent(tag)) {
@@ -1234,9 +1279,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
                    align == Align::Center) {
           // Body / flush-first / center: no extra block gap (indent alone distinguishes).
           out.setCurrentMarginsEmQ4(0, 0);
-          out.setCurrentIndentEmQ4((flags & kBlockNoIndent) != 0 || align == Align::Center
-                                       ? 0
-                                       : static_cast<uint8_t>(16));
+          out.setCurrentIndentEmQ4((flags & kBlockNoIndent) != 0 || align == Align::Center ? 0
+                                                                                           : static_cast<uint8_t>(16));
         } else {
           out.setCurrentMarginsEmQ4(0, 0);
           out.setCurrentIndentEmQ4(16);  // p { text-indent: 1em }
@@ -1247,15 +1291,14 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "p")) {
-        endBlockStyle();
         closeBlock();
+        endBlockStyle();
         continue;
       }
 
       // .alignment-block { margin-top/bottom: 1.4em } — group air around Views/Bounty.
       // Scaled like other book-style spacers; collapses with neighboring breaks in layouter.
-      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") &&
-          attrHasClass(tag, "alignment-block")) {
+      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") && attrHasClass(tag, "alignment-block")) {
         closeBlock();
         openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(22)), 0);
@@ -1284,8 +1327,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         closeBlock();
         // Alice .chapter is left + larger; other title hosts default center.
         const Align divAlign = [&]() {
-          Align a = classIsChapterLeftTitle(tag) ? Align::Left
-                                                 : (styleSaysCenter(tag) ? Align::Center : Align::Left);
+          Align a = classIsChapterLeftTitle(tag) ? Align::Left : (styleSaysCenter(tag) ? Align::Center : Align::Left);
           Align htmlA = Align::Left;
           if (htmlAlignAttr(tag, htmlA)) a = htmlA;
           return a;
@@ -1308,8 +1350,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "div") && titleDivDepth > 0) {
+        closeBlock();
         endBlockStyle();
-        if (inBlock) closeBlock();
         --titleDivDepth;
         continue;
       }
@@ -1433,8 +1475,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
               const Block& last = out.blocks().back();
               if (last.kind == BlockKind::Image && last.runCount > 0 && last.runBegin < out.runs().size()) {
                 const Run& lr = out.runs()[last.runBegin];
-                if (lr.textLen == use && out.textData() &&
-                    std::memcmp(out.textData() + lr.textOff, src, use) == 0) {
+                if (lr.textLen == use && out.textData() && std::memcmp(out.textData() + lr.textOff, src, use) == 0) {
                   if (headingLevelOpen > 0) reopenHeadingIfNeeded();
                   continue;
                 }
@@ -1449,14 +1490,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
             // Fourth Wing: .orn img { width: 12% } — small centered chapter ornament.
             // Only class / wrapper / explicit orn.png basename — do not match any
             // path containing "/orn" (false-positive on "ornate", "morning", folders).
-            const bool lastWasHeading =
-                !out.blocks().empty() && out.blocks().back().kind >= BlockKind::Heading1 &&
-                out.blocks().back().kind <= BlockKind::Heading6;
-            const bool isOrnament = ornamentDepth > 0 || attrHasClass(tag, "orn") ||
-                                    attrHasClass(tag, "ornament") ||
-                                    (use >= 7 && containsI(src, use, "orn.png")) ||
-                                    containsI(src, use, "ornament") || containsI(src, use, "flourish") ||
-                                    containsI(src, use, "fleuron") || containsI(src, use, "headpiece");
+            const bool lastWasHeading = !out.blocks().empty() && out.blocks().back().kind >= BlockKind::Heading1 &&
+                                        out.blocks().back().kind <= BlockKind::Heading6;
+            const bool isOrnament = ornamentDepth > 0 || attrHasClass(tag, "orn") || attrHasClass(tag, "ornament") ||
+                                    (use >= 7 && containsI(src, use, "orn.png")) || containsI(src, use, "ornament") ||
+                                    containsI(src, use, "flourish") || containsI(src, use, "fleuron") ||
+                                    containsI(src, use, "headpiece");
             if (isOrnament) imgFlags = static_cast<uint16_t>(imgFlags | kBlockOrnament);
             openBlock(BlockKind::Image, Align::Center, imgFlags);
             // Chapter-open decoration: air between title and flourish (v0.1.8 look).
@@ -1496,10 +1535,14 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
 
-      if (!tag.closing &&
-          (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
+      if (!tag.closing && (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
         flushText();
-        pushStyle(mergeBold(curStyle().style), curStyle().size);
+        if (!tag.selfClose && innerIsOnlyOpeningPunct(p, end, tag.name, tag.nameLen)) {
+          // Keep a frame so the matching </b> pop is balanced, but do not bold "[".
+          pushStyle(curStyle().style, curStyle().size);
+        } else {
+          pushStyle(mergeBold(curStyle().style), curStyle().size);
+        }
         continue;
       }
       if (tag.closing && (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
@@ -1555,8 +1598,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         flushText();
         RunStyle st = curStyle().style;
         SizeStep sz = curStyle().size;
-        applyInlineStyle(tag, st, sz);
-        applyClassEmphasis(tag, st, sz);
+        if (!innerIsOnlyOpeningPunct(p, end, tag.name, tag.nameLen)) {
+          applyInlineStyle(tag, st, sz);
+          applyClassEmphasis(tag, st, sz);
+        }
         pushStyle(st, sz);
         continue;
       }

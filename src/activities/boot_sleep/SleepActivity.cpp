@@ -231,16 +231,13 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  // Casper: sheet-ghost logo + product name + SLEEPING so persist/onExit is not
-  // a dead panel. Light = white; Dark = full invert
+  // Casper: sheet-ghost logo + product name only (no "SLEEPING"). Light = white; Dark = full invert
   // (1.5 has no drawImageInverted — invertScreen flips logo + name together).
   renderer.clearScreen();
   constexpr int kLogoSize = 120;
   const int logoY = pageHeight / 2 - kLogoSize / 2 - 24;
   renderer.drawImage(Logo120, (pageWidth - kLogoSize) / 2, logoY, kLogoSize, kLogoSize);
   renderer.drawCenteredText(UI_12_FONT_ID, logoY + kLogoSize + 12, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, logoY + kLogoSize + 12 + renderer.getLineHeight(UI_12_FONT_ID) + 4,
-                            tr(STR_SLEEPING), true);
 
   if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::DARK) {
     renderer.invertScreen();

@@ -801,9 +801,6 @@ void setup() {
       WIFI_STORE.loadFromFile();
     }
     APP_STATE.sleepResumeTarget = CrossPointState::RESUME_HOME;
-    if (resume == BootResume::QuickResume) {
-      GUI.drawTopLeftStatus(renderer, tr(STR_BOOTING), /*refresh=*/true);
-    }
     activityManager.goHome();
   } else {
     // Sleep-from-reader QuickResume: open book (and optionally book menu).

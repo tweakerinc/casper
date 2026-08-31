@@ -4,12 +4,14 @@
 #include <Logging.h>
 #include <PowerManager.h>
 #include <WiFi.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
-#include <soc/soc_caps.h>
+#include <esp_wifi.h>
 
 #include <cassert>
 
 #include "HalGPIO.h"
+#include "SleepHoldPolicy.h"
 
 HalPowerManager powerManager;  // Singleton instance
 
@@ -67,24 +69,52 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   }
 }
 
+namespace {
+
+void keepHoldThroughIsolate(const gpio_num_t pin) {
+  gpio_sleep_sel_dis(pin);
+  gpio_hold_en(pin);
+}
+
+void keepHoldThroughIsolateIfAssigned(const int8_t pin) {
+  if (pin < 0) return;
+  keepHoldThroughIsolate(static_cast<gpio_num_t>(pin));
+}
+
+// GPIO13 LOW + hold. Must run again after isolate (see sleephold::reassertHoldAfterIsolate).
+void holdXteinkC3Gpio13Off() {
+  const auto pin = static_cast<gpio_num_t>(sleephold::kXteinkC3CutGpio);
+  gpio_hold_dis(pin);
+  gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+  gpio_set_level(pin, 0);
+  keepHoldThroughIsolate(pin);
+}
+
+}  // namespace
+
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
-#ifdef ENABLE_SERIAL_LOG
-  // Tear down HWCDC so the host sees a clean disconnect and the peripheral
-  // doesn't hold power domains that interfere with USB-powered GPIO wake.
-  // logSerial is the raw HWCDC reference; Serial is the MySerialImpl proxy
-  // (which doesn't expose end()).
+  // USB CDC-on-boot leaves the Serial/JTAG PHY up unless we end it even when
+  // serial logging is compiled out.
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
   logSerial.end();
 #endif
 
-#if !SOC_PM_SUPPORT_EXT1_WAKEUP
-  if (gpio.isXteinkDevice() && !gpio.deviceIsX3()) {
-    // X4 GPIO13 is connected to the battery latch MOSFET. Keeping it low powers
-    // the MCU off on battery, while the SDK wake source still handles USB power.
-    constexpr gpio_num_t GPIO_SPIWP = GPIO_NUM_13;
-    gpio_set_direction(GPIO_SPIWP, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_SPIWP, 0);
-    gpio_hold_en(GPIO_SPIWP);
+  // Modem domain stays alive after a mere disconnect. Wake is a chip reset.
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    WiFi.disconnect(true /*wifioff*/, false /*eraseap*/);
+    WiFi.mode(WIFI_OFF);
   }
+  (void)esp_wifi_stop();
+
+#if defined(FREEINK_MCU_C3) && FREEINK_MCU_C3
+  // X4: battery MOSFET. X3: SD VCC. Same pin, same OFF level. Skip if this
+  // GPIO is a bus pin on the active profile (S3 X4 Pro display CS).
+  const bool cutGpio13 = gpio.isXteinkDevice() && !BoardConfig::latchConflictsWithBus(sleephold::kXteinkC3CutGpio) &&
+                         sleephold::cutGpio13InSleep(gpio.deviceIsX3() ? sleephold::Device::X3 : sleephold::Device::X4);
+  if (cutGpio13) holdXteinkC3Gpio13Off();
+#else
+  constexpr bool cutGpio13 = false;
+  (void)gpio;
 #endif
 
   // Cut the gated peripheral rails (touch/SD/EPD on boards like the Sticky) and
@@ -96,9 +126,26 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   // guarantees that ordering).
   freeink::PowerManager::powerDownRailsForSleep();
 
-  // Waits for the power button to be physically released (so holding it doesn't
-  // immediately wake the device again), then arms the wake source and sleeps.
-  freeink::PowerManager::deepSleepUntilPowerButton();
+  freeink::PowerManager::waitForPowerButtonRelease();
+  freeink::PowerManager::armPowerButtonWakeup();
+
+  // Isolate floating pads, then put the rail holds back — isolate enables
+  // sleep_sel on every GPIO and would otherwise drop gpio_hold_en.
+  esp_sleep_config_gpio_isolate();
+  if (sleephold::reassertHoldAfterIsolate()) {
+    if (cutGpio13) holdXteinkC3Gpio13Off();
+    const auto& b = BoardConfig::ACTIVE;
+    keepHoldThroughIsolateIfAssigned(b.display.powerEnable);
+    keepHoldThroughIsolateIfAssigned(b.sd.powerEnable);
+    keepHoldThroughIsolateIfAssigned(b.touch.powerEnable);
+    keepHoldThroughIsolateIfAssigned(b.mic.enable);
+    keepHoldThroughIsolateIfAssigned(b.power.latch0);
+    keepHoldThroughIsolateIfAssigned(b.power.latch1);
+  }
+  gpio_deep_sleep_hold_en();
+  esp_deep_sleep_start();
+  while (true) {
+  }
 }
 
 uint16_t HalPowerManager::getBatteryPercentage() const {

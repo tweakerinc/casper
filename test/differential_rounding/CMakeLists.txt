@@ -1,6 +1,7 @@
 add_executable(DifferentialRoundingTest
   DifferentialRoundingTest.cpp
   ${REPO_ROOT}/lib/EpdFont/EpdFont.cpp
+  ${REPO_ROOT}/lib/EpdFont/MusicNoteFallback.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
 )
 

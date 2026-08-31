@@ -162,6 +162,26 @@ TEST(HtmlToIr, KeepsBookTypography) {
   EXPECT_EQ(text.find("..."), std::string::npos) << "ellipsis must not be expanded to three periods";
 }
 
+// Rocky's chord-speech in Project Hail Mary (issue #11). Flattening these to
+// ASCII or dropping them is what left `“, ” he says.` on the glass.
+TEST(HtmlToIr, KeepsMusicNotes) {
+  const ChapterIr ir = convertOrDie("<p>\xE2\x80\x9C\xE2\x99\xAB\xE2\x99\xAB\xE2\x99\xAB,\xE2\x80\x9D he says.</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("\xE2\x99\xAB\xE2\x99\xAB\xE2\x99\xAB,"), std::string::npos)
+      << "three beamed eighths plus the grammatical comma must survive";
+  EXPECT_NE(text.find("\xE2\x80\x9C"), std::string::npos);
+  EXPECT_NE(text.find(" he says."), std::string::npos);
+}
+
+TEST(HtmlToIr, KeepsMixedStaffNotes) {
+  const ChapterIr ir = convertOrDie("<p>\xE2\x99\xA9 \xE2\x99\xAA \xE2\x99\xAB \xE2\x99\xAC</p>");
+  const std::string text = flattenText(ir);
+  EXPECT_NE(text.find("\xE2\x99\xA9"), std::string::npos) << "quarter U+2669";
+  EXPECT_NE(text.find("\xE2\x99\xAA"), std::string::npos) << "eighth U+266A";
+  EXPECT_NE(text.find("\xE2\x99\xAB"), std::string::npos) << "beamed eighth U+266B";
+  EXPECT_NE(text.find("\xE2\x99\xAC"), std::string::npos) << "beamed sixteenth U+266C";
+}
+
 // Characters that break layout rather than merely look different are still
 // removed / folded.
 TEST(HtmlToIr, StripsZeroWidthAndFoldsNoBreakSpace) {

@@ -6,6 +6,7 @@
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <MusicNoteFallback.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
@@ -94,6 +95,10 @@ void GfxRenderer::clearFontAccumulation() const {
 }
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
+  // Synthetic music notes are not in fontData->glyph; skip decompression.
+  if (const uint8_t* bits = musicNoteFallback::bitmapIfSynthetic(glyph, fontData->is2Bit)) {
+    return bits;
+  }
   if (fontData->groups != nullptr) {
     auto* fd = fontCacheManager_ ? fontCacheManager_->getDecompressor() : nullptr;
     if (!fd) {

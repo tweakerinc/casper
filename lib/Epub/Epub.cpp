@@ -963,8 +963,10 @@ bool Epub::generateThumbBmp(int height) const {
   const std::string existingPath = getThumbBmpPath(height);
   if (Storage.exists(existingPath.c_str())) {
     HalFile probe;
+    bool opened = false;
     bool valid = false;
     if (Storage.openFileForRead("EBP", existingPath, probe)) {
+      opened = true;
       char sig[2] = {};
       const size_t n = probe.read(sig, 2);
       const size_t sz = probe.size();
@@ -972,7 +974,10 @@ bool Epub::generateThumbBmp(int height) const {
       // Minimal BMP: "BM" + enough bytes for a header/DIB.
       valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
     }
-    if (valid) {
+    if (valid || !opened) {
+      // Open-fail after the reader is SD-busy, not a corrupt file. Deleting
+      // here re-decoded JPEG for a minute on every Home return.
+      LOG_DBG("EBP", "thumb cache hit %s opened=%d", existingPath.c_str(), opened ? 1 : 0);
       return true;
     }
     LOG_ERR("EBP", "Removing corrupt thumb: %s", existingPath.c_str());

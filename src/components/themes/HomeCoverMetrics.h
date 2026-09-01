@@ -24,7 +24,7 @@ constexpr int imageHeight = bareImageHeight;
 constexpr int thumbHeight = bareImageHeight;
 // Compact shelf thumbs (legacy Dashboard helper paths still reference this size).
 constexpr int homeShelfThumbHeight = 168;
-// Fast first-paint size while 420×560 JPEG decode runs. Not 1:1 — scaled BW only.
+// Legacy 0009 first-paint size. Do not generate this; blit 560 from SD instead.
 constexpr int previewThumbHeight = 280;
 
 // Height key so gen width == maxCoverW (3:4 plate fills the column).

@@ -41,6 +41,7 @@
 #include "util/HomeSideStepPolicy.h"
 #include "util/SystemChromeLive.h"
 #include "util/SystemLog.h"
+#include "util/ThumbCachePolicy.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -165,15 +166,20 @@ float loadRecentBookProgressPercent(const RecentBook& book) {
 }
 
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
+// If the file exists but cannot be opened, keep it — SD is often busy right
+// after leaving the reader; treating that as missing deleted the cache.
 bool thumbLooksValid(const std::string& path) {
   if (path.empty() || !Storage.exists(path.c_str())) return false;
   HalFile probe;
-  if (!Storage.openFileForRead("HOME", path, probe)) return false;
+  if (!Storage.openFileForRead("HOME", path, probe)) {
+    return thumbcache::keepExistingThumb(true, false, false);
+  }
   char sig[2] = {};
   const size_t n = probe.read(sig, 2);
   const size_t sz = probe.size();
   probe.close();
-  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
+  const bool validBmp = n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
+  return thumbcache::keepExistingThumb(true, true, validBmp);
 }
 
 // Phase 1 (A1): bind hero paths when thumbs already exist so the first home paint
@@ -187,13 +193,8 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
     if (FsHelpers::hasEpubExtension(book.path)) {
       Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
       const std::string heroPath = epub.getThumbBmpPath(heroH);
-      if (!thumbLooksValid(heroPath)) {
-        const bool previewOk = (heroH == HomeCoverMetrics::thumbHeight) &&
-                               (thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
-                                thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight)));
-        if (!previewOk) {
-          return false;
-        }
+      if (!thumbcache::heroReadyToPaint(thumbLooksValid(heroPath))) {
+        return false;
       }
       if (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH))) {
         return false;
@@ -205,13 +206,8 @@ bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int her
       Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
       // Path-only probe — avoid full XTC load when the hero BMP is already on disk.
       const std::string heroPath = xtc.getThumbBmpPath(heroH);
-      if (!thumbLooksValid(heroPath)) {
-        const bool previewOk = (heroH == HomeCoverMetrics::thumbHeight) &&
-                               (thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
-                                thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight)));
-        if (!previewOk) {
-          return false;
-        }
+      if (!thumbcache::heroReadyToPaint(thumbLooksValid(heroPath))) {
+        return false;
       }
       if (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH))) {
         return false;
@@ -319,19 +315,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   const int shelfH = HomeCoverMetrics::homeShelfThumbHeight;
 
   auto heroThumbExists = [&](auto& bookFmt) -> bool { return thumbLooksValid(bookFmt.getThumbBmpPath(heroH)); };
-  auto previewThumbExists = [&](auto& bookFmt) -> bool {
-    return thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
-           thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
-  };
   auto ensureThumbs = [&](auto& bookFmt) -> bool {
-    // Bare: first pass is a small preview so Home is not an empty plate for a minute
-    // while 420×560 JPEG decode runs. Full hero generates on the retry tick.
-    if (isBareTheme() && coverGenAttempts == 0 && !heroThumbExists(bookFmt)) {
-      if (!previewThumbExists(bookFmt)) {
-        (void)bookFmt.generateThumbBmp(HomeCoverMetrics::previewThumbHeight);
-      }
-      return previewThumbExists(bookFmt) || heroThumbExists(bookFmt);
-    }
     bool anyOk = bookFmt.generateThumbBmp(heroH);
     if (shelfTheme && !thumbLooksValid(bookFmt.getThumbBmpPath(shelfH))) {
       anyOk = bookFmt.generateThumbBmp(shelfH) || anyOk;
@@ -492,8 +476,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
 
-  // Bare preview pass: 560 still missing — retry soon for the 1:1 hero, keep the
-  // preview on glass meanwhile (recentsLoading holds the last paint).
+  // Retry only when gen actually failed — never because a 280 preview exists.
   bool bareHeroPending = false;
   if (isBareTheme() && !recentBooks.empty() && FsHelpers::hasEpubExtension(recentBooks[0].path)) {
     Epub epub(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
@@ -810,8 +793,15 @@ void HomeActivity::onResume() {
     if (isPenumbraTheme()) {
       recentsLoaded = true;
       if (!recentBooks.empty()) PenumbraThemeUi::warmRecentsProgressCache(recentBooks);
+    } else {
+      const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
+      if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
+                                        HomeCoverMetrics::homeShelfThumbHeight)) {
+        recentsLoaded = true;
+      }
     }
-    LOG_DBG("HOME", "onResume: skip SD stats reload (synced RAM recents n=%d)", static_cast<int>(recentBooks.size()));
+    LOG_DBG("HOME", "onResume: skip SD stats reload (synced RAM recents n=%d loaded=%d)",
+            static_cast<int>(recentBooks.size()), recentsLoaded ? 1 : 0);
     return;
   }
 
@@ -942,9 +932,9 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
-  // Cover greys are light-polarity. Whole-UI Dark Mode uses invertOnDisplay;
-  // pushing greys here left Bare home (and the Loading wipe) on a white plate.
-  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+  // Jacket greys use invert-wrapped BW base + cover-only grey planes. Clock AA
+  // still skips (skipUiGrayscale) because it is a full-plate light pass.
+  if (darkmode::skipCoverGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
     displayBw(true, "bw_dark_mode");
     return;
   }
@@ -977,8 +967,8 @@ void HomeActivity::multipassHomeCoverGrayscale() {
       coverPath = firstExisting({
           epub.getThumbBmpPath(heroH),
           epub.getThumbBmpPath(HomeCoverMetrics::thumbHeight),
-          epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
           epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight),
+          epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
       });
     } else {
       coverPath = firstExisting({epub.getThumbBmpPath(heroH)});
@@ -1150,7 +1140,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
-  renderer.displayGrayBuffer();
+  renderer.displayGrayBufferWindow(artX, artY, drawnW, drawnH);
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();
@@ -2282,11 +2272,10 @@ void HomeActivity::render(RenderLock&& lock) {
       return;
     }
     snappyResumeNoGreys = false;
-    // Bare: put the jacket on glass now. 560 JPEG + grey multipass in one sitting
-    // is the empty-box-for-a-minute then grey-pass stall. Greys run idle (or never
-    // in whole-UI Dark Mode).
+    // Bare: put the jacket on glass now. Greys run idle so Home is not an empty
+    // box for a minute. Same in Dark Mode — jackets are not 1-bit.
     if (isBareTheme() && recentsLoaded && !coverGrayOnPanel &&
-        !darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+        !darkmode::skipCoverGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
       deferredGreysOnly = true;
       softGrayscaleBase = true;
       coverGrayNeedsRetry = true;

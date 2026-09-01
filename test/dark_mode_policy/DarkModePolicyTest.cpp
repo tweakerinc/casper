@@ -23,3 +23,21 @@ TEST(DarkModePolicy, HideAaToggleWhileDark) {
   EXPECT_FALSE(darkmode::showAntiAliasingSetting(/*darkOn=*/true));
   EXPECT_TRUE(darkmode::showAntiAliasingSetting(/*darkOn=*/false));
 }
+
+TEST(DarkModePolicy, ClockAaStillSkippedInWholeUiDark) {
+  EXPECT_TRUE(darkmode::skipUiGrayscale(/*darkOn=*/true, /*readerOnly=*/false));
+  EXPECT_FALSE(darkmode::skipUiGrayscale(/*darkOn=*/true, /*readerOnly=*/true));
+}
+
+TEST(DarkModePolicy, CoverGreysRunInWholeUiDark) {
+  EXPECT_FALSE(darkmode::skipCoverGrayscale(/*darkOn=*/true, /*readerOnly=*/false));
+  EXPECT_FALSE(darkmode::skipCoverGrayscale(/*darkOn=*/true, /*readerOnly=*/true));
+  EXPECT_FALSE(darkmode::skipCoverGrayscale(/*darkOn=*/false, /*readerOnly=*/false));
+}
+
+TEST(DarkModePolicy, OpeningAndMenuNeedHalfInWholeUiDark) {
+  EXPECT_TRUE(darkmode::statusCueNeedsHalf(/*darkOn=*/true, /*readerOnly=*/false));
+  EXPECT_FALSE(darkmode::statusCueNeedsHalf(/*darkOn=*/true, /*readerOnly=*/true));
+  EXPECT_TRUE(darkmode::menuOpenNeedsHalf(/*darkOn=*/true, /*readerOnly=*/false));
+  EXPECT_FALSE(darkmode::menuOpenNeedsHalf(/*darkOn=*/true, /*readerOnly=*/true));
+}

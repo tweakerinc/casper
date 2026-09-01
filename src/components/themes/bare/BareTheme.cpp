@@ -90,18 +90,18 @@ std::string coverPathForBook(const RecentBook& book) {
     Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
     const std::string found = firstExisting({
         epub.getThumbBmpPath(BareMetrics::homeCoverThumbHeight),
-        epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
         epub.getThumbBmpPath(BareMetrics::homeCoverImageHeight),
         epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight),
+        epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
     });
     if (!found.empty()) return found;
   }
 
   return firstExisting({
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverThumbHeight),
-      UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::previewThumbHeight),
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverImageHeight),
       UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::homeShelfThumbHeight),
+      UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::previewThumbHeight),
       book.coverBmpPath.find("[HEIGHT]") == std::string::npos ? book.coverBmpPath : std::string{},
   });
 }

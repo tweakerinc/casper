@@ -25,10 +25,13 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // parity). v23 IR left-aligned chapter titles that only used the align= attribute.
 // v25: first-letter spans that wrap only "[" of DCC "Chapter [1]" no longer
 // emit a lone Bold/Plus2 run. v24 IR still has that split and must reconvert.
-inline constexpr uint16_t kIrFormatVersion = 25;
+// v26: chapter-title images with readable alt become heading text (no hollow
+// box); first body para after a real chapter heading / span.dropcap is armed
+// for a drop-cap. DCC "[ 70 ]" headings still do not arm. v25 IR must reconvert.
+inline constexpr uint16_t kIrFormatVersion = 26;
 // Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 25;
-inline constexpr uint16_t kIrFormatVersionMax = 25;
+inline constexpr uint16_t kIrFormatVersionMin = 26;
+inline constexpr uint16_t kIrFormatVersionMax = 26;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

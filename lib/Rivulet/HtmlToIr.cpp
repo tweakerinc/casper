@@ -407,6 +407,77 @@ bool looksLikeDocumentAlt(const char* alt, size_t altLen) {
          (containsI(alt, altLen, "paperclip icon") && altLen >= 60);
 }
 
+// Tradepub chapter plates: alt is "Chapter 1" / "1" / "CHAPTER ONE", painted as
+// a JPEG that often fails to decode → hollow box, no title ink (Hail Mary ch1).
+bool looksLikeChapterHeadingAlt(const char* alt, size_t altLen) {
+  if (!alt || altLen == 0 || altLen > 48) return false;
+  if (containsI(alt, altLen, "chapter") || containsI(alt, altLen, "chapitre") || containsI(alt, altLen, "capitulo") ||
+      containsI(alt, altLen, "capítulo") || containsI(alt, altLen, "kapitel")) {
+    return true;
+  }
+  bool any = false;
+  for (size_t i = 0; i < altLen; ++i) {
+    const unsigned char c = static_cast<unsigned char>(alt[i]);
+    if (c == ' ' || c == '\t' || c == '.' || c == '-') continue;
+    if ((c >= '0' && c <= '9') || c == 'I' || c == 'V' || c == 'X' || c == 'i' || c == 'v' || c == 'x') {
+      any = true;
+      continue;
+    }
+    return false;
+  }
+  return any;
+}
+
+bool classSaysDropCap(const Tag& tag) {
+  return attrHasClass(tag, "ct1") || attrHasClass(tag, "dropcap") || attrHasClass(tag, "drop-cap") ||
+         attrHasClass(tag, "drop_cap") || attrHasClass(tag, "dropcaps") || attrHasClass(tag, "drop-caps") ||
+         attrHasClass(tag, "firstletter") || attrHasClass(tag, "first-letter") || attrHasClass(tag, "first_letter") ||
+         attrHasClass(tag, "dropcharacter") || attrHasClass(tag, "drop-character") || attrHasClass(tag, "firstchar") ||
+         attrHasClass(tag, "first-char") || attrHasClass(tag, "lettrine");
+}
+
+// DCC chapter markers are real h1s ("[ 70 ]" / "Chapter [1]") but the book does
+// not drop-cap the following paragraph. Hail Mary "Chapter 1" has no brackets.
+bool headingLooksLikeBracketMarker(const char* s, const size_t n) {
+  if (!s || n == 0) return false;
+  size_t i = 0;
+  auto skipWs = [&]() {
+    while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
+  };
+  skipWs();
+  if (i + 7 <= n && (s[i] == 'C' || s[i] == 'c') && ieq(s + i, 7, "chapter")) i += 7;
+  skipWs();
+  if (i >= n || s[i] != '[') return false;
+  ++i;
+  skipWs();
+  bool digit = false;
+  while (i < n && s[i] >= '0' && s[i] <= '9') {
+    digit = true;
+    ++i;
+  }
+  skipWs();
+  if (!digit || i >= n || s[i] != ']') return false;
+  ++i;
+  skipWs();
+  return i >= n;
+}
+
+bool lastClosedHeadingIsDccMarker(const ChapterIr& ir) {
+  if (ir.blocks().empty()) return false;
+  const Block& b = ir.blocks().back();
+  if (b.kind < BlockKind::Heading1 || b.kind > BlockKind::Heading6) return false;
+  char buf[72];
+  size_t n = 0;
+  const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+  for (uint16_t ri = b.runBegin; ri < runEnd && ri < ir.runs().size(); ++ri) {
+    const Run& r = ir.runs()[ri];
+    const char* t = ir.runText(r);
+    if (!t) continue;
+    for (uint16_t k = 0; k < r.textLen && n + 1 < sizeof(buf); ++k) buf[n++] = t[k];
+  }
+  return headingLooksLikeBracketMarker(buf, n);
+}
+
 // Collapse whitespace; prefer "Briefing note:" / document-title body when present.
 // minOut: short stamps need a low floor; long notes use 24+.
 bool buildReadableAltText(const char* alt, size_t altLen, std::string& out, size_t minOut = 24) {
@@ -1042,10 +1113,9 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
 
-      // Drop-cap host open (explicit only — not every blockquote/epigraph).
+      // Drop-cap host open (explicit class — not every blockquote/epigraph).
       if (!tag.closing && (ieq(tag.name, tag.nameLen, "blockquote") || ieq(tag.name, tag.nameLen, "div"))) {
-        if (attrHasClass(tag, "ct1") || attrHasClass(tag, "dropcap") || attrHasClass(tag, "drop-cap") ||
-            attrHasClass(tag, "firstletter") || attrHasClass(tag, "first-letter")) {
+        if (classSaysDropCap(tag)) {
           dropCapHost = true;
         }
       }
@@ -1127,6 +1197,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         closeBlock();
         // CSS: hgroup + p { text-indent: 0 }
         noIndentNextParagraph = true;
+        dropCapArmed = true;
         continue;
       }
 
@@ -1167,7 +1238,13 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         headingLevelOpen = 0;
         // CSS: h2 + p, h3 + p, … { text-indent: 0 } — only when not inside hgroup
         // (hgroup's own close arms the flush for the first body para after the group).
-        if (hgroupDepth == 0) noIndentNextParagraph = true;
+        if (hgroupDepth == 0) {
+          noIndentNextParagraph = true;
+          // CrossInk/classic first-letter feel: first body para after a chapter
+          // heading. Skip DCC "[ 70 ]" markers (those books have no drop-cap).
+          const int closedLevel = tag.name[1] - '0';
+          if (closedLevel <= 2 && !lastClosedHeadingIsDccMarker(out)) dropCapArmed = true;
+        }
         continue;
       }
 
@@ -1243,6 +1320,9 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (dropCapArmed && kind == BlockKind::Paragraph) {
           flags |= kBlockDropCap | kBlockNoIndent;
           dropCapArmed = false;
+        }
+        if (kind == BlockKind::Paragraph && classSaysDropCap(tag)) {
+          flags |= kBlockDropCap | kBlockNoIndent;
         }
         Align htmlA = Align::Left;
         if (htmlAlignAttr(tag, htmlA)) {
@@ -1353,6 +1433,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         closeBlock();
         endBlockStyle();
         --titleDivDepth;
+        noIndentNextParagraph = true;
+        dropCapArmed = true;
         continue;
       }
 
@@ -1455,6 +1537,28 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
             (void)out.appendRun(style, size, readable.data(), readable.size());
             closeBlock();
             if (headingLevelOpen > 0) reopenHeadingIfNeeded();
+            continue;
+          }
+        }
+        // Chapter-number plates (Hail Mary / CrossInk): alt is the title. The
+        // JPEG often fails to decode and used to reserve a hollow full-width box.
+        if (alt && side == 0 && looksLikeChapterHeadingAlt(alt, altLen)) {
+          std::string readable;
+          if (buildReadableAltText(alt, altLen, readable, 1) && !readable.empty()) {
+            if (headingLevelOpen > 0 || titleDivDepth > 0) {
+              flushText();
+              (void)out.appendRun(curStyle().style, curStyle().size, readable.data(), readable.size());
+              continue;
+            }
+            closeBlock();
+            openBlock(BlockKind::Heading1, Align::Center, kBlockNoIndent);
+            out.setCurrentMarginsEmQ4(6, static_cast<int8_t>(scaleBookVSpaceQ4(32)));
+            beginBlockStyle(RunStyle::Bold, SizeStep::Plus2);
+            (void)out.appendRun(RunStyle::Bold, SizeStep::Plus2, readable.data(), readable.size());
+            closeBlock();
+            endBlockStyle();
+            noIndentNextParagraph = true;
+            dropCapArmed = true;
             continue;
           }
         }
@@ -1601,6 +1705,9 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (!innerIsOnlyOpeningPunct(p, end, tag.name, tag.nameLen)) {
           applyInlineStyle(tag, st, sz);
           applyClassEmphasis(tag, st, sz);
+        }
+        if (classSaysDropCap(tag) && inBlock) {
+          out.markDropCapOnCurrent();
         }
         pushStyle(st, sz);
         continue;

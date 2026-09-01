@@ -3015,11 +3015,13 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
     ImageDimsProbe probe;
     const bool streamOk = epub_->readItemContentsToStream(resolved, probe, 1024, /*allowEarlyStop=*/true);
     if (!probe.getDimensions(dims) || dims.width <= 0 || dims.height <= 0) {
-      // Fallback box so the page still reserves space — paint may still extract/decode.
-      dims.width = static_cast<uint16_t>(viewW);
-      dims.height = static_cast<uint16_t>(std::max(64, viewH / 3));
-      LOG_ERR("RVR", "image dims probe fail streamOk=%d path=%s — using %dx%d", streamOk ? 1 : 0, resolved.c_str(),
-              dims.width, dims.height);
+      // Do not invent a viewport-sized box. Hail Mary chapter plates that fail
+      // the probe used to layout as a hollow rectangle with no title ink.
+      LOG_ERR("RVR", "image dims probe fail streamOk=%d path=%s — skip plate", streamOk ? 1 : 0, resolved.c_str());
+      b.imageW = 0;
+      b.imageH = 0;
+      ++skipped;
+      continue;
     }
 
     int iw = dims.width;

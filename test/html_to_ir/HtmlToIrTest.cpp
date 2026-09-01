@@ -553,4 +553,42 @@ TEST(HtmlToIr, TokenizerKeepsRealSpaceAfterStyleRun) {
   EXPECT_EQ(vampireToSkillSpaces, 1);
 }
 
+TEST(HtmlToIr, ChapterHeadingArmsDropCapOnFirstParagraph) {
+  const ChapterIr ir = convertOrDie("<h1>Chapter 1</h1><p>I woke up.</p>");
+  ASSERT_GE(ir.blocks().size(), 2u);
+  EXPECT_EQ(ir.blocks()[0].kind, BlockKind::Heading1);
+  EXPECT_EQ(ir.blocks()[1].kind, BlockKind::Paragraph);
+  EXPECT_NE(ir.blocks()[1].flags & rivulet::kBlockDropCap, 0u);
+  EXPECT_EQ(flattenText(ir), "Chapter 1\nI woke up.\n");
+}
+
+TEST(HtmlToIr, DccBracketHeadingDoesNotArmDropCap) {
+  const ChapterIr ir = convertOrDie("<h1>[ 70 ]</h1><p>Colored lights.</p>");
+  ASSERT_GE(ir.blocks().size(), 2u);
+  EXPECT_EQ(ir.blocks()[1].kind, BlockKind::Paragraph);
+  EXPECT_EQ(ir.blocks()[1].flags & rivulet::kBlockDropCap, 0u);
+}
+
+TEST(HtmlToIr, DropCapClassOnParagraphAndSpan) {
+  const ChapterIr p = convertOrDie("<p class=\"dropcap\">Hello world.</p>");
+  ASSERT_FALSE(p.blocks().empty());
+  EXPECT_NE(p.blocks().front().flags & rivulet::kBlockDropCap, 0u);
+
+  const ChapterIr s = convertOrDie("<p><span class=\"dropcap\">H</span>ello</p>");
+  ASSERT_FALSE(s.blocks().empty());
+  EXPECT_NE(s.blocks().front().flags & rivulet::kBlockDropCap, 0u);
+}
+
+TEST(HtmlToIr, ChapterTitleImageAltBecomesHeading) {
+  const ChapterIr ir = convertOrDie("<body><img alt=\"Chapter 1\" src=\"images/ch1.jpg\"/><p>I woke up.</p></body>");
+  EXPECT_EQ(countBlocks(ir, BlockKind::Image), 0);
+  EXPECT_GE(countBlocks(ir, BlockKind::Heading1), 1);
+  EXPECT_NE(flattenText(ir).find("Chapter 1"), std::string::npos);
+  bool sawDrop = false;
+  for (const auto& b : ir.blocks()) {
+    if (b.kind == BlockKind::Paragraph && (b.flags & rivulet::kBlockDropCap) != 0) sawDrop = true;
+  }
+  EXPECT_TRUE(sawDrop);
+}
+
 }  // namespace

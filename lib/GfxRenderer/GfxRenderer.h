@@ -198,6 +198,9 @@ class GfxRenderer {
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
   void invertScreen() const;
+  // XOR a logical rectangle (orientation-aware). Whole-UI Dark Mode inverts the
+  // FB at display time; pre-inverting a cover here restores original jacket polarity.
+  void invertRect(int x, int y, int width, int height) const;
   void clearScreen(uint8_t color = 0xFF) const;
   // Re-arms drawPixel()'s rate-limited out-of-range logging. Called by
   // clearScreen(); exposed for paths that start a frame without clearing.

@@ -10,6 +10,9 @@ inline bool systemWide(const bool darkOn, const bool readerOnly) { return darkOn
 // Home covers / clock AA / settings preview — skip when invert-on-display is armed.
 inline bool skipUiGrayscale(const bool darkOn, const bool readerOnly) { return systemWide(darkOn, readerOnly); }
 
+// Jacket art is a photograph. Whole-UI invert would make it a negative.
+inline bool preserveCoverPolarity(const bool darkOn, const bool readerOnly) { return systemWide(darkOn, readerOnly); }
+
 // Reader page AA — skip for any Dark Mode (reader-only still inverts the page).
 inline bool skipReaderGrayscale(const bool darkOn) { return darkOn; }
 

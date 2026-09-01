@@ -117,9 +117,28 @@ void displayPopupWithDarkMode(const GfxRenderer& renderer, const HalDisplay::Ref
     renderer.invertScreen();
     renderer.displayBuffer(mode);
     renderer.invertScreen();
+    renderer.notePanelInverted(true);
     return;
   }
   renderer.displayBuffer(mode);
+}
+
+// Corner Loading/Saving/Opening. Same polarity contract as popups: if invertOnDisplay
+// was cleared during an activity swap, black glyphs would land on an already-dark
+// plate. Invert around the push so the label is light on dark.
+void displayCornerStatusWithDarkMode(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+  const bool sysWide = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
+  const bool needTempInvert = sysWide && !renderer.getInvertOnDisplay();
+  if (needTempInvert) renderer.invertScreen();
+  if (gpio.deviceIsX3()) {
+    renderer.displayWindow(x, y, w, h);
+  } else {
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
+  if (needTempInvert) {
+    renderer.invertScreen();
+    renderer.notePanelInverted(true);
+  }
 }
 
 constexpr int homeMenuMargin = 20;
@@ -1239,16 +1258,7 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   renderer.drawText(kFont, x, y, message, /*black=*/true);
 
   if (refresh) {
-    if (gpio.deviceIsX3()) {
-      // Windowed FAST on the wipe only. A full displayBuffer(FAST) raced the reader
-      // activity swap and made "Opening" invisible (user never saw the cue even with
-      // Dark Mode off). Corner glyphs leave no residual worth a full-frame refresh.
-      renderer.displayWindow(x - 1, y - 1, wipeW + 2, wipeH + 2);
-    } else {
-      // SSD1677 PART LUT on a strip only resyncs RED (UiGhostPolicy). Manage
-      // Fonts / chapter load then looked like "no loading" on X4.
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    }
+    displayCornerStatusWithDarkMode(renderer, x - 1, y - 1, wipeW + 2, wipeH + 2);
   }
   return Rect{x - 1, y - 1, wipeW + 2, wipeH + 2};
 }

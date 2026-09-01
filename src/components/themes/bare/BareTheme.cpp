@@ -19,6 +19,7 @@
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
 #include "util/StringUtils.h"
 #include "util/SystemChromeLive.h"
 
@@ -148,6 +149,11 @@ Rect drawCoverImage(const GfxRenderer& renderer, const Rect& coverRect, const Re
   renderer.maskRoundedRectOutsideCorners(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, artRadius,
                                          Color::White);
   renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1, artRadius, true);
+  // Whole-UI Dark Mode inverts the FB at display. Pre-invert the jacket so the
+  // photograph comes out original polarity (not a negative).
+  if (darkmode::preserveCoverPolarity(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.invertRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height);
+  }
   file.close();
   return bitmapRect;
 }

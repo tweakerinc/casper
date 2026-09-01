@@ -8,10 +8,10 @@ TEST(DarkModePolicy, SystemWideWhenReaderOnlyOff) {
   EXPECT_FALSE(darkmode::systemWide(/*darkOn=*/false, /*readerOnly=*/false));
 }
 
-TEST(DarkModePolicy, SkipUiGreysOnlyWhenWholeUiInverts) {
-  EXPECT_TRUE(darkmode::skipUiGrayscale(/*darkOn=*/true, /*readerOnly=*/false));
-  EXPECT_FALSE(darkmode::skipUiGrayscale(/*darkOn=*/true, /*readerOnly=*/true));
-  EXPECT_FALSE(darkmode::skipUiGrayscale(/*darkOn=*/false, /*readerOnly=*/false));
+TEST(DarkModePolicy, PreserveCoverPolarityOnlyWhenWholeUiInverts) {
+  EXPECT_TRUE(darkmode::preserveCoverPolarity(/*darkOn=*/true, /*readerOnly=*/false));
+  EXPECT_FALSE(darkmode::preserveCoverPolarity(/*darkOn=*/true, /*readerOnly=*/true));
+  EXPECT_FALSE(darkmode::preserveCoverPolarity(/*darkOn=*/false, /*readerOnly=*/false));
 }
 
 TEST(DarkModePolicy, SkipReaderAaForAnyDarkMode) {

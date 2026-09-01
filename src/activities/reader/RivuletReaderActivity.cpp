@@ -961,9 +961,19 @@ void RivuletReaderActivity::paintClippingHighlights() {
   // First open: do not block on SD clippings load — highlights appear after idle/next paint.
   if (!clippingsLoaded_) {
     if (firstPaint_ && ReaderActivity::hasOpenHints()) return;
+    if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
     ensureClippingsLoaded();
   }
   if (!CLIPPINGS.hasClippings()) return;
+  if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 20 * 1024) {
+    LOG_ERR("RVR", "Skip clipping highlights (heap free=%u maxA=%u)", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return;
+  }
+
+  const uint16_t curPage = static_cast<uint16_t>(std::max(0, engine_.currentPage()));
+  const uint16_t curSpine = static_cast<uint16_t>(spineIndex_);
+  if (!CLIPPINGS.hasClippingForPage(curSpine, curPage)) return;
 
   std::vector<DictionaryWordSelectActivity::WordBox> boxes;
   std::vector<std::string> pool;
@@ -972,10 +982,8 @@ void RivuletReaderActivity::paintClippingHighlights() {
   }
   if (boxes.empty()) return;
 
-  const uint16_t curPage = static_cast<uint16_t>(std::max(0, engine_.currentPage()));
   const int pageCount = std::max(1, engine_.chapterPageCount(&renderer));
   const uint16_t curPageCount = static_cast<uint16_t>(std::min(pageCount, 65535));
-  const uint16_t curSpine = static_cast<uint16_t>(spineIndex_);
 
   // Word indices to highlight (capped).
   bool hl[256] = {};
@@ -986,74 +994,27 @@ void RivuletReaderActivity::paintClippingHighlights() {
     for (uint16_t i = a; i <= b && i < nWords; ++i) hl[i] = true;
   };
 
-  std::string clipText;
-  clipText.reserve(CLIPPING_TEXT_MAX);
-  CLIPPINGS.warmTextCache();
-
+  // Index-only. Text-search fallback used to std::string::resize the full body
+  // on every page paint and abort under -fno-exceptions when heap was tight.
   for (const Clipping& c : CLIPPINGS.getClippings()) {
     if (c.spineIndex != curSpine) continue;
-
-    // Fast path: same chapter pagination as when clipped.
-    if (c.pageCount == curPageCount && curPage >= c.startPage && curPage <= c.endPage) {
-      if (c.startPage == c.endPage && c.startPage == curPage) {
-        markRange(c.startWordIndex, c.endWordIndex);
-        continue;
-      }
-      // Multi-page clip: whole page if middle; partial ends not tracked well — mark all words.
-      if (curPage > c.startPage && curPage < c.endPage) {
-        for (size_t i = 0; i < nWords; ++i) hl[i] = true;
-        continue;
-      }
-      if (curPage == c.startPage) {
-        markRange(c.startWordIndex, static_cast<uint16_t>(nWords > 0 ? nWords - 1 : 0));
-        continue;
-      }
-      if (curPage == c.endPage) {
-        markRange(0, c.endWordIndex);
-        continue;
-      }
+    if (c.pageCount != curPageCount) continue;
+    if (curPage < c.startPage || curPage > c.endPage) continue;
+    if (c.startPage == c.endPage && c.startPage == curPage) {
+      markRange(c.startWordIndex, c.endWordIndex);
+      continue;
     }
-
-    // Fallback: text search on this page's word sequence.
-    clipText.clear();
-    if (!CLIPPINGS.readClippingText(c, clipText) || clipText.empty()) continue;
-    // Normalize to lowercase alphanumeric runs for fuzzy match.
-    auto normalize = [](const std::string& s) {
-      std::string o;
-      o.reserve(s.size());
-      for (unsigned char ch : s) {
-        if (std::isalnum(ch))
-          o.push_back(static_cast<char>(std::tolower(ch)));
-        else if (!o.empty() && o.back() != ' ')
-          o.push_back(' ');
-      }
-      while (!o.empty() && o.back() == ' ') o.pop_back();
-      return o;
-    };
-    const std::string needle = normalize(clipText);
-    if (needle.size() < 4) continue;
-    std::string hay;
-    hay.reserve(512);
-    std::vector<size_t> wordEndInHay;
-    wordEndInHay.reserve(nWords);
-    for (size_t i = 0; i < nWords; ++i) {
-      if (!hay.empty()) hay.push_back(' ');
-      for (unsigned char ch : pool[i]) {
-        if (std::isalnum(ch)) hay.push_back(static_cast<char>(std::tolower(ch)));
-      }
-      wordEndInHay.push_back(hay.size());
+    if (curPage > c.startPage && curPage < c.endPage) {
+      for (size_t i = 0; i < nWords; ++i) hl[i] = true;
+      continue;
     }
-    const size_t at = hay.find(needle);
-    if (at == std::string::npos) continue;
-    const size_t endAt = at + needle.size();
-    size_t startW = 0;
-    size_t endW = nWords > 0 ? nWords - 1 : 0;
-    for (size_t i = 0; i < nWords; ++i) {
-      const size_t wStart = (i == 0) ? 0 : wordEndInHay[i - 1] + 1;
-      if (wStart <= at && wordEndInHay[i] > at) startW = i;
-      if (wStart < endAt) endW = i;
+    if (curPage == c.startPage) {
+      markRange(c.startWordIndex, static_cast<uint16_t>(nWords > 0 ? nWords - 1 : 0));
+      continue;
     }
-    markRange(static_cast<uint16_t>(startW), static_cast<uint16_t>(endW));
+    if (curPage == c.endPage) {
+      markRange(0, c.endWordIndex);
+    }
   }
 
   for (size_t i = 0; i < nWords; ++i) {

@@ -481,8 +481,8 @@ void EpubReaderClippingListActivity::render(RenderLock&&) {
   const int marginLeft = contentX + 20;
   std::string clippingText;
   std::string snippetText;
-  clippingText.reserve(CLIPPING_TEXT_MAX);
-  snippetText.reserve(CLIPPING_TEXT_MAX);
+  clippingText.reserve(160);
+  snippetText.reserve(160);
 
   for (int i = 0; i < pageItems; i++) {
     const int itemIndex = pageStartIndex + i;
@@ -497,10 +497,11 @@ void EpubReaderClippingListActivity::render(RenderLock&&) {
     const Clipping* clipping = CLIPPINGS.clippingAt(static_cast<size_t>(itemIndex));
     if (!clipping) continue;
 
-    clippingText.clear();
-    if (!CLIPPINGS.readClippingText(static_cast<size_t>(itemIndex), clippingText)) {
-      clippingText.clear();
+    char raw[160];
+    if (!CLIPPINGS.readClippingTextPrefix(static_cast<size_t>(itemIndex), raw, sizeof(raw))) {
+      raw[0] = '\0';
     }
+    clippingText.assign(raw);
     buildOneLineSnippetText(clippingText, snippetText);
     const std::string snippetTrunc = renderer.truncatedText(UI_10_FONT_ID, snippetText.c_str(), contentWidth - 40);
     renderer.drawText(UI_10_FONT_ID, marginLeft, rowY + 5, snippetTrunc.c_str(), !isSelected);

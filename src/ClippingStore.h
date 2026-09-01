@@ -62,6 +62,8 @@ class ClippingStore {
   const std::vector<Clipping>& getClippings() const { return clippings; }
   bool readClippingText(size_t index, std::string& out) const;
   bool readClippingText(const Clipping& clipping, std::string& out) const;
+  // Bounded prefix for list rows / paint. Never grows std::string (abort on OOM).
+  bool readClippingTextPrefix(size_t index, char* dst, size_t dstSize) const;
 
   // Prefetch all clipping bodies into RAM (once per book). Speeds page highlight
   // paint which otherwise re-opens the store file per unmatched clip.

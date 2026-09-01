@@ -259,7 +259,10 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   // become the sparse menu with no glass update — the following FAST sees zero
   // differential and the main home image remains fully visible on glass.
   renderer.setRenderMode(GfxRenderer::BW);
-  renderer.restoreBwBuffer();  // no-op if multipass already freed the store
+  renderer.restoreBwBuffer();  // FB is still the home BW shell
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  UiGhostPolicy::noteBwOnPanel();
+  coverGrayOnPanel = false;
 
   renderer.clearScreen(0xFF);
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
@@ -1154,6 +1157,16 @@ void HomeActivity::markLeavingForUiChild() {
   leaveForUiChildSnappy = themeOk && (isPenumbraTheme() ? penumbraHalfBaselineDone : coverGrayOnPanel);
   skipResumeSdReload_ = recentsLoaded;
   cancelHomeBackgroundPaint();
+  // Whole-UI Dark Mode: leftover cover greys are light-polarity. Settings/Library
+  // FAST against them looks like a light menu and flashes black on every move.
+  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.restoreBwBuffer();
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    coverGrayOnPanel = false;
+    UiGhostPolicy::noteBwOnPanel();
+    leaveForUiChildSnappy = false;
+  }
 }
 
 void HomeActivity::cancelHomeBackgroundPaint() {

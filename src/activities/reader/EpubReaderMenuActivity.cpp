@@ -282,9 +282,6 @@ void EpubReaderMenuActivity::activateSelected() {
   // Book menu Dark Mode mirrors Settings → Display (master + nested Reader Only).
   if (selectedAction == MenuAction::TOGGLE_DARK_MODE) {
     SETTINGS.readerDarkMode = SETTINGS.readerDarkMode ? 0 : 1;
-    if (SETTINGS.readerDarkMode) {
-      SETTINGS.darkModeReaderOnly = 1;  // default book-scoped; nested row can clear it
-    }
     SETTINGS.saveToFile();
     renderer.setInvertOnDisplay(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0);
     const int n = static_cast<int>(activeMenuItems().size());

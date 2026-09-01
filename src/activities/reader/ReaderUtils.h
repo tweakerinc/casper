@@ -48,6 +48,8 @@ inline void displayWithDarkMode(const GfxRenderer& renderer,
     renderer.invertScreen();
     renderer.displayBuffer(mode);
     renderer.invertScreen();
+    // displayBuffer saw invertOnDisplay=false; glass is still inverted.
+    renderer.notePanelInverted(true);
     return;
   }
   renderer.displayBuffer(mode);
@@ -285,7 +287,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   if (maintenanceDue || forceScrub) {
     // Soft interval on X3 only when not a forced hard scrub. Long-press power /
     // FORCE_SCRUB always HALF so the user sees a real flash clean.
-    const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub;
+    const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub && !renderer.getInvertOnDisplay() && !tempInvert;
     if (useX3SoftReinforce) {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
       UiGhostPolicy::noteBwOnPanel();
@@ -311,7 +313,10 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     }
   }
 
-  if (tempInvert) renderer.invertScreen();
+  if (tempInvert) {
+    renderer.invertScreen();
+    renderer.notePanelInverted(true);
+  }
 }
 
 // Push the BW page already painted into the framebuffer, then enhance it with

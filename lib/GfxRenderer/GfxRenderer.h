@@ -54,6 +54,10 @@ class GfxRenderer {
   // System-wide Dark Mode: invert FB → push panel → restore FB so paint stays light-space.
   // Sleep / intentional invert content should temporarily clear this (setInvertOnDisplay).
   bool invertOnDisplay;
+  // Polarity of the last bits actually driven to the panel. Reader-only dark
+  // inverts the FB around displayBuffer while invertOnDisplay is false — callers
+  // must notePanelInverted(true) after that push so the next light FAST can HALF.
+  mutable bool panelSentInverted_ = false;
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -167,6 +171,11 @@ class GfxRenderer {
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
   void setInvertOnDisplay(const bool enabled) { invertOnDisplay = enabled; }
   bool getInvertOnDisplay() const { return invertOnDisplay; }
+  // Record that the last panel push was inverted even when invertOnDisplay is
+  // off (reader-only Dark Mode). Menu/Settings FAST against that glass flashes black.
+  void notePanelInverted(const bool inverted) const { panelSentInverted_ = inverted; }
+  bool panelIsInverted() const { return panelSentInverted_; }
+  bool panelPolarityMatchesInvertFlag() const { return panelSentInverted_ == invertOnDisplay; }
 
   // Screen ops
   int getScreenWidth() const;

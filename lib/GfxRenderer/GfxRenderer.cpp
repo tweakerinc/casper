@@ -1818,6 +1818,7 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   if (invertOnDisplay) {
     invertScreen();
   }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
@@ -1833,6 +1834,7 @@ void GfxRenderer::displayWindow(const int x, const int y, const int width, const
   if (invertOnDisplay) {
     invertScreen();
   }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
@@ -1843,6 +1845,7 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
     return;
   }
   display.displayBufferAsync(refreshMode);
+  panelSentInverted_ = false;
 }
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
@@ -2453,6 +2456,7 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
   if (invertOnDisplay) {
     invertScreen();
   }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }

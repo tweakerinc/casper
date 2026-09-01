@@ -63,7 +63,9 @@ inline void displayHalf(const GfxRenderer& renderer) {
 // X3 soft B/W reinforce only (OEM AA-pre-BW mid). No strong plate first.
 // Prefer displaySoftOpen for full-screen swaps over home.
 inline void displaySoftReinforce(const GfxRenderer& renderer) {
-  if (gpio.deviceIsX3()) {
+  // Grey-base is a light-polarity waveform. In Dark Mode it flashes black
+  // and can leave menus looking light even when invertOnDisplay is armed.
+  if (gpio.deviceIsX3() && !renderer.getInvertOnDisplay()) {
     renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
   } else {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -76,6 +78,19 @@ inline void displaySoftReinforce(const GfxRenderer& renderer) {
 //       and cannot lift residual. Cursor moves must stay on displayMenuFrame.
 inline void displaySoftOpen(const GfxRenderer& renderer, int softCount = 1) {
   clearHardScrub();
+  // Leaving an inverted reader page: FAST cannot flip polarity (black flash).
+  if (!renderer.panelPolarityMatchesInvertFlag()) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    noteHalf();
+    return;
+  }
+  // Dark UI: invert wrap on displayBuffer is enough. Grey-base is light-polarity
+  // and was the black flash on every Settings/Bare-menu Up/Down.
+  if (renderer.getInvertOnDisplay()) {
+    renderer.displayBuffer(gpio.deviceIsX3() ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
+    if (!gpio.deviceIsX3()) noteHalf();
+    return;
+  }
   if (!gpio.deviceIsX3()) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     noteHalf();
@@ -92,7 +107,7 @@ inline void displaySoftOpen(const GfxRenderer& renderer, int softCount = 1) {
 // Ongoing UI paints (list cursor, re-draw): plain FAST unless hard scrub armed.
 // Not soft — avoids progressive erase while the user scrolls.
 inline void displayMenuFrame(const GfxRenderer& renderer) {
-  if (detail::hardScrubArmed()) {
+  if (detail::hardScrubArmed() || !renderer.panelPolarityMatchesInvertFlag()) {
     displayHalf(renderer);
   } else {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
@@ -105,6 +120,16 @@ inline void displayMenuFrame(const GfxRenderer& renderer) {
 // so this is one full FAST. Do not window: SSD1677 displayWindow uses the 0xFC
 // PART LUT on a strip and only resyncs RED for that strip, which ghosts the rest.
 inline void displayFastFull(const GfxRenderer& renderer) {
+  if (!renderer.panelPolarityMatchesInvertFlag()) {
+    displayHalf(renderer);
+    return;
+  }
+  // Dark UI: never grey-base (Library/Recents Up/Down was a black flash).
+  if (renderer.getInvertOnDisplay()) {
+    clearHardScrub();
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    return;
+  }
   if (gpio.deviceIsX3()) {
     displaySoftOpen(renderer, /*softCount=*/1);
     return;
@@ -119,6 +144,10 @@ inline void displayMenuBand(const GfxRenderer& renderer, int x, int y, int w, in
   (void)y;
   (void)w;
   (void)h;
+  if (!renderer.panelPolarityMatchesInvertFlag()) {
+    displayHalf(renderer);
+    return;
+  }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 

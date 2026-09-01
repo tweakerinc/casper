@@ -71,6 +71,13 @@ TEST(DictLookupLayout, WordHighlightDoesNotUseRowPitchAsHeight) {
   EXPECT_LT(box.y + box.h, 90);
 }
 
+TEST(DictLookupLayout, WordUnderlineSitsJustUnderEmBox) {
+  // Clipping/footnote mark: not a dither rect over the line box.
+  EXPECT_EQ(dictlookup::wordUnderlineY(100, 12), 114);
+  EXPECT_EQ(dictlookup::wordUnderlineY(100, 4), 108);  // floor ascender at 6
+  EXPECT_GT(dictlookup::wordUnderlineY(100, 12), 100 + 12);
+}
+
 TEST(DictLookupLayout, WordHighlightStaysAboveNextRowWhenTight) {
   const int wordY = 200;
   const int asc = 16;

@@ -69,6 +69,7 @@
 #include "util/CrossPointBookStore.h"
 #include "util/CrossPointPaths.h"
 #include "util/DarkModePolicy.h"
+#include "util/DictLookupLayout.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
 #include "util/GlyphWeightPolicy.h"
@@ -948,8 +949,7 @@ void RivuletReaderActivity::paintFootnoteMarkers() {
     if (!hit) continue;
 
     // Underline just under the glyph box (classic TextBlock: ascender + 2 from line top).
-    const int asc = std::max(6, renderer.getFontAscenderSize(baseFont));
-    const int y = b.y + asc + 2;
+    const int y = dictlookup::wordUnderlineY(b.y, renderer.getFontAscenderSize(baseFont));
     const int x1 = b.x;
     const int x2 = b.x + std::max(2, static_cast<int>(b.width));
     renderer.drawLine(x1, y, x2, y, /*thickness=*/2, true);
@@ -1017,20 +1017,24 @@ void RivuletReaderActivity::paintClippingHighlights() {
     }
   }
 
+  // X4 is 1-bit. LightGray dither was a checkerboard rectangle over the line
+  // box (pixelated "boxes") and the glyph redraw never read as a highlight.
+  // Same mark as footnote refs: a 2px rule just under the em-box.
+  const int baseFont = engine_.renderKey().fontId;
   for (size_t i = 0; i < nWords; ++i) {
     if (!hl[i]) continue;
     const auto& b = boxes[i];
     int w = b.width;
-    // Extend to next word if also highlighted (continuous band).
-    if (i + 1 < nWords && hl[i + 1] && boxes[i + 1].y == b.y) {
-      const int gapEnd = boxes[i + 1].x;
-      if (gapEnd > b.x + w) w = gapEnd - b.x;
+    size_t last = i;
+    while (last + 1 < nWords && hl[last + 1] && boxes[last + 1].y == b.y) {
+      ++last;
+      const int end = boxes[last].x + boxes[last].width;
+      if (end > b.x + w) w = end - b.x;
     }
+    i = last;
     if (w <= 0) continue;
-    // Same pitch as body lines (Tight/Normal/Wide) so marks don't straddle rows.
-    const int h = std::max(1, renderer.getLineHeight(engine_.renderKey().fontId, SETTINGS.getReaderLineCompression()));
-    renderer.fillRectDither(b.x, b.y, w, h, Color::LightGray);
-    renderer.drawText(engine_.renderKey().fontId, b.x, b.y, b.text, true, b.style);
+    const int y = dictlookup::wordUnderlineY(b.y, renderer.getFontAscenderSize(baseFont));
+    renderer.drawLine(b.x, y, b.x + w, y, /*lineWidth=*/2, true);
   }
 }
 

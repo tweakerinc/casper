@@ -66,6 +66,10 @@ inline HighlightRect wordHighlightRect(const int wordX, const int wordY, const i
   return r;
 }
 
+// 1-bit highlight (clippings / footnote refs). drawText y is em-box top;
+// a LightGray dither rect here is a checkerboard box on X4, not a mark on the word.
+inline int wordUnderlineY(const int wordY, const int ascender) { return wordY + std::max(6, ascender) + 2; }
+
 inline int modeTitleY(const int viewableTop) { return std::max(0, viewableTop + kModeTitleAir); }
 
 inline int modeTitleWipeH(const int titleY, const int lineH, const int marginTop) {

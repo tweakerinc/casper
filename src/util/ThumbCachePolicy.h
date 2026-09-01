@@ -1,21 +1,35 @@
 #pragma once
 
-// Home cover BMPs live on SD. A failed probe after the reader (SD busy) used
-// to look like a corrupt file, delete thumb_c30_560.bmp, and re-decode JPEG.
+#include <cstdint>
+
+// Home cover BMPs live on SD. Returning from the reader must blit a cached
+// thumb, never decode JPEG, even if the 1:1 560 file is missing and only a
+// smaller leftover exists.
 namespace thumbcache {
 
-// File is on disk. Open failed: keep it (transient). Opened and not a BMP: delete.
+// Keep a cached thumb unless we opened it and it is not a BMP.
+// exists() can false-negative after the reader: an open that returns a BMP wins.
+// Open failed: keep if exists() said the file is there (SD busy, not corrupt).
 inline bool keepExistingThumb(const bool exists, const bool opened, const bool validBmp) {
-  if (!exists) return false;
-  if (!opened) return true;
-  return validBmp;
+  if (opened) return validBmp;
+  return exists;
 }
 
 inline bool deleteCorruptThumb(const bool exists, const bool opened, const bool validBmp) {
   return exists && opened && !validBmp;
 }
 
-// Paint/bind from the hero size only. A smaller preview is not "ready".
-inline bool heroReadyToPaint(const bool heroExists) { return heroExists; }
+enum class DiskThumb : uint8_t { Hero, Fallback, Missing };
+
+inline DiskThumb classify(const bool heroExists, const bool fallbackExists) {
+  if (heroExists) return DiskThumb::Hero;
+  if (fallbackExists) return DiskThumb::Fallback;
+  return DiskThumb::Missing;
+}
+
+// Any on-disk thumb is enough to paint Home. JPEG is only for a first-ever miss.
+inline bool skipJpeg(const DiskThumb state) { return state != DiskThumb::Missing; }
+
+inline bool jpegWhenIdle(const DiskThumb state) { return state == DiskThumb::Missing; }
 
 }  // namespace thumbcache

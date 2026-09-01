@@ -166,58 +166,76 @@ float loadRecentBookProgressPercent(const RecentBook& book) {
 }
 
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
-// If the file exists but cannot be opened, keep it — SD is often busy right
-// after leaving the reader; treating that as missing deleted the cache.
+// Prefer open over exists() — exists() false-negatives after the reader made
+// every Home return decode JPEG even when thumb_c30_560.bmp was on SD.
 bool thumbLooksValid(const std::string& path) {
-  if (path.empty() || !Storage.exists(path.c_str())) return false;
+  if (path.empty()) return false;
   HalFile probe;
-  if (!Storage.openFileForRead("HOME", path, probe)) {
-    return thumbcache::keepExistingThumb(true, false, false);
+  const bool opened = Storage.openFileForRead("HOME", path, probe);
+  bool validBmp = false;
+  if (opened) {
+    char sig[2] = {};
+    const size_t n = probe.read(sig, 2);
+    const size_t sz = probe.size();
+    probe.close();
+    validBmp = n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
   }
-  char sig[2] = {};
-  const size_t n = probe.read(sig, 2);
-  const size_t sz = probe.size();
-  probe.close();
-  const bool validBmp = n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
-  return thumbcache::keepExistingThumb(true, true, validBmp);
+  const bool exists = opened || Storage.exists(path.c_str());
+  return thumbcache::keepExistingThumb(exists, opened, validBmp);
 }
 
-// Phase 1 (A1): bind hero paths when thumbs already exist so the first home paint
-// can multipass immediately (skip shell-only HALF → gen → multipass).
-// Returns true when no cover generation work is required.
-bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int heroH, bool shelfTheme, int shelfH) {
+bool fallbackThumbLooksValid(const std::string& templatePath) {
+  return thumbLooksValid(UITheme::getCoverThumbPath(templatePath, HomeCoverMetrics::previewThumbHeight)) ||
+         thumbLooksValid(UITheme::getCoverThumbPath(templatePath, HomeCoverMetrics::homeShelfThumbHeight));
+}
+
+bool recentsCoverLooksPaintable(const RecentBook& book, int heroH) {
+  if (book.coverBmpPath.empty()) return false;
+  if (thumbLooksValid(UITheme::getCoverThumbPath(book.coverBmpPath, heroH))) return true;
+  return fallbackThumbLooksValid(book.coverBmpPath);
+}
+
+template <typename BookFmt>
+bool bookFmtLooksPaintable(BookFmt& bookFmt, int heroH) {
+  const bool hero = thumbLooksValid(bookFmt.getThumbBmpPath(heroH));
+  const bool fallback = thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
+                        thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+  return thumbcache::skipJpeg(thumbcache::classify(hero, fallback));
+}
+
+// Bind when any cached thumb exists so Home return blits SD art.
+// A missing shelf/hero-size file must not force JPEG — leftover 280/168 is enough.
+bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int heroH, bool /*shelfTheme*/,
+                                   int /*shelfH*/) {
   if (recentBooks.empty()) {
     return true;
   }
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-      const std::string heroPath = epub.getThumbBmpPath(heroH);
-      if (!thumbcache::heroReadyToPaint(thumbLooksValid(heroPath))) {
-        return false;
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        continue;
       }
-      if (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH))) {
+      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
+      if (!bookFmtLooksPaintable(epub, heroH)) {
         return false;
       }
       if (book.coverBmpPath.empty()) {
         book.coverBmpPath = epub.getThumbBmpPath();
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-      // Path-only probe — avoid full XTC load when the hero BMP is already on disk.
-      const std::string heroPath = xtc.getThumbBmpPath(heroH);
-      if (!thumbcache::heroReadyToPaint(thumbLooksValid(heroPath))) {
-        return false;
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        continue;
       }
-      if (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH))) {
+      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+      if (!bookFmtLooksPaintable(xtc, heroH)) {
         return false;
       }
       if (book.coverBmpPath.empty()) {
         book.coverBmpPath = xtc.getThumbBmpPath();
       }
     }
-    // txt/md/etc.: no cover gen.
   }
+  SystemLog::logTiming("HOME", "cover_bind skip_jpeg n=%d", static_cast<int>(recentBooks.size()));
   return true;
 }
 }  // namespace
@@ -314,7 +332,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   const bool shelfTheme = isDashboardRecentsTheme();
   const int shelfH = HomeCoverMetrics::homeShelfThumbHeight;
 
-  auto heroThumbExists = [&](auto& bookFmt) -> bool { return thumbLooksValid(bookFmt.getThumbBmpPath(heroH)); };
   auto ensureThumbs = [&](auto& bookFmt) -> bool {
     bool anyOk = bookFmt.generateThumbBmp(heroH);
     if (shelfTheme && !thumbLooksValid(bookFmt.getThumbBmpPath(shelfH))) {
@@ -328,19 +345,18 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   // wipe a good paint and race into a blank frame).
   bool anyNeedWork = false;
   for (const RecentBook& book : recentBooks) {
+    if (recentsCoverLooksPaintable(book, heroH)) {
+      continue;
+    }
     if (FsHelpers::hasEpubExtension(book.path)) {
       Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (!heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)))) {
+      if (!bookFmtLooksPaintable(epub, heroH)) {
         anyNeedWork = true;
         break;
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
       Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (!xtc.load()) {
-        anyNeedWork = true;
-        break;
-      }
-      if (!heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)))) {
+      if (!bookFmtLooksPaintable(xtc, heroH)) {
         anyNeedWork = true;
         break;
       }
@@ -383,8 +399,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   bool pathsUpdated = false;
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        progress++;
+        continue;
+      }
       Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-      const bool needWork = !heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)));
+      const bool needWork = !bookFmtLooksPaintable(epub, heroH);
       if (needWork) {
         showProgress(progress, total);
         // Free snapshot RAM for decode, but keep coverGrayOnPanel if the panel
@@ -408,9 +428,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           LOG_ERR("HOME", "EPUB load failed for cover: %s", book.path.c_str());
           anyTransientFail = true;
         } else {
-          // Warm synopsis cache while the EPUB is already open (miss = one OPF
-          // metadata pass here instead of a multi-second stall on Synopsis).
-          (void)epub.getDescription();
           if (ensureThumbs(epub)) {
             const std::string templatePath = epub.getThumbBmpPath();
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
@@ -422,47 +439,39 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             anyTransientFail = true;
           }
         }
-        // Epub object + metadata cache go out of scope next — yield so the heap
-        // can coalesce before the next book’s JPEG decode.
         delay(1);
       } else {
-        // Thumbs already ready: still warm synopsis for the focused (first) recent
-        // so opening Synopsis does not cold-parse OPF on the critical path.
-        if (progress == 0) {
-          const std::string descPath = epub.getCachePath() + "/description.html";
-          if (!Storage.exists(descPath.c_str())) {
-            if (epub.load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true) ||
-                epub.load(/*buildIfMissing=*/true, /*skipLoadingCss=*/true)) {
-              (void)epub.getDescription();
-            }
-          }
-        }
         if (book.coverBmpPath.empty()) {
           const std::string templatePath = epub.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
           pathsUpdated = true;
         }
+        SystemLog::logTiming("HOME", "cover_cache_hit skip_jpeg");
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        progress++;
+        continue;
+      }
       Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (xtc.load()) {
-        const bool needWork = !heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)));
-        if (needWork) {
-          showProgress(progress, total);
-          if (ensureThumbs(xtc)) {
-            const std::string templatePath = xtc.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
-            book.coverBmpPath = templatePath;
-            anyNewThumb = true;
-          } else {
-            anyTransientFail = true;
-          }
-        } else if (book.coverBmpPath.empty()) {
+      if (bookFmtLooksPaintable(xtc, heroH)) {
+        if (book.coverBmpPath.empty()) {
           const std::string templatePath = xtc.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
           pathsUpdated = true;
+        }
+        SystemLog::logTiming("HOME", "cover_cache_hit skip_jpeg");
+      } else if (xtc.load()) {
+        showProgress(progress, total);
+        if (ensureThumbs(xtc)) {
+          const std::string templatePath = xtc.getThumbBmpPath();
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
+          book.coverBmpPath = templatePath;
+          anyNewThumb = true;
+        } else {
+          anyTransientFail = true;
         }
       } else {
         anyTransientFail = true;
@@ -476,21 +485,28 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
 
-  // Retry only when gen actually failed — never because a 280 preview exists.
-  bool bareHeroPending = false;
-  if (isBareTheme() && !recentBooks.empty() && FsHelpers::hasEpubExtension(recentBooks[0].path)) {
-    Epub epub(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
-    bareHeroPending = !thumbLooksValid(epub.getThumbBmpPath(heroH));
+  // Retry JPEG only when there is still nothing to blit. A leftover 280/168
+  // thumb is enough — do not decode JPEG on every Back.
+  bool missingThumb = false;
+  if (!recentBooks.empty() &&
+      (FsHelpers::hasEpubExtension(recentBooks[0].path) || FsHelpers::hasXtcExtension(recentBooks[0].path))) {
+    missingThumb = !recentsCoverLooksPaintable(recentBooks[0], heroH);
+    if (missingThumb && FsHelpers::hasEpubExtension(recentBooks[0].path)) {
+      Epub epub(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
+      missingThumb = !bookFmtLooksPaintable(epub, heroH);
+    } else if (missingThumb && FsHelpers::hasXtcExtension(recentBooks[0].path)) {
+      Xtc xtc(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
+      missingThumb = !bookFmtLooksPaintable(xtc, heroH);
+    }
   }
 
-  // Only retry gen when the panel still has no good gray cover (not after success).
-  if ((anyTransientFail || bareHeroPending) && coverGenAttempts < kMaxCoverGenAttempts && !coverGrayOnPanel) {
+  if ((anyTransientFail || missingThumb) && coverGenAttempts < kMaxCoverGenAttempts && !coverGrayOnPanel &&
+      missingThumb) {
     coverNeedsRetry = true;
-    coverRetryAtMs = millis() + (bareHeroPending && !anyTransientFail ? 400UL : 1500UL * coverGenAttempts);
-    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %lums bareHeroPending=%d", static_cast<unsigned>(coverGenAttempts),
-            static_cast<unsigned>(kMaxCoverGenAttempts),
-            static_cast<unsigned long>(bareHeroPending && !anyTransientFail ? 400UL : 1500UL * coverGenAttempts),
-            bareHeroPending ? 1 : 0);
+    coverRetryAtMs = millis() + 1500UL * coverGenAttempts;
+    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %lums missingThumb=%d", static_cast<unsigned>(coverGenAttempts),
+            static_cast<unsigned>(kMaxCoverGenAttempts), static_cast<unsigned long>(1500UL * coverGenAttempts),
+            missingThumb ? 1 : 0);
   } else {
     coverNeedsRetry = false;
   }
@@ -594,13 +610,6 @@ void HomeActivity::onEnter() {
     if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
       recentsLoaded = true;
       LOG_DBG("HOME", "Hero thumbs ready — multipass on first paint (skip shell HALF)");
-    }
-    if (isBareTheme() && recentsLoaded && !recentBooks.empty() && FsHelpers::hasEpubExtension(recentBooks[0].path)) {
-      Epub epub(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
-      if (!thumbLooksValid(epub.getThumbBmpPath(heroH))) {
-        coverNeedsRetry = true;
-        coverRetryAtMs = millis() + 400UL;
-      }
     }
   }
 
@@ -1409,8 +1418,8 @@ void HomeActivity::loop() {
       } else {
         // Field #3: cover gen + UI font decompress under pressure → FDC fail / reboot.
         // Paint shell without covers first; arm retry when heap recovers.
-        constexpr uint32_t kCoverGenMinFree = 40U * 1024U;
-        constexpr uint32_t kCoverGenMinMaxAlloc = 20U * 1024U;
+        constexpr uint32_t kCoverGenMinFree = 90U * 1024U;
+        constexpr uint32_t kCoverGenMinMaxAlloc = 80U * 1024U;
         const uint32_t freeH = ESP.getFreeHeap();
         const uint32_t maxA = ESP.getMaxAllocHeap();
         if (freeH < kCoverGenMinFree || maxA < kCoverGenMinMaxAlloc) {

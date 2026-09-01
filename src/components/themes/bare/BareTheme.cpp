@@ -74,12 +74,17 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const 
   }
 }
 
-// Prefer Bare-native 420×560 1:1. Fall back to other heights so a just-flashed
-// device still shows something while c30_560 regenerates.
+// Prefer Bare-native 420×560 1:1. Fall back to leftover 280/168 — do not wait
+// on JPEG just because the hero-size file is missing.
 std::string coverPathForBook(const RecentBook& book) {
   auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
     for (const std::string& path : candidates) {
-      if (!path.empty() && Storage.exists(path.c_str())) {
+      if (path.empty()) continue;
+      if (Storage.exists(path.c_str())) return path;
+      // exists() false-negatives after the reader; a successful open is enough.
+      HalFile probe;
+      if (Storage.openFileForRead("HOME", path, probe)) {
+        probe.close();
         return path;
       }
     }
@@ -109,7 +114,7 @@ std::string coverPathForBook(const RecentBook& book) {
 // Contain-fit full jacket; prefer 1:1 native blit. Returns art rect for multipass snapshot.
 Rect drawCoverImage(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book) {
   const std::string coverBmpPath = coverPathForBook(book);
-  if (coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) {
+  if (coverBmpPath.empty()) {
     drawMissingCover(renderer, coverRect, book);
     return coverRect;
   }

@@ -960,28 +960,31 @@ bool Epub::resolveCoverItemHrefFromOpf(std::string& outHref) const {
 bool Epub::generateThumbBmp(int height) const {
   // Already generated — but only trust files that look like real BMPs.
   // A truncated/corrupt file (e.g. mid-write OOM) used to block regen forever.
+  // Probe by open first: exists() false-negatives after the reader used to
+  // fall through into a 10–30s JPEG decode on every Home return.
   const std::string existingPath = getThumbBmpPath(height);
-  if (Storage.exists(existingPath.c_str())) {
-    HalFile probe;
-    bool opened = false;
-    bool valid = false;
-    if (Storage.openFileForRead("EBP", existingPath, probe)) {
-      opened = true;
-      char sig[2] = {};
-      const size_t n = probe.read(sig, 2);
-      const size_t sz = probe.size();
-      probe.close();
-      // Minimal BMP: "BM" + enough bytes for a header/DIB.
-      valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
-    }
-    if (valid || !opened) {
-      // Open-fail after the reader is SD-busy, not a corrupt file. Deleting
-      // here re-decoded JPEG for a minute on every Home return.
-      LOG_DBG("EBP", "thumb cache hit %s opened=%d", existingPath.c_str(), opened ? 1 : 0);
-      return true;
-    }
+  HalFile probe;
+  bool opened = false;
+  bool valid = false;
+  if (Storage.openFileForRead("EBP", existingPath, probe)) {
+    opened = true;
+    char sig[2] = {};
+    const size_t n = probe.read(sig, 2);
+    const size_t sz = probe.size();
+    probe.close();
+    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
+  }
+  if (opened && valid) {
+    LOG_DBG("EBP", "thumb cache hit %s", existingPath.c_str());
+    return true;
+  }
+  if (opened && !valid) {
     LOG_ERR("EBP", "Removing corrupt thumb: %s", existingPath.c_str());
     Storage.remove(existingPath.c_str());
+  } else if (!opened && Storage.exists(existingPath.c_str())) {
+    // Open-fail after the reader is SD-busy, not a missing file.
+    LOG_DBG("EBP", "thumb cache hit %s opened=0", existingPath.c_str());
+    return true;
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {

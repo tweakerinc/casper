@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -20,6 +21,7 @@
 #include "components/UITheme.h"
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 #include "util/ReaderChromePolicy.h"
 #include "util/SystemChromePolicy.h"
 
@@ -123,14 +125,16 @@ void displayPopupWithDarkMode(const GfxRenderer& renderer, const HalDisplay::Ref
   renderer.displayBuffer(mode);
 }
 
-// Corner Loading/Saving/Opening. Same polarity contract as popups: if invertOnDisplay
-// was cleared during an activity swap, black glyphs would land on an already-dark
-// plate. Invert around the push so the label is light on dark.
+// Corner Loading/Saving/Opening. Windowed FAST cannot drive white glyphs onto a
+// dark plate (X3 displayWindow is a full FAST, still differential). HALF when
+// whole-UI Dark Mode is on so the label is light on dark.
 void displayCornerStatusWithDarkMode(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
-  const bool sysWide = SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly == 0;
+  const bool sysWide = darkmode::systemWide(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0);
   const bool needTempInvert = sysWide && !renderer.getInvertOnDisplay();
   if (needTempInvert) renderer.invertScreen();
-  if (gpio.deviceIsX3()) {
+  if (darkmode::statusCueNeedsHalf(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else if (gpio.deviceIsX3()) {
     renderer.displayWindow(x, y, w, h);
   } else {
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);

@@ -84,11 +84,11 @@ inline void displaySoftOpen(const GfxRenderer& renderer, int softCount = 1) {
     noteHalf();
     return;
   }
-  // Dark UI: invert wrap on displayBuffer is enough. Grey-base is light-polarity
-  // and was the black flash on every Settings/Bare-menu Up/Down.
+  // Dark UI: FAST cannot lift a photographic cover (or book page) under a
+  // sparse menu. HALF once on open; cursor moves stay on displayMenuFrame.
   if (renderer.getInvertOnDisplay()) {
-    renderer.displayBuffer(gpio.deviceIsX3() ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
-    if (!gpio.deviceIsX3()) noteHalf();
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    noteHalf();
     return;
   }
   if (!gpio.deviceIsX3()) {

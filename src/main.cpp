@@ -45,6 +45,7 @@ static_assert(sizeof(rivulet::RivuletEngine) > 0, "Rivulet engine present");
 #include "images/MoonIcon.h"
 #include "util/BootWakePolicy.h"
 #include "util/ButtonNavigator.h"
+#include "util/DarkModePolicy.h"
 #include "util/GlyphWeightPolicy.h"
 #include "util/InputPollPolicy.h"
 #include "util/QrSleepPanelPolicy.h"
@@ -715,6 +716,9 @@ void setup() {
   }
 
   setupDisplayAndFonts(resume != BootResume::Splash);
+  // First QR/splash ink runs in setup() before loop() can arm invert-on-display.
+  // Without this, wake-into-book painted light then inverted on the next frame.
+  renderer.setInvertOnDisplay(darkmode::systemWide(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0));
   if (QrTimingLog::active()) QrTimingLog::line("after setupDisplayAndFonts");
   SystemLog::logTiming("BOOT", "after setupDisplayAndFonts millis=%lu", static_cast<unsigned long>(millis()));
 
@@ -754,7 +758,13 @@ void setup() {
         // 1.7s white clean. X3 skipInitialResync already allows that FAST.
         const bool primed = qrsleep::shouldPrimeWakeBaseline(!gpio.deviceIsX3());
         if (primed) {
+          const bool inv = renderer.getInvertOnDisplay();
+          if (inv) renderer.invertScreen();
           display.displayWindow(0, 0, display.getDisplayWidth(), display.getDisplayHeight());
+          if (inv) {
+            renderer.invertScreen();
+            renderer.notePanelInverted(true);
+          }
         }
         if (QrTimingLog::active()) {
           QrTimingLog::line("after wake_prime openBook=%d grey=%d primed=%d", qrOpenBook ? 1 : 0,

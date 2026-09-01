@@ -13,6 +13,7 @@
 #include "components/UITheme.h"
 #include "components/icons/settings2.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 #include "util/NestedMenuLabel.h"
 #include "util/UiGhostPolicy.h"
 
@@ -181,11 +182,13 @@ void EpubReaderMenuActivity::cycleActiveTab(const int direction) {
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
-  // Snappy open: paint the menu with FAST and wait until it is on glass.
-  // Hard HALF scrub used to land *after* prep work — users felt ~2s of dead air
-  // then a flash. Mild page residual under the white plate is preferable.
-  // Cursor moves still use FAST via displayMenuFrame (scrub not armed).
-  UiGhostPolicy::clearHardScrub();
+  // Dark Mode: HALF once so the book/cover does not show through a sparse menu.
+  // Light Mode stays FAST (residual under a white plate is preferable to a flash).
+  if (darkmode::menuOpenNeedsHalf(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    UiGhostPolicy::requestHardScrub();
+  } else {
+    UiGhostPolicy::clearHardScrub();
+  }
   const uint32_t t0 = millis();
   requestUpdateAndWait();
   LOG_INF("MENU", "open paint %lums", static_cast<unsigned long>(millis() - t0));

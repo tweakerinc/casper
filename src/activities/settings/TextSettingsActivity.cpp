@@ -18,6 +18,7 @@
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 #include "util/GlyphWeightPolicy.h"
 #include "util/UiGhostPolicy.h"
 
@@ -479,7 +480,8 @@ void TextSettingsActivity::render(RenderLock&&) {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   // Text AA off: solid BW. AA on: BW base + grey multipass of the sample text (live preview).
-  const bool wantPreviewAa = SETTINGS.textAntiAliasing != 0 && previewPaint.hasSample;
+  const bool wantPreviewAa = SETTINGS.textAntiAliasing != 0 && previewPaint.hasSample &&
+                             darkmode::showAntiAliasingSetting(SETTINGS.readerDarkMode != 0);
   if (!wantPreviewAa) {
     UiGhostPolicy::displayMenuFrame(renderer);
     return;
@@ -705,7 +707,9 @@ std::vector<TextSettingsActivity::StyleRow> TextSettingsActivity::visibleStyleRo
     rows.push_back(StyleRow::GuideDots);
   }
   rows.push_back(StyleRow::Hyphenation);
-  rows.push_back(StyleRow::AntiAliasing);
+  if (darkmode::showAntiAliasingSetting(SETTINGS.readerDarkMode != 0)) {
+    rows.push_back(StyleRow::AntiAliasing);
+  }
   return rows;
 }
 
@@ -851,6 +855,7 @@ void TextSettingsActivity::confirmStyleRow(int row) {
       SETTINGS.hyphenationEnabled = !SETTINGS.hyphenationEnabled;
       break;
     case StyleRow::AntiAliasing:
+      if (!darkmode::showAntiAliasingSetting(SETTINGS.readerDarkMode != 0)) return;
       SETTINGS.textAntiAliasing = !SETTINGS.textAntiAliasing;
       break;
 

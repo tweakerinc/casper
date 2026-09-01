@@ -21,6 +21,7 @@
 #include "activities/reader/ReadingStatsUtils.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 #include "util/PenumbraNowReadingPolicy.h"
 #include "util/StringUtils.h"
 #include "util/SystemChromeLive.h"
@@ -1447,6 +1448,9 @@ void paintHeroClockOnly(const GfxRenderer& renderer) {
 bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int baseRefreshMode,
                                               const Rect* dirtyOverride) {
   if (!gpio.deviceIsX3()) return false;
+  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    return false;
+  }
   if (!renderer.storeBwBuffer()) {
     LOG_DBG("HOME", "penumbra clock AA: storeBw failed — BW only");
     return false;

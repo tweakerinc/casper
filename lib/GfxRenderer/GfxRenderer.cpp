@@ -2444,7 +2444,15 @@ size_t GfxRenderer::getBufferSize() const { return frameBufferSize; }
 // void GfxRenderer::grayscaleRevert() const { display.grayscaleRevert(); }
 
 void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
+  // Same invert-around-push as displayBuffer. Cover/clock/AA greys-base used to
+  // ignore invertOnDisplay and paint a white plate over Dark Mode.
+  if (invertOnDisplay) {
+    invertScreen();
+  }
   display.displayGrayscaleBase(fallback, fadingFix);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
 }
 
 void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }

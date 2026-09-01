@@ -16,6 +16,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
@@ -405,7 +406,7 @@ void TxtReaderActivity::renderPage() {
   // BW frame is already painted above; AA sits on top of it. A failed AA pass must
   // still fall through to the BW refresh or the page never reaches the panel.
   bool aaRan = false;
-  if (SETTINGS.textAntiAliasing && !ReaderUtils::readerDarkModeEnabled()) {
+  if (SETTINGS.textAntiAliasing && !darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled())) {
     aaRan = ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
   }
   if (!aaRan) {

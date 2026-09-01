@@ -37,6 +37,7 @@
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
 #include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
 #include "util/HomeSideStepPolicy.h"
 #include "util/SystemChromeLive.h"
 #include "util/SystemLog.h"
@@ -358,6 +359,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   // here. On X4 (SSD1677), a window while greys are on glass can promote to a full
   // HALF clean and black-flash in a loop. Next multipass/home paint shows it once.
   auto showProgress = [&](int /*progress*/, int /*total*/) {
+    // Back from a book already showed Saving. Stamping Loading into a white
+    // wipe over the dark page is the inverted-looking box on Bare return.
+    if (suppressCoverLoadingCue_) return;
     if (!showingLoading) {
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
       showingLoading = true;
@@ -497,6 +501,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  suppressCoverLoadingCue_ = false;
 
   // Home chrome (Dashboard/Minimal/classic) is portrait-only. Reader may leave
   // landscape orientation; force portrait so X3 (528×792) and X4 (480×800)
@@ -631,6 +636,7 @@ void HomeActivity::onResume() {
   // residual from soft FAST children is scrubbed. One intentional flash; panel looks clean.
   // Cover themes may still defer greys after the BW shell.
   Activity::onResume();
+  suppressCoverLoadingCue_ = true;
 
   bool justLoadedDeferredEnter = false;
   if (deferredEnterLoad_) {
@@ -892,6 +898,13 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   if (leavingHome()) {
     coverGrayOnPanel = false;
     logMultipassDone("leave_early");
+    return;
+  }
+
+  // Cover greys are light-polarity. Whole-UI Dark Mode uses invertOnDisplay;
+  // pushing greys here left Bare home (and the Loading wipe) on a white plate.
+  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    displayBw(true, "bw_dark_mode");
     return;
   }
 

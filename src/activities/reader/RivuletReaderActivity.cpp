@@ -68,6 +68,7 @@
 #include "util/BookmarkUtil.h"
 #include "util/CrossPointBookStore.h"
 #include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
 #include "util/GlyphWeightPolicy.h"
@@ -2390,7 +2391,7 @@ void RivuletReaderActivity::tickAaCatchUp() {
   if (!aaCatchUpPending_) return;
 
   // Settings can change between scheduling and firing.
-  if (SETTINGS.textAntiAliasing == 0 || ReaderUtils::readerDarkModeEnabled()) {
+  if (SETTINGS.textAntiAliasing == 0 || darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled())) {
     aaCatchUpPending_ = false;
     return;
   }
@@ -4773,6 +4774,11 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
       GUI.drawPopup(renderer, errorMsg_.c_str(), BaseTheme::kPopupCenterY, true);
       return;
     }
+    // Leave/sleep already owns the plate (Saving / last page). A Loading wipe
+    // here is the white box on Dark Mode while Home is still coming up.
+    if (activityManager.hasPendingActivityChange() || activityManager.isSleepTransition()) {
+      return;
+    }
     const char* msg = tr(STR_LOADING_POPUP);
     GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/true);
     return;
@@ -4883,7 +4889,8 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   // that made every AA-on turn look like "page did not load" until a scrub.
   const bool forceScrub = (pagesUntilFullRefresh_ == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
-  const bool aaWanted = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled();
+  const bool aaWanted =
+      SETTINGS.textAntiAliasing != 0 && !darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled());
   // Catch-up flag kept for a heap-recovery retry; it no longer has to paper over
   // a preferFast/defer skip, because those no longer decline AA.
   const bool aaCatchUp = forceAaThisRender_;

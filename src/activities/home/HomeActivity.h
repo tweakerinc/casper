@@ -19,6 +19,8 @@ class HomeActivity final : public Activity {
   bool recentsLoaded = false;
   // First home paint finished — cover gen waits so Loading can float over real UI.
   bool homeUiReady = false;
+  // PopToHome already showed Saving; do not stamp Loading over that page.
+  bool suppressCoverLoadingCue_ = false;
   // Transient thumb-gen failures (heap/decode) schedule a deferred retry so we do
   // not burn the render path every frame, but also do not give up forever.
   bool coverNeedsRetry = false;

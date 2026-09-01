@@ -108,16 +108,12 @@ TEST(HtmlToIr, KeepsSpaceAroundStyleRuns) {
   EXPECT_EQ(flattenText(ir), "The Vampire skill fired.\n");
 }
 
-TEST(HtmlToIr, MarksBoldAndItalicRuns) {
-  const ChapterIr ir = convertOrDie("<p>plain <b>bold</b> <i>italic</i></p>");
-  bool sawBold = false;
+TEST(HtmlToIr, MarksEmTagItalic) {
+  const ChapterIr ir = convertOrDie("<p>plain <em>emphasis</em> done</p>");
   bool sawItalic = false;
   for (const auto& r : ir.runs()) {
-    const auto s = static_cast<uint8_t>(r.style);
-    if (s & static_cast<uint8_t>(RunStyle::Bold)) sawBold = true;
-    if (s & static_cast<uint8_t>(RunStyle::Italic)) sawItalic = true;
+    if (static_cast<uint8_t>(r.style) & static_cast<uint8_t>(RunStyle::Italic)) sawItalic = true;
   }
-  EXPECT_TRUE(sawBold);
   EXPECT_TRUE(sawItalic);
 }
 

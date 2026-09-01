@@ -137,6 +137,7 @@ inline constexpr uint16_t kBlockOrnament = 1u << 5;        // small chapter orna
 
 // Page map magic
 inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};
-inline constexpr uint16_t kMapFormatVersion = 1;
+// v2: drop-cap after a chapter heading stays on the same page (not a title plate).
+inline constexpr uint16_t kMapFormatVersion = 2;
 
 }  // namespace rivulet

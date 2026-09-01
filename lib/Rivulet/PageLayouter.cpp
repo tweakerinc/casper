@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "DropCapPolicy.h"
 #include "Epub/hyphenation/Hyphenator.h"
 #include "FontLadder.h"
 #include "IrTokenizer.h"
@@ -36,8 +37,7 @@ int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const
 
 // ParsedText warms SD glyph advances before measuring. Rivulet must too,
 // or SD packs keep 0-width metrics. Stack buffer, no heap.
-void warmSdToks(const GfxRenderer& renderer, const int baseFontId, const ChapterIr& ch,
-                const std::vector<Tok>& toks) {
+void warmSdToks(const GfxRenderer& renderer, const int baseFontId, const ChapterIr& ch, const std::vector<Tok>& toks) {
   for (const auto& t : toks) {
     if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) continue;
     const Run& run = ch.runs()[t.runIndex];
@@ -95,8 +95,8 @@ uint32_t tokenLastCp(const ChapterIr& ch, const Tok& t) {
 
 // Inter-word gap: classic ParsedText uses getSpaceAdvance (space + flanking kern).
 // getSpaceAdvance already floors negative kern; we never go below that floor here.
-int measureInterWordSpace(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st,
-                          const uint32_t leftCp, const uint32_t rightCp) {
+int measureInterWordSpace(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st, const uint32_t leftCp,
+                          const uint32_t rightCp) {
   const int base = r.getSpaceWidth(fontId, st);
   const int basePx = base > 0 ? base : 1;
   if (leftCp == 0 || rightCp == 0) return basePx;
@@ -222,9 +222,8 @@ std::string takeDropLetter(const ChapterIr& ch, const Block& b, uint16_t& runInd
       if (cp == ' ' || cp == '\t' || cp == 0x00A0 || cp == 0x200B) continue;
       // Soft hyphen / combining — not a drop-cap host.
       if (cp == 0x00AD || (cp >= 0x0300 && cp <= 0x036F)) continue;
-      const bool letter =
-          (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0x00C0 && cp <= 0x024F) ||
-          (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x0400 && cp <= 0x04FF);
+      const bool letter = (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0x00C0 && cp <= 0x024F) ||
+                          (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x0400 && cp <= 0x04FF);
       if (!letter) return {};
       std::string s;
       utf8AppendCodepoint(cp, s);
@@ -287,14 +286,14 @@ bool isSceneBreakRun(const ChapterIr& ch, const Block& b) {
         case '-':
         case '_':
         case '~':
-        case 0x00B7:  // ·
-        case 0x2013:  // –
-        case 0x2014:  // —
-        case 0x2022:  // •
-        case 0x2042:  // ⁂
-        case 0x2043:  // ⁃
-        case 0x2731:  // ✱
-        case 0x273B:  // ❋
+        case 0x00B7:                        // ·
+        case 0x2013:                        // –
+        case 0x2014:                        // —
+        case 0x2022:                        // •
+        case 0x2042:                        // ⁂
+        case 0x2043:                        // ⁃
+        case 0x2731:                        // ✱
+        case 0x273B:                        // ❋
           if (++glyphs > 12) return false;  // a real sentence, not a separator
           continue;
         default:
@@ -336,10 +335,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
   const float lc = params.lineCompression > 0.1f ? params.lineCompression : 1.0f;
   const int bodyLine = lineH(renderer, baseFontId, SizeStep::Body, lc);
-  const int bodyEm =
-      std::max(8, params.bodyEmPx > 0 ? params.bodyEmPx : renderer.getFontAscenderSize(baseFontId));
+  const int bodyEm = std::max(8, params.bodyEmPx > 0 ? params.bodyEmPx : renderer.getFontAscenderSize(baseFontId));
 
   int y = 0;
+  bool pageHasProse = false;
   IrCursor cur = from;
 
   int dropW = 0;
@@ -431,8 +430,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     // without clamping, tokenizeRuns yields nothing and we skip all text,
     // marking chapter-end after a handful of empty pages.
     const uint16_t blockRunEnd = static_cast<uint16_t>(block.runBegin + block.runCount);
-    if (cur.runIndex < block.runBegin || cur.runIndex >= blockRunEnd ||
-        (block.runCount == 0 && cur.byteInRun != 0)) {
+    if (cur.runIndex < block.runBegin || cur.runIndex >= blockRunEnd || (block.runCount == 0 && cur.byteInRun != 0)) {
       cur.runIndex = block.runBegin;
       cur.byteInRun = 0;
     } else if (cur.runIndex < chapter.runs().size()) {
@@ -457,8 +455,9 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       break;
     }
 
-    // Drop-cap paragraph prefers top of page.
-    if ((block.flags & kBlockDropCap) != 0 && y > 0 && atBlockStart) {
+    // Drop-cap after leftover prose starts a new page. After a chapter heading
+    // on this page it stays — title + opening paragraph belong together.
+    if ((block.flags & kBlockDropCap) != 0 && dropCapStartsNewPage(atBlockStart, y > 0, pageHasProse)) {
       break;
     }
 
@@ -577,8 +576,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         }
       }
       const bool letterGlyph =
-          !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW &&
-          (ih <= 0 || ih <= bodyLine * 6 || iw <= ih * 2);
+          !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW && (ih <= 0 || ih <= bodyLine * 6 || iw <= ih * 2);
       const bool figureFloat = !isOrnament && (leftFloat || rightFloat) && !letterGlyph;
 
       if (letterGlyph) {
@@ -726,15 +724,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           const int paintH = gH * scale;
           if (paintH <= 0 || paintH > maxPaintH) return;
           const auto styleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(faceStyle) |
-                                                                  static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+                                                                   static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
           const int w = renderer.getTextAdvanceX(fontId, letter.c_str(), styleBits, scale);
           if (w < 8 || w > maxW) return;
           // Tallest that still fits under maxPaintH; prefer scale 2 and body face.
-          const bool better = !found || paintH > bestPaintH ||
-                              (paintH == bestPaintH && scale < bestScale) ||
-                              (paintH == bestPaintH && scale == bestScale && fontId == bodyFaceId &&
-                               bestFaceId != bodyFaceId) ||
-                              (paintH == bestPaintH && scale == bestScale && w < bestW);
+          const bool better =
+              !found || paintH > bestPaintH || (paintH == bestPaintH && scale < bestScale) ||
+              (paintH == bestPaintH && scale == bestScale && fontId == bodyFaceId && bestFaceId != bodyFaceId) ||
+              (paintH == bestPaintH && scale == bestScale && w < bestW);
           if (!better) return;
           found = true;
           bestPaintH = paintH;
@@ -788,8 +785,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           cap.x = 0;
           cap.y = static_cast<int16_t>(capTop);
           cap.fontId = bestFaceId;
-          cap.epdStyle = static_cast<uint8_t>((bestBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) |
-                                              EpdFontFamily::DROP_CAP);
+          cap.epdStyle =
+              static_cast<uint8_t>((bestBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) | EpdFontFamily::DROP_CAP);
           cap.dropScale = static_cast<uint8_t>(bestScale);
           cap.text = letter;
           out.spans.push_back(std::move(cap));
@@ -813,8 +810,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     if (!besideFloat && atBlockStart) {
       if (forceUserAlign) {
         // Plain modes: simple first-line indent for Left/Justify only (not CSS).
-        if ((userAlign == Align::Left || userAlign == Align::Justify) &&
-            block.kind == BlockKind::Paragraph && !dropCapActive) {
+        if ((userAlign == Align::Left || userAlign == Align::Justify) && block.kind == BlockKind::Paragraph &&
+            !dropCapActive) {
           indent = (16 * bodyEm) / 16;  // 1em — common body indent
         }
       } else if ((block.flags & kBlockNoIndent) == 0) {
@@ -830,8 +827,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
     // Heading size floor (classic ladder): h1=+2, h2=+1 — measure + paint.
     SizeStep headingFloor = SizeStep::Body;
-    if (block.kind == BlockKind::Heading1) headingFloor = SizeStep::Plus2;
-    else if (block.kind == BlockKind::Heading2) headingFloor = SizeStep::Plus1;
+    if (block.kind == BlockKind::Heading1)
+      headingFloor = SizeStep::Plus2;
+    else if (block.kind == BlockKind::Heading2)
+      headingFloor = SizeStep::Plus1;
 
     while (ti < toks.size()) {
       // A wrap after a word leaves ti on the following space token. If that space
@@ -842,8 +841,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       if (ti >= toks.size()) break;
 
       // Use largest step so mid-heading page breaks leave enough vertical room.
-      const int probeLineH = lineH(renderer, baseFontId,
-                                   headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
+      const int probeLineH =
+          lineH(renderer, baseFontId, headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
       if (y + probeLineH > viewH) {
         // Page full mid-block.
         cur.runIndex = toks[ti].runIndex;
@@ -1100,6 +1099,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       dropW = 0;
       dropBottom = 0;
       dropIsRight = false;
+    }
+    if (block.kind == BlockKind::Paragraph) {
+      pageHasProse = true;
+    } else if (block.kind == BlockKind::Image) {
+      const uint16_t deco = static_cast<uint16_t>(kBlockOrnament | kBlockFloatLeft | kBlockFloatRight);
+      if ((block.flags & deco) == 0) {
+        pageHasProse = true;
+      }
     }
     advancePastBlock(chapter, cur);
   }

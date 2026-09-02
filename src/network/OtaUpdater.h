@@ -2,6 +2,8 @@
 
 #include <string>
 
+class GfxRenderer;
+
 class OtaUpdater {
   bool updateAvailable = false;
   std::string latestVersion;
@@ -32,6 +34,7 @@ class OtaUpdater {
   OtaUpdater() = default;
   bool isUpdateNewer() const;
   const std::string& getLatestVersion() const;
-  OtaUpdaterError checkForUpdate();
-  OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr);
+  OtaUpdaterError checkForUpdate(GfxRenderer* renderer = nullptr);
+  OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr,
+                                GfxRenderer* renderer = nullptr);
 };

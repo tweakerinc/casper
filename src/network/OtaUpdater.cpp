@@ -3,22 +3,25 @@
 
 bool OtaUpdater::isUpdateNewer() const { return false; }
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
-OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() { return NO_UPDATE; }
-OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*) { return NO_UPDATE; }
+OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(GfxRenderer*) { return NO_UPDATE; }
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*, GfxRenderer*) { return NO_UPDATE; }
 #else
 #include <Arduino.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <ReleaseJsonParser.h>
 #include <strings.h>
 
 #include <cstring>
+#include <optional>
 
 #include "FirmwareFlasher.h"
 #include "HttpDownloader.h"
 #include "OtaUpdater.h"
 #include "esp_ota_ops.h"
 #include "network/WifiPowerSaveGuard.h"
+#include "util/WifiTransferPolicy.h"
 
 // CrossPoint OTA: GitHub Releases on the CrossPoint fork only.
 // Override at build time if the repo moves:
@@ -136,7 +139,7 @@ void removeOtaCache() {
 
 }  // namespace
 
-OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
+OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(GfxRenderer* renderer) {
   WifiPowerSaveGuard wifiPowerSaveGuard;
 
   updateAvailable = false;
@@ -154,12 +157,31 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   LOG_INF("OTA", "Checking for update (current: %s) heap=%u maxAlloc=%u url=%s", CROSSPOINT_VERSION, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap(), latestReleaseUrl);
 
+  std::optional<GfxRenderer::FrameBufferLoan> tlsLoan;
+  if (renderer && wifitransfer::loanFramebufferForTls()) {
+    tlsLoan.emplace(*renderer, true);
+  }
+
   size_t totalBytesReceived = 0;
-  const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&](const uint8_t* data, const size_t len) -> bool {
-    totalBytesReceived += len;
-    releaseParser.feed(reinterpret_cast<const char*>(data), len);
-    return true;
-  });
+  bool ok = false;
+  for (int attempt = 1; attempt <= wifitransfer::kOtaCheckAttempts && !ok; ++attempt) {
+    if (attempt > 1) {
+      LOG_INF("OTA", "Retrying release manifest (%d/%d)", attempt, wifitransfer::kOtaCheckAttempts);
+      delay(wifitransfer::kRetryDelayMs);
+      releaseParser.reset();
+      totalBytesReceived = 0;
+    }
+    ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&](const uint8_t* data, const size_t len) -> bool {
+      totalBytesReceived += len;
+      releaseParser.feed(reinterpret_cast<const char*>(data), len);
+      return true;
+    });
+    if (!ok) {
+      LOG_ERR("OTA", "Release manifest fetch failed attempt=%d after %zu bytes heap=%u maxAlloc=%u", attempt,
+              totalBytesReceived, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    }
+  }
+  tlsLoan.reset();
 
   if (!ok) {
     LOG_ERR("OTA", "Release manifest fetch failed after %zu bytes heap=%u maxAlloc=%u", totalBytesReceived,
@@ -179,7 +201,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
 
   if (!releaseParser.foundFirmware()) {
     LOG_ERR("OTA", "No CrossPoint-v* / firmware.bin asset on release %s", latestVersion.c_str());
-    return NO_UPDATE;
+    return wifitransfer::noMatchingAssetIsNoUpdate() ? NO_UPDATE : HTTP_ERROR;
   }
 
   otaUrl = releaseParser.getFirmwareUrl();
@@ -218,7 +240,7 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
-OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx, GfxRenderer* renderer) {
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }
@@ -261,20 +283,41 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // Stream TLS download to SD only — do not call esp_ota_write while the TLS
   // session is open. Measured OOM floor on C3 was ~2–8KB free contiguous when
   // erase/write + wolfSSL shared the arena for multi-minute GitHub CDN downloads.
-  const auto dlErr =
-      HttpDownloader::downloadToFile(otaUrl, kOtaCachePath, [&](size_t downloaded, size_t reportedTotal) {
-        if (reportedTotal > 0 && reportedTotal != downloadDenom) {
-          downloadDenom = reportedTotal;
-          totalSize = downloadDenom * 2;
-          installCtx.totalSize = totalSize;
-        } else if (downloaded > downloadDenom) {
-          downloadDenom = downloaded + 64 * 1024;
-          totalSize = downloadDenom * 2;
-          installCtx.totalSize = totalSize;
-        }
-        processedSize = downloaded;
+  // Do not paint e-ink during this phase: a full refresh every 64 KB stalled
+  // the socket past HTTP_TIMEOUT_MS and aborted every WiFi update.
+  std::optional<GfxRenderer::FrameBufferLoan> tlsLoan;
+  if (renderer && wifitransfer::loanFramebufferForTls()) {
+    tlsLoan.emplace(*renderer, true);
+  }
+
+  HttpDownloader::DownloadError dlErr = HttpDownloader::HTTP_ERROR;
+  for (int attempt = 1; attempt <= wifitransfer::kOtaDownloadAttempts; ++attempt) {
+    if (attempt > 1) {
+      LOG_INF("OTA", "Retrying firmware download (%d/%d)", attempt, wifitransfer::kOtaDownloadAttempts);
+      delay(wifitransfer::kRetryDelayMs);
+      removeOtaCache();
+      processedSize = 0;
+    }
+    dlErr = HttpDownloader::downloadToFile(otaUrl, kOtaCachePath, [&](size_t downloaded, size_t reportedTotal) {
+      if (reportedTotal > 0 && reportedTotal != downloadDenom) {
+        downloadDenom = reportedTotal;
+        totalSize = downloadDenom * 2;
+        installCtx.totalSize = totalSize;
+      } else if (downloaded > downloadDenom) {
+        downloadDenom = downloaded + 64 * 1024;
+        totalSize = downloadDenom * 2;
+        installCtx.totalSize = totalSize;
+      }
+      processedSize = downloaded;
+      if (wifitransfer::paintDuringTlsTransfer()) {
         notifyOtaProgress(&installCtx, false);
-      });
+      }
+    });
+    if (dlErr == HttpDownloader::OK || dlErr == HttpDownloader::ABORTED) break;
+    LOG_ERR("OTA", "Firmware download attempt=%d err=%d after %zu bytes heap=%u maxAlloc=%u", attempt,
+            static_cast<int>(dlErr), processedSize, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  }
+  tlsLoan.reset();
 
   if (dlErr != HttpDownloader::OK) {
     LOG_ERR("OTA", "Firmware download failed err=%d after %zu bytes heap=%u maxAlloc=%u", static_cast<int>(dlErr),

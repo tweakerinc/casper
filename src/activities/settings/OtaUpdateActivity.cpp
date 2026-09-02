@@ -1,6 +1,7 @@
 #include "OtaUpdateActivity.h"
 
 #include <BoardConfig.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>
@@ -14,6 +15,7 @@
 #include "fontIds.h"
 #include "network/OtaUpdater.h"
 #include "util/UiGhostPolicy.h"
+#include "util/WifiTransferPolicy.h"
 
 namespace {
 struct OtaActionRects {
@@ -53,8 +55,19 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
   // Drop scan result memory before TLS (scan APs can hold several KB).
   WiFi.scanDelete();
+  if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+    if (!fcm->isScanning()) fcm->clearCache();
+  }
 
-  const auto res = updater.checkForUpdate();
+  const auto res = updater.checkForUpdate(&renderer);
+  if (res == OtaUpdater::NO_UPDATE && wifitransfer::noMatchingAssetIsNoUpdate()) {
+    LOG_DBG("OTA", "No matching firmware asset");
+    {
+      RenderLock lock(*this);
+      state = NO_UPDATE;
+    }
+    return;
+  }
   if (res != OtaUpdater::OK) {
     LOG_ERR("OTA", "Update check failed: %d heap=%u maxAlloc=%u", res, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     {
@@ -204,10 +217,11 @@ void OtaUpdateActivity::runUpdateInstall() {
       [](void* ctx) {
         // immediate=true notifies the render task directly. The default deferred path only
         // sets a flag consumed at the end of ActivityManager::loop(), which never runs while
-        // installUpdate() blocks this task.
+        // installUpdate() blocks this task. Download phase does not invoke this (TLS + e-ink
+        // paint is what aborted WiFi OTA).
         static_cast<OtaUpdateActivity*>(ctx)->requestUpdate(true);
       },
-      this);
+      this, &renderer);
 
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update failed: %d", res);

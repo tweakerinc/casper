@@ -33,7 +33,7 @@ uint32_t fnv1a(const uint8_t* data, size_t len, uint32_t hash = FNV_OFFSET) {
 // .cpfont magic bytes
 constexpr char CPFONT_MAGIC[8] = {'C', 'P', 'F', 'O', 'N', 'T', '\0', '\0'};
 // CPFONT_VERSION is defined as a #define in SdCardFont.h so it can be
-// stringified into FONT_MANIFEST_URL.
+// stringified into wifitransfer::fontManifestUrl.
 constexpr uint32_t HEADER_SIZE = 32;
 constexpr uint32_t STYLE_TOC_ENTRY_SIZE = 32;
 

@@ -222,7 +222,7 @@ CrossPoint pulls firmware from **this fork only** — never CrossPoint stock rel
 
 GitHub’s “Source code” zip is **always** the **git tag’s commit**. Uploading only a `.bin` does **not** update source. Ship source and binary from the **same** commit.
 
-1. Bump `[casper] version` in `platformio.ini` (e.g. `v0.1.9`) — must match the tag.
+1. Bump `[casper] version` in `platformio.ini` (e.g. `v0.2.0`) — must match the tag.
 2. Commit everything that belongs in that firmware (not serial logs / temp dirs).
 3. Build a clean release binary (not the default env’s branch+SHA suffix):
    ```bash

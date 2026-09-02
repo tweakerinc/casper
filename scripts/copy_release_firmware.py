@@ -2,7 +2,7 @@
 PlatformIO post-build: do not dump a second name into dist/.
 
 Shipping / test bins are published only by scripts/dist_bin.sh as
-Casper-v0.1.9.NNNN.bin. A post-script copy of CrossPoint-<version>.bin used to
+Casper-v0.2.0.NNNN.bin. A post-script copy of CrossPoint-<version>.bin used to
 land in dist/ on every gh_release compile and fight that numbering.
 """
 

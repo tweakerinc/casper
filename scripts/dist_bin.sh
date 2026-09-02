@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish a built firmware into dist/ with a sequential, sortable name.
 #
-# Naming: dist/Casper-v0.1.9.NNNN.bin
+# Naming: dist/Casper-v0.2.0.NNNN.bin
 #   Product version comes from [casper] version in platformio.ini (the leading
 #   "v" is kept). NNNN is a zero-padded counter kept in dist/.build-number, so
 #   `ls` always lists builds oldest -> newest.
@@ -10,7 +10,7 @@
 #   scripts/dist_bin.sh [env]        # env defaults to gh_release
 #
 # Example:
-#   scripts/dist_bin.sh gh_release   -> dist/Casper-v0.1.9.0001.bin
+#   scripts/dist_bin.sh gh_release   -> dist/Casper-v0.2.0.0000.bin
 set -euo pipefail
 
 ENV_NAME="${1:-gh_release}"
@@ -38,7 +38,7 @@ config.read(sys.argv[1] + "/platformio.ini")
 print(config.get("casper", "version", fallback="v0.0.0").strip())
 PY
 )"
-# [casper] version is already "v0.1.9"
+# [casper] version is already "v0.2.0"
 OUT="$DIST/$(printf 'Casper-%s.%04d.bin' "$VERSION" "$NEXT")"
 
 cp -f "$SRC" "$OUT"

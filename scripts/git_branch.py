@@ -3,7 +3,7 @@ PlatformIO pre-build script.
 
 Two jobs:
 
-1. CROSSPOINT_VERSION -- the *product* version, e.g. "v0.1.9". Injected here for the
+1. CROSSPOINT_VERSION -- the *product* version, e.g. "v0.2.0". Injected here for the
    default (dev) environment; release environments set it in platformio.ini.
 
 2. CROSSPOINT_BUILD_ID -- the *build* fingerprint, e.g. "05c6cf8" or "05c6cf8-dirty".
@@ -11,9 +11,9 @@ Two jobs:
 
 The distinction matters for support. CROSSPOINT_VERSION only changes when the
 product version is bumped, so consecutive test builds all report the same
-string: a device log reading "ver=v0.1.9" could have come from any of them, and
+string: a device log reading "ver=v0.2.0" could have come from any of them, and
 there was no way to tell which firmware produced a capture. CROSSPOINT_BUILD_ID
-pins a log to a commit. Field bins are named dist/Casper-v0.1.9.NNNN.bin by scripts/dist_bin.sh.
+pins a log to a commit. Field bins are named dist/Casper-v0.2.0.NNNN.bin by scripts/dist_bin.sh.
 """
 
 import configparser

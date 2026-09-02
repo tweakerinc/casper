@@ -27,7 +27,9 @@ inline DiskThumb classify(const bool heroExists, const bool fallbackExists) {
   return DiskThumb::Missing;
 }
 
-// Any on-disk thumb is enough to paint Home. JPEG is only for a first-ever miss.
+// Any on-disk thumb is enough to paint Home on Back. JPEG on the return path
+// is only for a first-ever miss. Idle may still generate the 1:1 hero (see
+// coverrender::generateHero) with a "Rendering Cover" cue.
 inline bool skipJpeg(const DiskThumb state) { return state != DiskThumb::Missing; }
 
 inline bool jpegWhenIdle(const DiskThumb state) { return state == DiskThumb::Missing; }

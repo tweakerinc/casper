@@ -660,7 +660,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   LOG_DBG("JPG", "JPEG dimensions: %dx%d", srcWidth, srcHeight);
   if (progressiveDecode) {
-    LOG_DBG("JPG", "Progressive JPEG decode uses 1/8 source: %dx%d", decodedSrcWidth, decodedSrcHeight);
+    LOG_INF("JPG", "Progressive JPEG decode uses 1/8 source: %dx%d (soft vs baseline covers)", decodedSrcWidth,
+            decodedSrcHeight);
   }
 
   constexpr int MAX_IMAGE_WIDTH = 2048;

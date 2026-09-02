@@ -36,6 +36,7 @@
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
+#include "util/CoverRenderPolicy.h"
 #include "util/CrossPointPaths.h"
 #include "util/DarkModePolicy.h"
 #include "util/HomeSideStepPolicy.h"
@@ -195,6 +196,38 @@ bool recentsCoverLooksPaintable(const RecentBook& book, int heroH) {
   return fallbackThumbLooksValid(book.coverBmpPath);
 }
 
+thumbcache::DiskThumb classifyRecentCover(const RecentBook& book, int heroH) {
+  bool hero = false;
+  bool fallback = false;
+  if (!book.coverBmpPath.empty()) {
+    hero = thumbLooksValid(UITheme::getCoverThumbPath(book.coverBmpPath, heroH));
+    fallback = fallbackThumbLooksValid(book.coverBmpPath);
+  }
+  if (hero) return thumbcache::DiskThumb::Hero;
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
+    hero = thumbLooksValid(epub.getThumbBmpPath(heroH));
+    fallback = fallback || thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
+               thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+  } else if (FsHelpers::hasXtcExtension(book.path)) {
+    Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+    hero = thumbLooksValid(xtc.getThumbBmpPath(heroH));
+    fallback = fallback || thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
+               thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+  }
+  return thumbcache::classify(hero, fallback);
+}
+
+void paintRenderingCoverCue(GfxRenderer& renderer) {
+  GUI.drawTopLeftStatus(renderer, tr(STR_RENDERING_COVER), /*refresh=*/true);
+  SystemLog::logTiming("HOME", "rendering_cover cue dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
+}
+
+bool shouldArmIdleHeroUpgrade(const std::vector<RecentBook>& recentBooks, int heroH) {
+  if (recentBooks.empty()) return false;
+  return coverrender::generateHero(classifyRecentCover(recentBooks[0], heroH));
+}
+
 template <typename BookFmt>
 bool bookFmtLooksPaintable(BookFmt& bookFmt, int heroH) {
   const bool hero = thumbLooksValid(bookFmt.getThumbBmpPath(heroH));
@@ -323,11 +356,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
-  recentsLoading = true;
-  bool showingLoading = false;
-
   // Per-theme hero height so gen matches the on-screen plate (1:1, no grids).
-  // Shelf still needs a compact 168px row when that theme is active.
   const int heroH = homeHeroThumbHeight(renderer, coverHeight);
   const bool shelfTheme = isDashboardRecentsTheme();
   const int shelfH = HomeCoverMetrics::homeShelfThumbHeight;
@@ -340,86 +369,61 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     return anyOk;
   };
 
-  // Pre-scan so we only free the on-screen cover snapshot when generation work
-  // is required (returning from the reader with thumbs already on disk used to
-  // wipe a good paint and race into a blank frame).
-  bool anyNeedWork = false;
-  for (const RecentBook& book : recentBooks) {
-    if (recentsCoverLooksPaintable(book, heroH)) {
-      continue;
-    }
-    if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (!bookFmtLooksPaintable(epub, heroH)) {
-        anyNeedWork = true;
-        break;
-      }
-    } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (!bookFmtLooksPaintable(xtc, heroH)) {
-        anyNeedWork = true;
-        break;
-      }
-    }
-  }
-
-  if (anyNeedWork) {
-    // Free snapshot RAM for decode heap, but do NOT clear coverGrayOnPanel when
-    // the panel already shows a good multipass (retry would flash black 5–10s later).
-    if (!coverGrayOnPanel) {
-      freeCoverBuffer();
-      coverRendered = false;
-      coverBufferStored = false;
-    } else if (coverBuffer) {
-      free(coverBuffer);
-      coverBuffer = nullptr;
-      coverBufferSize = 0;
-      coverBufferStored = false;
-      // keep coverRendered / coverGrayOnPanel — panel is still correct
-    }
-  }
-
-  // Upper-left "Loading" into the framebuffer only — do NOT window/HALF refresh
-  // here. On X4 (SSD1677), a window while greys are on glass can promote to a full
-  // HALF clean and black-flash in a loop. Next multipass/home paint shows it once.
-  auto showProgress = [&](int /*progress*/, int /*total*/) {
-    // Back from a book already showed Saving. Stamping Loading into a white
-    // wipe over the dark page is the inverted-looking box on Bare return.
-    if (suppressCoverLoadingCue_) return;
-    if (!showingLoading) {
-      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
-      showingLoading = true;
-    }
+  auto bookNeedsHero = [&](const RecentBook& book) -> bool {
+    return coverrender::generateHero(classifyRecentCover(book, heroH));
   };
 
-  const int total = std::max(1, static_cast<int>(recentBooks.size()));
-  int progress = 0;
+  bool anyNeedWork = false;
+  for (const RecentBook& book : recentBooks) {
+    if (bookNeedsHero(book)) {
+      anyNeedWork = true;
+      break;
+    }
+  }
+
+  if (!anyNeedWork) {
+    recentsLoaded = true;
+    recentsLoading = false;
+    coverNeedsRetry = false;
+    return;
+  }
+
+  // Cue on glass first. recentsLoading then blocks render(); a framebuffer-only
+  // stamp would never appear. Dark Mode uses HALF via drawTopLeftStatus.
+  if (coverrender::showRenderingCoverCue(true, homeUiReady)) {
+    paintRenderingCoverCue(renderer);
+  }
+
+  recentsLoading = true;
+
+  // Free snapshot RAM for JPEG. Keep coverGrayOnPanel so the current plate
+  // stays until the new 560 is ready (then one intentional remultipass).
+  if (coverBuffer) {
+    free(coverBuffer);
+    coverBuffer = nullptr;
+    coverBufferSize = 0;
+    coverBufferStored = false;
+  }
+  if (!coverGrayOnPanel) {
+    coverRendered = false;
+  }
+
   bool anyNewThumb = false;
   bool anyTransientFail = false;
-  bool pathsUpdated = false;
-  for (RecentBook& book : recentBooks) {
-    if (FsHelpers::hasEpubExtension(book.path)) {
-      if (recentsCoverLooksPaintable(book, heroH)) {
-        progress++;
+
+  {
+    GfxRenderer::FrameBufferLoan decodeLoan(renderer, coverrender::loanFramebufferForDecode());
+    SystemLog::logTiming("HOME", "cover_gen start free=%u maxAlloc=%u n=%d", static_cast<unsigned>(ESP.getFreeHeap()),
+                         static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<int>(recentBooks.size()));
+
+    for (RecentBook& book : recentBooks) {
+      if (!bookNeedsHero(book)) {
         continue;
       }
-      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-      const bool needWork = !bookFmtLooksPaintable(epub, heroH);
-      if (needWork) {
-        showProgress(progress, total);
-        // Free snapshot RAM for decode, but keep coverGrayOnPanel if the panel
-        // already shows a settled multipass (avoids delayed black re-flash).
-        if (!coverGrayOnPanel) {
-          freeCoverBuffer();
-        } else if (coverBuffer) {
-          free(coverBuffer);
-          coverBuffer = nullptr;
-          coverBufferSize = 0;
-          coverBufferStored = false;
-        }
+      if (FsHelpers::hasEpubExtension(book.path)) {
+        Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
         LOG_DBG("HOME", "Cover gen free heap before: %u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
                 static_cast<unsigned>(ESP.getMaxAllocHeap()));
-        // Prefer existing book.bin (fast). Only full-index if cache is missing.
         bool loaded = epub.load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
         if (!loaded) {
           loaded = epub.load(/*buildIfMissing=*/true, /*skipLoadingCss=*/true);
@@ -427,45 +431,20 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         if (!loaded) {
           LOG_ERR("HOME", "EPUB load failed for cover: %s", book.path.c_str());
           anyTransientFail = true;
-        } else {
-          if (ensureThumbs(epub)) {
-            const std::string templatePath = epub.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
-            book.coverBmpPath = templatePath;
-            anyNewThumb = true;
-          } else {
-            LOG_ERR("HOME", "Thumb generate failed for: %s (heap=%u maxAlloc=%u)", book.path.c_str(),
-                    static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-            anyTransientFail = true;
-          }
-        }
-        delay(1);
-      } else {
-        if (book.coverBmpPath.empty()) {
+        } else if (ensureThumbs(epub)) {
           const std::string templatePath = epub.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
-          pathsUpdated = true;
+          anyNewThumb = true;
+        } else {
+          LOG_ERR("HOME", "Thumb generate failed for: %s (heap=%u maxAlloc=%u)", book.path.c_str(),
+                  static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+          anyTransientFail = true;
         }
-        SystemLog::logTiming("HOME", "cover_cache_hit skip_jpeg");
-      }
-    } else if (FsHelpers::hasXtcExtension(book.path)) {
-      if (recentsCoverLooksPaintable(book, heroH)) {
-        progress++;
-        continue;
-      }
-      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-      if (bookFmtLooksPaintable(xtc, heroH)) {
-        if (book.coverBmpPath.empty()) {
-          const std::string templatePath = xtc.getThumbBmpPath();
-          RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
-          book.coverBmpPath = templatePath;
-          pathsUpdated = true;
-        }
-        SystemLog::logTiming("HOME", "cover_cache_hit skip_jpeg");
-      } else if (xtc.load()) {
-        showProgress(progress, total);
-        if (ensureThumbs(xtc)) {
+        delay(1);
+      } else if (FsHelpers::hasXtcExtension(book.path)) {
+        Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+        if (xtc.load() && ensureThumbs(xtc)) {
           const std::string templatePath = xtc.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
@@ -473,68 +452,45 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         } else {
           anyTransientFail = true;
         }
-      } else {
-        anyTransientFail = true;
       }
     }
-    progress++;
   }
 
-  // Stop render-path re-entry (loop only kicks when !recentsLoaded).
   recentsLoaded = true;
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
 
-  // Retry JPEG only when there is still nothing to blit. A leftover 280/168
-  // thumb is enough — do not decode JPEG on every Back.
-  bool missingThumb = false;
-  if (!recentBooks.empty() &&
-      (FsHelpers::hasEpubExtension(recentBooks[0].path) || FsHelpers::hasXtcExtension(recentBooks[0].path))) {
-    missingThumb = !recentsCoverLooksPaintable(recentBooks[0], heroH);
-    if (missingThumb && FsHelpers::hasEpubExtension(recentBooks[0].path)) {
-      Epub epub(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
-      missingThumb = !bookFmtLooksPaintable(epub, heroH);
-    } else if (missingThumb && FsHelpers::hasXtcExtension(recentBooks[0].path)) {
-      Xtc xtc(recentBooks[0].path, CrossPointPaths::kPackageCacheRoot);
-      missingThumb = !bookFmtLooksPaintable(xtc, heroH);
+  const bool missingHero =
+      !recentBooks.empty() && coverrender::generateHero(classifyRecentCover(recentBooks[0], heroH));
+  if (coverrender::keepRetrying(coverGenAttempts, missingHero, coverGrayOnPanel)) {
+    coverNeedsRetry = true;
+    const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *
+                             static_cast<unsigned>(std::max<uint8_t>(1, coverGenAttempts));
+    coverRetryAtMs = millis() + delayMs;
+    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %ums missingHero=%d", static_cast<unsigned>(coverGenAttempts),
+            static_cast<unsigned>(coverrender::kMaxGenAttempts), delayMs, missingHero ? 1 : 0);
+    SystemLog::logTiming("HOME", "cover_gen retry %u/%u missingHero=%d", static_cast<unsigned>(coverGenAttempts),
+                         static_cast<unsigned>(coverrender::kMaxGenAttempts), missingHero ? 1 : 0);
+  } else {
+    coverNeedsRetry = false;
+    if (missingHero) {
+      SystemLog::logTiming("HOME", "cover_gen gave_up attempts=%u", static_cast<unsigned>(coverGenAttempts));
     }
   }
 
-  if ((anyTransientFail || missingThumb) && coverGenAttempts < kMaxCoverGenAttempts && !coverGrayOnPanel &&
-      missingThumb) {
-    coverNeedsRetry = true;
-    coverRetryAtMs = millis() + 1500UL * coverGenAttempts;
-    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %lums missingThumb=%d", static_cast<unsigned>(coverGenAttempts),
-            static_cast<unsigned>(kMaxCoverGenAttempts), static_cast<unsigned long>(1500UL * coverGenAttempts),
-            missingThumb ? 1 : 0);
-  } else {
-    coverNeedsRetry = false;
-  }
-
-  // Repaint only for new pixels, or one multipass after the first BW shell paint.
-  // Never re-multipass solely because a background gen retry ran, and never when
-  // greys are already settled (idle black-flash bug).
-  if (anyNewThumb && !coverGrayOnPanel) {
+  if (anyNewThumb && coverrender::paintWhenHeroArrives()) {
     freeCoverBuffer();
     coverRendered = false;
     coverBufferStored = false;
+    coverGrayOnPanel = false;
     requestUpdate();
-  } else if (anyNewThumb && coverGrayOnPanel) {
-    // New thumb on disk but panel already shows gray of prior art — soft update
-    // next intentional paint only (do not multipass on a timer).
-    LOG_DBG("HOME", "New thumb ready; panel already gray — skip timed multipass");
   } else if (!coverGrayOnPanel) {
     requestUpdate();
-  } else if (pathsUpdated) {
-    LOG_DBG("HOME", "Cover path templates updated; skip repaint (art unchanged)");
   }
-  (void)showingLoading;
-  (void)anyNeedWork;
 }
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
-  suppressCoverLoadingCue_ = false;
 
   // Home chrome (Dashboard/Minimal/classic) is portrait-only. Reader may leave
   // landscape orientation; force portrait so X3 (528×792) and X4 (480×800)
@@ -610,6 +566,10 @@ void HomeActivity::onEnter() {
     if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
       recentsLoaded = true;
       LOG_DBG("HOME", "Hero thumbs ready — multipass on first paint (skip shell HALF)");
+      if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+        coverNeedsRetry = true;
+        coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+      }
     }
   }
 
@@ -669,7 +629,6 @@ void HomeActivity::onResume() {
   // residual from soft FAST children is scrubbed. One intentional flash; panel looks clean.
   // Cover themes may still defer greys after the BW shell.
   Activity::onResume();
-  suppressCoverLoadingCue_ = true;
 
   bool justLoadedDeferredEnter = false;
   if (deferredEnterLoad_) {
@@ -807,6 +766,10 @@ void HomeActivity::onResume() {
       if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
                                         HomeCoverMetrics::homeShelfThumbHeight)) {
         recentsLoaded = true;
+        if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+          coverNeedsRetry = true;
+          coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+        }
       }
     }
     LOG_DBG("HOME", "onResume: skip SD stats reload (synced RAM recents n=%d loaded=%d)",
@@ -852,6 +815,10 @@ void HomeActivity::onResume() {
                                            HomeCoverMetrics::homeShelfThumbHeight)) {
     recentsLoaded = true;
     LOG_DBG("HOME", "onResume: thumbs ready — HALF shell then multipass");
+    if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+      coverNeedsRetry = true;
+      coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+    }
   } else if (!usesHomeCoverMultipass()) {
     recentsLoaded = true;
     // First paint honors hardScrubArmed → HALF (baseline set after that paint).
@@ -1385,19 +1352,16 @@ void HomeActivity::loop() {
         if (!inputBusy) return;
       }
     }
-    // Cover gen after first home paint so the Loading box floats over visible UI.
+    // Cover gen after first home paint so Rendering Cover floats over visible UI.
     if (coverNeedsRetry && static_cast<long>(millis() - coverRetryAtMs) >= 0) {
       coverNeedsRetry = false;
-      // Never schedule a gen/multipass retry once greys are already on the panel —
-      // that was a source of random black flashes ~seconds after home settled.
-      if (!coverGrayOnPanel) {
-        recentsLoaded = false;
-      }
+      recentsLoaded = false;
     }
     // Deferred greys after snappy resume, or multipass soft-fail retry.
-    if (coverGrayNeedsRetry && !coverGrayOnPanel && static_cast<long>(millis() - coverGrayRetryAtMs) >= 0) {
+    if (recentsLoaded && coverGrayNeedsRetry && !coverGrayOnPanel &&
+        static_cast<long>(millis() - coverGrayRetryAtMs) >= 0) {
       coverGrayNeedsRetry = false;
-      if (deferredGreysOnly && recentsLoaded && coverRectW > 0 && coverRectH > 0 && usesHomeCoverMultipass()) {
+      if (deferredGreysOnly && coverRectW > 0 && coverRectH > 0 && usesHomeCoverMultipass()) {
         // Panel already has the snappy BW home — multipass greys in place (no clearScreen).
         softGrayscaleBase = true;
         requestUpdate(true);
@@ -1416,26 +1380,13 @@ void HomeActivity::loop() {
         recentsLoaded = true;
         coverGrayOnPanel = true;
       } else {
-        // Field #3: cover gen + UI font decompress under pressure → FDC fail / reboot.
-        // Paint shell without covers first; arm retry when heap recovers.
-        constexpr uint32_t kCoverGenMinFree = 90U * 1024U;
-        constexpr uint32_t kCoverGenMinMaxAlloc = 80U * 1024U;
-        const uint32_t freeH = ESP.getFreeHeap();
-        const uint32_t maxA = ESP.getMaxAllocHeap();
-        if (freeH < kCoverGenMinFree || maxA < kCoverGenMinMaxAlloc) {
-          LOG_DBG("HOME", "defer cover gen free=%u maxAlloc=%u", static_cast<unsigned>(freeH),
-                  static_cast<unsigned>(maxA));
-          recentsLoaded = true;  // allow text shell paint this cycle
-          coverNeedsRetry = true;
-          coverRetryAtMs = millis() + 400UL;
-          requestUpdate();
-          // fall through to input + eventual shell paint
-        } else {
-          const auto& metrics = UITheme::getInstance().getMetrics();
-          recentsLoading = true;
-          loadRecentCovers(metrics.homeCoverHeight);
-          return;
-        }
+        // Loan the 48 KB framebuffer inside loadRecentCovers so fragmented
+        // maxAlloc after reading can still decode JPEG. Do not require 90/80 KB
+        // up front — that is why cache-delete covers sat blank for 60s+.
+        const auto& metrics = UITheme::getInstance().getMetrics();
+        recentsLoading = true;
+        loadRecentCovers(metrics.homeCoverHeight);
+        return;
       }
     }
   }

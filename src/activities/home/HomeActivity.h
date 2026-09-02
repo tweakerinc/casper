@@ -17,16 +17,13 @@ class HomeActivity final : public Activity {
   int selectorIndex = 0;
   bool recentsLoading = false;
   bool recentsLoaded = false;
-  // First home paint finished — cover gen waits so Loading can float over real UI.
+  // First home paint finished — cover gen waits so Rendering Cover floats over UI.
   bool homeUiReady = false;
-  // PopToHome already showed Saving; do not stamp Loading over that page.
-  bool suppressCoverLoadingCue_ = false;
   // Transient thumb-gen failures (heap/decode) schedule a deferred retry so we do
   // not burn the render path every frame, but also do not give up forever.
   bool coverNeedsRetry = false;
   uint8_t coverGenAttempts = 0;
   unsigned long coverRetryAtMs = 0;
-  static constexpr uint8_t kMaxCoverGenAttempts = 3;
   bool hasOpdsServers = false;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored

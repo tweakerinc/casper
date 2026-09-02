@@ -9,14 +9,13 @@
 #include <cstdio>
 
 #include "util/CachedIrPolicy.h"
+#include "util/ChapterLoadPolicy.h"
 #include "util/TaskWatchdog.h"
 
 namespace chapterload {
 namespace {
 
-// Chapter HTML held in RAM during convert. The convert needs headroom on top of
-// this, so the cap is about the pair fitting, not about the file alone.
-constexpr size_t kMaxHtml = 160 * 1024;
+constexpr size_t kMaxHtml = chapterloadpolicy::kMaxHtmlInRam;
 
 }  // namespace
 
@@ -99,249 +98,236 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
   bool ok = false;
   bool fromIrCache = false;
 
-  // --- Cached IR ------------------------------------------------------------
-  if (Storage.exists(irPath)) {
-    ok = eng.loadIr(irPath);
-    if (!ok && eng.lastIrLoadResult() == rivulet::RivuletEngine::IrLoadResult::Oom) {
+  // Loan covers cache deserialize AND convert. Nested inner loans are inert.
+  // Sitting open leaves this on so a 50 KB CrossPoint .rvir can load; idle
+  // indexing leaves it off because the panel still holds the current page.
+  GfxRenderer::FrameBufferLoan fbLoan(rend, lendFb);
+  LOG_INF("CHLOAD", "heap loan=%d free=%u maxAlloc=%u", lendFb ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  auto tryLoadIrFile = [&](const char* path, const char* thisMapPath) -> bool {
+    if (!path || !path[0] || !Storage.exists(path)) return false;
+    bool loaded = eng.loadIr(path);
+    if (!loaded && eng.lastIrLoadResult() == rivulet::RivuletEngine::IrLoadResult::Oom) {
       LOG_ERR("CHLOAD", "IR OOM spine=%d — scrub and retry, keeping cache free=%u maxA=%u", spineIndex,
               static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       prepHeap(true);
-      ok = eng.loadIr(irPath);
+      loaded = eng.loadIr(path);
     }
-    if (ok) {
+    if (loaded) {
       fromIrCache = true;
-      LOG_DBG("CHLOAD", "loaded IR %s", irPath);
-      if (Storage.exists(mapPath) && eng.loadPageMap(mapPath)) {
+      LOG_DBG("CHLOAD", "loaded IR %s", path);
+      if (thisMapPath && thisMapPath[0] && Storage.exists(thisMapPath) && eng.loadPageMap(thisMapPath)) {
         if (eng.scrubStaleCompleteMap(rend)) {
-          LOG_DBG("CHLOAD", "page map %s scrubbed pages=%d complete=%d", mapPath, eng.mapKnownPages(),
+          LOG_DBG("CHLOAD", "page map %s scrubbed pages=%d complete=%d", thisMapPath, eng.mapKnownPages(),
                   eng.mapComplete() ? 1 : 0);
           // Only discard the file when the scrub emptied it (false 2–3 page
           // complete). An incomplete reopen must keep it so idle can finish.
-          if (eng.mapKnownPages() <= 1 && Storage.exists(mapPath)) Storage.remove(mapPath);
+          if (eng.mapKnownPages() <= 1 && Storage.exists(thisMapPath)) Storage.remove(thisMapPath);
         }
       }
-    } else if (Storage.exists(irPath)) {
-      const auto loadSt = eng.lastIrLoadResult();
-      const cachedir::LoadMiss miss = (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) ? cachedir::LoadMiss::Oom
-                                      : (loadSt == rivulet::RivuletEngine::IrLoadResult::StaleVersion)
-                                          ? cachedir::LoadMiss::StaleVersion
-                                          : cachedir::LoadMiss::Corrupt;
-      if (cachedir::deleteFileOnLoadMiss(miss)) {
-        LOG_DBG("CHLOAD", "corrupt IR %s — reconvert", irPath);
-        Storage.remove(irPath);
-      } else if (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) {
-        // Deserialize lost to heap. Convert needs the HTML buffer on top of the
-        // same blob — it will lose too, and used to delete a chapter the user
-        // had just been reading. Keep the file for the caller's next scrub.
-        LOG_ERR("CHLOAD", "IR OOM spine=%d — keep cache, skip convert", spineIndex);
-        return out;
-      } else {
-        // Stale version: keep the file and try convert. Only a complete IR may
-        // replace it (see save below). A failed convert must not delete the cache.
-        LOG_ERR("CHLOAD", "IR stale version spine=%d — keep cache, try convert", spineIndex);
+      return true;
+    }
+    if (!Storage.exists(path)) return false;
+    const auto loadSt = eng.lastIrLoadResult();
+    const cachedir::LoadMiss miss = (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) ? cachedir::LoadMiss::Oom
+                                    : (loadSt == rivulet::RivuletEngine::IrLoadResult::StaleVersion)
+                                        ? cachedir::LoadMiss::StaleVersion
+                                        : cachedir::LoadMiss::Corrupt;
+    if (cachedir::deleteFileOnLoadMiss(miss)) {
+      LOG_DBG("CHLOAD", "corrupt IR %s — reconvert", path);
+      Storage.remove(path);
+    } else if (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) {
+      // Keep the file. Convert a prefix of HTML under the same loan — skipping
+      // convert here is what left sitting opens as "Chapter not readable".
+      LOG_ERR("CHLOAD", "IR OOM spine=%d — keep cache, convert", spineIndex);
+    } else {
+      LOG_ERR("CHLOAD", "IR stale version spine=%d — keep cache, try convert", spineIndex);
+    }
+    return false;
+  };
+
+  ok = tryLoadIrFile(irPath, mapPath);
+  if (!ok && chapterloadpolicy::trySiblingImageModeCaches()) {
+    for (uint8_t tryIndex = 1; tryIndex < chapterloadpolicy::kImageModeCount && !ok; ++tryIndex) {
+      const unsigned m = chapterloadpolicy::cacheModeToTry(static_cast<uint8_t>(imgMode), tryIndex);
+      char sibIr[192];
+      char sibMap[200];
+      std::snprintf(sibIr, sizeof(sibIr), "%s/s%d_m%u.rvir", irDir.c_str(), spineIndex, m);
+      std::snprintf(sibMap, sizeof(sibMap), "%s/s%d_m%u.rvpm", irDir.c_str(), spineIndex, m);
+      if (tryLoadIrFile(sibIr, sibMap)) {
+        LOG_INF("CHLOAD", "spine %d using sibling IR mode %u (want %u)", spineIndex, m, imgMode);
+        ok = true;
       }
     }
   }
 
-  // --- Convert from HTML ----------------------------------------------------
+  auto leftoverHeap = [&]() -> size_t {
+    size_t leftover = ESP.getMaxAllocHeap();
+    const size_t freeH = ESP.getFreeHeap();
+    if (freeH < leftover) leftover = freeH;
+    return leftover;
+  };
+
+  auto convertStoredHtml = [&](const char* path, const bool retryPartial) -> bool {
+    HalFile htmlFile;
+    if (!Storage.openFileForRead("CHLOAD", path, htmlFile)) {
+      LOG_ERR("CHLOAD", "spine %d open HTML failed", spineIndex);
+      return false;
+    }
+    const size_t fileSize = htmlFile.size();
+    if (fileSize == 0) {
+      htmlFile.close();
+      LOG_DBG("CHLOAD", "spine %d bad html size 0 — discard", spineIndex);
+      return false;
+    }
+    size_t htmlCap = chapterloadpolicy::htmlBytesToConvert(fileSize, kMaxHtml, leftoverHeap(),
+                                                          chapterloadpolicy::kConvertHeadroom);
+    if (htmlCap == 0) {
+      htmlFile.close();
+      LOG_ERR("CHLOAD", "spine %d HTML cap 0 leftover=%u file=%u", spineIndex,
+              static_cast<unsigned>(leftoverHeap()), static_cast<unsigned>(fileSize));
+      return false;
+    }
+    auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlCap + 1);
+    if (!htmlBuf && htmlCap > 1024) {
+      htmlCap /= 2;
+      htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlCap + 1);
+    }
+    if (!htmlBuf) {
+      htmlFile.close();
+      LOG_ERR("CHLOAD", "spine %d HTML OOM size=%u free=%u maxAlloc=%u", spineIndex, static_cast<unsigned>(htmlCap),
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      return false;
+    }
+    const int got = htmlFile.read(htmlBuf.get(), htmlCap);
+    htmlFile.close();
+    if (got <= 0) {
+      LOG_ERR("CHLOAD", "spine %d HTML short read %d/%u", spineIndex, got, static_cast<unsigned>(htmlCap));
+      return false;
+    }
+    const size_t htmlSize = static_cast<size_t>(got);
+    htmlBuf[htmlSize] = 0;
+    if (htmlSize < fileSize) {
+      LOG_INF("CHLOAD", "spine %d converting prefix %u of %u", spineIndex, static_cast<unsigned>(htmlSize),
+              static_cast<unsigned>(fileSize));
+    }
+
+    if (aborted()) {
+      LOG_INF("CHLOAD", "spine %d abort before ingestHtml", spineIndex);
+      return false;
+    }
+    resetTaskWatchdogIfSubscribed();
+
+    const uint32_t t0 = millis();
+    bool conv = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
+                               /*armDropCapFirstPara=*/false, imageRendering);
+    if (conv && eng.chapter().failed() && retryPartial) {
+      LOG_ERR("CHLOAD", "spine %d partial IR — retry convert free=%u maxA=%u", spineIndex,
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      eng.clear();
+      delay(30);
+      yield();
+      conv = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false, imageRendering);
+    }
+    htmlBuf.reset();
+    LOG_INF("CHLOAD", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
+            conv ? "ok" : "FAIL", (conv && eng.chapter().failed()) ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+            static_cast<unsigned>(eng.chapter().blockCount()), static_cast<unsigned>(eng.chapter().textSize()),
+            static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return conv;
+  };
+
+  auto commitConvert = [&]() {
+    if (ok && !eng.chapter().failed()) {
+      prepImages(item.href);
+      if (irPath[0]) (void)eng.chapter().saveToFile(irPath);
+      if (Storage.exists(mapPath)) Storage.remove(mapPath);
+    } else if (ok && eng.chapter().failed()) {
+      if (requireCompleteIr) {
+        LOG_ERR("CHLOAD", "spine %d partial IR refused (requireFull) text=%u", spineIndex,
+                static_cast<unsigned>(eng.chapter().textSize()));
+        eng.clear();
+        ok = false;
+      } else {
+        prepImages(item.href);
+        LOG_ERR("CHLOAD", "spine %d using partial IR (not cached) text=%u", spineIndex,
+                static_cast<unsigned>(eng.chapter().textSize()));
+      }
+    }
+  };
+
   if (!ok) {
     if (aborted()) {
       LOG_INF("CHLOAD", "spine %d abort before convert", spineIndex);
       return out;
     }
-    // Never accumulate chapter HTML in a std::string: growth aborts on OOM under
-    // -fno-exceptions. ZIP-inflate to SD, then load with makeUniqueNoThrow.
-    // Hold the framebuffer loan across stream + load + convert so maxAlloc stays
-    // high for the whole sequence.
-    {
-      GfxRenderer::FrameBufferLoan loan(rend, lendFb);
-      LOG_INF("CHLOAD", "html phase loan=%d free=%u maxAlloc=%u", lendFb ? 1 : 0,
-              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
-      // Two passes: prefer the cached sN.html; on failure delete and re-stream
-      // (a stale/truncated extract left chapters permanently unloadable).
-      for (int pass = 0; pass < 2 && !ok; ++pass) {
-        const bool forceRestream = (pass > 0);
-        if (forceRestream) {
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
+    for (int pass = 0; pass < 2 && !ok; ++pass) {
+      const bool forceRestream = (pass > 0);
+      if (forceRestream) {
+        if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
+        if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
+        LOG_INF("CHLOAD", "spine %d re-stream HTML after convert/read fail", spineIndex);
+      }
+
+      const char* readPath = htmlPath;
+      if (forceRestream || !Storage.exists(htmlPath)) {
+        bool streamed = false;
+        for (int attempt = 0; attempt < 3 && !streamed; ++attempt) {
+          if (attempt > 0) delay(50);
           if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-          LOG_INF("CHLOAD", "spine %d re-stream HTML after convert/read fail", spineIndex);
-        }
-
-        const char* readPath = htmlPath;
-        if (forceRestream || !Storage.exists(htmlPath)) {
-          bool streamed = false;
-          for (int attempt = 0; attempt < 3 && !streamed; ++attempt) {
-            if (attempt > 0) delay(50);
-            if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-            HalFile tmpHtml;
-            if (!Storage.openFileForWrite("CHLOAD", tmpHtmlPath, tmpHtml)) {
-              LOG_ERR("CHLOAD", "spine %d open tmp HTML failed", spineIndex);
-              continue;
-            }
-            streamed = epub.readItemContentsToStream(item.href, tmpHtml, 8192);
-            const uint32_t fileSize = tmpHtml.size();
-            tmpHtml.close();
-            if (!streamed) {
-              if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-              LOG_ERR("CHLOAD", "spine %d ZIP stream fail free=%u maxAlloc=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              continue;
-            }
-            if (fileSize == 0) {
-              Storage.remove(tmpHtmlPath);
-              LOG_DBG("CHLOAD", "spine %d HTML empty — skip", spineIndex);
-              return out;
-            }
-            if (fileSize > kMaxHtml) {
-              Storage.remove(tmpHtmlPath);
-              LOG_ERR("CHLOAD", "spine %d HTML too large (%u) — skip", spineIndex, static_cast<unsigned>(fileSize));
-              return out;
-            }
-            readPath = Storage.rename(tmpHtmlPath, htmlPath) ? htmlPath : tmpHtmlPath;
-            LOG_DBG("CHLOAD", "spine %d htmlBytes=%u", spineIndex, static_cast<unsigned>(fileSize));
-          }
-          if (!streamed) {
-            if (forceRestream) return out;
+          HalFile tmpHtml;
+          if (!Storage.openFileForWrite("CHLOAD", tmpHtmlPath, tmpHtml)) {
+            LOG_ERR("CHLOAD", "spine %d open tmp HTML failed", spineIndex);
             continue;
           }
-        }
-
-        HalFile htmlFile;
-        if (!Storage.openFileForRead("CHLOAD", readPath, htmlFile)) {
-          LOG_ERR("CHLOAD", "spine %d open HTML failed", spineIndex);
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize == 0 || htmlSize > kMaxHtml) {
-          htmlFile.close();
-          LOG_DBG("CHLOAD", "spine %d bad html size %u — discard", spineIndex, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-        if (!htmlBuf) {
-          htmlFile.close();
-          LOG_ERR("CHLOAD", "spine %d HTML OOM size=%u free=%u maxAlloc=%u", spineIndex,
-                  static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
-                  static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          return out;  // keep the HTML: a later attempt may have more heap
-        }
-        const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-        htmlFile.close();
-        if (got < 0 || static_cast<size_t>(got) != htmlSize) {
-          LOG_ERR("CHLOAD", "spine %d HTML short read %d/%u", spineIndex, got, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        htmlBuf[htmlSize] = 0;
-
-        if (aborted()) {
-          LOG_INF("CHLOAD", "spine %d abort before ingestHtml", spineIndex);
-          return out;
-        }
-        resetTaskWatchdogIfSubscribed();
-
-        // free/maxA here are net of the HTML buffer we just took.
-        const size_t maxA = ESP.getMaxAllocHeap();
-        const size_t freeH = ESP.getFreeHeap();
-        if (maxA < 12 * 1024 || freeH < 14 * 1024) {
-          LOG_ERR("CHLOAD", "spine %d convert skip low heap free=%u maxA=%u html=%u", spineIndex,
-                  static_cast<unsigned>(freeH), static_cast<unsigned>(maxA), static_cast<unsigned>(htmlSize));
-          htmlBuf.reset();
-          eng.clear();
-          delay(20);
-          continue;
-        }
-
-        const uint32_t t0 = millis();
-        ok = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
-                            /*armDropCapFirstPara=*/false, imageRendering);
-        // Partial OOM: clear, yield, retry once while still holding HTML + loan.
-        if (ok && eng.chapter().failed() && pass == 0) {
-          LOG_ERR("CHLOAD", "spine %d partial IR — retry convert free=%u maxA=%u", spineIndex,
-                  static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          eng.clear();
-          delay(30);
-          yield();
-          if (ESP.getMaxAllocHeap() >= 12 * 1024) {
-            ok = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false, imageRendering);
+          streamed = epub.readItemContentsToStream(item.href, tmpHtml, 8192);
+          const uint32_t fileSize = tmpHtml.size();
+          tmpHtml.close();
+          if (!streamed) {
+            if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
+            LOG_ERR("CHLOAD", "spine %d ZIP stream fail free=%u maxAlloc=%u", spineIndex,
+                    static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+            continue;
           }
-        }
-        htmlBuf.reset();  // free before the caller lays anything out
-        LOG_INF("CHLOAD", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
-                ok ? "ok" : "FAIL", (ok && eng.chapter().failed()) ? 1 : 0, static_cast<unsigned long>(millis() - t0),
-                static_cast<unsigned>(eng.chapter().blockCount()), static_cast<unsigned>(eng.chapter().textSize()),
-                static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(ESP.getMaxAllocHeap()));
-
-        if (ok && !eng.chapter().failed()) {
-          prepImages(item.href);
-          // Persist only a complete IR — a partial must not become permanent.
-          if (irPath[0]) (void)eng.chapter().saveToFile(irPath);
-          // Drop any map built from an earlier partial session for this spine.
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-        } else if (ok && eng.chapter().failed()) {
-          // Partial RAM is session-only. Never delete an on-disk .rvir — that is
-          // how a version bump + OOM convert left every book "Chapter not readable".
-          if (requireCompleteIr) {
-            LOG_ERR("CHLOAD", "spine %d partial IR refused (requireFull) text=%u html=%u", spineIndex,
-                    static_cast<unsigned>(eng.chapter().textSize()), static_cast<unsigned>(htmlSize));
-            eng.clear();
-            ok = false;
-            break;  // leave the loan scope for an aggressive scrub + one retry
+          if (fileSize == 0) {
+            Storage.remove(tmpHtmlPath);
+            LOG_DBG("CHLOAD", "spine %d HTML empty — skip", spineIndex);
+            return out;
           }
-          prepImages(item.href);
-          LOG_ERR("CHLOAD", "spine %d using partial IR (not cached) text=%u html=%u", spineIndex,
-                  static_cast<unsigned>(eng.chapter().textSize()), static_cast<unsigned>(htmlSize));
-        } else if (Storage.exists(htmlPath)) {
-          Storage.remove(htmlPath);  // bad extract — force ZIP re-stream next pass
+          if (fileSize > kMaxHtml && !chapterloadpolicy::skipOversizedHtml()) {
+            LOG_INF("CHLOAD", "spine %d HTML %u — convert prefix", spineIndex, static_cast<unsigned>(fileSize));
+          }
+          readPath = Storage.rename(tmpHtmlPath, htmlPath) ? htmlPath : tmpHtmlPath;
+          LOG_DBG("CHLOAD", "spine %d htmlBytes=%u", spineIndex, static_cast<unsigned>(fileSize));
         }
+        if (!streamed) {
+          if (forceRestream) break;
+          continue;
+        }
+      }
+
+      ok = convertStoredHtml(readPath, /*retryPartial=*/pass == 0);
+      if (aborted()) {
+        LOG_INF("CHLOAD", "spine %d abort during convert", spineIndex);
+        return out;
+      }
+      if (ok) {
+        commitConvert();
+        if (!ok && requireCompleteIr) break;
+      } else if (Storage.exists(htmlPath) && pass == 0) {
+        Storage.remove(htmlPath);  // bad extract — force ZIP re-stream next pass
       }
     }
 
-    // requireComplete: one more attempt after a hard scrub, outside the loan.
-    if (!ok && requireCompleteIr && Storage.exists(htmlPath)) {
+    if (!ok && chapterloadpolicy::extraConvertRetry(lendFb, requireCompleteIr) && Storage.exists(htmlPath)) {
       prepHeap(/*aggressive=*/true);
-      GfxRenderer::FrameBufferLoan loan(rend, lendFb);
-      HalFile htmlFile;
-      if (Storage.openFileForRead("CHLOAD", htmlPath, htmlFile)) {
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize > 0 && htmlSize <= kMaxHtml) {
-          auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-          if (htmlBuf) {
-            const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-            htmlFile.close();
-            if (got >= 0 && static_cast<size_t>(got) == htmlSize) {
-              htmlBuf[htmlSize] = 0;
-              LOG_INF("CHLOAD", "spine %d requireFull reconvert free=%u maxA=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              ok = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false,
-                                  imageRendering);
-              htmlBuf.reset();
-              if (ok && !eng.chapter().failed()) {
-                prepImages(item.href);
-                if (irPath[0]) (void)eng.chapter().saveToFile(irPath);
-                if (Storage.exists(mapPath)) Storage.remove(mapPath);
-                LOG_INF("CHLOAD", "spine %d requireFull OK text=%u", spineIndex,
-                        static_cast<unsigned>(eng.chapter().textSize()));
-              } else {
-                LOG_ERR("CHLOAD", "spine %d requireFull still partial/fail", spineIndex);
-                eng.clear();
-                ok = false;
-                // Keep any existing .rvir. A failed reconvert must not wipe the cache.
-              }
-            } else {
-              htmlFile.close();
-            }
-          } else {
-            htmlFile.close();
-          }
-        } else {
-          htmlFile.close();
-        }
-      }
+      LOG_INF("CHLOAD", "spine %d extra convert free=%u maxA=%u", spineIndex,
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      ok = convertStoredHtml(htmlPath, /*retryPartial=*/true);
+      if (ok) commitConvert();
     }
   } else if (fromIrCache) {
     // Always re-size images for the current viewport: cached IR may hold float

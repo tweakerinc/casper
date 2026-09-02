@@ -10,13 +10,18 @@ class GfxRenderer;
 
 // Getting one chapter's IR into a RivuletEngine.
 //
-// This is the pipeline that used to live inside RivuletReaderActivity::loadSpine:
-//   cached .rvir (OOM deserialize retries; corrupt header may reconvert)
-//   else  ZIP inflate -> SD -> read into RAM under a framebuffer loan -> HtmlToIr
-//         -> persist IR, drop any map built from an older/partial convert
+// Sitting open (lendFrameBuffer=true) must produce IR when the EPUB has HTML.
+// Partial text is readable; returning fail is what flashed "Chapter not readable".
+//
+// Pipeline:
+//   framebuffer loan (cache + convert) so a 50 KB .rvir can deserialize
+//   cached .rvir for this Images mode, then sibling sN_m{0,1,2}.rvir
+//   else ZIP inflate -> SD -> prefix of HTML that fits -> HtmlToIr
+//        -> persist only a complete IR
 //
 // A successfully loaded .rvir is trusted. HTML is markup, so html>>text is
-// normal EPUB, not a truncated convert (see util/CachedIrPolicy.h).
+// normal EPUB, not a truncated convert (see util/CachedIrPolicy.h,
+// util/ChapterLoadPolicy.h).
 //
 // It is separate from the reader activity so other callers can use it — the Home
 // screen indexes chapters while no book is open, where nothing has to be evicted
@@ -53,11 +58,12 @@ struct Request {
   // Bind the engine's laid-out-page cache to this spine. Off for indexing, which
   // never paints and so would only write files nobody reads.
   bool bindPageCache = true;
-  // Lend the framebuffer's 48 KB to the convert (see GfxRenderer::FrameBufferLoan).
+  // Lend the framebuffer's 48 KB to cache deserialize AND convert.
   // MUST be false when the caller's screen is still on the panel and will do
   // windowed repaints afterwards: the loan hands the buffer back white, so a
-  // later partial update paints blank over live UI. Costs contiguous heap, so a
-  // caller that turns it off needs a correspondingly higher heap floor.
+  // later partial update paints blank over live UI. Sitting loadSpine leaves
+  // this true so a CrossPoint .rvir can load instead of flashing
+  // "Chapter not readable".
   bool lendFrameBuffer = true;
 };
 

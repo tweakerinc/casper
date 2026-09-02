@@ -27,10 +27,14 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // emit a lone Bold/Plus2 run. v24 IR still has that split and must reconvert.
 // v26: chapter-title images with readable alt become heading text (no hollow
 // box); first body para after a real chapter heading / span.dropcap is armed
-// for a drop-cap. DCC "[ 70 ]" headings still do not arm. v25 IR must reconvert.
+// for a drop-cap. DCC "[ 70 ]" headings still do not arm.
+//
+// Write v26 on save. LOAD v19–v26: the on-disk layout (blocks / runs / text blob)
+// has been stable since v19. Parser-only bumps used to set Min==Max, which marked
+// CrossPoint/CrossInk caches "corrupt", deleted them, and forced HTML convert
+// under ~11 KB maxAlloc → PTX OOM → abort() → "Chapter not readable".
 inline constexpr uint16_t kIrFormatVersion = 26;
-// Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 26;
+inline constexpr uint16_t kIrFormatVersionMin = 19;
 inline constexpr uint16_t kIrFormatVersionMax = 26;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
@@ -138,6 +142,9 @@ inline constexpr uint16_t kBlockOrnament = 1u << 5;        // small chapter orna
 // Page map magic
 inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};
 // v2: drop-cap after a chapter heading stays on the same page (not a title plate).
+// Load still accepts v1 so a format bump does not force a full map rebuild (and
+// a heap-starved convert) before the chapter can be shown.
 inline constexpr uint16_t kMapFormatVersion = 2;
+inline constexpr uint16_t kMapFormatVersionMin = 1;
 
 }  // namespace rivulet

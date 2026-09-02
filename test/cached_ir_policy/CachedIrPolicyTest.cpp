@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "Rivulet/IrFormat.h"
 #include "util/CachedIrPolicy.h"
 
 namespace {
@@ -36,4 +37,19 @@ TEST(CachedIrPolicy, OomDoesNotDeleteTheFile) { EXPECT_FALSE(cachedir::deleteFil
 
 TEST(CachedIrPolicy, CorruptHeaderMayDelete) {
   EXPECT_TRUE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::Corrupt));
+}
+
+TEST(CachedIrPolicy, StaleVersionDoesNotDeleteTheFile) {
+  EXPECT_FALSE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::StaleVersion));
+}
+
+TEST(CachedIrPolicy, CrossPointIrVersionsStayLoadable) {
+  // Parser-only bumps must not force a reconvert of v19–v25 caches.
+  EXPECT_EQ(rivulet::kIrFormatVersionMin, 19);
+  EXPECT_EQ(rivulet::kIrFormatVersionMax, rivulet::kIrFormatVersion);
+  EXPECT_TRUE(cachedir::irVersionLoadable(19, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
+  EXPECT_TRUE(cachedir::irVersionLoadable(25, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
+  EXPECT_TRUE(cachedir::irVersionLoadable(26, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
+  EXPECT_FALSE(cachedir::irVersionLoadable(18, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
+  EXPECT_FALSE(cachedir::irVersionLoadable(27, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
 }

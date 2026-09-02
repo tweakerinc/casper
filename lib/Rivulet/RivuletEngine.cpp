@@ -318,6 +318,9 @@ bool RivuletEngine::loadIr(const char* irPath) {
     case ChapterIr::LoadResult::Oom:
       lastIrLoadResult_ = IrLoadResult::Oom;
       return false;
+    case ChapterIr::LoadResult::StaleVersion:
+      lastIrLoadResult_ = IrLoadResult::StaleVersion;
+      return false;
     case ChapterIr::LoadResult::Corrupt:
       lastIrLoadResult_ = IrLoadResult::Corrupt;
       return false;

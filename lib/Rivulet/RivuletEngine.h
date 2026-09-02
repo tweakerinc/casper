@@ -48,7 +48,7 @@ class RivuletEngine {
   // Load Tier B IR from SD.
   bool loadIr(const char* irPath);
   // Valid after a failed loadIr: Oom means keep the file and retry after a scrub.
-  enum class IrLoadResult : uint8_t { Ok, Corrupt, Oom };
+  enum class IrLoadResult : uint8_t { Ok, Corrupt, Oom, StaleVersion };
   [[nodiscard]] IrLoadResult lastIrLoadResult() const { return lastIrLoadResult_; }
 
   // Load page map if key matches and cursors fit IR; otherwise false.

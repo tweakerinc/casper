@@ -11,14 +11,15 @@
 // 1. HTML-vs-text ratio: EPUB XHTML is markup. 50 KB of HTML with 15 KB of
 //    extracted text is normal (tags, CSS, class attributes, SVG). The old
 //    2.5× / "html>20KB and text<5KB" test treated that as a truncated convert.
-// 2. loadIr failure: deserialize is one contiguous malloc of the text blob.
-//    Tight maxAlloc after a menu is OOM, not a corrupt file. Deleting the
-//    .rvir then forced a heavier HTML convert that also failed.
+// 3. version mismatch: v19–v26 share one on-disk layout. Treating an older
+//    CrossPoint/CrossInk cache as corrupt deleted it and forced a convert that
+//    abort()ed ("Chapter not readable").
 namespace cachedir {
 
 enum class LoadMiss : uint8_t {
   Oom = 0,
   Corrupt = 1,
+  StaleVersion = 2,
 };
 
 // Never reject a deserialized IR because HTML is larger than text.
@@ -28,8 +29,14 @@ inline constexpr bool rejectLoadedIrForHtmlRatio(const size_t htmlBytes, const s
   return false;
 }
 
-// Delete the file only when the header is actually unreadable. Keep it on OOM
-// so the next scrub can load the chapter the user already read.
+// v19–v26 share one on-disk layout. A parser bump must still load older files.
+inline constexpr bool irVersionLoadable(const uint16_t ver, const uint16_t minV, const uint16_t maxV) {
+  return ver >= minV && ver <= maxV;
+}
+
+// Delete only when the header is actually unreadable. Keep the file on OOM and
+// on a version we do not load yet — converting under a tight heap used to
+// abort() and leave every chapter as "Chapter not readable".
 inline constexpr bool deleteFileOnLoadMiss(const LoadMiss miss) { return miss == LoadMiss::Corrupt; }
 
 }  // namespace cachedir

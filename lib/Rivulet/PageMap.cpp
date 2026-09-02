@@ -121,7 +121,7 @@ bool PageMap::loadFromFile(const char* path) {
     return false;
   }
   uint16_t ver = 0;
-  if (!serialization::tryReadPod(f, ver) || ver != kMapFormatVersion) {
+  if (!serialization::tryReadPod(f, ver) || ver < kMapFormatVersionMin || ver > kMapFormatVersion) {
     f.close();
     return false;
   }
@@ -135,8 +135,7 @@ bool PageMap::loadFromFile(const char* path) {
   // vector allocation calls abort(), so a corrupt header used to crash the device
   // (600 KB request on a 380 KB part). Cap by sanity AND by bytes actually left.
   if (!serialization::tryReadPod(f, n) || n > kMaxMapPages) {
-    LOG_ERR("RVPM", "page count %u rejected (cap %u)", static_cast<unsigned>(n),
-            static_cast<unsigned>(kMaxMapPages));
+    LOG_ERR("RVPM", "page count %u rejected (cap %u)", static_cast<unsigned>(n), static_cast<unsigned>(kMaxMapPages));
     f.close();
     return false;
   }

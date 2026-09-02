@@ -98,7 +98,7 @@ class ChapterIr {
   bool saveToFile(const char* path) const;
   bool loadFromFile(const char* path);
   // Distinguish OOM from a bad header so callers can keep a just-read cache.
-  enum class LoadResult : uint8_t { Ok, Corrupt, Oom };
+  enum class LoadResult : uint8_t { Ok, Corrupt, Oom, StaleVersion };
   LoadResult loadFromFileEx(const char* path);
 
   [[nodiscard]] int estimatePageCount(int viewportW, int viewportH, int bodyEmPx, float lineCompression) const;

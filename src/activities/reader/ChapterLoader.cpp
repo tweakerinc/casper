@@ -121,18 +121,24 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
         }
       }
     } else if (Storage.exists(irPath)) {
-      const cachedir::LoadMiss miss = (eng.lastIrLoadResult() == rivulet::RivuletEngine::IrLoadResult::Oom)
-                                          ? cachedir::LoadMiss::Oom
+      const auto loadSt = eng.lastIrLoadResult();
+      const cachedir::LoadMiss miss = (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) ? cachedir::LoadMiss::Oom
+                                      : (loadSt == rivulet::RivuletEngine::IrLoadResult::StaleVersion)
+                                          ? cachedir::LoadMiss::StaleVersion
                                           : cachedir::LoadMiss::Corrupt;
       if (cachedir::deleteFileOnLoadMiss(miss)) {
         LOG_DBG("CHLOAD", "corrupt IR %s — reconvert", irPath);
         Storage.remove(irPath);
-      } else {
+      } else if (loadSt == rivulet::RivuletEngine::IrLoadResult::Oom) {
         // Deserialize lost to heap. Convert needs the HTML buffer on top of the
         // same blob — it will lose too, and used to delete a chapter the user
         // had just been reading. Keep the file for the caller's next scrub.
         LOG_ERR("CHLOAD", "IR OOM spine=%d — keep cache, skip convert", spineIndex);
         return out;
+      } else {
+        // Stale version: keep the file and try convert. Only a complete IR may
+        // replace it (see save below). A failed convert must not delete the cache.
+        LOG_ERR("CHLOAD", "IR stale version spine=%d — keep cache, try convert", spineIndex);
       }
     }
   }
@@ -277,8 +283,8 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
           // Drop any map built from an earlier partial session for this spine.
           if (Storage.exists(mapPath)) Storage.remove(mapPath);
         } else if (ok && eng.chapter().failed()) {
-          if (Storage.exists(irPath)) Storage.remove(irPath);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
+          // Partial RAM is session-only. Never delete an on-disk .rvir — that is
+          // how a version bump + OOM convert left every book "Chapter not readable".
           if (requireCompleteIr) {
             LOG_ERR("CHLOAD", "spine %d partial IR refused (requireFull) text=%u html=%u", spineIndex,
                     static_cast<unsigned>(eng.chapter().textSize()), static_cast<unsigned>(htmlSize));
@@ -324,7 +330,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
                 LOG_ERR("CHLOAD", "spine %d requireFull still partial/fail", spineIndex);
                 eng.clear();
                 ok = false;
-                if (Storage.exists(irPath)) Storage.remove(irPath);
+                // Keep any existing .rvir. A failed reconvert must not wipe the cache.
               }
             } else {
               htmlFile.close();

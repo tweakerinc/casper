@@ -418,8 +418,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       logSkip(maxAlloc);
       return false;
     }
-    // Nothrow probe of the largest single buffer (string vector growth).
-    void* probe = ::operator new(newCapacity * 32U + 256U, std::nothrow);
+    void* probe = ::operator new(needBytes, std::nothrow);
     if (!probe) {
       logSkip(maxAlloc);
       return false;
@@ -696,8 +695,6 @@ int ParsedText::widthForLine(const int lineIndex, const int pageWidth) const {
   return w < 16 ? 16 : w;
 }
 
-
-
 std::vector<size_t> ParsedText::computeFloatAwareLineBreaks(const GfxRenderer& renderer, const int fontId,
                                                             const int pageWidth, std::vector<uint16_t>& wordWidths,
                                                             std::vector<bool>& continuesVec,
@@ -867,8 +864,8 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
       }
     }
     if (wordWidths.capacity() < words.size()) {
-      LOG_ERR("PTX", "OOM: wordWidths reserve n=%u maxA=%u — skip layout lines",
-              static_cast<unsigned>(words.size()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      LOG_ERR("PTX", "OOM: wordWidths reserve n=%u maxA=%u — skip layout lines", static_cast<unsigned>(words.size()),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
       return wordWidths;
     }
   }
@@ -877,13 +874,13 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
     EpdFontFamily::Style style = wordStyles[i];
     // Single-size / synthetic scale: measure with DROP_CAP so wrap matches paint.
     if (blockStyle.syntheticScale) {
-      style = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(style) | static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+      style = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(style) |
+                                                static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
     }
     if ((style & EpdFontFamily::DROP_CAP) != 0) {
       // Metric drop-cap: paintGlyphScale 2–4; 0/1 → default 2×.
       const int nn = blockStyle.paintGlyphScale >= 2 ? static_cast<int>(blockStyle.paintGlyphScale) : 2;
-      wordWidths.push_back(static_cast<uint16_t>(
-          renderer.getTextAdvanceX(fontId, words[i].c_str(), style, nn)));
+      wordWidths.push_back(static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, words[i].c_str(), style, nn)));
     } else {
       wordWidths.push_back(measureWordWidth(renderer, fontId, words[i], style));
     }

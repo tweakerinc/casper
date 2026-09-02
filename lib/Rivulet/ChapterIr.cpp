@@ -333,9 +333,13 @@ ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
     return LoadResult::Corrupt;
   }
   uint16_t ver = 0;
-  if (!serialization::tryReadPod(f, ver) || ver < kIrFormatVersionMin || ver > kIrFormatVersionMax) {
-    LOG_ERR("RVIR", "bad version %u", ver);
-    return LoadResult::Corrupt;
+  if (!serialization::tryReadPod(f, ver)) return LoadResult::Corrupt;
+  if (ver < kIrFormatVersionMin || ver > kIrFormatVersionMax) {
+    // Not a torn header — CrossPoint/CrossInk (or an older Casper) wrote this.
+    // Caller must keep the file. Deleting it forced a convert that abort()ed.
+    LOG_ERR("RVIR", "unsupported version %u (load %u-%u) — keep file", static_cast<unsigned>(ver),
+            static_cast<unsigned>(kIrFormatVersionMin), static_cast<unsigned>(kIrFormatVersionMax));
+    return LoadResult::StaleVersion;
   }
   uint32_t nBlocks = 0, nRuns = 0, nText = 0;
   if (!serialization::tryReadPod(f, nBlocks)) return LoadResult::Corrupt;

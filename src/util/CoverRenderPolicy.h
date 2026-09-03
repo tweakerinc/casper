@@ -29,6 +29,10 @@ inline constexpr bool paintWhenHeroArrives() { return true; }
 
 inline constexpr bool idleUpgradeFallbackToHero() { return true; }
 
+// Progressive jackets (DCC Ruin, etc.) decode at full source size via SD coeff
+// spill. JPEGDEC's 1/8 DC-only path is fallback only.
+inline constexpr bool fullProgressiveCoverDecode() { return true; }
+
 inline constexpr uint8_t kMaxGenAttempts = 8;
 
 inline constexpr unsigned kRetryDelayMs = 800;

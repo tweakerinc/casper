@@ -35,3 +35,7 @@ TEST(CoverRenderPolicy, LoanFramebufferAndPaintWhenHeroArrives) {
   EXPECT_TRUE(coverrender::paintWhenHeroArrives());
   EXPECT_TRUE(coverrender::idleUpgradeFallbackToHero());
 }
+
+TEST(CoverRenderPolicy, FullProgressiveCoverDecode) {
+  EXPECT_TRUE(coverrender::fullProgressiveCoverDecode());
+}

@@ -799,14 +799,30 @@ std::string Epub::getDescription() {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
-  const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
+  const auto coverFileName = std::string("cover_c31") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
 
+namespace {
+bool bmpLooksValid(const std::string& path) {
+  HalFile probe;
+  if (!Storage.openFileForRead("EBP", path, probe)) return false;
+  char sig[2] = {};
+  const size_t n = probe.read(sig, 2);
+  const size_t sz = probe.size();
+  probe.close();
+  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
+}
+}  // namespace
+
 bool Epub::generateCoverBmp(bool cropped) const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
+  const std::string existingPath = getCoverBmpPath(cropped);
+  if (bmpLooksValid(existingPath)) {
     return true;
+  }
+  if (Storage.exists(existingPath.c_str())) {
+    LOG_ERR("EBP", "Removing corrupt sleep cover: %s", existingPath.c_str());
+    Storage.remove(existingPath.c_str());
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
@@ -923,9 +939,9 @@ bool Epub::generateCoverBmp(bool cropped) const {
 // c30: CrossPoint v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
 // Stats + Stats-Life share one height key (same thumb file). Bare 420×560 1:1.
 // c24 (480×640) forced Bare to scale down and looked griddy — do not reintroduce.
-std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c30_[HEIGHT].bmp"; }
+std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c31_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const {
-  return cachePath + "/thumb_c30_" + std::to_string(height) + ".bmp";
+  return cachePath + "/thumb_c31_" + std::to_string(height) + ".bmp";
 }
 
 // Re-read OPF (full, including manifest) so cover href is current. book.bin can

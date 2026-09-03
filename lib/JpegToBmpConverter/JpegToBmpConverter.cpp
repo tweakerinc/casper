@@ -7,8 +7,11 @@
 #include <Memory.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <jpgd.h>
+#include <jpgd_spill.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 
 #include "BitmapHelpers.h"
@@ -498,6 +501,52 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   ctx->currentOutY++;
 }
 
+static bool emitSourceGrayRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int y) {
+  if (!ctx || ctx->error) return false;
+  if (y <= ctx->lastSrcYProcessed) return true;
+  if (y < 0 || y >= ctx->srcHeight) return true;
+
+  if (ctx->smoothUpscale) {
+    processSmoothSourceRow(ctx, srcRow, y);
+  } else if (!ctx->needsScaling) {
+    writeOutputRow(ctx, srcRow, y);
+    ctx->currentOutY++;
+  } else {
+    for (int outX = 0; outX < ctx->outWidth; outX++) {
+      const int srcXStart = (static_cast<uint32_t>(outX) * ctx->scaleX_fp) >> 16;
+      int srcXEnd = (static_cast<uint32_t>(outX + 1) * ctx->scaleX_fp) >> 16;
+      if (srcXEnd <= srcXStart) srcXEnd = srcXStart + 1;
+      int sum = 0;
+      int count = 0;
+      for (int srcX = srcXStart; srcX < srcXEnd && srcX < ctx->srcWidth; srcX++) {
+        sum += srcRow[srcX];
+        count++;
+      }
+      if (count == 0 && srcXStart < ctx->srcWidth) {
+        sum = srcRow[srcXStart];
+        count = 1;
+      } else if (count == 0 && ctx->srcWidth > 0) {
+        sum = srcRow[ctx->srcWidth - 1];
+        count = 1;
+      }
+      ctx->rowAccum[outX] += sum;
+      ctx->rowCount[outX] += count;
+    }
+
+    const uint32_t srcY_fp = static_cast<uint32_t>(y + 1) << 16;
+    while (srcY_fp >= ctx->nextOutY_srcStart && ctx->currentOutY < ctx->outHeight) {
+      flushScaledRow(ctx);
+      ctx->nextOutY_srcStart = static_cast<uint32_t>(ctx->currentOutY + 1) * ctx->scaleY_fp;
+      if (srcY_fp >= ctx->nextOutY_srcStart) continue;
+      memset(ctx->rowAccum.get(), 0, ctx->outWidth * sizeof(uint32_t));
+      memset(ctx->rowCount.get(), 0, ctx->outWidth * sizeof(uint32_t));
+    }
+  }
+
+  ctx->lastSrcYProcessed = y;
+  return !ctx->error;
+}
+
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,
 // in left-to-right, top-to-bottom order (baseline JPEG).
 // Accumulates columns into mcuBuf; once the last column arrives (completing the MCU
@@ -558,61 +607,281 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   const int endRow = ctx->mcuRowBaseY + processH;
 
   for (int y = ctx->mcuRowBaseY; y < endRow && y < ctx->srcHeight; y++) {
-    // Skip already-emitted rows (defensive; should not happen with continuous decode).
-    if (y <= ctx->lastSrcYProcessed) continue;
-
     const uint8_t* srcRow = ctx->mcuBuf.get() + (y - ctx->mcuRowBaseY) * ctx->srcWidth;
-
-    if (ctx->smoothUpscale) {
-      processSmoothSourceRow(ctx, srcRow, y);
-    } else if (!ctx->needsScaling) {
-      // 1:1 — outWidth == srcWidth, write directly
-      writeOutputRow(ctx, srcRow, y);
-      ctx->currentOutY++;
-    } else {
-      // Fixed-point area averaging on X axis
-      for (int outX = 0; outX < ctx->outWidth; outX++) {
-        const int srcXStart = (static_cast<uint32_t>(outX) * ctx->scaleX_fp) >> 16;
-        int srcXEnd = (static_cast<uint32_t>(outX + 1) * ctx->scaleX_fp) >> 16;
-        // Ensure every output column samples at least one source pixel (avoids
-        // black hairlines from empty bins at fixed-point boundaries).
-        if (srcXEnd <= srcXStart) srcXEnd = srcXStart + 1;
-        int sum = 0;
-        int count = 0;
-        for (int srcX = srcXStart; srcX < srcXEnd && srcX < ctx->srcWidth; srcX++) {
-          sum += srcRow[srcX];
-          count++;
-        }
-        if (count == 0 && srcXStart < ctx->srcWidth) {
-          sum = srcRow[srcXStart];
-          count = 1;
-        } else if (count == 0 && ctx->srcWidth > 0) {
-          sum = srcRow[ctx->srcWidth - 1];
-          count = 1;
-        }
-        ctx->rowAccum[outX] += sum;
-        ctx->rowCount[outX] += count;
-      }
-
-      // Flush output row(s) whose Y boundary we've crossed
-      const uint32_t srcY_fp = static_cast<uint32_t>(y + 1) << 16;
-      while (srcY_fp >= ctx->nextOutY_srcStart && ctx->currentOutY < ctx->outHeight) {
-        flushScaledRow(ctx);
-        ctx->nextOutY_srcStart = static_cast<uint32_t>(ctx->currentOutY + 1) * ctx->scaleY_fp;
-        if (srcY_fp >= ctx->nextOutY_srcStart) continue;
-        memset(ctx->rowAccum.get(), 0, ctx->outWidth * sizeof(uint32_t));
-        memset(ctx->rowCount.get(), 0, ctx->outWidth * sizeof(uint32_t));
-      }
-    }
-
-    ctx->lastSrcYProcessed = y;
+    if (!emitSourceGrayRow(ctx, srcRow, y)) return 0;
   }
 
-  // MCU row complete — reset assembly state for the next row.
   ctx->mcuRowBaseY = -1;
   ctx->mcuRowMaxH = 0;
 
   return ctx->error ? 0 : 1;
+}
+
+class HalJpegStream final : public jpgd::jpeg_decoder_stream {
+ public:
+  explicit HalJpegStream(HalFile& file) : file_(&file), size_(file.size()) { file_->seek(0); }
+
+  int read(jpgd::uint8* pBuf, int max_bytes_to_read, bool* pEOF_flag) override {
+    if (!file_ || !pBuf || max_bytes_to_read <= 0) {
+      if (pEOF_flag) *pEOF_flag = true;
+      return 0;
+    }
+    if (pos_ >= size_) {
+      if (pEOF_flag) *pEOF_flag = true;
+      return 0;
+    }
+    if (!file_->seek(pos_)) {
+      if (pEOF_flag) *pEOF_flag = true;
+      return -1;
+    }
+    const size_t remain = size_ - pos_;
+    const int want = max_bytes_to_read < static_cast<int>(remain) ? max_bytes_to_read : static_cast<int>(remain);
+    const int n = file_->read(pBuf, static_cast<size_t>(want));
+    if (n <= 0) {
+      if (pEOF_flag) *pEOF_flag = true;
+      return n < 0 ? -1 : 0;
+    }
+    pos_ += static_cast<size_t>(n);
+    if (pos_ >= size_ && pEOF_flag) *pEOF_flag = true;
+    yieldDuringJpegIo();
+    return n;
+  }
+
+ private:
+  HalFile* file_ = nullptr;
+  size_t pos_ = 0;
+  size_t size_ = 0;
+};
+
+static int spillPread(void* ctx, uint64_t offset, void* buf, int n) {
+  auto* f = static_cast<HalFile*>(ctx);
+  if (!f || n <= 0) return 0;
+  if (!f->seek64(offset)) return 0;
+  const int r = f->read(buf, static_cast<size_t>(n));
+  return r < 0 ? 0 : r;
+}
+
+static int spillPwrite(void* ctx, uint64_t offset, const void* buf, int n) {
+  auto* f = static_cast<HalFile*>(ctx);
+  if (!f || n <= 0) return 0;
+  if (!f->seek64(offset)) return 0;
+  const int w = static_cast<int>(f->write(buf, static_cast<size_t>(n)));
+  f->flush();
+  return w;
+}
+
+static void finishCoverRows(BmpConvertCtx* ctx, const bool ok) {
+  if (!ctx) return;
+  if (ok && ctx->smoothUpscale && !ctx->error) {
+    finishSmoothUpscale(ctx);
+  }
+  if (ok && !ctx->error && ctx->needsScaling && !ctx->smoothUpscale) {
+    while (ctx->currentOutY < ctx->outHeight) {
+      flushScaledRow(ctx);
+      memset(ctx->rowAccum.get(), 0, ctx->outWidth * sizeof(uint32_t));
+      memset(ctx->rowCount.get(), 0, ctx->outWidth * sizeof(uint32_t));
+    }
+  }
+  if (ok && !ctx->error && !ctx->needsScaling && !ctx->smoothUpscale) {
+    while (ctx->currentOutY < ctx->outHeight) {
+      uint8_t* gray = ctx->grayRow.get();
+      if (!gray) break;
+      if (ctx->hasLastGoodGray && ctx->lastGoodGray) {
+        memcpy(gray, ctx->lastGoodGray.get(), static_cast<size_t>(ctx->outWidth));
+      } else {
+        memset(gray, ctx->coverHighQuality ? 255 : 128, static_cast<size_t>(ctx->outWidth));
+      }
+      pushGrayRow(ctx, gray, ctx->currentOutY);
+      ctx->currentOutY++;
+    }
+  }
+  if (ok && !ctx->error) {
+    finishSeamBuffer(ctx);
+  }
+}
+
+// Full-res progressive cover decode. JPEGDEC only keeps the DC scan (1/8).
+// Spill DCT coeffs to SD so a 1000×1504 jacket can IDCT at native size.
+static bool convertProgressiveJpegFull(HalFile& jpegFile, Print& bmpOut, int srcWidth, int srcHeight, int targetWidth,
+                                       int targetHeight, bool oneBit, bool crop, bool coverHighQuality, bool* wroteBmp) {
+  Storage.ensureDirectoryExists("/.crosspoint");
+  constexpr const char* kSpillPath = "/.crosspoint/.jpgd_coeff.tmp";
+  Storage.remove(kSpillPath);
+  HalFile spillFile = Storage.open(kSpillPath, O_RDWR | O_CREAT | O_TRUNC);
+  if (!spillFile) {
+    LOG_ERR("JPG", "Progressive spill file open failed");
+    return false;
+  }
+
+  jpgd::jpeg_decoder_spill_io io{};
+  io.ctx = &spillFile;
+  io.pread = spillPread;
+  io.pwrite = spillPwrite;
+  if (!jpgd::jpgd_spill_begin(&io)) {
+    spillFile.close();
+    Storage.remove(kSpillPath);
+    return false;
+  }
+
+  const ScopedCleanup spillCleanup{[&]() {
+    jpgd::jpgd_spill_end();
+    spillFile.close();
+    Storage.remove(kSpillPath);
+  }};
+
+  HalJpegStream stream(jpegFile);
+  auto decoder = makeUniqueNoThrow<jpgd::jpeg_decoder>(
+      &stream, jpgd::jpeg_decoder::cFlagDisableSIMD | jpgd::jpeg_decoder::cFlagCoverDecode);
+  if (!decoder || decoder->get_error_code() != jpgd::JPGD_SUCCESS) {
+    LOG_ERR("JPG", "Progressive jpgd open failed");
+    return false;
+  }
+  if (decoder->get_width() != srcWidth || decoder->get_height() != srcHeight) {
+    LOG_ERR("JPG", "Progressive jpgd size mismatch");
+    return false;
+  }
+  decoder->set_yield_callback(yieldToIdle);
+  if (decoder->begin_decoding() != jpgd::JPGD_SUCCESS) {
+    LOG_ERR("JPG", "Progressive jpgd decode failed (err=%d)", static_cast<int>(decoder->get_error_code()));
+    return false;
+  }
+
+  int outWidth = srcWidth;
+  int outHeight = srcHeight;
+  uint32_t scaleX_fp = 65536;
+  uint32_t scaleY_fp = 65536;
+  bool needsScaling = false;
+  if (targetWidth > 0 && targetHeight > 0 && (srcWidth != targetWidth || srcHeight != targetHeight)) {
+    const float scaleToFitWidth = static_cast<float>(targetWidth) / srcWidth;
+    const float scaleToFitHeight = static_cast<float>(targetHeight) / srcHeight;
+    float scale = crop ? ((scaleToFitWidth > scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight)
+                       : ((scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight);
+    outWidth = static_cast<int>(srcWidth * scale);
+    outHeight = static_cast<int>(srcHeight * scale);
+    if (outWidth < 1) outWidth = 1;
+    if (outHeight < 1) outHeight = 1;
+  }
+  if (srcWidth != outWidth || srcHeight != outHeight) {
+    scaleX_fp = (static_cast<uint32_t>(srcWidth) << 16) / outWidth;
+    scaleY_fp = (static_cast<uint32_t>(srcHeight) << 16) / outHeight;
+    needsScaling = true;
+  }
+
+  int bytesPerRow;
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    bytesPerRow = (outWidth + 3) / 4 * 4;
+  } else if (oneBit) {
+    bytesPerRow = (outWidth + 31) / 32 * 4;
+  } else {
+    bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
+  }
+
+  BmpConvertCtx ctx = {};
+  ctx.bmpOut = &bmpOut;
+  ctx.srcWidth = srcWidth;
+  ctx.srcHeight = srcHeight;
+  ctx.outWidth = outWidth;
+  ctx.outHeight = outHeight;
+  ctx.oneBit = oneBit;
+  ctx.bytesPerRow = bytesPerRow;
+  ctx.needsScaling = needsScaling;
+  ctx.scaleX_fp = scaleX_fp;
+  ctx.scaleY_fp = scaleY_fp;
+  ctx.smoothUpscale = false;
+  ctx.smoothScaleX_fp = interpolationStep(srcWidth, outWidth);
+  ctx.smoothScaleY_fp = interpolationStep(srcHeight, outHeight);
+  ctx.smoothNextOutY = 0;
+  ctx.smoothPrevY = -1;
+  ctx.mcuRowBaseY = -1;
+  ctx.mcuRowMaxH = 0;
+  ctx.lastSrcYProcessed = -1;
+  ctx.error = false;
+  ctx.coverHighQuality = coverHighQuality;
+
+  ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(8) * static_cast<size_t>(srcWidth));
+  ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  ctx.grayRow = makeUniqueNoThrow<uint8_t[]>(outWidth);
+  if (!ctx.mcuBuf || !ctx.bmpRow || !ctx.grayRow) {
+    LOG_ERR("JPG", "OOM: progressive full-res BMP buffers");
+    return false;
+  }
+  if (needsScaling) {
+    ctx.lastGoodGray = makeUniqueNoThrow<uint8_t[]>(outWidth);
+    if (ctx.lastGoodGray) {
+      memset(ctx.lastGoodGray.get(), coverHighQuality ? 255 : 128, static_cast<size_t>(outWidth));
+    }
+    ctx.rowAccum = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    ctx.rowCount = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    if (!ctx.rowAccum || !ctx.rowCount) {
+      LOG_ERR("JPG", "OOM: progressive scale buffers");
+      return false;
+    }
+    ctx.nextOutY_srcStart = scaleY_fp;
+  }
+
+  if (oneBit) {
+    ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->isValid()) return false;
+  } else if (!USE_8BIT_OUTPUT) {
+    if (coverHighQuality) {
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/true);
+    } else if (USE_FLOYD_STEINBERG) {
+      ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
+      if (!ctx.fsDitherer || !ctx.fsDitherer->isValid()) return false;
+    } else if (USE_ATKINSON) {
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth, /*balancedLevels=*/false);
+    }
+    if (ctx.atkinsonDitherer && !ctx.atkinsonDitherer->isValid()) return false;
+    if (!USE_FLOYD_STEINBERG && USE_ATKINSON && !ctx.atkinsonDitherer) return false;
+    if (coverHighQuality && !ctx.atkinsonDitherer) return false;
+  }
+
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
+  } else if (oneBit) {
+    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
+  } else {
+    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
+  }
+  if (wroteBmp) *wroteBmp = true;
+
+  LOG_INF("JPG", "Progressive JPEG full decode %dx%d -> %dx%d (spill coeffs) free=%u maxAlloc=%u", srcWidth, srcHeight,
+          outWidth, outHeight, static_cast<unsigned>(ESP.getFreeHeap()),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  const int blocksX = decoder->luma_blocks_x();
+  const int blocksY = decoder->luma_blocks_y();
+  uint8_t block[64];
+  for (int by = 0; by < blocksY; ++by) {
+    memset(ctx.mcuBuf.get(), coverHighQuality ? 128 : 0, static_cast<size_t>(8) * static_cast<size_t>(srcWidth));
+    for (int bx = 0; bx < blocksX; ++bx) {
+      if (!decoder->copy_luma_block(bx, by, block)) {
+        LOG_ERR("JPG", "Progressive luma block %d,%d failed", bx, by);
+        return false;
+      }
+      const int dstX = bx * 8;
+      for (int r = 0; r < 8; ++r) {
+        const int y = by * 8 + r;
+        if (y >= srcHeight) break;
+        uint8_t* dst = ctx.mcuBuf.get() + static_cast<size_t>(r) * static_cast<size_t>(srcWidth) + dstX;
+        const int copyW = (dstX + 8 <= srcWidth) ? 8 : (srcWidth - dstX);
+        if (copyW > 0) memcpy(dst, block + r * 8, static_cast<size_t>(copyW));
+      }
+    }
+    for (int r = 0; r < 8; ++r) {
+      const int y = by * 8 + r;
+      if (y >= srcHeight) break;
+      if (!emitSourceGrayRow(&ctx, ctx.mcuBuf.get() + static_cast<size_t>(r) * static_cast<size_t>(srcWidth), y)) {
+        return false;
+      }
+    }
+    yieldToIdle();
+  }
+
+  finishCoverRows(&ctx, !ctx.error);
+  if (ctx.error) return false;
+  LOG_DBG("JPG", "Progressive full decode wrote BMP");
+  return true;
 }
 
 }  // namespace
@@ -635,7 +904,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   s_jpegFile = &jpegFile;
 
-  const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
+  auto jpeg = makeUniqueNoThrow<JPEGDEC>();
   if (!jpeg) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
     return false;
@@ -647,30 +916,55 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     return false;
   }
 
-  const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
+  const ScopedCleanup cleanup{[&jpeg]() {
+    if (jpeg) jpeg->close();
+  }};
 
   const int srcWidth = jpeg->getWidth();
   const int srcHeight = jpeg->getHeight();
   const bool progressiveDecode = (jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE);
-  // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG,
-  // so callback coordinates and MCU buffering must use the reduced decode grid.
-  // c30 / v0.1.3: smooth bilinear upscale of that grid (not blocky full-size DC).
-  const int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
-  const int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
 
   LOG_DBG("JPG", "JPEG dimensions: %dx%d", srcWidth, srcHeight);
-  if (progressiveDecode) {
-    LOG_INF("JPG", "Progressive JPEG decode uses 1/8 source: %dx%d (soft vs baseline covers)", decodedSrcWidth,
-            decodedSrcHeight);
-  }
 
   constexpr int MAX_IMAGE_WIDTH = 2048;
   constexpr int MAX_IMAGE_HEIGHT = 3072;
-
   if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > MAX_IMAGE_WIDTH || srcHeight > MAX_IMAGE_HEIGHT) {
     LOG_DBG("JPG", "Image too large or invalid (%dx%d), max supported: %dx%d", srcWidth, srcHeight, MAX_IMAGE_WIDTH,
             MAX_IMAGE_HEIGHT);
     return false;
+  }
+
+  if (progressiveDecode) {
+    jpeg->close();
+    jpeg.reset();
+    bool wroteBmp = false;
+    if (convertProgressiveJpegFull(jpegFile, bmpOut, srcWidth, srcHeight, targetWidth, targetHeight, oneBit, crop,
+                                   coverHighQuality, &wroteBmp)) {
+      return true;
+    }
+    if (wroteBmp) {
+      LOG_ERR("JPG", "Progressive full decode failed after BMP start; not falling back to 1/8");
+      return false;
+    }
+    LOG_INF("JPG", "Progressive JPEG full decode failed; 1/8 fallback");
+    jpegFile.seek(0);
+    jpeg = makeUniqueNoThrow<JPEGDEC>();
+    if (!jpeg) {
+      LOG_ERR("JPG", "OOM: JPEG decoder fallback");
+      return false;
+    }
+    if (jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback) != 1) {
+      LOG_ERR("JPG", "JPEG reopen failed after progressive fallback (err=%d)", jpeg->getLastError());
+      return false;
+    }
+  }
+
+  // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG.
+  const int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
+  const int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
+  if (progressiveDecode) {
+    LOG_INF("JPG", "Progressive JPEG decode uses 1/8 source: %dx%d (soft vs baseline covers)", decodedSrcWidth,
+            decodedSrcHeight);
   }
 
   // Calculate output dimensions (pre-scale to fit display exactly)
@@ -918,7 +1212,7 @@ bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Prin
   return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true, false);
 }
 
-// Home covers (c30 / v0.1.3): 2-bit balanced Atkinson + mild lift at gen.
+// Home covers (c31): 2-bit balanced Atkinson + mild lift at gen.
 // Shared by Bare / Stats / Stats-Life. MCU max-height + empty-bin carry-forward.
 // Pair with home grayscale multipass for clean midtones (minimal dither grain).
 bool JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut,

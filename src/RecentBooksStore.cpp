@@ -22,6 +22,12 @@ bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentB
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
+    // c31: full-res progressive covers. Recents saved under c30 would skip JPEG
+    // forever on the muddy 1/8 thumb.
+    for (size_t pos = 0; (pos = book.coverBmpPath.find("thumb_c30_", pos)) != std::string::npos;) {
+      book.coverBmpPath.replace(pos, 10, "thumb_c31_");
+      pos += 10;
+    }
     // CrossPoint progress field (missing → unknown).
     if (obj["progressMilli"].is<int>() || obj["progressMilli"].is<unsigned int>()) {
       const int m = obj["progressMilli"] | -1;

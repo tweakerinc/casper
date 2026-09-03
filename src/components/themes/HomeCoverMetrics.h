@@ -4,9 +4,10 @@
 
 // Home hero cover generation for Bare / Stats / Stats-Life.
 //
-// Epub::generateThumbBmp(H) writes floor(H*3/4)×H (3:4 contain-fit, c30 balanced
-// Atkinson — CrossPoint v0.1.3). Same JpegToBmpConverter for all themes. Nearest-
-// neighbor scale of that 2-bit dither = gridlines / bands — gen size must match plate.
+// Epub::generateThumbBmp(H) writes floor(H*3/4)×H (3:4 contain-fit, c31 full-res
+// progressive JPEG + balanced Atkinson). Same JpegToBmpConverter for all themes.
+// Nearest-neighbor scale of that 2-bit dither = gridlines / bands — gen size must
+// match plate.
 //   Bare           → fixed 420×560
 //   Stats+Stats-Life → ONE shared height key (same thumb file for both themes)
 //

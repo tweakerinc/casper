@@ -168,7 +168,7 @@ float loadRecentBookProgressPercent(const RecentBook& book) {
 
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
 // Prefer open over exists() — exists() false-negatives after the reader made
-// every Home return decode JPEG even when thumb_c30_560.bmp was on SD.
+// every Home return decode JPEG even when thumb_c31_560.bmp was on SD.
 bool thumbLooksValid(const std::string& path) {
   if (path.empty()) return false;
   HalFile probe;

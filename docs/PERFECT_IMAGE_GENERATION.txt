@@ -1,7 +1,7 @@
 ================================================================================
 PERFECT IMAGE GENERATION — Casper home book covers
 ================================================================================
-Status: LOCKED recipe (Atkinson / 1:1 / multipass). Cache key c30.
+Status: LOCKED recipe (Atkinson / 1:1 / multipass). Cache key c31.
 Perfect path: MCU max-height assembly + empty-bin carry-forward + balanced Atkinson.
 NO row hairline filters (c26–c28 filters either missed seams or invented bands).
 Stats + Stats-Life share one height key (statsFamilyHeroThumbHeight) and ONE file.
@@ -22,11 +22,11 @@ This document is the exact recipe so the pipeline can be recreated by anyone.
 --------------------------------------------------------------------------------
 File: lib/Epub/Epub.cpp
 
-  getThumbBmpPath()     →  cachePath + "/thumb_c30_[HEIGHT].bmp"
-  getThumbBmpPath(H)    →  cachePath + "/thumb_c30_" + height + ".bmp"
+  getThumbBmpPath()     →  cachePath + "/thumb_c31_[HEIGHT].bmp"
+  getThumbBmpPath(H)    →  cachePath + "/thumb_c31_" + height + ".bmp"
 
 Meaning of the key:
-  c30 = generation recipe version (bump whenever gen quality settings change).
+  c31 = generation recipe version (bump whenever gen quality settings change).
   HEIGHT = pixel height of the generated BMP (width = floor(H*3/4) ≈ 3:4).
 
 IMPORTANT — one pipeline for ALL themes:
@@ -35,8 +35,8 @@ IMPORTANT — one pipeline for ALL themes:
     Bare            → 560
     Stats+Stats-Life → statsFamilyHeroThumbHeight(pageW, pageH)  [SAME file]
 
-Bare: thumb_c30_560.bmp (420×560).
-Stats / Stats-Life: one shared thumb_c30_<H>.bmp (never two gens).
+Bare: thumb_c31_560.bmp (420×560).
+Stats / Stats-Life: one shared thumb_c31_<H>.bmp (never two gens).
 
 Do NOT reintroduce c24 (480×640): Bare had to scale down → gridlines.
 
@@ -118,7 +118,7 @@ LAW: Never nearest-neighbor scale a 2-bit Atkinson BMP up or down for display.
 Bare (fixed):
   imageWidth  = 420
   imageHeight = 560
-  Gen: thumb_c30_560.bmp = 420×560, blit 1:1.
+  Gen: thumb_c31_560.bmp = 420×560, blit 1:1.
   Layout plate prefers exact 420×560; multipass snapshots the art rect.
 
 Stats + Stats-Life (ONE shared plate):
@@ -168,8 +168,11 @@ onEnter freeCoverBuffer so theme switches always remultipass.
 - Share one Bare-sized thumb with Focus/Stats when their plate is a different
   width → scale → grids.
 - Process only last MCU column’s blockH → skipped source rows → horizontal seam.
+- Progressive jackets (DCC Ruin, etc.): JPEGDEC 1/8 DC-only is muddy. c31
+  full-decodes progressive covers via jpgd + SD coeff spill, then the same
+  scale/Atkinson path as baseline Empire. In-chapter images stay 1/8.
 - Empty Y-scale bins as black → hairline; as solid white → band after dither.
-  Use carry-forward of last good gray per column (c30).
+  Use carry-forward of last good gray per column (c30+).
 - Short BMP height (not filling outHeight) → trash strip / line at bottom.
 - Double multipass / wrong thumb height → white flash or muddy art.
 - Floyd–Steinberg on covers → worm artifacts.
@@ -180,10 +183,12 @@ onEnter freeCoverBuffer so theme switches always remultipass.
 --------------------------------------------------------------------------------
 10. HOW TO REGENERATE AFTER A RECIPE CHANGE
 --------------------------------------------------------------------------------
-1. Bump c30 → cN+1 in Epub::getThumbBmpPath.
+1. Bump c31 → cN+1 in Epub::getThumbBmpPath (and cover_c31).
 2. Flash firmware.
-3. Delete Cache on the book (or force home refresh) so thumb_cN+1_*.bmp is built.
+3. First Home/sleep gen writes thumb_cN+1_*.bmp / cover_cN+1.bmp (no Delete Cache
+   if recents paths are rewritten; otherwise Delete Cache).
 4. Confirm 1:1: on-disk BMP width/height == on-screen drawn size for that theme.
+   Enable Logging: `Progressive JPEG full decode WxH -> wxh (spill coeffs)`.
 
 --------------------------------------------------------------------------------
 11. KEY SOURCE FILES (QUICK MAP)

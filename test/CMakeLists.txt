@@ -37,6 +37,7 @@ target_compile_options(crosspoint_test_common INTERFACE
 
 enable_testing()
 include(GoogleTest)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
@@ -47,3 +48,4 @@ add_subdirectory(opds_filename)
 add_subdirectory(minibidi_arabic)
 add_subdirectory(combining_marks)
 add_subdirectory(html_to_ir)
+add_subdirectory(xteink_display)

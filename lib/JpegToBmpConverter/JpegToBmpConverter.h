@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CoverDecodePolicy.h"
+
 #include <HalStorage.h>
 
 class Print;

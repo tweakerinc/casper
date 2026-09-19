@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <vector>
 
 #include "BookActions.h"
@@ -37,6 +38,7 @@
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
 #include "util/CoverRenderPolicy.h"
+#include "util/CoverThumbFiles.h"
 #include "util/CrossPointPaths.h"
 #include "util/DarkModePolicy.h"
 #include "util/HomeSideStepPolicy.h"
@@ -169,21 +171,10 @@ float loadRecentBookProgressPercent(const RecentBook& book) {
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
 // Prefer open over exists() — exists() false-negatives after the reader made
 // every Home return decode JPEG even when thumb_c31_560.bmp was on SD.
-bool thumbLooksValid(const std::string& path) {
-  if (path.empty()) return false;
-  HalFile probe;
-  const bool opened = Storage.openFileForRead("HOME", path, probe);
-  bool validBmp = false;
-  if (opened) {
-    char sig[2] = {};
-    const size_t n = probe.read(sig, 2);
-    const size_t sz = probe.size();
-    probe.close();
-    validBmp = n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
-  }
-  const bool exists = opened || Storage.exists(path.c_str());
-  return thumbcache::keepExistingThumb(exists, opened, validBmp);
-}
+// A header-only leftover (BM + 70 bytes) is not a jacket.
+bool thumbLooksValid(const std::string& path) { return coverthumb::fileIsValidBmp("HOME", path); }
+
+bool thumbLooksPresent(const std::string& path) { return coverthumb::fileLooksPresent("HOME", path); }
 
 bool fallbackThumbLooksValid(const std::string& templatePath) {
   return thumbLooksValid(UITheme::getCoverThumbPath(templatePath, HomeCoverMetrics::previewThumbHeight)) ||
@@ -199,23 +190,35 @@ bool recentsCoverLooksPaintable(const RecentBook& book, int heroH) {
 thumbcache::DiskThumb classifyRecentCover(const RecentBook& book, int heroH) {
   bool hero = false;
   bool fallback = false;
+  bool present = false;
+  auto consider = [&](const std::string& path, const bool isHero) {
+    if (path.empty()) return;
+    if (thumbLooksValid(path)) {
+      if (isHero)
+        hero = true;
+      else
+        fallback = true;
+    } else if (thumbLooksPresent(path)) {
+      present = true;
+    }
+  };
   if (!book.coverBmpPath.empty()) {
-    hero = thumbLooksValid(UITheme::getCoverThumbPath(book.coverBmpPath, heroH));
-    fallback = fallbackThumbLooksValid(book.coverBmpPath);
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, heroH), true);
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::previewThumbHeight), false);
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::homeShelfThumbHeight), false);
   }
-  if (hero) return thumbcache::DiskThumb::Hero;
   if (FsHelpers::hasEpubExtension(book.path)) {
     Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-    hero = thumbLooksValid(epub.getThumbBmpPath(heroH));
-    fallback = fallback || thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
-               thumbLooksValid(epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+    consider(epub.getThumbBmpPath(heroH), true);
+    consider(epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight), false);
+    consider(epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight), false);
   } else if (FsHelpers::hasXtcExtension(book.path)) {
     Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
-    hero = thumbLooksValid(xtc.getThumbBmpPath(heroH));
-    fallback = fallback || thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
-               thumbLooksValid(xtc.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+    consider(xtc.getThumbBmpPath(heroH), true);
+    consider(xtc.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight), false);
+    consider(xtc.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight), false);
   }
-  return thumbcache::classify(hero, fallback);
+  return thumbcache::classify(hero, fallback, present && !hero && !fallback);
 }
 
 void paintRenderingCoverCue(GfxRenderer& renderer) {
@@ -373,6 +376,29 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     return coverrender::generateHero(classifyRecentCover(book, heroH));
   };
 
+  auto armRetry = [this, heroH](const bool fromGen) {
+    const auto disk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Missing : classifyRecentCover(recentBooks[0], heroH);
+    if (coverrender::keepRetrying(coverGenAttempts, disk, coverGrayOnPanel)) {
+      coverNeedsRetry = true;
+      const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *
+                               static_cast<unsigned>(std::max<uint8_t>(1, coverGenAttempts));
+      coverRetryAtMs = millis() + delayMs;
+      LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %ums disk=%d", static_cast<unsigned>(coverGenAttempts),
+              static_cast<unsigned>(coverrender::kMaxGenAttempts), delayMs, static_cast<int>(disk));
+      SystemLog::logTiming("HOME", "cover_gen retry %u/%u disk=%d fromGen=%d",
+                           static_cast<unsigned>(coverGenAttempts),
+                           static_cast<unsigned>(coverrender::kMaxGenAttempts), static_cast<int>(disk),
+                           fromGen ? 1 : 0);
+    } else {
+      coverNeedsRetry = false;
+      if (disk != thumbcache::DiskThumb::Hero) {
+        SystemLog::logTiming("HOME", "cover_gen gave_up attempts=%u disk=%d",
+                             static_cast<unsigned>(coverGenAttempts), static_cast<int>(disk));
+      }
+    }
+  };
+
   bool anyNeedWork = false;
   for (const RecentBook& book : recentBooks) {
     if (bookNeedsHero(book)) {
@@ -384,9 +410,27 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   if (!anyNeedWork) {
     recentsLoaded = true;
     recentsLoading = false;
-    coverNeedsRetry = false;
+    const auto disk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Hero : classifyRecentCover(recentBooks[0], heroH);
+    if (disk != thumbcache::DiskThumb::Hero) {
+      coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
+      coverRendered = false;
+      coverGrayOnPanel = false;
+      requestUpdate();
+    }
+    armRetry(false);
     return;
   }
+
+  // Shell must already be on glass. Generating before the first Home paint
+  // FAST/windowed the cue onto an empty FB (white plate + "Rendering Cover").
+  if (coverrender::genWaitsForHomeShell() && !homeUiReady) {
+    recentsLoading = false;
+    coverNeedsRetry = true;
+    coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+    return;
+  }
+  activityManager.waitForRenderIdle();
 
   // Cue on glass first. recentsLoading then blocks render(); a framebuffer-only
   // stamp would never appear. Dark Mode uses HALF via drawTopLeftStatus.
@@ -459,24 +503,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoaded = true;
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
-
-  const bool missingHero =
-      !recentBooks.empty() && coverrender::generateHero(classifyRecentCover(recentBooks[0], heroH));
-  if (coverrender::keepRetrying(coverGenAttempts, missingHero, coverGrayOnPanel)) {
-    coverNeedsRetry = true;
-    const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *
-                             static_cast<unsigned>(std::max<uint8_t>(1, coverGenAttempts));
-    coverRetryAtMs = millis() + delayMs;
-    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %ums missingHero=%d", static_cast<unsigned>(coverGenAttempts),
-            static_cast<unsigned>(coverrender::kMaxGenAttempts), delayMs, missingHero ? 1 : 0);
-    SystemLog::logTiming("HOME", "cover_gen retry %u/%u missingHero=%d", static_cast<unsigned>(coverGenAttempts),
-                         static_cast<unsigned>(coverrender::kMaxGenAttempts), missingHero ? 1 : 0);
-  } else {
-    coverNeedsRetry = false;
-    if (missingHero) {
-      SystemLog::logTiming("HOME", "cover_gen gave_up attempts=%u", static_cast<unsigned>(coverGenAttempts));
-    }
-  }
+  (void)anyTransientFail;
+  armRetry(true);
 
   if (anyNewThumb && coverrender::paintWhenHeroArrives()) {
     freeCoverBuffer();
@@ -485,6 +513,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     coverGrayOnPanel = false;
     requestUpdate();
   } else if (!coverGrayOnPanel) {
+    coverRendered = false;
     requestUpdate();
   }
 }
@@ -659,7 +688,7 @@ void HomeActivity::onResume() {
     if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
       recentsLoaded = true;
     }
-    homeUiReady = true;
+    homeUiReady = false;
   }
 
   // Capture the snappy-return hint BEFORE clearing it. This flag was written in
@@ -690,7 +719,7 @@ void HomeActivity::onResume() {
   deferredGreysOnly = false;
   softGrayscaleBase = false;
   recentsLoading = false;
-  homeUiReady = true;
+  homeUiReady = false;  // render() sets this after the shell is actually on glass
   coverNeedsRetry = false;
   coverGenAttempts = 0;
   coverRetryAtMs = 0;
@@ -926,12 +955,7 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   const int heroH = homeHeroThumbHeight(renderer, UITheme::getInstance().getMetrics().homeCoverHeight);
 
   auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
-    for (const std::string& path : candidates) {
-      if (!path.empty() && Storage.exists(path.c_str())) {
-        return path;
-      }
-    }
-    return {};
+    return coverthumb::firstValidBmp("HOME", candidates);
   };
 
   // Prefer the current theme's hero height (1:1). Bare may briefly open a
@@ -957,13 +981,15 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     });
   }
   if (coverPath.empty()) {
-    displayBw(true, "bw_no_path");
+    const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
+    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_no_path");
     return;
   }
 
   HalFile file;
   if (!Storage.openFileForRead("HOME", coverPath, file)) {
-    displayBw(true, "bw_open_fail");
+    const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
+    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_open_fail");
     return;
   }
 
@@ -1383,8 +1409,9 @@ void HomeActivity::loop() {
         // Loan the 48 KB framebuffer inside loadRecentCovers so fragmented
         // maxAlloc after reading can still decode JPEG. Do not require 90/80 KB
         // up front — that is why cache-delete covers sat blank for 60s+.
+        // Do not set recentsLoading before the call: that blocked render() so
+        // the cue FAST'd onto an empty framebuffer (white + "Rendering Cover").
         const auto& metrics = UITheme::getInstance().getMetrics();
-        recentsLoading = true;
         loadRecentCovers(metrics.homeCoverHeight);
         return;
       }
@@ -1695,7 +1722,11 @@ void HomeActivity::loop() {
         if (mappedInput.wasTapInRect(0, tapTop, renderer.getScreenWidth(), tapH)) {
           onContinueReading();
         }
-      } else if (mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(),
+      } else if (coverRectW > 0 && coverRectH > 0 &&
+                 mappedInput.wasTapInRect(coverRectX, coverRectY, coverRectW, coverRectH)) {
+        onContinueReading();
+      } else if (coverRectW <= 0 &&
+                 mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(),
                                           metrics.homeCoverTileHeight)) {
         onContinueReading();
       }
@@ -2234,7 +2265,13 @@ void HomeActivity::render(RenderLock&& lock) {
     snappyResumeNoGreys = false;
     // Bare: put the jacket on glass now. Greys run idle so Home is not an empty
     // box for a minute. Same in Dark Mode — jackets are not 1-bit.
-    if (isBareTheme() && recentsLoaded && !coverGrayOnPanel &&
+    // Skip this path when there is no paintably valid thumb: FAST of the white
+    // placeholder plus deferred bw_no_path used to settle a blank plate.
+    const thumbcache::DiskThumb bareDisk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Missing
+                            : classifyRecentCover(recentBooks[0],
+                                                  homeHeroThumbHeight(renderer, metrics.homeCoverHeight));
+    if (isBareTheme() && recentsLoaded && coverrender::deferBareCoverGreys(bareDisk) && !coverGrayOnPanel &&
         !darkmode::skipCoverGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
       deferredGreysOnly = true;
       softGrayscaleBase = true;
@@ -2433,7 +2470,7 @@ void HomeActivity::reloadHomeAfterBookAction() {
   recentsLoaded = false;
   recentsLoading = false;
   skipResumeSdReload_ = true;  // this method already reloaded; onResume must not
-  homeUiReady = true;          // UI already visible; gen may float Loading again
+  homeUiReady = false;         // paint shell first; gen may float Rendering Cover after
   coverNeedsRetry = false;
   coverGenAttempts = 0;
   coverRetryAtMs = 0;

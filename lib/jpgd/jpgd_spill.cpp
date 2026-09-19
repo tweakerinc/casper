@@ -7,7 +7,9 @@
 namespace jpgd {
 namespace {
 
-constexpr int kSlots = 4;
+// Two slots: one AC row (~15 KB on a 1000-wide jacket) plus a small DC row.
+// Four 15 KB rows blew X3 maxAlloc (~69 KB) and jpgd longjmp'd NOTENOUGHMEM.
+constexpr int kSlots = 2;
 
 struct Slot {
   int64_t region_ofs = -1;

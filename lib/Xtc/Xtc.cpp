@@ -302,7 +302,7 @@ bool Xtc::generateThumbBmp(int height) const {
     const size_t n = probe.read(sig, 2);
     const size_t sz = probe.size();
     probe.close();
-    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
+    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024);
   }
   if (opened && valid) {
     return true;

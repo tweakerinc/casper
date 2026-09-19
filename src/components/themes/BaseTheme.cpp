@@ -134,10 +134,12 @@ void displayCornerStatusWithDarkMode(const GfxRenderer& renderer, const int x, c
   if (needTempInvert) renderer.invertScreen();
   if (darkmode::statusCueNeedsHalf(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-  } else if (gpio.deviceIsX3()) {
-    renderer.displayWindow(x, y, w, h);
   } else {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    // Window the corner on X3 and X4. X4 used to FAST the whole framebuffer
+    // here — if Home had not painted yet that was a white plate with only
+    // "Rendering Cover" in the corner. Dark Mode still HALF-scrubs so the
+    // glyph is light on dark.
+    renderer.displayWindow(x, y, w, h);
   }
   if (needTempInvert) {
     renderer.invertScreen();

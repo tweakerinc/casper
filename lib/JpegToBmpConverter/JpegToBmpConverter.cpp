@@ -5,16 +5,22 @@
 #include <JPEGDEC.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <jpgd.h>
 #include <jpgd_spill.h>
+
+#include "CoverDecodePolicy.h"
 
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 
 #include "BitmapHelpers.h"
+
+static_assert(coverdecode::kJpegScaleEighth == JPEG_SCALE_EIGHTH,
+              "cover 1/8 scale must match JPEGDEC JPEG_SCALE_EIGHTH");
 
 // ============================================================================
 // IMAGE PROCESSING OPTIONS - Toggle these to test different configurations
@@ -176,7 +182,12 @@ constexpr uint32_t FP_ONE = 1UL << 16;
 static HalFile* s_jpegFile = nullptr;
 static uint8_t s_jpegIoSinceYield = 0;
 
-static void yieldToIdle() { vTaskDelay(1); }
+static void yieldToIdle() {
+  if (esp_task_wdt_status(nullptr) == ESP_OK) {
+    esp_task_wdt_reset();
+  }
+  vTaskDelay(1);
+}
 
 static void yieldDuringJpegIo() {
   if (++s_jpegIoSinceYield < 4) return;
@@ -569,11 +580,12 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   const int blockY = pDraw->y;
 
   // Guard against unexpected callback geometry so we never index past row buffers.
+  // Do not abort the whole jacket: JPEGDEC can report a full-res origin against
+  // a 1/8 grid (field err=2). Skip the stray block and keep decoding.
   if (blockX < 0 || blockY < 0 || blockX >= ctx->srcWidth || blockY >= ctx->srcHeight) {
-    LOG_ERR("JPG", "Unexpected JPEG block origin (%d,%d) for decode grid %dx%d", blockX, blockY, ctx->srcWidth,
+    LOG_DBG("JPG", "Skip JPEG block origin (%d,%d) for decode grid %dx%d", blockX, blockY, ctx->srcWidth,
             ctx->srcHeight);
-    ctx->error = true;
-    return 0;
+    return 1;
   }
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
@@ -938,15 +950,21 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     jpeg->close();
     jpeg.reset();
     bool wroteBmp = false;
-    if (convertProgressiveJpegFull(jpegFile, bmpOut, srcWidth, srcHeight, targetWidth, targetHeight, oneBit, crop,
-                                   coverHighQuality, &wroteBmp)) {
-      return true;
+    const unsigned maxAlloc = static_cast<unsigned>(ESP.getMaxAllocHeap());
+    if (coverdecode::useFullProgressiveDecode(maxAlloc)) {
+      if (convertProgressiveJpegFull(jpegFile, bmpOut, srcWidth, srcHeight, targetWidth, targetHeight, oneBit, crop,
+                                     coverHighQuality, &wroteBmp)) {
+        return true;
+      }
+      if (wroteBmp) {
+        LOG_ERR("JPG", "Progressive full decode failed after BMP start; not falling back to 1/8");
+        return false;
+      }
+      LOG_INF("JPG", "Progressive JPEG full decode failed; 1/8 fallback");
+    } else {
+      LOG_INF("JPG", "Progressive JPEG skips jpgd (maxAlloc=%u < %u); 1/8 path", maxAlloc,
+              coverdecode::kJpgdMinMaxAllocBytes);
     }
-    if (wroteBmp) {
-      LOG_ERR("JPG", "Progressive full decode failed after BMP start; not falling back to 1/8");
-      return false;
-    }
-    LOG_INF("JPG", "Progressive JPEG full decode failed; 1/8 fallback");
     jpegFile.seek(0);
     jpeg = makeUniqueNoThrow<JPEGDEC>();
     if (!jpeg) {
@@ -1146,7 +1164,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   jpeg->setPixelType(EIGHT_BIT_GRAYSCALE);
   jpeg->setUserPointer(&ctx);
 
-  rc = jpeg->decode(0, 0, 0);
+  const int decodeOptions = coverdecode::jpegDecDecodeOptions(progressiveDecode);
+  rc = jpeg->decode(0, 0, decodeOptions);
 
   if (rc == 1 && ctx.smoothUpscale && !ctx.error) {
     finishSmoothUpscale(&ctx);

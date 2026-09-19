@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <string>
 
 #include "CrossPointSettings.h"
@@ -18,6 +19,7 @@
 #include "components/icons/cover.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/CoverThumbFiles.h"
 #include "util/CrossPointPaths.h"
 #include "util/DarkModePolicy.h"
 #include "util/StringUtils.h"
@@ -75,25 +77,12 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const 
 }
 
 // Prefer Bare-native 420×560 1:1. Fall back to leftover 280/168 — do not wait
-// on JPEG just because the hero-size file is missing.
+// on JPEG just because the hero-size file is missing. exists() alone is not a
+// hit: a header-only leftover must not become a white jacket plate.
 std::string coverPathForBook(const RecentBook& book) {
-  auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
-    for (const std::string& path : candidates) {
-      if (path.empty()) continue;
-      if (Storage.exists(path.c_str())) return path;
-      // exists() false-negatives after the reader; a successful open is enough.
-      HalFile probe;
-      if (Storage.openFileForRead("HOME", path, probe)) {
-        probe.close();
-        return path;
-      }
-    }
-    return {};
-  };
-
   if (FsHelpers::hasEpubExtension(book.path)) {
     Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
-    const std::string found = firstExisting({
+    const std::string found = coverthumb::firstValidBmp("HOME", {
         epub.getThumbBmpPath(BareMetrics::homeCoverThumbHeight),
         epub.getThumbBmpPath(BareMetrics::homeCoverImageHeight),
         epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight),
@@ -102,7 +91,7 @@ std::string coverPathForBook(const RecentBook& book) {
     if (!found.empty()) return found;
   }
 
-  return firstExisting({
+  return coverthumb::firstValidBmp("HOME", {
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverThumbHeight),
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverImageHeight),
       UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::homeShelfThumbHeight),

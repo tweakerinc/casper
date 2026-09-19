@@ -18,6 +18,8 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   // First home paint finished — cover gen waits so Rendering Cover floats over UI.
+  // Must be set by render(), never by onResume, or JPEG gen FAST-blits the cue
+  // onto an empty framebuffer (white plate + the word in the corner).
   bool homeUiReady = false;
   // Transient thumb-gen failures (heap/decode) schedule a deferred retry so we do
   // not burn the render path every frame, but also do not give up forever.

@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <CoverDecodePolicy.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -811,7 +812,7 @@ bool bmpLooksValid(const std::string& path) {
   const size_t n = probe.read(sig, 2);
   const size_t sz = probe.size();
   probe.close();
-  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
+  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024;
 }
 }  // namespace
 
@@ -988,7 +989,8 @@ bool Epub::generateThumbBmp(int height) const {
     const size_t n = probe.read(sig, 2);
     const size_t sz = probe.size();
     probe.close();
-    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
+    // 1024: reject header-only leftovers (BM + 70 bytes) that locked Bare on a white plate.
+    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024);
   }
   if (opened && valid) {
     LOG_DBG("EBP", "thumb cache hit %s", existingPath.c_str());
@@ -1111,7 +1113,8 @@ bool Epub::generateThumbBmp(int height) const {
   };
 
   // 1) Try path stored in book.bin (fast when still valid).
-  if (tryGenerateFromHref(bookMetadataCache->coreMetadata.coverItemHref)) {
+  const std::string cachedHref = bookMetadataCache->coreMetadata.coverItemHref;
+  if (tryGenerateFromHref(cachedHref)) {
     return true;
   }
 
@@ -1119,9 +1122,10 @@ bool Epub::generateThumbBmp(int height) const {
   //    EPUB was updated to cover.jpeg (e.g. Dungeon Crawler Carl, Gate of the Feral Gods).
   std::string freshHref;
   if (resolveCoverItemHrefFromOpf(freshHref)) {
-    LOG_DBG("EBP", "Cover href from OPF: %s (cached was: %s)", freshHref.c_str(),
-            bookMetadataCache->coreMetadata.coverItemHref.c_str());
-    if (tryGenerateFromHref(freshHref)) {
+    LOG_DBG("EBP", "Cover href from OPF: %s (cached was: %s)", freshHref.c_str(), cachedHref.c_str());
+    if (coverdecode::skipSameCoverHrefRetry(cachedHref.c_str(), freshHref.c_str())) {
+      LOG_DBG("EBP", "Cover href unchanged; not decoding the same JPEG twice");
+    } else if (tryGenerateFromHref(freshHref)) {
       // Keep session cache current so cover BMP / other heights skip OPF reparse.
       const_cast<BookMetadataCache&>(*bookMetadataCache).coreMetadata.coverItemHref = std::move(freshHref);
       return true;

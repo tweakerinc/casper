@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
+#include <FatDateTimePolicy.h>
 #include <HalClock.h>
 #include <Logging.h>
 #include <SDCardManager.h>
@@ -14,12 +15,14 @@
 HalStorage HalStorage::instance;
 
 namespace {
-// FAT timestamps require a valid year; used only if the RTC is missing/invalid.
-constexpr uint16_t kFallbackYear = 2024;
-constexpr uint8_t kFallbackMonth = 1;
-constexpr uint8_t kFallbackDay = 1;
-constexpr uint8_t kFallbackHour = 0;
-constexpr uint8_t kFallbackMinute = 0;
+// FAT timestamps require a valid year. Firmware compile date — never 2024-01-01
+// (that stamped every SD file "2 years ago" when the RTC VL bit was set).
+constexpr fatdate::CivilTime kFirmwareDate = fatdate::firmwareFallback(__DATE__);
+constexpr uint16_t kFallbackYear = kFirmwareDate.year;
+constexpr uint8_t kFallbackMonth = kFirmwareDate.month;
+constexpr uint8_t kFallbackDay = kFirmwareDate.day;
+constexpr uint8_t kFallbackHour = kFirmwareDate.hour;
+constexpr uint8_t kFallbackMinute = kFirmwareDate.minute;
 const uint8_t* clockUtcOffsetQ = nullptr;
 
 bool isLeapYear(const uint16_t year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
@@ -80,7 +83,8 @@ void storageDateTimeCallback(uint16_t* date, uint16_t* time) {
   uint8_t hour = kFallbackHour;
   uint8_t minute = kFallbackMinute;
 
-  if (halClock.getDateTime(year, month, day, hour, minute) && isValidFatDateTime(year, month, day, hour, minute)) {
+  if (halClock.getDateTime(year, month, day, hour, minute) && isValidFatDateTime(year, month, day, hour, minute) &&
+      fatdate::yearIsPlausible(year, kFallbackYear)) {
     const uint8_t configuredOffsetQ = clockUtcOffsetQ ? *clockUtcOffsetQ : 48;
     const uint8_t offsetQ = configuredOffsetQ > 104 ? 104 : configuredOffsetQ;
     const int offsetQuarterHours = static_cast<int>(offsetQ) - 48;

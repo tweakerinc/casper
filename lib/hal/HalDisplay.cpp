@@ -11,7 +11,9 @@ HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_R
 HalDisplay::~HalDisplay() {}
 
 void HalDisplay::begin(bool seamless) {
-  // Set X3-specific panel mode before initializing.
+  // Set X3-specific panel mode before initializing. setDisplayX3() keeps the
+  // UC8279d sibling profile (XteinkX3Uc8279) selected in gpio.begin(); without
+  // that, this call would drop a new-batch X3 back onto the UC8253 driver.
   if (gpio.deviceIsX3()) {
     einkDisplay.setDisplayX3();
   }

@@ -37,6 +37,7 @@ target_compile_options(crosspoint_test_common INTERFACE
 
 enable_testing()
 include(GoogleTest)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 add_subdirectory(streaming_json_parser)
 add_subdirectory(release_json_parser)
@@ -70,3 +71,4 @@ add_subdirectory(chapter_load_policy)
 add_subdirectory(wifi_transfer_policy)
 add_subdirectory(sleep_hold_policy)
 add_subdirectory(music_note_fallback)
+add_subdirectory(xteink_display)

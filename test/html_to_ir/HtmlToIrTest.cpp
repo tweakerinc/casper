@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "Esp.h"  // host stub — must define ESP before ChapterIr uses it
+#include "HalStorage.h"
 #include "ChapterIr.h"
 #include "HtmlToIr.h"
 
@@ -242,6 +243,74 @@ TEST(HtmlToIr, EmptyAndNullInput) {
   ChapterIr ir;
   EXPECT_FALSE(HtmlToIr::convert(nullptr, 10, ir));
   EXPECT_FALSE(HtmlToIr::convert("", 0, ir));
+}
+
+TEST(HtmlToIr, OversizedHtmlConvertsPrefix) {
+  // ChapterLoader used to skip HTML > 160 KB. ingestHtml already truncates;
+  // a prefix must still produce readable IR instead of fail.
+  std::string html = "<html><body>";
+  html.reserve(180 * 1024);
+  for (int i = 0; i < 4000; ++i) html += "<p>The quick brown fox jumps over the lazy dog.</p>";
+  html += "</body></html>";
+  ASSERT_GT(html.size(), 160u * 1024u);
+  ChapterIr ir;
+  const size_t prefix = 160 * 1024;
+  EXPECT_TRUE(HtmlToIr::convert(html.data(), prefix, ir));
+  EXPECT_GT(ir.textSize(), 1000u);
+  EXPECT_NE(flattenText(ir).find("quick"), std::string::npos);
+}
+
+TEST(ChapterIrLoad, RoundTripCurrentVersion) {
+  Storage.reset();
+  ChapterIr ir = convertOrDie("<p>cached chapter</p>");
+  ASSERT_TRUE(ir.saveToFile("/tmp/s0_m0.rvir"));
+  ChapterIr loaded;
+  EXPECT_EQ(loaded.loadFromFileEx("/tmp/s0_m0.rvir"), ChapterIr::LoadResult::Ok);
+  EXPECT_EQ(flattenText(loaded).find("cached chapter") != std::string::npos, true);
+}
+
+TEST(ChapterIrLoad, V19LayoutStaysLoadable) {
+  Storage.reset();
+  ChapterIr ir = convertOrDie("<p>crosspoint cache</p>");
+  ASSERT_TRUE(ir.saveToFile("/tmp/s1_m0.rvir"));
+  HalFile f;
+  ASSERT_TRUE(Storage.openFileForRead("T", "/tmp/s1_m0.rvir", f));
+  std::vector<uint8_t> bytes(f.size());
+  ASSERT_EQ(f.read(bytes.data(), bytes.size()), static_cast<int>(bytes.size()));
+  f.close();
+  ASSERT_GE(bytes.size(), 6u);
+  bytes[4] = 19;  // uint16_t version little-endian
+  bytes[5] = 0;
+  Storage.remove("/tmp/s1_m0.rvir");
+  HalFile w;
+  ASSERT_TRUE(Storage.openFileForWrite("T", "/tmp/s1_m0.rvir", w));
+  ASSERT_EQ(w.write(bytes.data(), bytes.size()), bytes.size());
+  w.close();
+  ChapterIr loaded;
+  EXPECT_EQ(loaded.loadFromFileEx("/tmp/s1_m0.rvir"), ChapterIr::LoadResult::Ok);
+  EXPECT_NE(flattenText(loaded).find("crosspoint cache"), std::string::npos);
+}
+
+TEST(ChapterIrLoad, V18IsStaleVersionNotCorrupt) {
+  Storage.reset();
+  ChapterIr ir = convertOrDie("<p>too old</p>");
+  ASSERT_TRUE(ir.saveToFile("/tmp/s2_m0.rvir"));
+  HalFile f;
+  ASSERT_TRUE(Storage.openFileForRead("T", "/tmp/s2_m0.rvir", f));
+  std::vector<uint8_t> bytes(f.size());
+  ASSERT_EQ(f.read(bytes.data(), bytes.size()), static_cast<int>(bytes.size()));
+  f.close();
+  ASSERT_GE(bytes.size(), 6u);
+  bytes[4] = 18;
+  bytes[5] = 0;
+  Storage.remove("/tmp/s2_m0.rvir");
+  HalFile w;
+  ASSERT_TRUE(Storage.openFileForWrite("T", "/tmp/s2_m0.rvir", w));
+  ASSERT_EQ(w.write(bytes.data(), bytes.size()), bytes.size());
+  w.close();
+  ChapterIr loaded;
+  EXPECT_EQ(loaded.loadFromFileEx("/tmp/s2_m0.rvir"), ChapterIr::LoadResult::StaleVersion);
+  EXPECT_TRUE(Storage.exists("/tmp/s2_m0.rvir"));
 }
 
 }  // namespace

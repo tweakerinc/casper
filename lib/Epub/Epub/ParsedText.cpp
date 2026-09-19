@@ -419,7 +419,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       return false;
     }
     // Nothrow probe of the largest single buffer (string vector growth).
-    void* probe = ::operator new(newCapacity * 32U + 256U, std::nothrow);
+    void* probe = ::operator new(needBytes, std::nothrow);
     if (!probe) {
       logSkip(maxAlloc);
       return false;

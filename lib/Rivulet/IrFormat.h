@@ -17,9 +17,13 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // v23: real typography preserved. v22 and earlier flattened curly quotes to ' ",
 // en/em dashes to -, and the ellipsis to "..." while building the IR, so cached
 // chapters hold the flattened text and must be reconverted to get it back.
+//
+// Write v23 on save. LOAD v19–v23: the on-disk layout (blocks / runs / text blob)
+// has been stable since v19. Parser-only bumps used to set Min==Max, which marked
+// CrossPoint/CrossInk caches "corrupt", deleted them, and forced HTML convert
+// under ~11 KB maxAlloc → PTX OOM → abort() → "Chapter not readable".
 inline constexpr uint16_t kIrFormatVersion = 23;
-// Accept this version on load (inclusive range).
-inline constexpr uint16_t kIrFormatVersionMin = 23;
+inline constexpr uint16_t kIrFormatVersionMin = 19;
 inline constexpr uint16_t kIrFormatVersionMax = 23;
 
 // Render-spec fingerprint: layout maps invalid when this changes.

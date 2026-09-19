@@ -99,6 +99,9 @@ class ChapterIr {
 
   bool saveToFile(const char* path) const;
   bool loadFromFile(const char* path);
+  // Distinguish OOM from a bad header so callers can keep a just-read cache.
+  enum class LoadResult : uint8_t { Ok, Corrupt, Oom, StaleVersion };
+  LoadResult loadFromFileEx(const char* path);
 
   [[nodiscard]] int estimatePageCount(int viewportW, int viewportH, int bodyEmPx, float lineCompression) const;
 
@@ -116,7 +119,7 @@ class ChapterIr {
   size_t textCap_ = 0;
 
   bool writeTo(HalFile& f) const;
-  bool readFrom(HalFile& f);
+  LoadResult readFrom(HalFile& f);
 };
 
 }  // namespace rivulet

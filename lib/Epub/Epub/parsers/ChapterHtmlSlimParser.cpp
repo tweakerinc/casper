@@ -236,6 +236,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   }
 
   // flush the buffer
+  if (!currentTextBlock) return;
   partWordBuffer[partWordBufferIndex] = '\0';
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
   partWordBufferIndex = 0;
@@ -293,8 +294,16 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(
-      new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled, blockStyle));
+  auto* nextText = new (std::nothrow)
+      ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled, blockStyle);
+  if (!nextText) {
+    // -fno-exceptions: bare new abort()s. After PTX word-vector skip, the next
+    // paragraph allocation was the field abort() (need=16, maxAlloc≈11KB).
+    LOG_ERR("RLC", "OOM: ParsedText");
+    currentTextBlock.reset();
+    return;
+  }
+  currentTextBlock.reset(nextText);
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
   if (armDropCapOnNextTextBlock_) {
@@ -2396,7 +2405,12 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   capStyle.syntheticScale = false;
   capStyle.smallCaps = false;
 
-  auto capText = std::make_unique<ParsedText>(false, false, false, false, capStyle);
+  auto capText = std::unique_ptr<ParsedText>(new (std::nothrow) ParsedText(false, false, false, false, capStyle));
+  if (!capText) {
+    LOG_ERR("RLC", "OOM: drop-cap ParsedText");
+    if (currentTextBlock) currentTextBlock->addWord(letter, EpdFontFamily::BOLD);
+    return;
+  }
   capText->addWord(letter, capStyleBits);
   const int leftInset = bs.leftInset();
   std::shared_ptr<TextBlock> capLine;

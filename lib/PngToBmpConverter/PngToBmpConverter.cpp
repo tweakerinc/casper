@@ -374,22 +374,40 @@ static void convertScanlineToGray(const PngDecodeContext& ctx, uint8_t* grayRow)
     }
 
     case PNG_COLOR_GRAYSCALE_ALPHA:
+      // Composite the alpha channel over a white background so transparent
+      // regions render as paper-white instead of black (transparent PNG
+      // wallpapers). 16-bit samples use the high byte of each 2-byte sample.
       if (ctx.bitDepth == 8) {
-        for (uint32_t x = 0; x < w; x++) grayRow[x] = src[x * 2];
+        for (uint32_t x = 0; x < w; x++) {
+          const uint8_t g = src[x * 2];
+          const uint8_t a = src[x * 2 + 1];
+          grayRow[x] = static_cast<uint8_t>((g * a + 255 * (255 - a)) / 255);
+        }
       } else {
-        for (uint32_t x = 0; x < w; x++) grayRow[x] = src[x * 4];
+        for (uint32_t x = 0; x < w; x++) {
+          const uint8_t g = src[x * 4];
+          const uint8_t a = src[x * 4 + 2];
+          grayRow[x] = static_cast<uint8_t>((g * a + 255 * (255 - a)) / 255);
+        }
       }
       break;
 
     case PNG_COLOR_RGBA:
+      // Composite the alpha channel over a white background so transparent
+      // regions render as paper-white instead of black (transparent PNG
+      // wallpapers). 16-bit samples use the high byte of each 2-byte sample.
       if (ctx.bitDepth == 8) {
         for (uint32_t x = 0; x < w; x++) {
           const uint8_t* p = src + x * 4;
-          grayRow[x] = (p[0] * 25 + p[1] * 50 + p[2] * 25) / 100;
+          const uint8_t g = (p[0] * 25 + p[1] * 50 + p[2] * 25) / 100;
+          const uint8_t a = p[3];
+          grayRow[x] = static_cast<uint8_t>((g * a + 255 * (255 - a)) / 255);
         }
       } else {
         for (uint32_t x = 0; x < w; x++) {
-          grayRow[x] = (src[x * 8] * 25 + src[x * 8 + 2] * 50 + src[x * 8 + 4] * 25) / 100;
+          const uint8_t g = (src[x * 8] * 25 + src[x * 8 + 2] * 50 + src[x * 8 + 4] * 25) / 100;
+          const uint8_t a = src[x * 8 + 6];
+          grayRow[x] = static_cast<uint8_t>((g * a + 255 * (255 - a)) / 255);
         }
       }
       break;

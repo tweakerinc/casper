@@ -1,0 +1,45 @@
+name: Apply reviewed Casper RC1 source
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-apply-rc1.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fix/casper-stability-v0.2.0-candidate
+          fetch-depth: 0
+      - name: Verify and apply exact source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, lzma
+          parts = [Path(f'.github/candidate-patches/rc1.{i:02d}.b64') for i in range(1,4)]
+          encoded = ''.join(p.read_text().strip() for p in parts)
+          data = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(data).hexdigest()
+          expected = 'ea0d1f61e2f244f9317837b240fdedc238e67a7049f628df2210354774d53691'
+          assert actual == expected, f'Patch checksum mismatch: {actual}'
+          decoded = lzma.decompress(data)
+          assert len(decoded) == 131813
+          Path('/tmp/casper-rc1.patch').write_bytes(decoded)
+          print('Verified source patch', actual, len(decoded))
+          PY
+          git apply --check --unidiff-zero /tmp/casper-rc1.patch
+          git apply --unidiff-zero /tmp/casper-rc1.patch
+          git diff --check
+          python3 tools/casper_stability/run_tests.py
+          git rm .github/candidate-patches/rc1.*.b64
+          git add lib src platformio.ini test/font_ladder tools/casper_stability
+          git -c user.name='Casper candidate builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(candidate): bounded pagination, cache validation and transactional font downloads' -m 'v0.2.0-rc1. Real-allocation failure handling, UTF-8-safe long-run splitting, checkpointed exact previous-chapter landing, signed font IDs, incremental font manifests, recoverable font replacement, and synchronized reader/cache ownership. UI layouts retained. Host sanitizer regressions passed; device verification pending.'
+          git push origin HEAD:refs/heads/fix/casper-stability-v0.2.0-candidate
+          git rev-parse HEAD

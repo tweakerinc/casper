@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
+#include "../Memory/FallibleVector.h"
 
 #include "IrFormat.h"
 
@@ -53,15 +53,16 @@ class PageMap {
   void setRenderKey(const RenderKey& k) { key_ = k; }
   [[nodiscard]] const RenderKey& renderKey() const { return key_; }
 
-  void resetWithStart(const IrCursor& firstPageStart);
-  void pushPageStart(const IrCursor& c);
+  bool resetWithStart(const IrCursor& firstPageStart);
+  bool pushPageStart(const IrCursor& c);
   // Overwrite page start (e.g. re-layout produced a different end). Truncates any
   // later entries so they cannot point past a gap/overlap. Marks map incomplete.
-  void setPageStart(int pageIndex, const IrCursor& c);
+  bool setPageStart(int pageIndex, const IrCursor& c);
   // Drop starts from pageIndex onward (keep [0, pageIndex)).
   void truncateFrom(int pageIndex);
   // Chapter fully walked: total must match starts_.size() (page count = starts).
   void markComplete(const int totalPages) {
+    if (starts_.failed()) { markIncomplete(); return; }
     complete_ = true;
     // Prefer live start count — never trust a larger/stale total than we have.
     const int n = static_cast<int>(starts_.size());
@@ -77,8 +78,9 @@ class PageMap {
     knownTotal_ = 0;
   }
 
+  [[nodiscard]] bool failed() const { return starts_.failed(); }
   [[nodiscard]] bool empty() const { return starts_.empty(); }
-  [[nodiscard]] bool complete() const { return complete_; }
+  [[nodiscard]] bool complete() const { return complete_ && !starts_.failed(); }
   [[nodiscard]] int knownPages() const { return static_cast<int>(starts_.size()); }
   // While complete, knownTotal is the chapter length; if starts grew past a stale
   // total (false complete), report the larger live count.
@@ -102,7 +104,7 @@ class PageMap {
 
  private:
   RenderKey key_{};
-  std::vector<IrCursor> starts_;
+  casper_memory::FallibleVector<IrCursor> starts_;
   bool complete_ = false;
   int knownTotal_ = 0;
 };

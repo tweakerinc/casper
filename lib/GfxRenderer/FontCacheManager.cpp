@@ -5,6 +5,7 @@
 #include <SdCardFont.h>
 
 #include <cstring>
+#include "../Memory/BoundedUtf8.h"
 
 FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
                                    const std::map<int, SdCardFont*>& sdCardFonts)
@@ -62,49 +63,38 @@ void FontCacheManager::resetStats() {
 bool FontCacheManager::isScanning() const { return scanMode_ == ScanMode::Scanning; }
 
 void FontCacheManager::resetScanBuckets() {
-  for (uint8_t i = 0; i < kMaxScanBuckets; i++) {
-    scanBuckets_[i].fontId = -1;
-    scanBuckets_[i].style = 0;
-    // clear(), not shrink: the buckets are reused every page, so keeping the
-    // capacity avoids re-growing the same strings on every single turn.
-    scanBuckets_[i].text.clear();
-  }
+  for (auto& bucket : scanBuckets_) bucket.count = 0;
   scanBucketCount_ = 0;
 }
 
 void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
-  if (!text || *text == '\0') return;
-  const uint8_t baseStyle = static_cast<uint8_t>(style) & 0x03;
-
+  if (!text || !*text) return;
+  const uint8_t baseStyle = static_cast<uint8_t>(style) & 3;
   ScanBucket* bucket = nullptr;
-  for (uint8_t i = 0; i < scanBucketCount_; i++) {
+  for (uint8_t i = 0; i < scanBucketCount_; ++i) {
     if (scanBuckets_[i].fontId == fontId && scanBuckets_[i].style == baseStyle) {
       bucket = &scanBuckets_[i];
       break;
     }
   }
   if (!bucket) {
-    if (scanBucketCount_ < kMaxScanBuckets) {
-      bucket = &scanBuckets_[scanBucketCount_++];
-      bucket->fontId = fontId;
-      bucket->style = baseStyle;
-      bucket->text.clear();
-      if (bucket->text.capacity() < 256) bucket->text.reserve(256);
-    } else {
-      // Out of buckets (a page mixing more than 8 face/style combinations).
-      // Fold into a bucket for the same font id when there is one, else the
-      // first bucket. That over-prewarms — exactly what the old single-bucket
-      // code always did — but never drops glyphs, so rendering stays correct.
-      for (uint8_t i = 0; i < scanBucketCount_; i++) {
-        if (scanBuckets_[i].fontId == fontId) {
-          bucket = &scanBuckets_[i];
-          break;
-        }
-      }
-      if (!bucket) bucket = &scanBuckets_[0];
-    }
+    if (scanBucketCount_ == kMaxScanBuckets) return;
+    bucket = &scanBuckets_[scanBucketCount_++];
+    bucket->fontId = fontId;
+    bucket->style = baseStyle;
+    bucket->count = 0;
   }
-  bucket->text += text;
+  const char* p = text;
+  const char* end = p + std::strlen(p);
+  while (p < end) {
+    uint32_t cp = casper_memory::nextUtf8(p, end);
+    if (!cp) break;
+    bool found = false;
+    for (uint16_t i = 0; i < bucket->count; ++i) {
+      if (bucket->codepoints[i] == cp) { found = true; break; }
+    }
+    if (!found && bucket->count < kMaxScanGlyphs) bucket->codepoints[bucket->count++] = cp;
+  }
 }
 
 // --- PrewarmScope implementation ---
@@ -133,8 +123,12 @@ bool FontCacheManager::PrewarmScope::endScanAndPrewarm(bool (*shouldAbort)()) {
       break;
     }
     ScanBucket& bucket = manager_->scanBuckets_[i];
-    if (bucket.fontId < 0 || bucket.text.empty()) continue;
-    manager_->prewarmCache(bucket.fontId, bucket.text.c_str(), static_cast<uint8_t>(1u << bucket.style));
+    if (bucket.count == 0) continue;
+    char text[kMaxScanGlyphs * 4 + 1];
+    char* end = text;
+    for (uint16_t j = 0; j < bucket.count; ++j) end = casper_memory::encodeUtf8(end, bucket.codepoints[j]);
+    *end = '\0';
+    manager_->prewarmCache(bucket.fontId, text, static_cast<uint8_t>(1u << bucket.style));
   }
 
   manager_->resetScanBuckets();

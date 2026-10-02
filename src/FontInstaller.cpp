@@ -1,4 +1,5 @@
 #include "FontInstaller.h"
+#include <cstdio>
 
 #include <HalStorage.h>
 #include <Logging.h>
@@ -153,4 +154,26 @@ void FontInstaller::refreshRegistry() { registry_.discover(); }
 
 bool FontInstaller::isFamilyInstalled(const char* familyName) const {
   return registry_.findFamily(familyName) != nullptr;
+}
+
+void FontInstaller::recoverInterruptedInstalls() {
+  const char* roots[]={SdCardFontRegistry::FONTS_DIR_HIDDEN,SdCardFontRegistry::FONTS_DIR_VISIBLE};
+  for(const char* root:roots) {
+    auto dir=Storage.open(root);
+    if(!dir || !dir.isDirectory())continue;
+    for(auto entry=dir.openNextFile();entry;entry=dir.openNextFile()) {
+      char name[112]{};entry.getName(name,sizeof(name));bool directory=entry.isDirectory();entry.close();
+      const size_t n=std::strlen(name);constexpr size_t suffix=9; // ".previous"
+      if(!directory||name[0]!='.'||n<=suffix+1||std::strcmp(name+n-suffix,".previous"))continue;
+      name[n-suffix]=0;
+      const char* family=name+1;
+      if(!isValidFamilyName(family))continue;
+      char backup[192],live[176];
+      std::snprintf(backup,sizeof(backup),"%s/.%s.previous",root,family);
+      std::snprintf(live,sizeof(live),"%s/%s",root,family);
+      if(!Storage.exists(live)) {
+        if(Storage.rename(backup,live))LOG_INF("FONT","Recovered interrupted install: %s",family);
+      } else Storage.removeDir(backup);
+    }
+  }
 }

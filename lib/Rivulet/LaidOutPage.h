@@ -2,7 +2,8 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
+#include "../Memory/FallibleVector.h"
+#include "../Memory/FallibleString.h"
 
 #include "IrFormat.h"
 #include "PageMap.h"
@@ -16,7 +17,7 @@ struct GlyphSpan {
   int fontId = 0;
   uint8_t epdStyle = 0;   // EpdFontFamily bits (may include DROP_CAP)
   uint8_t dropScale = 0;  // 0 = normal; 2–4 = NN drop-cap scale
-  std::string text;       // owned UTF-8 fragment for this span
+  casper_memory::FallibleString text;       // owned UTF-8 fragment for this span
 };
 
 // Raster plate (JPEG/PNG) laid out on the page — painted via ImageBlock.
@@ -25,7 +26,7 @@ struct ImagePlate {
   int16_t y = 0;
   int16_t w = 0;
   int16_t h = 0;
-  std::string href;  // EPUB package-relative path
+  casper_memory::FallibleString href;  // EPUB package-relative path
 };
 
 // A drawn hairline (thematic break / <hr>). Painting this as a real rule instead
@@ -39,9 +40,9 @@ struct RulePlate {
 };
 
 struct LaidOutPage {
-  std::vector<GlyphSpan> spans;
-  std::vector<ImagePlate> images;
-  std::vector<RulePlate> rules;
+  casper_memory::FallibleVector<GlyphSpan> spans;
+  casper_memory::FallibleVector<ImagePlate> images;
+  casper_memory::FallibleVector<RulePlate> rules;
   IrCursor start{};
   IrCursor end{};  // exclusive end cursor (start of next page)
   int16_t contentH = 0;
@@ -55,7 +56,16 @@ struct LaidOutPage {
   int16_t dropZoneH = 0;
   bool hasDropZone = false;
 
+  bool allocationFailed = false;
+  bool failed() const {
+    if (allocationFailed || spans.failed() || images.failed() || rules.failed()) return true;
+    for (const auto& sp : spans) if (sp.text.failed()) return true;
+    for (const auto& im : images) if (im.href.failed()) return true;
+    return false;
+  }
+
   void clear() {
+    allocationFailed = false;
     spans.clear();
     images.clear();
     rules.clear();

@@ -230,6 +230,7 @@ Result loadChapterIr(const Request& req, const Hooks& hooks) {
       yield();
       conv = eng.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false, imageRendering);
     }
+    if (conv && htmlSize < fileSize) eng.chapterMutable().markFailed();
     htmlBuf.reset();
     LOG_INF("CHLOAD", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
             conv ? "ok" : "FAIL", (conv && eng.chapter().failed()) ? 1 : 0, static_cast<unsigned long>(millis() - t0),

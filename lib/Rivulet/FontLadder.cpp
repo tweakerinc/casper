@@ -27,6 +27,9 @@ constexpr int kSourceSerif[6] = {
 };
 
 int familyIndex(const int* ladder, const int fontId) {
+  // The 8pt Literata slot aliases 10pt. Anchor relative sizing to the actual
+  // 10pt face, not its earlier alias, or +1 incorrectly stays at 10pt.
+  if (ladder == kLiterata && fontId == kLiterata[1]) return 1;
   for (int i = 0; i < 6; ++i) {
     if (ladder[i] == fontId) return i;
   }

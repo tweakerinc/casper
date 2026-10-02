@@ -52,6 +52,11 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 }
 
 void ActivityManager::waitForRenderIdle() {
+  // A foreground reader transaction already excludes painting. The render
+  // task may have raised renderInProgress while waiting for this same mutex;
+  // waiting for it here would deadlock. Nested reader helpers use recursive
+  // ownership rather than releasing the engine halfway through an operation.
+  if (RenderLock::heldByCurrentTask()) return;
   // Main task only — never call from the render task (would deadlock).
   while (renderInProgress.load(std::memory_order_acquire)) {
     vTaskDelay(pdMS_TO_TICKS(1));
@@ -547,25 +552,25 @@ void ActivityManager::requestUpdateAndWait() {
 // RenderLock
 
 RenderLock::RenderLock() {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  xSemaphoreTakeRecursive(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  xSemaphoreTakeRecursive(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
 
 RenderLock::~RenderLock() {
   if (isLocked) {
-    xSemaphoreGive(activityManager.renderingMutex);
+    xSemaphoreGiveRecursive(activityManager.renderingMutex);
     isLocked = false;
   }
 }
 
 void RenderLock::unlock() {
   if (isLocked) {
-    xSemaphoreGive(activityManager.renderingMutex);
+    xSemaphoreGiveRecursive(activityManager.renderingMutex);
     isLocked = false;
   }
 }
@@ -578,3 +583,7 @@ void RenderLock::unlock() {
  *
  */
 bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };
+
+bool RenderLock::heldByCurrentTask() {
+  return xSemaphoreGetMutexHolder(activityManager.renderingMutex) == xTaskGetCurrentTaskHandle();
+}

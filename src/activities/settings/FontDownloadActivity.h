@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "FontInstaller.h"
+#include "util/FontManifest.h"
 #include "SdCardFont.h"
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
@@ -41,28 +42,16 @@ class FontDownloadActivity : public Activity {
     ERROR,
   };
 
-  struct ManifestFile {
-    std::string name;
-    size_t size = 0;
-    uint32_t crc32 = 0;
-  };
-
-  struct ManifestFamily {
-    std::string name;
-    std::string description;
-    std::vector<ManifestFile> files;
-    size_t totalSize = 0;
-    bool installed = false;
-    bool hasUpdate = false;
-  };
+  using ManifestFile = fontmanifest::File;
+  using ManifestFamily = fontmanifest::Family;
 
   State state_ = WIFI_SELECTION;
   FontInstaller fontInstaller_;
   ButtonNavigator buttonNavigator_;
 
   // Manifest data
-  std::string baseUrl_;
-  std::vector<ManifestFamily> families_;
+  casper_memory::FallibleString baseUrl_;
+  casper_memory::FallibleVector<ManifestFamily> families_;
   int selectedIndex_ = 0;
 
   // Download progress

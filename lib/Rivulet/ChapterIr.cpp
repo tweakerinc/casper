@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <new>
 
 namespace rivulet {
@@ -39,12 +40,13 @@ void ChapterIr::freeText() {
 void ChapterIr::clear() {
   openBlock_ = false;
   failed_ = false;
-  blocks_.clear();
-  runs_.clear();
+  blocks_.release();
+  runs_.release();
   freeText();
 }
 
 bool ChapterIr::ensureTextCapacity(const size_t needExtra) {
+  if (needExtra > kMaxTextBlob || textLen_ > kMaxTextBlob - needExtra) return false;
   const size_t need = textLen_ + needExtra;
   if (need <= textCap_) return true;
   if (need > kMaxTextBlob) return false;
@@ -86,8 +88,7 @@ bool ChapterIr::ensureRunsCapacity(const size_t needExtra) {
   if (newCap < need) return false;
   // vector::reserve allocates a full new buffer — probe full size.
   if (!canAlloc(newCap * sizeof(Run) + 64)) return false;
-  runs_.reserve(newCap);
-  return runs_.capacity() >= need;
+  return runs_.reserve(newCap);
 }
 
 void ChapterIr::reserveForConvert(const size_t htmlLen) {
@@ -144,7 +145,7 @@ void ChapterIr::beginBlock(const BlockKind kind, const Align align, const uint16
       failed_ = true;
       return;
     }
-    blocks_.reserve(nc);
+    if (!blocks_.reserve(nc)) { failed_ = true; return; }
   }
   Block b;
   b.kind = kind;
@@ -193,46 +194,40 @@ void ChapterIr::endBlock() {
 
 bool ChapterIr::appendRun(const RunStyle style, const SizeStep step, const char* utf8, const size_t len) {
   if (failed_ || !openBlock_ || !utf8 || len == 0) return !failed_;
-  if (runs_.size() >= kMaxRuns) {
-    failed_ = true;
-    return false;
-  }
-  if (textLen_ + len > kMaxTextBlob) {
-    LOG_ERR("RVIR", "text blob cap %u", static_cast<unsigned>(kMaxTextBlob));
-    failed_ = true;
-    return false;
-  }
-  // Coalesce adjacent identical style runs.
-  if (!runs_.empty() && blocks_.back().runCount > 0) {
-    Run& last = runs_.back();
-    if (last.style == style && last.sizeStep == step && last.textOff + last.textLen == textLen_) {
-      if (!ensureTextCapacity(len)) {
-        LOG_ERR("RVIR", "OOM coalesce free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-                static_cast<unsigned>(ESP.getMaxAllocHeap()));
-        failed_ = true;
-        return false;
-      }
-      std::memcpy(textData_ + textLen_, utf8, len);
-      textLen_ += len;
-      last.textLen = static_cast<uint16_t>(std::min<size_t>(65535, last.textLen + len));
-      return true;
+  if (len > kMaxTextBlob || textLen_ > kMaxTextBlob - len) { failed_ = true; return false; }
+  size_t off = 0;
+  while (off < len) {
+    Run* last = (!runs_.empty() && blocks_.back().runCount) ? &runs_.back() : nullptr;
+    const bool join = last && last->style == style && last->sizeStep == step &&
+                      last->textOff + last->textLen == textLen_ && last->textLen < UINT16_MAX;
+    size_t take = std::min<size_t>(len - off, join ? UINT16_MAX - last->textLen : UINT16_MAX);
+    // The next run must start on a UTF-8 scalar boundary. Never saturate a run
+    // length while appending unreferenced bytes to the text blob.
+    if (off + take < len) {
+      while (take && (static_cast<unsigned char>(utf8[off + take]) & 0xC0) == 0x80) --take;
     }
+    if (take == 0 || !join) {
+      take = std::min<size_t>(len - off, UINT16_MAX);
+      if (off + take < len) {
+        while (take && (static_cast<unsigned char>(utf8[off + take]) & 0xC0) == 0x80) --take;
+      }
+      if (!take || !ensureRunsCapacity(1) || !ensureTextCapacity(take)) { failed_ = true; return false; }
+      Run r;
+      r.textOff = static_cast<uint32_t>(textLen_);
+      r.textLen = static_cast<uint16_t>(take);
+      r.style = style; r.sizeStep = step;
+      std::memcpy(textData_ + textLen_, utf8 + off, take);
+      if (!runs_.push_back(r)) { failed_ = true; return false; }
+      textLen_ += take;
+      ++blocks_.back().runCount;
+    } else {
+      if (!ensureTextCapacity(take)) { failed_ = true; return false; }
+      std::memcpy(textData_ + textLen_, utf8 + off, take);
+      textLen_ += take;
+      last->textLen = static_cast<uint16_t>(last->textLen + take);
+    }
+    off += take;
   }
-  if (!ensureRunsCapacity(1) || !ensureTextCapacity(len)) {
-    LOG_ERR("RVIR", "OOM appendRun free=%u maxAlloc=%u need=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(len));
-    failed_ = true;
-    return false;
-  }
-  Run r;
-  r.textOff = static_cast<uint32_t>(textLen_);
-  r.textLen = static_cast<uint16_t>(std::min<size_t>(len, 65535));
-  r.style = style;
-  r.sizeStep = step;
-  std::memcpy(textData_ + textLen_, utf8, r.textLen);
-  textLen_ += r.textLen;
-  runs_.push_back(r);
-  blocks_.back().runCount++;
   return true;
 }
 
@@ -254,18 +249,18 @@ void ChapterIr::markDropCapOnCurrent() {
 }
 
 const char* ChapterIr::runText(const Run& r) const {
-  if (!textData_ || r.textOff + r.textLen > textLen_) return "";
+  if (!textData_ || r.textOff > textLen_ || r.textLen > textLen_ - r.textOff) return "";
   return textData_ + r.textOff;
 }
 
 std::string ChapterIr::runString(const Run& r) const {
-  if (!textData_ || r.textOff + r.textLen > textLen_) return {};
+  if (!textData_ || r.textOff > textLen_ || r.textLen > textLen_ - r.textOff) return {};
   return std::string(textData_ + r.textOff, r.textLen);
 }
 
 bool ChapterIr::setRunText(const size_t runIndex, const char* utf8, const size_t len) {
   if (failed_ || !utf8 || len == 0 || runIndex >= runs_.size()) return false;
-  if (textLen_ + len > kMaxTextBlob) {
+  if (len > UINT16_MAX || len > kMaxTextBlob || textLen_ > kMaxTextBlob - len) {
     LOG_ERR("RVIR", "setRunText blob cap");
     return false;
   }
@@ -353,8 +348,11 @@ ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
   if (nBlocks > 0 && !canAlloc(nBlocks * sizeof(Block) + 64)) return LoadResult::Oom;
   if (nRuns > 0 && !canAlloc(nRuns * sizeof(Run) + 64)) return LoadResult::Oom;
   if (nText > 0 && !canAlloc(nText + 64)) return LoadResult::Oom;
-  blocks_.resize(nBlocks);
-  runs_.resize(nRuns);
+  // Validate the complete wire length before allocating anything. Block fields
+  // occupy 15 bytes, runs 8 bytes, and the header 18 bytes (no native padding).
+  const uint64_t expected = 18ULL + 15ULL * nBlocks + 8ULL * nRuns + nText;
+  if (expected != f.size()) return LoadResult::Corrupt;
+  if (!blocks_.resize(nBlocks) || !runs_.resize(nRuns)) return LoadResult::Oom;
   for (uint32_t i = 0; i < nBlocks; ++i) {
     uint8_t kind = 0, align = 0;
     if (!serialization::tryReadPod(f, kind)) return LoadResult::Corrupt;
@@ -370,6 +368,8 @@ ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
     if (!serialization::tryReadPod(f, b.runCount)) return LoadResult::Corrupt;
     if (!serialization::tryReadPod(f, b.imageW)) return LoadResult::Corrupt;
     if (!serialization::tryReadPod(f, b.imageH)) return LoadResult::Corrupt;
+    if (kind > static_cast<uint8_t>(BlockKind::Image) || align > 3 ||
+        b.runBegin > nRuns || b.runCount > nRuns - b.runBegin) return LoadResult::Corrupt;
   }
   for (uint32_t i = 0; i < nRuns; ++i) {
     Run& r = runs_[i];
@@ -379,6 +379,8 @@ ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
     int8_t step = 2;
     if (!serialization::tryReadPod(f, st)) return LoadResult::Corrupt;
     if (!serialization::tryReadPod(f, step)) return LoadResult::Corrupt;
+    if ((st & ~uint8_t(0x3f)) != 0 || step < 0 || step > 4 ||
+        r.textOff > nText || r.textLen > nText - r.textOff) return LoadResult::Corrupt;
     r.style = static_cast<RunStyle>(st);
     r.sizeStep = static_cast<SizeStep>(step);
   }
@@ -393,16 +395,21 @@ ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
 }
 
 bool ChapterIr::saveToFile(const char* path) const {
-  if (!path || !*path) return false;
+  // A usable prefix is not a complete chapter and must never replace one.
+  if (!path || !*path || failed_ || blocks_.failed() || runs_.failed()) return false;
+  char temp[256];
+  const int n = std::snprintf(temp, sizeof(temp), "%s.tmp", path);
+  if (n <= 0 || static_cast<size_t>(n) >= sizeof(temp)) return false;
   HalFile f;
-  if (!Storage.openFileForWrite("RVIR", path, f)) {
-    LOG_ERR("RVIR", "save open failed %s", path);
-    return false;
-  }
+  if (!Storage.openFileForWrite("RVIR", temp, f)) return false;
   const bool ok = writeTo(f);
   f.close();
-  if (!ok) Storage.remove(path);
-  return ok;
+  if (!ok) { Storage.remove(temp); return false; }
+  // Derived cache only: a loss between remove and rename causes a rebuild;
+  // a short write never truncates the previously valid cache.
+  if (Storage.exists(path) && !Storage.remove(path)) { Storage.remove(temp); return false; }
+  if (!Storage.rename(temp, path)) { Storage.remove(temp); return false; }
+  return true;
 }
 
 ChapterIr::LoadResult ChapterIr::loadFromFileEx(const char* path) {

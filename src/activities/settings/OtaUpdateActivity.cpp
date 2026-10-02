@@ -1,3 +1,4 @@
+#include "util/NetworkPreparation.h"
 #include "OtaUpdateActivity.h"
 
 #include <BoardConfig.h>
@@ -94,6 +95,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
 void OtaUpdateActivity::onEnter() {
   Activity::onEnter();
+  prepareNetworkWorkingSet(renderer);
 
   // OTA needs a large contiguous internal-heap block for TLS + later flash.
   // Log the floor so serial captures of buddy devices show OOM vs connect fails.

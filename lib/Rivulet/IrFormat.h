@@ -29,13 +29,11 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // box); first body para after a real chapter heading / span.dropcap is armed
 // for a drop-cap. DCC "[ 70 ]" headings still do not arm.
 //
-// Write v26 on save. LOAD v19–v26: the on-disk layout (blocks / runs / text blob)
-// has been stable since v19. Parser-only bumps used to set Min==Max, which marked
-// CrossPoint/CrossInk caches "corrupt", deleted them, and forced HTML convert
-// under ~11 KB maxAlloc → PTX OOM → abort() → "Chapter not readable".
-inline constexpr uint16_t kIrFormatVersion = 26;
-inline constexpr uint16_t kIrFormatVersionMin = 19;
-inline constexpr uint16_t kIrFormatVersionMax = 26;
+// v27: complete-source publication and UTF-8-safe long-run splitting. Old IR
+// could contain an unmarked source prefix; rebuild it once from cached HTML.
+inline constexpr uint16_t kIrFormatVersion = 27;
+inline constexpr uint16_t kIrFormatVersionMin = 27;
+inline constexpr uint16_t kIrFormatVersionMax = 27;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {
@@ -60,7 +58,7 @@ struct RenderKey {
   bool operator==(const RenderKey& o) const {
     return fontId == o.fontId && viewportW == o.viewportW && viewportH == o.viewportH && marginL == o.marginL &&
            marginR == o.marginR && marginT == o.marginT && marginB == o.marginB &&
-           lineCompressionQ8 == o.lineCompressionQ8 && flags == o.flags;
+           lineCompressionQ8 == o.lineCompressionQ8 && flags == o.flags && pad == o.pad;
   }
   bool operator!=(const RenderKey& o) const { return !(*this == o); }
 };
@@ -144,7 +142,7 @@ inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};
 // v2: drop-cap after a chapter heading stays on the same page (not a title plate).
 // Load still accepts v1 so a format bump does not force a full map rebuild (and
 // a heap-starved convert) before the chapter can be shown.
-inline constexpr uint16_t kMapFormatVersion = 2;
-inline constexpr uint16_t kMapFormatVersionMin = 1;
+inline constexpr uint16_t kMapFormatVersion = 3;
+inline constexpr uint16_t kMapFormatVersionMin = 3;
 
 }  // namespace rivulet

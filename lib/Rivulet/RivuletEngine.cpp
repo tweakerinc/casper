@@ -130,7 +130,7 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
     // Only accept orphan cache for page 0 into an empty map (seed continuity).
     if (!(pageIndex == 0 && map_.empty())) return false;
     map_.setRenderKey(key_);
-    map_.resetWithStart(tmp.start);
+    if (!map_.resetWithStart(tmp.start)) return false;
   }
   laidOut_ = std::move(tmp);
   laidOutValid_ = true;
@@ -138,9 +138,9 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
   if (!laidOut_.atChapterEnd) {
     const int nextIdx = pageIndex + 1;
     if (!map_.hasPage(nextIdx)) {
-      map_.pushPageStart(laidOut_.end);
+      if (!map_.pushPageStart(laidOut_.end)) return false;
     } else if (map_.pageStart(nextIdx) != laidOut_.end) {
-      map_.setPageStart(nextIdx, laidOut_.end);
+      if (!map_.setPageStart(nextIdx, laidOut_.end)) return false;
     }
   }
   LOG_DBG("RVEN", "page cache HIT p=%d spans=%u", pageIndex, static_cast<unsigned>(laidOut_.spans.size()));
@@ -148,6 +148,7 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
 }
 
 void RivuletEngine::savePageCache(const int pageIndex) const {
+  if (chapter_.failed()) return;
   if (!laidOutValid_ || pageIndex < 0 || pageCacheDir_.empty()) return;
   if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
   ensurePageCacheDir();
@@ -196,9 +197,9 @@ bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int
     } else {
       const int nextIdx = target + 1;
       if (!map_.hasPage(nextIdx)) {
-        map_.pushPageStart(tmp.end);
+        if (!map_.pushPageStart(tmp.end)) return false;
       } else if (map_.pageStart(nextIdx) != tmp.end) {
-        map_.setPageStart(nextIdx, tmp.end);
+        if (!map_.setPageStart(nextIdx, tmp.end)) return false;
       }
     }
     LOG_DBG("RVEN", "idle prefetch SAVE p=%d spans=%u fre=%u", target, static_cast<unsigned>(tmp.spans.size()),
@@ -280,6 +281,7 @@ bool RivuletEngine::ingestHtml(const char* html, const size_t len, const char* i
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return false;
   }
+  if (useLen < len) chapter_.markFailed();
   if (chapter_.failed()) {
     LOG_ERR("RVEN", "HtmlToIr partial OOM blocks=%u text=%u html=%u free=%u maxA=%u — NOT caching",
             static_cast<unsigned>(chapter_.blockCount()), static_cast<unsigned>(chapter_.textSize()),
@@ -300,7 +302,7 @@ bool RivuletEngine::ingestHtml(const char* html, const size_t len, const char* i
   if (!chapter_.blocks().empty()) {
     start.runIndex = chapter_.blocks()[0].runBegin;
   }
-  map_.resetWithStart(start);
+  if (!map_.resetWithStart(start)) return false;
   currentPage_ = 0;
   laidOutValid_ = false;
   LOG_DBG("RVEN", "ingest blocks=%u runs=%u text=%u", static_cast<unsigned>(chapter_.blockCount()),
@@ -328,7 +330,7 @@ bool RivuletEngine::loadIr(const char* irPath) {
   map_.setRenderKey(key_);
   IrCursor start{};
   if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;
-  map_.resetWithStart(start);
+  if (!map_.resetWithStart(start)) return false;
   currentPage_ = 0;
   laidOutValid_ = false;
   aheadValid_ = false;
@@ -359,12 +361,17 @@ bool RivuletEngine::loadPageMap(const char* mapPath) {
       const Block& b = blocks[c.blockIndex];
       const uint32_t runEnd = static_cast<uint32_t>(b.runBegin) + b.runCount;
       // Allow runIndex == runEnd only as empty-block edge; anything past is stale.
-      if (b.runCount > 0 && c.runIndex >= runEnd) {
+      if (b.runCount > 0 && (c.runIndex < b.runBegin || c.runIndex >= runEnd)) {
         LOG_DBG("RVEN", "page map run outside block page=%d run=%u blockRuns=[%u+%u) — ignoring", i,
                 static_cast<unsigned>(c.runIndex), static_cast<unsigned>(b.runBegin),
                 static_cast<unsigned>(b.runCount));
         return false;
       }
+      if (b.runCount > 0) {
+        const Run& r = chapter_.runs()[c.runIndex];
+        if (c.byteInRun > r.textLen) return false;
+        if (c.byteInRun < r.textLen && (static_cast<uint8_t>(chapter_.runText(r)[c.byteInRun]) & 0xC0) == 0x80) return false;
+      } else if (c.byteInRun != 0) return false;
     }
   }
   map_ = std::move(m);
@@ -372,7 +379,7 @@ bool RivuletEngine::loadPageMap(const char* mapPath) {
 }
 
 bool RivuletEngine::savePageMap(const char* mapPath) const {
-  if (!mapPath || !*mapPath) return false;
+  if (!mapPath || !*mapPath || chapter_.failed()) return false;
   return map_.saveToFile(mapPath);
 }
 
@@ -392,27 +399,12 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
   // If the recorded last page really ends the IR, trust the map. Do NOT compare
   // against estimatePageCount — that heuristic is padded and was deleting honest
   // 30–40 page maps on PageBack (known*2+1 < est), which made Back a no-op.
-  if (tmp.atChapterEnd) {
-    const int known = map_.knownPages();
-    // Only catch the classic false-complete bug (2–3 page "whole chapter").
-    if (known <= 3) {
-      const int est =
-          chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx, lineCompression_);
-      if (est >= 10) {
-        LOG_ERR("RVEN", "scrubStaleCompleteMap: tiny complete known=%d est=%d — reset", known, est);
-        IrCursor start{};
-        if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;
-        map_.resetWithStart(start);
-        return true;
-      }
-    }
-    return false;  // honest complete map — keep it
-  }
+  if (tmp.atChapterEnd && !chapter_.failed()) return false;
 
   LOG_DBG("RVEN", "scrubStaleCompleteMap: last page not chapter end (known=%d) — reopening", map_.knownPages());
   map_.markIncomplete();
   if (tmp.end != map_.pageStart(last) && !map_.hasPage(last + 1)) {
-    map_.pushPageStart(tmp.end);
+    if (!map_.pushPageStart(tmp.end)) return false;
   }
   return true;
 }
@@ -423,18 +415,11 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
 // It must not be strict: estimatePageCount is a padded heuristic, and comparing a
 // real page count against it (known*2+1 < est) refused to seal honest maps, which
 // left the status bar on "~" forever and forced every PageBack to re-walk.
-void RivuletEngine::markMapCompleteIfPlausible(const GfxRenderer& renderer) {
-  const int known = map_.knownPages();
-  if (known <= 0) return;
-  if (known <= 3) {
-    const int est =
-        chapter_.estimatePageCount(key_.viewportW, key_.viewportH, makeParams(renderer).bodyEmPx, lineCompression_);
-    if (est >= 10) {
-      LOG_ERR("RVEN", "refuse markComplete known=%d est=%d (implausibly short)", known, est);
-      return;
-    }
-  }
-  map_.markComplete(known);
+void RivuletEngine::markMapCompleteIfPlausible(const GfxRenderer& /*renderer*/) {
+  // Callers verified a live layout end. Source completeness, not an estimate
+  // of text density, decides whether the count is exact.
+  if (chapter_.failed() || map_.failed() || map_.knownPages() <= 0) return;
+  map_.markComplete(map_.knownPages());
 }
 
 bool RivuletEngine::buildPageMap(const GfxRenderer& renderer) {
@@ -457,21 +442,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     if (last < 0) break;
     LaidOutPage tmp;
     if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
-      if (tmp.aborted) break;
-      // Layout failed mid-map (broken image, empty cell). Skip that block rather
-      // than freezing the map here — a stuck map also freezes the page count and
-      // makes every later last-page walk fail.
-      const IrCursor at = map_.pageStart(last);
-      if (!tmp.atChapterEnd && at.blockIndex + 1 < chapter_.blocks().size()) {
-        IrCursor skip = at;
-        ++skip.blockIndex;
-        skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
-        skip.byteInRun = 0;
-        map_.setPageStart(last, skip);
-        progressed = true;
-        continue;
-      }
-      break;
+      break;  // OOM, cancellation and malformed content are not empty blocks
     }
     progressed = true;
     if (tmp.atChapterEnd) {
@@ -484,7 +455,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
       LOG_DBG("RVEN", "extendPageMap stuck at page=%d — not marking complete", last);
       break;
     }
-    map_.pushPageStart(tmp.end);
+    if (!map_.pushPageStart(tmp.end)) return false;
     if ((i & 3) == 3) yield();
   }
   return progressed;
@@ -620,9 +591,9 @@ bool RivuletEngine::goToStart(const GfxRenderer& renderer) {
   // belongs on idle — layouting kMapAheadPages here blocked open/resume.
   if (!laidOut_.atChapterEnd) {
     if (!map_.hasPage(1)) {
-      map_.pushPageStart(laidOut_.end);
+      if (!map_.pushPageStart(laidOut_.end)) return false;
     } else if (map_.pageStart(1) != laidOut_.end) {
-      map_.setPageStart(1, laidOut_.end);
+      if (!map_.setPageStart(1, laidOut_.end)) return false;
     }
     // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
@@ -646,7 +617,8 @@ bool RivuletEngine::resumeAtCursor(const GfxRenderer& renderer, const IrCursor& 
 
   if (map_.knownPages() > 0) {
     const int page = map_.pageContaining(cursor);
-    if (page >= 0 && goToPage(renderer, page, /*maxWalkPages=*/8)) return true;
+    if (page >= 0 && (page + 1 < map_.knownPages() || map_.complete()) &&
+        goToPage(renderer, page, /*maxWalkPages=*/8)) return true;
   }
 
   seedMapIfEmpty();
@@ -669,7 +641,7 @@ bool RivuletEngine::resumeAtCursor(const GfxRenderer& renderer, const IrCursor& 
       return ensureLaidOut(renderer);
     }
     if (tmp.end == start) break;
-    if (!map_.hasPage(last + 1)) map_.pushPageStart(tmp.end);
+    if (!map_.hasPage(last + 1) && !map_.pushPageStart(tmp.end)) return false;
     if (++walked > budget) break;
     if ((walked & 7) == 0) yield();
   }
@@ -696,9 +668,9 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
     if (!laidOut_.atChapterEnd) {
       // Live end is ground truth; correct map tail if a loaded .rvpm disagrees.
       if (!map_.hasPage(pageIndex + 1)) {
-        map_.pushPageStart(laidOut_.end);
+        if (!map_.pushPageStart(laidOut_.end)) return false;
       } else if (map_.pageStart(pageIndex + 1) != laidOut_.end) {
-        map_.setPageStart(pageIndex + 1, laidOut_.end);
+        if (!map_.setPageStart(pageIndex + 1, laidOut_.end)) return false;
       }
       // One paint-ahead only; idle tick extends the thin map further.
       // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
@@ -711,7 +683,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
   if (map_.empty()) {
     IrCursor start{};
     if (!chapter_.blocks().empty()) start.runIndex = chapter_.blocks()[0].runBegin;
-    map_.resetWithStart(start);
+    if (!map_.resetWithStart(start)) return false;
   }
   const int walkBudget = maxWalkPages > 0 ? maxWalkPages : 64;
   int walked = 0;
@@ -737,7 +709,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
       // Stuck mid-walk — stop without poisoning complete.
       break;
     }
-    map_.pushPageStart(tmp.end);
+    if (!map_.pushPageStart(tmp.end)) return false;
   }
   if (!map_.hasPage(pageIndex)) return false;
   currentPage_ = pageIndex;
@@ -745,9 +717,9 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer, const int pageIndex, c
   if (!ensureLaidOut(renderer)) return false;
   if (!laidOut_.atChapterEnd) {
     if (!map_.hasPage(pageIndex + 1)) {
-      map_.pushPageStart(laidOut_.end);
+      if (!map_.pushPageStart(laidOut_.end)) return false;
     } else if (map_.pageStart(pageIndex + 1) != laidOut_.end) {
-      map_.setPageStart(pageIndex + 1, laidOut_.end);
+      if (!map_.setPageStart(pageIndex + 1, laidOut_.end)) return false;
     }
     // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
   }
@@ -784,10 +756,10 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
     return false;
   }
   if (!map_.hasPage(currentPage_ + 1)) {
-    map_.pushPageStart(nextStart);
+    if (!map_.pushPageStart(nextStart)) return false;
   } else if (map_.pageStart(currentPage_ + 1) != nextStart) {
     LOG_DBG("RVEN", "nextPage: correct map start for page %d (stale break)", currentPage_ + 1);
-    map_.setPageStart(currentPage_ + 1, nextStart);
+    if (!map_.setPageStart(currentPage_ + 1, nextStart)) return false;
   }
 
   ++currentPage_;
@@ -804,9 +776,9 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
     // Record map start for page+1 from this live end; fix if stale.
     if (!laidOut_.atChapterEnd) {
       if (!map_.hasPage(currentPage_ + 1)) {
-        map_.pushPageStart(laidOut_.end);
+        if (!map_.pushPageStart(laidOut_.end)) return false;
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
-        map_.setPageStart(currentPage_ + 1, laidOut_.end);
+        if (!map_.setPageStart(currentPage_ + 1, laidOut_.end)) return false;
       }
       // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
@@ -826,9 +798,9 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
   if (ensureLaidOut(renderer)) {
     if (!laidOut_.atChapterEnd) {
       if (!map_.hasPage(currentPage_ + 1)) {
-        map_.pushPageStart(laidOut_.end);
+        if (!map_.pushPageStart(laidOut_.end)) return false;
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
-        map_.setPageStart(currentPage_ + 1, laidOut_.end);
+        if (!map_.setPageStart(currentPage_ + 1, laidOut_.end)) return false;
       }
       // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
@@ -839,15 +811,15 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
   laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), nextStart, laidOut_);
   if (laidOutValid_) {
     if (!map_.hasPage(currentPage_)) {
-      map_.pushPageStart(nextStart);
+      if (!map_.pushPageStart(nextStart)) return false;
     } else {
-      map_.setPageStart(currentPage_, nextStart);
+      if (!map_.setPageStart(currentPage_, nextStart)) return false;
     }
     if (!laidOut_.atChapterEnd) {
       if (!map_.hasPage(currentPage_ + 1)) {
-        map_.pushPageStart(laidOut_.end);
+        if (!map_.pushPageStart(laidOut_.end)) return false;
       } else if (map_.pageStart(currentPage_ + 1) != laidOut_.end) {
-        map_.setPageStart(currentPage_ + 1, laidOut_.end);
+        if (!map_.setPageStart(currentPage_ + 1, laidOut_.end)) return false;
       }
       // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
     }
@@ -906,7 +878,7 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
   if (!laidOut_.atChapterEnd) {
     const int nextIdx = currentPage_ + 1;
     if (!map_.hasPage(nextIdx)) {
-      map_.pushPageStart(laidOut_.end);
+      if (!map_.pushPageStart(laidOut_.end)) return false;
     } else if (map_.pageStart(nextIdx) != laidOut_.end) {
       // A sealed map came from a verified end-to-end walk. Overwriting one entry
       // truncates the whole tail and drops `complete` (PageMap::setPageStart), so
@@ -916,7 +888,7 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
         LOG_DBG("RVEN", "prevPage: page %d end differs from sealed map — keeping map", currentPage_);
       } else {
         LOG_DBG("RVEN", "prevPage: re-break page %d end; truncate stale tail", currentPage_);
-        map_.setPageStart(nextIdx, laidOut_.end);
+        if (!map_.setPageStart(nextIdx, laidOut_.end)) return false;
       }
     }
     // Paint-ahead deferred to warmAheadPage() on the idle tick — see below.
@@ -925,256 +897,54 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
 }
 
 bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkPages, const bool allowPartial) {
-  if (chapter_.empty()) return false;
-  // Partial OOM IR ends mid-chapter (DCC: "ripping the T'Ghee totem in two").
-  // Refusing is right for forward reading, but for PageBack it meant the reader
-  // simply never left the current chapter (silent "nothing happens" refresh).
-  if (chapter_.failed() && !allowPartial) {
-    LOG_ERR("RVEN", "goToLastPage refuse partial IR text=%u blocks=%u", static_cast<unsigned>(chapter_.textSize()),
-            static_cast<unsigned>(chapter_.blockCount()));
-    return false;
-  }
-  if (chapter_.failed()) {
-    LOG_ERR("RVEN", "goToLastPage on PARTIAL IR (allowed) text=%u blocks=%u",
-            static_cast<unsigned>(chapter_.textSize()), static_cast<unsigned>(chapter_.blockCount()));
-  }
+  // An incomplete source has no known final page, even if the RAM prefix ends.
+  (void)allowPartial;
+  if (chapter_.empty() || chapter_.failed()) return false;
+  seedMapIfEmpty();
+  if (map_.empty() || map_.failed()) return false;
+  aheadValid_ = false; ahead_.clear();
+  behindValid_ = false; behind_.clear();
+  lastWalkPages_ = 0; lastWalkSkips_ = 0; lastWalkBlock_ = 0;
+  lastWalkStallKind_ = -1; lastWalkStop_ = kWalkStopBudget;
 
-  // Instant path only when a complete map's last page is a verified IR end.
-  // Never land on "last known mid-map page" — that painted the wrong last line.
-  if (map_.complete() && map_.knownTotal() > 0) {
-    const int last = map_.knownTotal() - 1;
-    if (goToPage(renderer, last, /*maxWalkPages=*/8) && laidOutValid_ && laidOut_.atChapterEnd) {
-      LOG_DBG("RVEN", "goToLastPage map-hit page=%d total=%d", currentPage_, map_.knownTotal());
-      return true;
-    }
-    map_.markIncomplete();
-  }
-
-  // legacy-style: build the full page map with pure layoutPage walks (not nextPage).
-  // nextPage warms paint-ahead and aborts on stuck cursors mid-chapter; a dedicated
-  // walk can skip unlayoutable blocks and only succeeds when atChapterEnd is true.
-  IrCursor start{};
-  if (!chapter_.blocks().empty()) {
-    start.runIndex = chapter_.blocks()[0].runBegin;
-  }
-  map_.setRenderKey(key_);
-  map_.resetWithStart(start);
-  aheadValid_ = false;
-  ahead_.clear();
-  behindValid_ = false;
-  behind_.clear();
-
-  // The walk below can cover up to `budget` pages (1024 by default) and only
-  // ever inspects `page.end` / `page.atChapterEnd`, so it runs measure-only:
-  // no GlyphSpan, no per-word string copy, no span vector, per walked page.
-  // `paintParams` is used for the pages that actually land in laidOut_.
-  const LayoutParams params = makeMeasureParams(renderer);
-  const LayoutParams paintParams = makeParams(renderer);
-  IrCursor cur = start;
-  LaidOutPage page;
+  // Continue the validated prefix already indexed, rather than throwing it
+  // away on every Back across a chapter. Completed maps need one last-page
+  // layout; partial maps only need their previously unindexed suffix.
+  int pageIndex = map_.knownPages() - 1;
+  IrCursor cursor = map_.pageStart(pageIndex);
   const int budget = maxWalkPages > 0 ? maxWalkPages : 1024;
-  int walked = 0;
-  // Skip budget must scale with the chapter. A flat 64 stopped a 158-block
-  // chapter at block 80 (log: stop=3 block=80/158) even though the walk was
-  // still advancing — the reader then landed mid-chapter. One skip per block is
-  // the natural bound: the walk can never revisit a block, so it still cannot spin.
-  int skips = 0;
-  const int kMaxBlockSkips = std::max(64, static_cast<int>(chapter_.blocks().size()) + 8);
-  // Telemetry so a user log can say how far the walk actually got and why it
-  // stopped — guessing at this from the outside has cost several rounds.
-  lastWalkPages_ = 0;
-  lastWalkBlock_ = 0;
-  lastWalkSkips_ = 0;
-  lastWalkStallKind_ = -1;
-  lastWalkStop_ = kWalkStopBudget;
-
-  for (int guard = 0; guard < budget; ++guard) {
-    if ((guard & 7) == 0) {
-      yield();
+  LaidOutPage measured;
+  for (int i = 0; i < budget; ++i) {
+    if ((i & 3) == 3) yield();
+    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), cursor, measured)) {
+      lastWalkStop_ = kWalkStopLayoutFail;
+      return false;  // retain valid checkpoints; never skip source blocks
     }
-    page.clear();
-    if (!PageLayouter::layoutPage(chapter_, renderer, params, cur, page)) {
-      // from already past end → empty chapter / overshot after last content page
-      if (page.atChapterEnd) {
-        if (walked == 0) {
-          // Empty IR body: one empty last page at start.
-          currentPage_ = 0;
-          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, start, laidOut_);
-          if (!laidOutValid_) {
-            laidOut_.clear();
-            laidOut_.start = start;
-            laidOut_.end = start;
-            laidOut_.atChapterEnd = true;
-            laidOutValid_ = true;
-          }
-          map_.markComplete(1);
-          LOG_INF("RVEN", "goToLastPage empty-chapter page=0");
-          return true;
-        }
-        // Land on previous page (last content).
-        const int lastIdx = walked - 1;
-        currentPage_ = lastIdx;
-        laidOutValid_ = false;
-        if (!ensureLaidOut(renderer) || !laidOut_.atChapterEnd) {
-          // Re-layout last start explicitly.
-          const IrCursor lastStart = map_.pageStart(lastIdx);
-          laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, lastStart, laidOut_);
-        }
-        if (laidOutValid_) {
-          // We are here because laying out FROM `cur` reported atEnd — the cursor
-          // is past the last block, so the page before it IS the last page even if
-          // its own atChapterEnd flag came back false (page filled exactly at the
-          // final block boundary). Requiring that flag rejected a perfectly good
-          // last page and dropped us into the fallback, which is how PageBack kept
-          // landing mid-chapter.
-          laidOut_.atChapterEnd = true;
-          map_.markComplete(map_.knownPages());
-          lastWalkPages_ = map_.knownPages();
-          lastWalkBlock_ = static_cast<int>(cur.blockIndex);
-          lastWalkStop_ = kWalkStopOvershoot;
-          LOG_INF("RVEN", "goToLastPage overshot-land page=%d known=%d", currentPage_, map_.knownPages());
-          return true;
-        }
-      }
-      // Layout failed and we are NOT at the chapter end: one unlayoutable block
-      // (broken image, empty cell, zero-progress spacer) must not end the walk.
-      // Aborting here is why PageBack landed on page 1 of a 23 KB chapter — the
-      // walk died ~1 page in, so "last page" was never found. Skip the block and
-      // keep going, exactly as this function's comment always claimed to do.
-      if (cur.blockIndex + 1 < chapter_.blocks().size() && ++skips <= kMaxBlockSkips) {
-        IrCursor skip = cur;
-        if (lastWalkStallKind_ < 0) {
-          // Record what kind of block first refuses to lay out — a long run of
-          // these is the real content bug behind the short maps.
-          lastWalkStallKind_ = static_cast<int>(chapter_.blocks()[cur.blockIndex].kind);
-        }
-        ++skip.blockIndex;
-        skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
-        skip.byteInRun = 0;
-        LOG_ERR("RVEN", "goToLastPage layout fail at block %u kind=%d — skipping to %u (page=%d)",
-                static_cast<unsigned>(cur.blockIndex), static_cast<int>(chapter_.blocks()[cur.blockIndex].kind),
-                static_cast<unsigned>(skip.blockIndex), walked);
-        cur = skip;
-        lastWalkSkips_ = skips;
-        if (!map_.hasPage(walked)) {
-          map_.pushPageStart(cur);
-        } else {
-          map_.setPageStart(walked, cur);
-        }
-        continue;
-      }
-      LOG_ERR("RVEN", "goToLastPage layout fail page=%d walked=%d known=%d skips=%d", walked, walked, map_.knownPages(),
-              skips);
-      lastWalkStop_ = (skips > kMaxBlockSkips) ? kWalkStopSkipsExhausted : kWalkStopLayoutFail;
-      break;
-    }
-
-    if (page.atChapterEnd) {
-      // This page is the true last page of the IR. `page` came from the
-      // measure-only walk and therefore carries no spans, so re-run it as a
-      // painting pass before handing it to laidOut_ (moving it straight in would
-      // land the reader on a blank last page).
-      currentPage_ = walked;
-      laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, paintParams, page.start, laidOut_);
-      if (!laidOutValid_) {
-        LOG_ERR("RVEN", "goToLastPage repaint of last page failed page=%d", currentPage_);
-        break;
-      }
-      map_.markComplete(map_.knownPages() > 0 ? map_.knownPages() : walked + 1);
-      lastWalkPages_ = map_.knownPages();
-      lastWalkBlock_ = static_cast<int>(page.end.blockIndex);
+    lastWalkPages_ = i + 1;
+    lastWalkBlock_ = measured.end.blockIndex;
+    if (measured.atChapterEnd) {
+      LaidOutPage target;
+      if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), cursor, target) ||
+          target.failed() || !target.atChapterEnd) return false;
+      currentPage_ = pageIndex;
+      laidOut_ = std::move(target);
+      laidOutValid_ = true;
+      map_.markComplete(pageIndex + 1);
       lastWalkStop_ = kWalkStopReachedEnd;
-      LOG_INF("RVEN", "goToLastPage pure-walk page=%d walked=%d known=%d complete=1", currentPage_, walked,
-              map_.knownPages());
-      return true;
+      savePageCache(currentPage_);
+      return map_.complete();
     }
-
-    if (page.end == cur) {
-      // Stuck on a block (broken image / empty run). Skip the block so we can
-      // still reach the real chapter end — better than stopping mid-chapter.
-      if (cur.blockIndex + 1 < chapter_.blocks().size()) {
-        IrCursor skip = cur;
-        ++skip.blockIndex;
-        skip.runIndex = chapter_.blocks()[skip.blockIndex].runBegin;
-        skip.byteInRun = 0;
-        LOG_DBG("RVEN", "goToLastPage skip stuck block=%u → %u", static_cast<unsigned>(cur.blockIndex),
-                static_cast<unsigned>(skip.blockIndex));
-        cur = skip;
-        // Keep map coherent: next page starts after the skipped block.
-        if (!map_.hasPage(walked + 1)) {
-          map_.pushPageStart(cur);
-        } else {
-          map_.setPageStart(walked + 1, cur);
-        }
-        ++walked;
-        continue;
-      }
-      LOG_ERR("RVEN", "goToLastPage stuck at last block page=%d", walked);
-      lastWalkStop_ = kWalkStopStuckLastBlock;
-      break;
-    }
-
-    // Record start of next page and continue.
-    if (!map_.hasPage(walked + 1)) {
-      map_.pushPageStart(page.end);
-    } else {
-      map_.setPageStart(walked + 1, page.end);
-    }
-    cur = page.end;
-    ++walked;
+    if (!(cursor < measured.end)) { lastWalkStop_ = kWalkStopLayoutFail; return false; }
+    if (!map_.pushPageStart(measured.end)) return false;
+    cursor = measured.end;
+    ++pageIndex;
   }
-
-  lastWalkPages_ = map_.knownPages();
-  lastWalkBlock_ = static_cast<int>(cur.blockIndex);
-  LOG_ERR("RVEN", "goToLastPage incomplete page=%d walked=%d budget=%d known=%d block=%u/%u stop=%u", walked, walked,
-          budget, map_.knownPages(), static_cast<unsigned>(cur.blockIndex),
-          static_cast<unsigned>(chapter_.blocks().size()), static_cast<unsigned>(lastWalkStop_));
-  // Do not paint a mid-chapter page as verified "last" — clear paint state.
-  // Keep the walked map so goToBestEffortLastPage can land on known-1.
-  // Do NOT reset currentPage_ to 0: a caller that ignores the false return then
-  // painted page 0 of this chapter under the previous chapter's status label.
-  laidOut_.clear();
-  laidOutValid_ = false;
-  aheadValid_ = false;
-  behindValid_ = false;
-  behind_.clear();
   return false;
 }
 
 bool RivuletEngine::goToLastPageNearEnd(const GfxRenderer& renderer, const int maxForwardPages,
-                                        const bool allowPartial) {
-  // Land on REAL last page index with a full page map so next Back is N-1 in-chapter.
-  (void)maxForwardPages;
-  if (chapter_.empty()) return false;
-  if (chapter_.failed() && !allowPartial) return false;
-
-  auto landLast = [&]() -> bool {
-    if (!map_.complete() || map_.knownTotal() <= 0) return false;
-    const int last = map_.knownTotal() - 1;
-    if (!goToPage(renderer, last, /*maxWalkPages=*/32)) return false;
-    if (!laidOutValid_) return false;
-    // Prefer verified end; still accept last index if paint succeeded (map was sealed).
-    return laidOut_.atChapterEnd || last >= 0;
-  };
-
-  if (map_.complete() && landLast()) {
-    LOG_INF("RVEN", "goToLastPageNearEnd map-hit page=%d total=%d", currentPage_, map_.knownTotal());
-    return true;
-  }
-
-  if (goToLastPage(renderer, /*maxWalkPages=*/1024, allowPartial)) {
-    LOG_INF("RVEN", "goToLastPageNearEnd walk page=%d known=%d", currentPage_, map_.knownPages());
-    return true;
-  }
-
-  // Stronger rebuild (same as classic section rebuild) then land last.
-  LOG_ERR("RVEN", "goToLastPage failed — buildFullPageMap fallback");
-  if (buildPageMap(renderer) && landLast()) {
-    LOG_INF("RVEN", "goToLastPageNearEnd buildFull page=%d known=%d", currentPage_, map_.knownPages());
-    return true;
-  }
-
-  return goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024, allowPartial);
+                                      const bool allowPartial) {
+  return goToLastPage(renderer, maxForwardPages, allowPartial);
 }
 
 bool RivuletEngine::goToBestEffortLastPage(const GfxRenderer& renderer, const int maxWalkPages,
@@ -1219,7 +989,7 @@ bool RivuletEngine::tryCompleteMapAtEnd(const GfxRenderer& renderer) {
     return map_.complete();
   }
   if (tmp.end != map_.pageStart(last) && !map_.hasPage(last + 1)) {
-    map_.pushPageStart(tmp.end);
+    if (!map_.pushPageStart(tmp.end)) return false;
     return true;
   }
   return false;
@@ -1231,7 +1001,7 @@ bool RivuletEngine::sealMapAtChapterEnd() {
   if (total <= 0) return false;
   // Ensure map has a start for the last page we are on.
   if (!map_.hasPage(currentPage_)) {
-    map_.resetWithStart(laidOut_.start);
+    if (!map_.resetWithStart(laidOut_.start)) return false;
     // Can't reconstruct full map here — at least mark single-page complete chapters.
     if (currentPage_ == 0) {
       map_.markComplete(1);

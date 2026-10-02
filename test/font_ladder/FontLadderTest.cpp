@@ -27,3 +27,9 @@ TEST(FontLadder, LiterataBodyStaysOnLadder) {
   EXPECT_EQ(FontLadder::resolve(kLiterata12, SizeStep::Body), kLiterata12);
   EXPECT_EQ(FontLadder::resolve(kLiterata12, SizeStep::Plus1), kLiterata14);
 }
+
+TEST(FontLadder, LiterataTenPointAliasUsesActualSize) {
+  EXPECT_EQ(FontLadder::resolve(-1128177077, SizeStep::Body), -1128177077);
+  EXPECT_EQ(FontLadder::resolve(-1128177077, SizeStep::Plus1), 2090520927);
+  EXPECT_EQ(FontLadder::resolve(-1128177077, SizeStep::Plus2), -847079762);
+}

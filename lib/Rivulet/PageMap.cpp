@@ -14,27 +14,29 @@ constexpr uint32_t kMaxMapPages = 4000;
 }  // namespace
 
 void PageMap::clear() {
-  starts_.clear();
+  starts_.release();
   complete_ = false;
   knownTotal_ = 0;
   key_ = {};
 }
 
-void PageMap::resetWithStart(const IrCursor& firstPageStart) {
+bool PageMap::resetWithStart(const IrCursor& firstPageStart) {
   starts_.clear();
-  starts_.push_back(firstPageStart);
+  const bool ok = starts_.push_back(firstPageStart);
   complete_ = false;
   knownTotal_ = 0;
+  return ok;
 }
 
-void PageMap::pushPageStart(const IrCursor& c) {
-  starts_.push_back(c);
+bool PageMap::pushPageStart(const IrCursor& c) {
+  if (!starts_.push_back(c)) { markIncomplete(); return false; }
   // Extending past a "complete" map means that total was wrong (stale .rvpm or
   // false end==start complete). Drop complete so counts/idle walk resume.
   if (complete_ && static_cast<int>(starts_.size()) > knownTotal_) {
     complete_ = false;
     knownTotal_ = 0;
   }
+  return true;
 }
 
 void PageMap::truncateFrom(const int pageIndex) {
@@ -47,14 +49,14 @@ void PageMap::truncateFrom(const int pageIndex) {
   knownTotal_ = 0;
 }
 
-void PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
-  if (pageIndex < 0) return;
+bool PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
+  if (pageIndex < 0) return false;
   if (pageIndex > static_cast<int>(starts_.size())) {
     // Cannot leave holes — only extend by one at a time via pushPageStart.
-    return;
+    return false;
   }
   if (pageIndex == static_cast<int>(starts_.size())) {
-    starts_.push_back(c);
+    if (!starts_.push_back(c)) { markIncomplete(); return false; }
   } else {
     starts_[static_cast<size_t>(pageIndex)] = c;
     // Later starts are no longer valid relative to this re-break.
@@ -64,6 +66,7 @@ void PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
   }
   complete_ = false;
   knownTotal_ = 0;
+  return true;
 }
 
 IrCursor PageMap::pageStart(const int pageIndex) const {
@@ -72,7 +75,7 @@ IrCursor PageMap::pageStart(const int pageIndex) const {
 }
 
 bool PageMap::saveToFile(const char* path) const {
-  if (!path || !*path) return false;
+  if (failed() || !path || !*path) return false;
   // Atomic: write .tmp then rename. A power loss mid-write used to leave a
   // corrupt .rvpm at the final path, which the loader then had to defend against.
   char tmpPath[224];
@@ -159,7 +162,9 @@ bool PageMap::loadFromFile(const char* path) {
     f.close();
     return false;
   }
-  starts_.resize(n);
+  if (completeU8 > 1 || knownTotal_ < 0 || (completeU8 && knownTotal_ != static_cast<int>(n)) ||
+      static_cast<uint64_t>(n) * kCursorBytes != remaining) { clear(); f.close(); return false; }
+  if (!starts_.resize(n)) { clear(); f.close(); return false; }
   for (uint32_t i = 0; i < n; ++i) {
     if (!serialization::tryReadPod(f, starts_[i].blockIndex) || !serialization::tryReadPod(f, starts_[i].runIndex) ||
         !serialization::tryReadPod(f, starts_[i].byteInRun)) {
@@ -167,6 +172,9 @@ bool PageMap::loadFromFile(const char* path) {
       f.close();
       return false;
     }
+  }
+  for (uint32_t i = 1; i < n; ++i) {
+    if (!(starts_[i-1] < starts_[i])) { clear(); f.close(); return false; }
   }
   complete_ = completeU8 != 0;
   f.close();

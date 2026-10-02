@@ -1,3 +1,4 @@
+#include "util/NetworkPreparation.h"
 #include "WifiSelectionActivity.h"
 
 #include <GfxRenderer.h>
@@ -19,6 +20,7 @@
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+  prepareNetworkWorkingSet(renderer);
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both

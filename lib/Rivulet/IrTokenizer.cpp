@@ -1,6 +1,7 @@
 #include "IrTokenizer.h"
 
 #include <Utf8.h>
+#include "../Memory/BoundedUtf8.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -84,109 +85,54 @@ bool hasCjkBreakBetween(const uint32_t leftCp, const uint32_t rightCp) {
   return true;
 }
 
-// True if a byte range could contain a codepoint utf8IsCjkBreakable() accepts.
-// Keeps the per-codepoint scan below off the hot path for non-CJK books.
-//
-// The breakable set starts at U+1100 (Hangul Jamo) and is otherwise >= U+3000, so
-// in UTF-8 the lead bytes that matter are 0xE1 and 0xE3..0xEF, plus 0xF0+ for the
-// Extension B/C planes. Continuation bytes are 0x80-0xBF and never collide.
-//
-// 0xE2 is deliberately excluded: it covers U+2000-U+2FFF (General Punctuation,
-// arrows, maths), which contains NO breakable CJK. That range is exactly where
-// ordinary Latin typography lives — em dashes, curly quotes, ellipses — so a naive
-// ">= 0xE0" test would have dragged most real prose onto the slow path for nothing.
-bool mayContainCjk(const char* p, const char* end) {
-  for (const char* q = p; q < end; ++q) {
-    const unsigned char b = static_cast<unsigned char>(*q);
-    if (b == 0xE1 || b >= 0xE3) return true;
+}  // namespace
+
+IrTokenCursor::IrTokenCursor(const ChapterIr& ch, uint16_t begin, uint16_t count,
+                             uint16_t startRun, uint16_t startByte)
+    : chapter_(&ch), run_(std::max(begin, startRun)), endRun_(static_cast<uint32_t>(begin) + count),
+      byte_(run_ == startRun ? startByte : 0) {
+  failed_ = endRun_ > ch.runs().size() || run_ > endRun_;
+}
+
+bool IrTokenCursor::next(IrTok& out) {
+  if (failed_) return false;
+  const auto& runs = chapter_->runs();
+  while (run_ < endRun_) {
+    const Run& run = runs[run_];
+    if (byte_ >= run.textLen) { ++run_; byte_ = 0; continue; }
+    if (run.textOff > chapter_->textSize() || run.textLen > chapter_->textSize() - run.textOff) {
+      failed_ = true; return false;
+    }
+    const char* base = chapter_->runText(run);
+    const char* p = base + byte_;
+    const char* start = p;
+    const char* end = base + run.textLen;
+    const bool space = *p == ' ' || *p == '\t';
+    if (space) ++p;
+    else {
+      uint32_t prev = 0;
+      while (p < end && *p != ' ' && *p != '\t') {
+        const char* q = p;
+        const uint32_t cp = casper_memory::nextUtf8(q, end);
+        if (prev && hasCjkBreakBetween(prev, cp)) break;
+        prev = cp; p = q;
+      }
+    }
+    out = IrTok{static_cast<uint16_t>(run_), byte_, static_cast<uint16_t>(p - start), space};
+    byte_ = static_cast<uint16_t>(p - base);
+    return true;
   }
   return false;
 }
 
-}  // namespace
-
-void tokenizeRuns(const ChapterIr& ch, const uint16_t runBegin, const uint16_t runCount, const uint16_t startRun,
-                  const uint16_t startByte, std::vector<IrTok>& out) {
+void tokenizeRuns(const ChapterIr& ch, uint16_t begin, uint16_t count, uint16_t run,
+                  uint16_t byte, std::vector<IrTok>& out) {
+  // Compatibility helper for host tests; the device layouter uses the bounded
+  // cursor directly. No whole-block reserve is made in the device path.
   out.clear();
-  const auto& runs = ch.runs();
-  const uint16_t runEnd = static_cast<uint16_t>(runBegin + runCount);
-
-  // Reserve up front: this runs per block on EVERY page layout, and an unreserved
-  // push_back loop costs a chain of geometric reallocations (allocate + copy +
-  // free each time) that fragments DRAM — the one thing the C3 cannot afford.
-  // Estimate from the remaining byte span at ~1 token per 4 bytes (a word plus its
-  // space averages well above that in Latin prose), clamped so a pathological run
-  // list cannot reserve something silly. Over-estimating slightly is free; the
-  // vector is a per-layout scratch that is cleared and refilled.
-  {
-    size_t remainingBytes = 0;
-    for (uint16_t ri = startRun < runBegin ? runBegin : startRun; ri < runEnd && ri < runs.size(); ++ri) {
-      remainingBytes += runs[ri].textLen;
-    }
-    size_t estimate = remainingBytes / 4 + 8;
-    if (estimate > 4096) estimate = 4096;
-    if (out.capacity() < estimate) out.reserve(estimate);
-  }
-  uint16_t ri = startRun < runBegin ? runBegin : startRun;
-  uint16_t bo = (ri == startRun) ? startByte : 0;
-  for (; ri < runEnd && ri < runs.size(); ++ri, bo = 0) {
-    const Run& run = runs[ri];
-    if (bo >= run.textLen) continue;
-    const char* base = ch.runText(run);
-    // Do not insert a synthetic space between adjacent word-char runs.
-    //
-    // v22 IR already keeps a real leading space after </i>/</b>/</span> when
-    // HTML had one ("Vampire"+" skill"). A style-run boundary with no space
-    // is adjacency: ordinal suffixes (6 + superscript th) and mid-word bold.
-    // The old backstop turned that adjacency into justify glue, so "th" flew
-    // to the right margin on a fully-justified line.
-    const char* p = base + bo;
-    const char* end = base + run.textLen;
-    while (p < end) {
-      if (*p == ' ' || *p == '\t') {
-        out.push_back(IrTok{ri, static_cast<uint16_t>(p - base), 1, true});
-        ++p;
-        continue;
-      }
-      const char* w0 = p;
-      while (p < end && *p != ' ' && *p != '\t') ++p;
-      // Latin fast path: no CJK possible, so the whole space-delimited run is one
-      // token, exactly as before.
-      if (!mayContainCjk(w0, p)) {
-        out.push_back(IrTok{ri, static_cast<uint16_t>(w0 - base), static_cast<uint16_t>(p - w0), false});
-        continue;
-      }
-      // CJK-bearing: re-walk this word by codepoint and cut at every legal break
-      // opportunity, so the line fitter has somewhere to wrap.
-      {
-        const char* const wordEnd = p;
-        const char* segStart = w0;
-        const char* cur = w0;
-        uint32_t prevCp = 0;
-        while (cur < wordEnd) {
-          const auto* q = reinterpret_cast<const unsigned char*>(cur);
-          const uint32_t cp = utf8NextCodepoint(&q);
-          const char* next = reinterpret_cast<const char*>(q);
-          if (cp == 0 || next <= cur) {
-            ++cur;  // malformed byte: step over it rather than spin
-            continue;
-          }
-          if (next > wordEnd) next = wordEnd;
-          if (prevCp != 0 && cur > segStart && hasCjkBreakBetween(prevCp, cp)) {
-            out.push_back(
-                IrTok{ri, static_cast<uint16_t>(segStart - base), static_cast<uint16_t>(cur - segStart), false});
-            segStart = cur;
-          }
-          prevCp = cp;
-          cur = next;
-        }
-        if (wordEnd > segStart) {
-          out.push_back(
-              IrTok{ri, static_cast<uint16_t>(segStart - base), static_cast<uint16_t>(wordEnd - segStart), false});
-        }
-      }
-    }
-  }
+  IrTokenCursor cursor(ch, begin, count, run, byte);
+  IrTok token;
+  while (cursor.next(token)) out.push_back(token);
 }
 
 }  // namespace rivulet

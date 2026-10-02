@@ -18,6 +18,7 @@ class FontInstaller {
   };
 
   explicit FontInstaller(SdCardFontRegistry& registry);
+  static void recoverInterruptedInstalls();
 
   /// Validate a family name: alphanumeric + hyphen + underscore only, no path traversal.
   static bool isValidFamilyName(const char* name);

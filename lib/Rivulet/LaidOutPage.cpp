@@ -17,7 +17,7 @@ constexpr char kPageMagic[4] = {'R', 'V', 'P', 'G'};
 // v2: page carries drawn thematic-break rules (RulePlate) as well as spans/images.
 // v3: no leading-space indent / last-line justify
 // v4: chapter titles stay centered; small ornaments are not letter-floated
-constexpr uint16_t kPageFormatVersion = 4;
+constexpr uint16_t kPageFormatVersion = 5;
 // Soft caps — a pathological page should not allocate unbounded on load.
 constexpr uint32_t kMaxSpans = 2000;
 constexpr uint32_t kMaxImages = 64;
@@ -42,6 +42,17 @@ bool canAlloc(const size_t bytes) {
   return true;
 }
 
+bool writeText(HalFile& f, const casper_memory::FallibleString& s) {
+  const uint32_t n = static_cast<uint32_t>(s.size());
+  return !s.failed() && serialization::tryWritePod(f, n) && (n == 0 || f.write(s.data(), n) == n);
+}
+bool readText(HalFile& f, casper_memory::FallibleString& s, uint32_t limit) {
+  uint32_t n = 0;
+  if (!serialization::tryReadPod(f, n) || n > limit || f.position() > f.size() || n > f.size() - f.position()) return false;
+  if (!s.resize(n)) return false;
+  return n == 0 || f.read(s.data(), n) == static_cast<int>(n);
+}
+
 bool writeCursor(HalFile& f, const IrCursor& c) {
   return serialization::tryWritePod(f, c.blockIndex) && serialization::tryWritePod(f, c.runIndex) &&
          serialization::tryWritePod(f, c.byteInRun);
@@ -55,7 +66,7 @@ bool readCursor(HalFile& f, IrCursor& c) {
 }  // namespace
 
 bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int pageIndex) const {
-  if (!path || !*path || pageIndex < 0) return false;
+  if (failed() || aborted || !path || !*path || pageIndex < 0) return false;
   // Atomic: .tmp + rename so a power loss cannot leave a half-written page that
   // later deserializes into a partly-blank page.
   char tmpPath[240];
@@ -86,7 +97,7 @@ bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int p
     ok = ok && serialization::tryWritePod(f, static_cast<int32_t>(sp.fontId));
     ok = ok && serialization::tryWritePod(f, sp.epdStyle);
     ok = ok && serialization::tryWritePod(f, sp.dropScale);
-    ok = ok && serialization::tryWriteString(f, sp.text);
+    ok = ok && writeText(f, sp.text);
   }
 
   const uint32_t nImgs = static_cast<uint32_t>(images.size());
@@ -96,7 +107,7 @@ bool LaidOutPage::saveToFile(const char* path, const RenderKey& key, const int p
     ok = ok && serialization::tryWritePod(f, im.y);
     ok = ok && serialization::tryWritePod(f, im.w);
     ok = ok && serialization::tryWritePod(f, im.h);
-    ok = ok && serialization::tryWriteString(f, im.href);
+    ok = ok && writeText(f, im.href);
   }
 
   const uint32_t nRules = static_cast<uint32_t>(rules.size());
@@ -162,6 +173,7 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
       !serialization::tryReadPod(f, dropU8)) {
     return fail(true);
   }
+  if (endU8 > 1 || dropU8 > 1 || end < start) return fail(true);
   atChapterEnd = endU8 != 0;
   hasDropZone = dropU8 != 0;
 
@@ -188,17 +200,17 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
             static_cast<unsigned>(spanBytes + slack), static_cast<unsigned>(ESP.getMaxAllocHeap()));
     return fail(false);
   }
-  spans.reserve(nSpans);
+  if (!spans.reserve(nSpans)) return fail(false);
   for (uint32_t i = 0; i < nSpans; ++i) {
     GlyphSpan sp;
     int32_t fontId = 0;
     if (!serialization::tryReadPod(f, sp.x) || !serialization::tryReadPod(f, sp.y) ||
         !serialization::tryReadPod(f, fontId) || !serialization::tryReadPod(f, sp.epdStyle) ||
-        !serialization::tryReadPod(f, sp.dropScale) || !serialization::tryReadString(f, sp.text, kMaxTextBytes)) {
-      return fail(true);
+        !serialization::tryReadPod(f, sp.dropScale) || !readText(f, sp.text, kMaxTextBytes)) {
+      return fail(!sp.text.failed());
     }
     sp.fontId = static_cast<int>(fontId);
-    spans.push_back(std::move(sp));
+    if (!spans.push_back(std::move(sp))) return fail(false);
   }
 
   uint32_t nImgs = 0;
@@ -208,15 +220,15 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
   if (!canAlloc(static_cast<size_t>(nImgs) * sizeof(ImagePlate))) {
     return fail(false);
   }
-  images.reserve(nImgs);
+  if (!images.reserve(nImgs)) return fail(false);
   for (uint32_t i = 0; i < nImgs; ++i) {
     ImagePlate im;
     if (!serialization::tryReadPod(f, im.x) || !serialization::tryReadPod(f, im.y) ||
         !serialization::tryReadPod(f, im.w) || !serialization::tryReadPod(f, im.h) ||
-        !serialization::tryReadString(f, im.href, kMaxHrefBytes)) {
-      return fail(true);
+        !readText(f, im.href, kMaxHrefBytes)) {
+      return fail(!im.href.failed());
     }
-    images.push_back(std::move(im));
+    if (!images.push_back(std::move(im))) return fail(false);
   }
 
   uint32_t nRules = 0;
@@ -226,16 +238,17 @@ bool LaidOutPage::loadFromFile(const char* path, const RenderKey& expectedKey, c
   if (!canAlloc(static_cast<size_t>(nRules) * sizeof(RulePlate))) {
     return fail(false);
   }
-  rules.reserve(nRules);
+  if (!rules.reserve(nRules)) return fail(false);
   for (uint32_t i = 0; i < nRules; ++i) {
     RulePlate r;
     if (!serialization::tryReadPod(f, r.x) || !serialization::tryReadPod(f, r.y) ||
         !serialization::tryReadPod(f, r.w) || !serialization::tryReadPod(f, r.h)) {
       return fail(true);
     }
-    rules.push_back(r);
+    if (!rules.push_back(r)) return fail(false);
   }
 
+  if (f.position() != f.size()) return fail(true);
   f.close();
   return true;
 }

@@ -1,4 +1,5 @@
 #include "SdCardFontSystem.h"
+#include "FontInstaller.h"
 
 #include <Epub/css/StyleResolve.h>
 #include <GfxRenderer.h>
@@ -44,6 +45,7 @@ bool sdStyleLadderFill(void* ctx, const int baseFontId, int outFontIdByStep[5]) 
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
   renderer_ = &renderer;
+  FontInstaller::recoverInterruptedInstalls();
   registry_.discover();
 
   // Register this system as the SD font ID resolver in settings.

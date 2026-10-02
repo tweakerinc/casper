@@ -1,4 +1,6 @@
+#include "util/NetworkPreparation.h"
 #include "FontDownloadActivity.h"
+#include "util/FontInstallTransaction.h"
 
 #include <Esp.h>
 #include <FontCacheManager.h>
@@ -35,125 +37,6 @@ bool isFirmwareBuiltinFamily(const char* name) {
          strcasecmp(name, "Bitter") == 0 || strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
 }
 
-// --- Minimal fonts.json (schema v1) scanner ---------------------------------
-// Avoids ArduinoJson's full DOM (file size × ~2 plus our copies), which OOMs
-// on ESP32-C3 once Wi‑Fi is up. Walks one in-memory copy of the file only.
-
-void skipWs(const char*& p, const char* end) {
-  while (p < end && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) ++p;
-}
-
-bool parseJsonString(const char*& p, const char* end, std::string& out) {
-  skipWs(p, end);
-  if (p >= end || *p != '"') return false;
-  ++p;
-  out.clear();
-  while (p < end) {
-    const char c = *p++;
-    if (c == '"') return true;
-    if (c == '\\' && p < end) {
-      const char e = *p++;
-      switch (e) {
-        case '"':
-        case '\\':
-        case '/':
-          out.push_back(e);
-          break;
-        case 'b':
-          out.push_back('\b');
-          break;
-        case 'f':
-          out.push_back('\f');
-          break;
-        case 'n':
-          out.push_back('\n');
-          break;
-        case 'r':
-          out.push_back('\r');
-          break;
-        case 't':
-          out.push_back('\t');
-          break;
-        case 'u':
-          // Skip \uXXXX (manifest is ASCII for names/URLs).
-          for (int i = 0; i < 4 && p < end; ++i) ++p;
-          break;
-        default:
-          out.push_back(e);
-          break;
-      }
-    } else {
-      out.push_back(c);
-    }
-  }
-  return false;
-}
-
-bool parseJsonUint(const char*& p, const char* end, uint32_t& out) {
-  skipWs(p, end);
-  if (p >= end || !std::isdigit(static_cast<unsigned char>(*p))) return false;
-  uint64_t v = 0;
-  while (p < end && std::isdigit(static_cast<unsigned char>(*p))) {
-    v = v * 10u + static_cast<uint32_t>(*p - '0');
-    if (v > 0xFFFFFFFFull) return false;
-    ++p;
-  }
-  out = static_cast<uint32_t>(v);
-  return true;
-}
-
-// Skip one JSON value (object/array/string/number/literal) without copying.
-bool skipJsonValue(const char*& p, const char* end) {
-  skipWs(p, end);
-  if (p >= end) return false;
-  if (*p == '"') {
-    std::string discard;
-    return parseJsonString(p, end, discard);
-  }
-  if (*p == '{' || *p == '[') {
-    const char open = *p++;
-    const char close = (open == '{') ? '}' : ']';
-    int depth = 1;
-    bool inStr = false;
-    bool esc = false;
-    while (p < end && depth > 0) {
-      const char c = *p++;
-      if (inStr) {
-        if (esc) {
-          esc = false;
-        } else if (c == '\\') {
-          esc = true;
-        } else if (c == '"') {
-          inStr = false;
-        }
-        continue;
-      }
-      if (c == '"') {
-        inStr = true;
-      } else if (c == open) {
-        ++depth;
-      } else if (c == close) {
-        --depth;
-      }
-    }
-    return depth == 0;
-  }
-  // number / true / false / null
-  while (p < end && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n' && *p != '\r' && *p != '\t') {
-    ++p;
-  }
-  return true;
-}
-
-bool parseJsonKey(const char*& p, const char* end, std::string& key) { return parseJsonString(p, end, key); }
-
-bool expectChar(const char*& p, const char* end, char c) {
-  skipWs(p, end);
-  if (p >= end || *p != c) return false;
-  ++p;
-  return true;
-}
-
 }  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -164,7 +47,7 @@ FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputMan
 void FontDownloadActivity::prepareHeapForNetwork() {
   // legacy: drop SD faces + catalog before Wi‑Fi. CrossPoint also clears the
   // glyph cache — it fragments maxAlloc and competes with HTTP buffers.
-  sdFontSystem.releaseForNetwork(renderer);
+  prepareNetworkWorkingSet(renderer);
   if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
     if (!fcm->isScanning()) fcm->clearCache();
   }
@@ -251,146 +134,12 @@ void FontDownloadActivity::runPendingManifestFetch() {
 // --- Manifest fetching ---
 
 bool FontDownloadActivity::parseManifestBuffer(const char* buf, const size_t len) {
-  if (!buf || len == 0) return false;
-  const char* p = buf;
-  const char* end = buf + len;
-
-  skipWs(p, end);
-  if (!expectChar(p, end, '{')) return false;
-
-  int version = -1;
-  baseUrl_.clear();
-  families_.clear();
-
-  while (p < end) {
-    skipWs(p, end);
-    if (p < end && *p == '}') {
-      ++p;
-      break;
-    }
-    if (p < end && *p == ',') {
-      ++p;
-      continue;
-    }
-
-    std::string key;
-    if (!parseJsonKey(p, end, key)) return false;
-    if (!expectChar(p, end, ':')) return false;
-
-    if (key == "version") {
-      uint32_t v = 0;
-      if (!parseJsonUint(p, end, v)) return false;
-      version = static_cast<int>(v);
-    } else if (key == "baseUrl") {
-      if (!parseJsonString(p, end, baseUrl_)) return false;
-    } else if (key == "families") {
-      skipWs(p, end);
-      if (!expectChar(p, end, '[')) return false;
-      while (p < end) {
-        skipWs(p, end);
-        if (p < end && *p == ']') {
-          ++p;
-          break;
-        }
-        if (p < end && *p == ',') {
-          ++p;
-          continue;
-        }
-        if (!expectChar(p, end, '{')) return false;
-
-        ManifestFamily family;
-        while (p < end) {
-          skipWs(p, end);
-          if (p < end && *p == '}') {
-            ++p;
-            break;
-          }
-          if (p < end && *p == ',') {
-            ++p;
-            continue;
-          }
-          std::string fkey;
-          if (!parseJsonKey(p, end, fkey)) return false;
-          if (!expectChar(p, end, ':')) return false;
-
-          if (fkey == "name") {
-            if (!parseJsonString(p, end, family.name)) return false;
-          } else if (fkey == "description") {
-            if (!parseJsonString(p, end, family.description)) return false;
-          } else if (fkey == "files") {
-            skipWs(p, end);
-            if (!expectChar(p, end, '[')) return false;
-            while (p < end) {
-              skipWs(p, end);
-              if (p < end && *p == ']') {
-                ++p;
-                break;
-              }
-              if (p < end && *p == ',') {
-                ++p;
-                continue;
-              }
-              if (!expectChar(p, end, '{')) return false;
-              ManifestFile file;
-              bool sawCrc = false;
-              while (p < end) {
-                skipWs(p, end);
-                if (p < end && *p == '}') {
-                  ++p;
-                  break;
-                }
-                if (p < end && *p == ',') {
-                  ++p;
-                  continue;
-                }
-                std::string ikey;
-                if (!parseJsonKey(p, end, ikey)) return false;
-                if (!expectChar(p, end, ':')) return false;
-                if (ikey == "name") {
-                  if (!parseJsonString(p, end, file.name)) return false;
-                } else if (ikey == "size") {
-                  uint32_t sz = 0;
-                  if (!parseJsonUint(p, end, sz)) return false;
-                  file.size = static_cast<size_t>(sz);
-                } else if (ikey == "crc32") {
-                  uint32_t crc = 0;
-                  if (!parseJsonUint(p, end, crc)) return false;
-                  file.crc32 = crc;
-                  sawCrc = true;
-                } else {
-                  if (!skipJsonValue(p, end)) return false;
-                }
-              }
-              if (file.name.empty() || !sawCrc) {
-                errorMessage_ = "Invalid font manifest";
-                return false;
-              }
-              family.totalSize += file.size;
-              family.files.push_back(std::move(file));
-            }
-          } else {
-            // styles[] and any future keys — skip without allocating.
-            if (!skipJsonValue(p, end)) return false;
-          }
-        }
-        if (!family.name.empty() && !family.files.empty()) {
-          families_.push_back(std::move(family));
-        }
-      }
-    } else {
-      if (!skipJsonValue(p, end)) return false;
-    }
-  }
-
-  if (version != FONTS_MANIFEST_VERSION) {
-    LOG_ERR("FONT", "Unsupported manifest version: %d", version);
-    errorMessage_ = "Unsupported manifest version";
-    return false;
-  }
-  if (baseUrl_.empty() || families_.empty()) {
-    errorMessage_ = "Invalid font manifest";
-    return false;
-  }
+  if (!buf || !len) return false;
+  fontmanifest::Parser parser;
+  parser.feed(buf,len);
+  if (!parser.ok()) return false;
+  baseUrl_ = std::move(parser.baseUrl);
+  families_ = std::move(parser.families);
   return true;
 }
 
@@ -428,7 +177,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   static constexpr unsigned long kRetryDelayMs = 1500;
 
   baseUrl_.clear();
-  families_.clear();
+  families_.release();
 
   // Extra headroom right before HTTP (Wi‑Fi may have allocated scan tables).
   prepareHeapForNetwork();
@@ -481,48 +230,24 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   LOG_INF("FONT", "Manifest on SD: %zu bytes free=%u maxAlloc=%u", fileSize, static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
-  if (ESP.getMaxAllocHeap() < fileSize + 4096) {
-    LOG_ERR("FONT", "Not enough contiguous heap for manifest buffer");
-    manifestFile.close();
-    Storage.remove(MANIFEST_TMP);
-    errorMessage_ = "Out of memory";
-    return false;
-  }
-
-  auto buf = makeUniqueNoThrow<char[]>(fileSize + 1);
-  if (!buf) {
-    LOG_ERR("FONT", "OOM allocating %zu-byte manifest buffer", fileSize + 1);
-    manifestFile.close();
-    Storage.remove(MANIFEST_TMP);
-    errorMessage_ = "Out of memory";
-    return false;
-  }
-
-  size_t got = 0;
-  while (got < fileSize) {
-    const int n = manifestFile.read(reinterpret_cast<uint8_t*>(buf.get() + got), fileSize - got);
-    if (n <= 0) break;
-    got += static_cast<size_t>(n);
+  fontmanifest::Parser parser;
+  char buf[512];
+  size_t got=0;
+  while(got<fileSize) {
+    const int n=manifestFile.read(buf,std::min(sizeof(buf),fileSize-got));
+    if(n<=0)break;
+    parser.feed(buf,static_cast<size_t>(n));
+    got+=static_cast<size_t>(n);
+    yield();
   }
   manifestFile.close();
   Storage.remove(MANIFEST_TMP);
-  buf[got] = '\0';
-
-  if (got != fileSize) {
-    LOG_ERR("FONT", "Short read of manifest: %zu/%zu", got, fileSize);
-    errorMessage_ = "Failed to read font list";
+  if(got!=fileSize || !parser.ok()) {
+    errorMessage_="Invalid or incomplete font list";
     return false;
   }
-
-  if (!parseManifestBuffer(buf.get(), got)) {
-    if (errorMessage_.empty()) errorMessage_ = "Invalid font manifest";
-    LOG_ERR("FONT", "Manifest parse failed free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    families_.clear();
-    return false;
-  }
-  // Drop file buffer before registry rediscover + stringy path checks.
-  buf.reset();
+  baseUrl_=std::move(parser.baseUrl);
+  families_=std::move(parser.families);
 
   resolveInstalledFlags();
 
@@ -645,7 +370,8 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   delay(50);
   yield();
 
-  if (!fontInstaller_.ensureFamilyDir(family.name.c_str())) {
+  FontInstallTransaction transaction(family.name.c_str());
+  if (!transaction.ready()) {
     RenderLock lock(*this);
     state_ = ERROR;
     errorMessage_ = "Failed to create font directory";
@@ -662,10 +388,12 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     requestUpdateAndWait();
 
-    char destPath[128];
-    FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), destPath, sizeof(destPath));
+    char destPath[320];
+    if (!transaction.path(file.name.c_str(), destPath, sizeof(destPath))) {
+      state_=ERROR; errorMessage_="Invalid font filename"; return;
+    }
 
-    std::string url = baseUrl_ + file.name;
+    std::string url = std::string(baseUrl_.c_str()) + file.name.c_str();
 
     // Do not paint the e-ink panel during TLS/HTTP. Full-screen redraws each
     // tick thrashed heap with wolfSSL and stalled the 60 s socket timeout.
@@ -699,9 +427,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
 
     if (result == HttpDownloader::ABORTED) {
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      transaction.rollback();
       {
         RenderLock lock(*this);
         state_ = FAMILY_LIST;
@@ -711,51 +437,53 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", file.name.c_str(), result);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      transaction.rollback();
       RenderLock lock(*this);
       state_ = ERROR;
-      errorMessage_ = "Download failed: " + file.name;
+      errorMessage_ = std::string("Download failed: ") + file.name.c_str();
       return;
     }
 
+    HalFile verified;
+    if (!Storage.openFileForRead("FONT", destPath, verified) || verified.size() != file.size) {
+      verified.close(); state_=ERROR; errorMessage_="Incomplete font file"; return;
+    }
+    verified.close();
     uint32_t actualCrc = 0;
     if (!computeFileCrc32(destPath, actualCrc)) {
       LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      transaction.rollback();
       RenderLock lock(*this);
       state_ = ERROR;
-      errorMessage_ = "Failed to compute checksum: " + file.name;
+      errorMessage_ = std::string("Failed to compute checksum: ") + file.name.c_str();
       return;
     }
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", file.name.c_str(), actualCrc, file.crc32);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      transaction.rollback();
       RenderLock lock(*this);
       state_ = ERROR;
-      errorMessage_ = "Checksum mismatch: " + file.name;
+      errorMessage_ = std::string("Checksum mismatch: ") + file.name.c_str();
       return;
     }
     LOG_DBG("FONT", "Downloaded %s (size=%zu crc32=%08x)", file.name.c_str(), file.size, actualCrc);
 
     if (!fontInstaller_.validateCpfontFile(destPath)) {
       LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
-      fontInstaller_.deleteFamily(family.name.c_str());
-      family.installed = false;
-      family.hasUpdate = false;
+      transaction.rollback();
       RenderLock lock(*this);
       state_ = ERROR;
-      errorMessage_ = "Invalid font file: " + file.name;
+      errorMessage_ = std::string("Invalid font file: ") + file.name.c_str();
       return;
     }
     currentFileIndex_++;
   }
 
+  if (!transaction.publish()) {
+    RenderLock lock(*this);
+    state_=ERROR; errorMessage_="Font install failed; previous font preserved";
+    return;
+  }
   fontInstaller_.refreshRegistry();
   family.installed = true;
   family.hasUpdate = false;
@@ -775,7 +503,7 @@ void FontDownloadActivity::promptDeleteSelectedFamily() {
 
   std::string heading = tr(STR_DELETE);
   const auto& family = families_[pendingDeleteFamilyIndex];
-  std::string body = family.name;
+  std::string body = family.name.c_str();
   auto confirm = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, heading, body);
   if (!confirm) return;
   startActivityForResult(std::move(confirm),
@@ -1037,11 +765,11 @@ void FontDownloadActivity::render(RenderLock&&) {
             if (isUpdateAllRow(index)) {
               return std::string(tr(STR_UPDATE_ALL)) + " (" + formatSize(totalUpdateSize()) + ")";
             }
-            return families_[familyIndexFromList(index)].name;
+            return std::string(families_[familyIndexFromList(index)].name.c_str());
           },
           [this](int index) -> std::string {
             if (isDownloadAllRow(index) || isUpdateAllRow(index)) return "";
-            return families_[familyIndexFromList(index)].description;
+            return std::string(families_[familyIndexFromList(index)].description.c_str());
           },
           nullptr,
           [this](int index) -> std::string {
@@ -1068,7 +796,7 @@ void FontDownloadActivity::render(RenderLock&&) {
   } else if (state_ == DOWNLOADING) {
     const auto& family = families_[downloadingFamilyIndex_];
 
-    std::string statusText = std::string(tr(STR_DOWNLOADING)) + " " + family.name + " (" +
+    std::string statusText = std::string(tr(STR_DOWNLOADING)) + " " + family.name.c_str() + " (" +
                              std::to_string(currentFileIndex_ + 1) + "/" + std::to_string(currentFileTotal_) + ")";
     renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight, statusText.c_str());
 

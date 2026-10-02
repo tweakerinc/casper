@@ -22,6 +22,21 @@ struct IrTok {
   int16_t w = -1;
 };
 
+// Resumable, allocation-free block tokenizer. It carries only a run/byte cursor;
+// page layout need not materialize the rest of a long paragraph.
+class IrTokenCursor {
+ public:
+  IrTokenCursor(const ChapterIr& ch, uint16_t begin, uint16_t count, uint16_t startRun, uint16_t startByte);
+  bool next(IrTok& out);
+  bool failed() const { return failed_; }
+ private:
+  const ChapterIr* chapter_;
+  uint32_t run_;
+  uint32_t endRun_;
+  uint16_t byte_;
+  bool failed_ = false;
+};
+
 // Split a block's runs into words and real spaces. Adjacent style runs with no
 // space in the IR stay adjacent — "6" + superscript "th" is one visual word.
 void tokenizeRuns(const ChapterIr& ch, uint16_t runBegin, uint16_t runCount, uint16_t startRun, uint16_t startByte,

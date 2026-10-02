@@ -21,11 +21,13 @@ jobs:
           set -euo pipefail
           mkdir -p reconciliation
           git for-each-ref --sort=-committerdate --format='%(objectname) %(committerdate:iso8601) %(refname:short) %(subject)' refs/remotes/origin > reconciliation/branches.txt
-          for sha in e158c6ad8974252edad14437a6bc1d7abcdc3675 e26f39dd42e6952ea36ea4983a5f90dead7b853a; do
-            git log --oneline fc6d41d75b3d76558000726777f0ae5a4e659591..$sha > reconciliation/$sha-log.txt
-            git diff --stat fc6d41d75b3d76558000726777f0ae5a4e659591 $sha > reconciliation/$sha-stat.txt
-            git archive $sha src lib/Rivulet lib/GfxRenderer lib/Memory test/CMakeLists.txt platformio.ini | gzip > reconciliation/$sha-source.tar.gz
-          done
+          sha=af10aa45d334a859ea714073d0864040e8347d7c
+          git log --oneline fc6d41d75b3d76558000726777f0ae5a4e659591..$sha > reconciliation/$sha-log.txt
+          git diff --stat fc6d41d75b3d76558000726777f0ae5a4e659591 $sha > reconciliation/$sha-stat.txt
+          mkdir reference
+          git archive $sha | tar -x -C reference
+          tar -C reference --exclude='.git' --exclude='*.ttf' --exclude='*.otf' --exclude='*.woff*' --exclude='*.bin' --exclude='*.epub' --exclude='*.png' --exclude='*.jpg' --exclude='*.pdf' -czf reconciliation/$sha-source.tar.gz .
+          git diff e158c6ad8974252edad14437a6bc1d7abcdc3675 $sha -- src lib/Rivulet > reconciliation/september.patch
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: casper-source-reconciliation

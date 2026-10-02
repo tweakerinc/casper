@@ -64,6 +64,8 @@ struct LaidOutPage {
     return false;
   }
 
+  void release() { spans.release();images.release();rules.release();clear(); }
+
   void clear() {
     allocationFailed = false;
     spans.clear();

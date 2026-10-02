@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <string>
-#include "../Memory/FallibleVector.h"
+#include "PagedRecords.h"
 
 #include "IrFormat.h"
 
@@ -50,6 +50,8 @@ inline int pageIndexForCursor(const IrCursor* starts, const int n, const IrCurso
 class PageMap {
  public:
   void clear();
+  bool enablePaging(const char* basePath);
+  [[nodiscard]] bool diskBacked() const { return starts_.diskBacked(); }
   void setRenderKey(const RenderKey& k) { key_ = k; }
   [[nodiscard]] const RenderKey& renderKey() const { return key_; }
 
@@ -96,7 +98,10 @@ class PageMap {
   // Last known page that begins at or before cursor. -1 if the map is empty.
   [[nodiscard]] int pageContaining(const IrCursor& cursor) const {
     if (starts_.empty()) return -1;
-    return pageIndexForCursor(starts_.data(), knownPages(), cursor);
+    int lo=0,hi=knownPages()-1,result=0;
+    while(lo<=hi){const int mid=lo+(hi-lo)/2;const auto start=starts_[mid];
+      if(!(cursor<start)){result=mid;lo=mid+1;}else hi=mid-1;}
+    return starts_.failed() ? -1 : result;
   }
 
   bool saveToFile(const char* path) const;
@@ -104,7 +109,8 @@ class PageMap {
 
  private:
   RenderKey key_{};
-  casper_memory::FallibleVector<IrCursor> starts_;
+  mutable PagedRecords<IrCursor,128,1000000> starts_;
+  char pagingBase_[224]{};
   bool complete_ = false;
   int knownTotal_ = 0;
 };

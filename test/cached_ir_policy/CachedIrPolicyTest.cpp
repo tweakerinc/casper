@@ -44,16 +44,16 @@ TEST(CachedIrPolicy, StaleVersionDoesNotDeleteTheFile) {
 }
 
 TEST(CachedIrPolicy, LegacyPrefixWithoutCompletionProofMustReconvert) {
-  // v19-v26 may contain a successful-looking IR made from only a prefix of
+  // v19-v27 may contain a successful-looking IR made from only a prefix of
   // the chapter. A wire-layout match alone cannot prove source completion.
   // Rebuild derived IR once; do not remove the source or user progress.
-  EXPECT_EQ(rivulet::kIrFormatVersionMin, 27);
+  EXPECT_EQ(rivulet::kIrFormatVersionMin, 28);
   EXPECT_EQ(rivulet::kIrFormatVersionMax, rivulet::kIrFormatVersion);
-  for (uint16_t v = 19; v <= 26; ++v) {
+  for (uint16_t v = 19; v <= 27; ++v) {
     EXPECT_FALSE(cachedir::irVersionLoadable(v, rivulet::kIrFormatVersionMin,
                                             rivulet::kIrFormatVersionMax));
   }
-  EXPECT_TRUE(cachedir::irVersionLoadable(27, rivulet::kIrFormatVersionMin,
+  EXPECT_TRUE(cachedir::irVersionLoadable(28, rivulet::kIrFormatVersionMin,
                                          rivulet::kIrFormatVersionMax));
   EXPECT_FALSE(cachedir::irVersionLoadable(18, rivulet::kIrFormatVersionMin,
                                           rivulet::kIrFormatVersionMax));

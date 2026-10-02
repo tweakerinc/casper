@@ -10,18 +10,27 @@
 namespace rivulet {
 namespace {
 // Sanity cap for a single chapter's page count (see loadFromFile).
-constexpr uint32_t kMaxMapPages = 4000;
+constexpr uint32_t kMaxMapPages = 1000000;
+uint32_t mapWorkSerial = 0;
 }  // namespace
+
+bool PageMap::enablePaging(const char* basePath) {
+  if (!basePath || !*basePath || std::strlen(basePath)>=sizeof(pagingBase_)) return false;
+  std::strcpy(pagingBase_,basePath);
+  char work[256];std::snprintf(work,sizeof(work),"%s.pm%lu",basePath,static_cast<unsigned long>(++mapWorkSerial));
+  return starts_.create(work);
+}
 
 void PageMap::clear() {
   starts_.release();
   complete_ = false;
   knownTotal_ = 0;
   key_ = {};
+  pagingBase_[0]=0;
 }
 
 bool PageMap::resetWithStart(const IrCursor& firstPageStart) {
-  starts_.clear();
+  if (starts_.diskBacked()) { if (!starts_.resize(0)) return false; } else starts_.clear();
   const bool ok = starts_.push_back(firstPageStart);
   complete_ = false;
   knownTotal_ = 0;
@@ -66,7 +75,7 @@ bool PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
   }
   complete_ = false;
   knownTotal_ = 0;
-  return true;
+  return !failed();
 }
 
 IrCursor PageMap::pageStart(const int pageIndex) const {
@@ -75,7 +84,7 @@ IrCursor PageMap::pageStart(const int pageIndex) const {
 }
 
 bool PageMap::saveToFile(const char* path) const {
-  if (failed() || !path || !*path) return false;
+  if (failed() || !path || !*path || !starts_.detachBacking()) return false;
   // Atomic: write .tmp then rename. A power loss mid-write used to leave a
   // corrupt .rvpm at the final path, which the loader then had to defend against.
   char tmpPath[224];
@@ -93,11 +102,9 @@ bool PageMap::saveToFile(const char* path) const {
   const uint8_t completeU8 = complete_ ? 1 : 0;
   ok = ok && serialization::tryWritePod(f, completeU8);
   ok = ok && serialization::tryWritePod(f, knownTotal_);
-  for (const IrCursor& c : starts_) {
-    ok = ok && serialization::tryWritePod(f, c.blockIndex);
-    ok = ok && serialization::tryWritePod(f, c.runIndex);
-    ok = ok && serialization::tryWritePod(f, c.byteInRun);
-  }
+  static_assert(sizeof(IrCursor)==6);
+  ok = ok && starts_.writeTo(f);
+  f.flush();
   f.close();
   if (!ok) {
     Storage.remove(writePath);
@@ -164,17 +171,16 @@ bool PageMap::loadFromFile(const char* path) {
   }
   if (completeU8 > 1 || knownTotal_ < 0 || (completeU8 && knownTotal_ != static_cast<int>(n)) ||
       static_cast<uint64_t>(n) * kCursorBytes != remaining) { clear(); f.close(); return false; }
-  if (!starts_.resize(n)) { clear(); f.close(); return false; }
-  for (uint32_t i = 0; i < n; ++i) {
-    if (!serialization::tryReadPod(f, starts_[i].blockIndex) || !serialization::tryReadPod(f, starts_[i].runIndex) ||
-        !serialization::tryReadPod(f, starts_[i].byteInRun)) {
-      clear();
-      f.close();
-      return false;
-    }
-  }
-  for (uint32_t i = 1; i < n; ++i) {
-    if (!(starts_[i-1] < starts_[i])) { clear(); f.close(); return false; }
+  char work[256];
+  if (std::snprintf(work,sizeof(work),"%s.pm%lu",path,static_cast<unsigned long>(++mapWorkSerial))>=int(sizeof(work))) return false;
+  f.close();
+  if (!starts_.mount(path,consumed,n,work)) { clear(); return false; }
+  const auto& records=static_cast<const decltype(starts_)&>(starts_);
+  IrCursor previous{};
+  for (uint32_t i=0;i<n;++i) {
+    const IrCursor current=records[i];
+    if (records.failed() || (i && !(previous<current))) { clear(); return false; }
+    previous=current;
   }
   complete_ = completeU8 != 0;
   f.close();

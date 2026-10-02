@@ -65,9 +65,9 @@ class HomeBookIndexer {
 
   // Pages measured per step. Each is a full layout pass over one screen of text
   // (tens of ms), so this trades indexing throughput for input latency.
-  static constexpr int kPagesPerStep = 4;
+  static constexpr int kPagesPerStep = 1;
   // A chapter that never completes must not be retried forever.
-  static constexpr int kMaxBurstsPerChapter = 400;
+
 
   std::string bookPath_;
   std::string irDir_;

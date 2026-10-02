@@ -7,11 +7,13 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <RivuletEngine.h>
+#include <SourceIdentity.h>
 
 #include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "activities/reader/ChapterLoader.h"
+#include "activities/reader/ChapterGeometry.h"
 #include "activities/reader/ReaderRenderKey.h"
 #include "util/CrossPointBookStore.h"
 #include "util/CrossPointPaths.h"
@@ -32,6 +34,7 @@ constexpr uint32_t kMinMaxAlloc = 56 * 1024;
 
 struct HomeBookIndexer::Engine {
   rivulet::RivuletEngine engine;
+  std::unique_ptr<chapterload::Session> load;
 };
 
 HomeBookIndexer::HomeBookIndexer() = default;
@@ -45,8 +48,9 @@ void HomeBookIndexer::begin(const std::string& bookPath) {
 }
 
 void HomeBookIndexer::reset() {
-  epub_.reset();
+  if(engine_ && activeSpine_>=0)finishChapter(false);
   engine_.reset();
+  epub_.reset();
   bookPath_.clear();
   irDir_.clear();
   nextSpine_ = 0;
@@ -72,7 +76,7 @@ bool HomeBookIndexer::ensureOpen() {
     return false;
   }
 
-  irDir_ = CrossPointBook::rivuletDirForPath(bookPath_);
+  irDir_ = rivulet::sourceCacheDirectory(CrossPointBook::rivuletDirForPath(bookPath_),bookPath_);
   if (irDir_.empty()) {
     openFailed_ = true;
     return false;
@@ -106,20 +110,24 @@ bool HomeBookIndexer::ensureOpen() {
 
 bool HomeBookIndexer::beginNextChapter(GfxRenderer& renderer) {
   const int spineCount = epub_->getSpineItemsCount();
+  const readerkey::Layout layout = readerkey::compute(renderer);
 
   // Find the next spine that still needs a map. Skipping is cheap (one exists()
   // per spine), so a mostly-indexed book costs almost nothing per pass.
   int target = -1;
-  while (nextSpine_ < spineCount) {
+  int probes=0;
+  while (nextSpine_ < spineCount && ++probes<=8) {
     const int candidate = nextSpine_++;
     if (epub_->getSpineItem(candidate).href.empty()) continue;
     char mapPath[200];
     mapPathFor(candidate, mapPath, sizeof(mapPath));
-    if (Storage.exists(mapPath)) continue;
+    rivulet::PageMap map;
+    if (map.loadFromFile(mapPath) && map.complete() && map.renderKey()==layout.key) continue;
     target = candidate;
     break;
   }
 
+  if(target<0 && nextSpine_<spineCount)return true;
   if (target < 0) {
     finished_ = true;
     LOG_INF("HIDX", "book fully indexed: %s (%d chapters this pass)", bookPath_.c_str(), indexed_);
@@ -135,7 +143,6 @@ bool HomeBookIndexer::beginNextChapter(GfxRenderer& renderer) {
   // The map is only usable if it is built under the exact key the reader will
   // present on load; anything else is silently rejected by loadPageMap and the
   // stale .rvpm then makes this indexer skip the chapter forever.
-  const readerkey::Layout layout = readerkey::compute(renderer);
   eng.setRenderKey(layout.key);
   eng.setLineCompression(layout.lineCompression);
 
@@ -147,46 +154,18 @@ bool HomeBookIndexer::beginNextChapter(GfxRenderer& renderer) {
   req.spineIndex = target;
   req.imageRendering = SETTINGS.imageRendering;
   req.requireCompleteIr = false;
-  // Never paints, so no laid-out page cache and no image dimension probing.
+  // Same image geometry as the reader; no pixels or laid-out paint cache.
   req.bindPageCache = false;
   // Home is still on the panel: taking the framebuffer would blank it.
   req.lendFrameBuffer = false;
 
-  chapterload::Hooks hooks;
-  hooks.ctx = &eng;
-  hooks.prepareHeap = [](void* ctx, bool) {
-    // No reader state to protect here; just drop the previous chapter.
-    static_cast<rivulet::RivuletEngine*>(ctx)->clear();
-    yield();
-  };
-  hooks.prepareImages = nullptr;
-
-  const uint32_t t0 = millis();
-  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
-  const uint32_t loadMs = millis() - t0;
-
-  if (!loaded.ok) {
-    LOG_ERR("HIDX", "spine %d load failed in %lums", target, static_cast<unsigned long>(loadMs));
-    SystemLog::logTiming("HIDX", "spine=%d load_fail ms=%lu", target, static_cast<unsigned long>(loadMs));
-    eng.clear();
-    return true;  // consumed a slot; try the next spine on the following pass
-  }
-
-  // A partial convert would produce a map for a truncated chapter — worse than
-  // no map, because it would be trusted later. Leave it for the reader to redo
-  // when more heap is free.
-  if (loaded.partial) {
-    LOG_ERR("HIDX", "spine %d partial IR — not mapping", target);
-    SystemLog::logTiming("HIDX", "spine=%d partial ms=%lu", target, static_cast<unsigned long>(loadMs));
-    eng.clear();
-    return true;
-  }
+  engine_->load=makeUniqueNoThrow<chapterload::Session>(req);
+  if(!engine_->load){eng.clear();return true;}
 
   activeSpine_ = target;
   burstsThisChapter_ = 0;
   chapterStartMs_ = millis();
-  SystemLog::logTiming("HIDX", "spine=%d loaded cache=%d ms=%lu fre=%u", target, loaded.fromCache ? 1 : 0,
-                       static_cast<unsigned long>(loadMs), static_cast<unsigned>(ESP.getFreeHeap()));
+  SystemLog::logTiming("HIDX", "spine=%d prepare queued", target);
   return true;
 }
 
@@ -210,16 +189,18 @@ void HomeBookIndexer::measureBurst(GfxRenderer& renderer) {
     finishChapter(/*mapped=*/false);
     return;
   }
-  if (burstsThisChapter_ >= kMaxBurstsPerChapter) {
-    LOG_ERR("HIDX", "spine %d exceeded burst budget at %d pages", activeSpine_, eng.mapKnownPages());
-    finishChapter(/*mapped=*/false);
-  }
+
 }
 
 void HomeBookIndexer::finishChapter(const bool mapped) {
+  engine_->load.reset();
   rivulet::RivuletEngine& eng = engine_->engine;
   const int spine = activeSpine_;
 
+  if(!mapped && !eng.chapter().failed() && eng.mapKnownPages()>0){
+    char partial[224];std::snprintf(partial,sizeof(partial),"%s/s%d_m%u.rvpm.part",irDir_.c_str(),spine,unsigned(SETTINGS.imageRendering));
+    (void)eng.savePageMap(partial);
+  }
   if (mapped) {
     char mapPath[200];
     mapPathFor(spine, mapPath, sizeof(mapPath));
@@ -252,7 +233,14 @@ bool HomeBookIndexer::step(GfxRenderer& renderer) {
   if (!ensureOpen()) return false;
 
   if (activeSpine_ < 0) return beginNextChapter(renderer);
-
+  if(engine_->load){
+    const auto status=engine_->load->step();
+    if(status==chapterload::Session::Status::Working)return true;
+    const bool ok=status==chapterload::Session::Status::Done&&engine_->load->result().ok;
+    engine_->load.reset();
+    if(!ok)finishChapter(false);
+    return true;
+  }
   measureBurst(renderer);
   return true;
 }

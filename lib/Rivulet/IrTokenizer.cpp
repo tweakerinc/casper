@@ -98,7 +98,7 @@ bool IrTokenCursor::next(IrTok& out) {
   if (failed_) return false;
   const auto& runs = chapter_->runs();
   while (run_ < endRun_) {
-    const Run& run = runs[run_];
+    const Run run = runs[run_];
     if (byte_ >= run.textLen) { ++run_; byte_ = 0; continue; }
     if (run.textOff > chapter_->textSize() || run.textLen > chapter_->textSize() - run.textOff) {
       failed_ = true; return false;

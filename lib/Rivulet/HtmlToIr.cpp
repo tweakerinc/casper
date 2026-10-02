@@ -1,4 +1,7 @@
 #include "HtmlToIr.h"
+#include "../Memory/FallibleString.h"
+#include "HtmlInput.h"
+#include "../Memory/BoundedUtf8.h"
 
 #include <Esp.h>
 #include <Logging.h>
@@ -56,30 +59,20 @@ bool containsI(const char* hay, size_t hayLen, const char* needle) {
   return false;
 }
 
-// -fno-exceptions: std::string::reserve aborts if new fails. Probe full newCap
-// (reserve allocates a whole new buffer, not just the delta).
-bool safeReserve(std::string& dst, const size_t needCap) {
-  if (dst.capacity() >= needCap) return true;
-  if (ESP.getMaxAllocHeap() < needCap + 2048) return false;
-  void* p = ::operator new(needCap + 64, std::nothrow);
-  if (!p) return false;
-  ::operator delete(p);
-  dst.reserve(needCap);
-  return dst.capacity() >= needCap;
-}
+// Test the actual allocation result, not an allocate/free probe.
+bool safeReserve(casper_memory::FallibleString& dst,const size_t needCap){return dst.reserve(needCap);}
 
-bool safePushChar(std::string& dst, const char c) {
+bool safePushChar(casper_memory::FallibleString& dst, const char c) {
   if (dst.size() + 1 > dst.capacity()) {
     size_t nc = dst.capacity() ? dst.capacity() * 2 : 64;
     if (nc < dst.size() + 32) nc = dst.size() + 32;
     if (nc > 8192) nc = std::max(dst.size() + 32, size_t(8192));  // textAcc is flushed often
     if (!safeReserve(dst, nc)) return false;
   }
-  dst.push_back(c);
-  return true;
+  return dst.push_back(c);
 }
 
-bool safeAppendLit(std::string& dst, const char* lit) {
+bool safeAppendLit(casper_memory::FallibleString& dst, const char* lit) {
   while (*lit) {
     if (!safePushChar(dst, *lit++)) return false;
   }
@@ -96,7 +89,7 @@ bool safeAppendLit(std::string& dst, const char* lit) {
 // cheap, not book-like" complaint. Zero-width and formatting characters are
 // still dropped, and no-break spaces still become spaces, because those DO
 // break layout rather than merely look different.
-bool appendNormalizedUtf8(std::string& dst, uint32_t cp) {
+bool appendNormalizedUtf8(casper_memory::FallibleString& dst, uint32_t cp) {
   switch (cp) {
     case 0x00A0:  // nbsp
     case 0x202F:  // narrow nbsp
@@ -108,13 +101,13 @@ bool appendNormalizedUtf8(std::string& dst, uint32_t cp) {
     case 0xFEFF:
       return true;  // drop
     default: {
-      // utf8AppendCodepoint can grow unchecked — stage then copy with checks.
-      std::string tmp;
-      tmp.reserve(4);
-      utf8AppendCodepoint(cp, tmp);
-      for (char ch : tmp) {
-        if (!safePushChar(dst, ch)) return false;
-      }
+      if(cp>0x10FFFF || (cp>=0xD800&&cp<=0xDFFF))cp=0xFFFD;
+      char bytes[4];size_t n=0;
+      if(cp<0x80)bytes[n++]=static_cast<char>(cp);
+      else if(cp<0x800){bytes[n++]=static_cast<char>(0xC0|(cp>>6));bytes[n++]=static_cast<char>(0x80|(cp&63));}
+      else if(cp<0x10000){bytes[n++]=static_cast<char>(0xE0|(cp>>12));bytes[n++]=static_cast<char>(0x80|((cp>>6)&63));bytes[n++]=static_cast<char>(0x80|(cp&63));}
+      else {bytes[n++]=static_cast<char>(0xF0|(cp>>18));bytes[n++]=static_cast<char>(0x80|((cp>>12)&63));bytes[n++]=static_cast<char>(0x80|((cp>>6)&63));bytes[n++]=static_cast<char>(0x80|(cp&63));}
+      for(size_t i=0;i<n;++i)if(!safePushChar(dst,bytes[i]))return false;
       return true;
     }
   }
@@ -122,7 +115,7 @@ bool appendNormalizedUtf8(std::string& dst, uint32_t cp) {
 
 // Decode a handful of entities into utf8 out. Returns bytes consumed after '&'.
 // Sets *oom on heap failure (caller should stop convert).
-size_t decodeEntity(const char* p, const char* end, std::string& out, bool* oom) {
+size_t decodeEntity(const char* p, const char* end, casper_memory::FallibleString& out, bool* oom) {
   if (oom) *oom = false;
   if (p >= end || *p != '&') return 0;
   const char* s = p + 1;
@@ -179,7 +172,7 @@ size_t decodeEntity(const char* p, const char* end, std::string& out, bool* oom)
   return static_cast<size_t>(e - p);
 }
 
-bool appendCollapsedText(std::string& dst, const char* p, size_t n, bool preserveSpace) {
+bool appendCollapsedText(casper_memory::FallibleString& dst, const char* p, size_t n, bool preserveSpace) {
   const char* s = p;
   const char* end = p + n;
   while (s < end) {
@@ -206,9 +199,9 @@ bool appendCollapsedText(std::string& dst, const char* p, size_t n, bool preserv
       ++s;
       continue;
     }
-    const unsigned char* us = reinterpret_cast<const unsigned char*>(s);
-    const unsigned char* before = us;
-    const uint32_t cp = utf8NextCodepoint(&us);
+    const char* us = s;
+    const char* before = us;
+    const uint32_t cp = casper_memory::nextUtf8(us, end);
     if (cp == 0 || us == before) {
       ++s;
       continue;
@@ -245,7 +238,10 @@ size_t parseTag(const char* p, const char* end, Tag& tag) {
   while (s < end && (std::isalnum(static_cast<unsigned char>(*s)) || *s == ':' || *s == '-')) ++s;
   tag.nameLen = static_cast<size_t>(s - tag.name);
   tag.attr = s;
-  while (s < end && *s != '>') {
+  char quote = 0;
+  while (s < end && (quote || *s != '>')) {
+    if (quote) { if (*s == quote) quote = 0; ++s; continue; }
+    if (*s == '\'' || *s == '"') { quote = *s++; continue; }
     if (*s == '/' && s + 1 < end && s[1] == '>') {
       tag.selfClose = true;
       s += 2;
@@ -464,13 +460,13 @@ bool headingLooksLikeBracketMarker(const char* s, const size_t n) {
 
 bool lastClosedHeadingIsDccMarker(const ChapterIr& ir) {
   if (ir.blocks().empty()) return false;
-  const Block& b = ir.blocks().back();
+  const Block b = ir.blocks().back();
   if (b.kind < BlockKind::Heading1 || b.kind > BlockKind::Heading6) return false;
   char buf[72];
   size_t n = 0;
   const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
   for (uint16_t ri = b.runBegin; ri < runEnd && ri < ir.runs().size(); ++ri) {
-    const Run& r = ir.runs()[ri];
+    const Run r = ir.runs()[ri];
     const char* t = ir.runText(r);
     if (!t) continue;
     for (uint16_t k = 0; k < r.textLen && n + 1 < sizeof(buf); ++k) buf[n++] = t[k];
@@ -480,7 +476,7 @@ bool lastClosedHeadingIsDccMarker(const ChapterIr& ir) {
 
 // Collapse whitespace; prefer "Briefing note:" / document-title body when present.
 // minOut: short stamps need a low floor; long notes use 24+.
-bool buildReadableAltText(const char* alt, size_t altLen, std::string& out, size_t minOut = 24) {
+bool buildReadableAltText(const char* alt, size_t altLen, casper_memory::FallibleString& out, size_t minOut = 24) {
   out.clear();
   if (!alt || altLen == 0) return false;
   size_t start = 0;
@@ -550,8 +546,8 @@ bool buildReadableAltText(const char* alt, size_t altLen, std::string& out, size
   }
   while (!out.empty() && out.back() == ' ') out.pop_back();
   // Drop leading punctuation leftovers from stripped parens.
-  while (!out.empty() && (out.front() == ',' || out.front() == ';' || out.front() == ' ')) {
-    out.erase(out.begin());
+  while (!out.empty() && (out[0] == ',' || out[0] == ';' || out[0] == ' ')) {
+    if(!out.assign(out.data()+1,out.size()-1))return false;
   }
   return out.size() >= minOut;
 }
@@ -691,7 +687,7 @@ bool innerIsOnlyOpeningPunct(const char* p, const char* end, const char* closeNa
       continue;
     }
     if (*p == '&') {
-      std::string tmp;
+      casper_memory::FallibleString tmp;
       tmp.reserve(8);
       bool oom = false;
       const size_t n = decodeEntity(p, end, tmp, &oom);
@@ -832,35 +828,10 @@ struct StyleFrame {
 
 }  // namespace
 
-bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const bool armDropCapOnFirstParagraph,
-                       const uint8_t imageRendering) {
-  out.clear();
-  if (!html || len == 0) return false;
-  // Caller still holds HTML. free/maxA are net of that buffer. Only refuse when
-  // contiguous heap is tiny (crash was abort at maxA≈15KB with unchecked strings;
-  // growth is now heap-checked — soft fail, not device abort).
-  if (ESP.getMaxAllocHeap() < 10 * 1024 || ESP.getFreeHeap() < 12 * 1024) {
-    LOG_ERR("RVIR", "convert refuse: free=%u maxA=%u html=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(len));
-    return false;
-  }
-  // Pre-size text/runs/blocks once (malloc/realloc, heap-checked) so convert does
-  // not fragment mid-chapter — that produced partial IR and a false "last page".
-  out.reserveForConvert(len);
-  const char* p = html;
-  const char* end = html + len;
-
-  for (const char* s = p; s + 6 < end; ++s) {
-    if (startsWithI(s, end, "<body")) {
-      while (s < end && *s != '>') ++s;
-      if (s < end) ++s;
-      p = s;
-      break;
-    }
-  }
-
+namespace {
+struct ParserState {
   bool dropCapHost = false;
-  bool dropCapArmed = armDropCapOnFirstParagraph;
+  bool dropCapArmed = false;
   bool inSkip = false;  // script/style/svg
   int skipDepth = 0;
   bool inHidden = false;  // oculto / sr-only / etc.
@@ -899,8 +870,51 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   int stackTop = 0;
   int styleFloor = 0;  // never pop below this (current block's base face)
   bool styleOverflowLogged = false;
-  stack[0] = {};
 
+  bool initialized=false;
+  bool inBlock=false;
+  casper_memory::FallibleString textAcc;
+};
+HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterIr& out,
+                                   const size_t byteBudget, const uint8_t imageRendering) {
+  using Result=HtmlToIrSession::Result;
+  if(!input.ok() || input.size()==0 || out.failed()) {out.markFailed();return Result::Failed;}
+  if(!state.initialized) {
+    out.reserveForConvert(input.size());
+    if(!safeReserve(state.textAcc,2048)){out.markFailed();return Result::Failed;}
+    state.initialized=true;
+  }
+  if(!input.seekBody(byteBudget))return Result::Working;
+  if(!input.ok()){out.markFailed();return Result::Failed;}
+  const size_t started=input.position();
+  const char*& p=input.p;
+  const char*& end=input.end;
+  auto& dropCapHost=state.dropCapHost;
+  auto& dropCapArmed=state.dropCapArmed;
+  auto& inSkip=state.inSkip;
+  auto& skipDepth=state.skipDepth;
+  auto& inHidden=state.inHidden;
+  auto& hiddenDepth=state.hiddenDepth;
+  auto& titleDivDepth=state.titleDivDepth;
+  auto& floatInherit=state.floatInherit;
+  auto& floatWidthPx=state.floatWidthPx;
+  auto& floatDivDepth=state.floatDivDepth;
+  auto& unindentInherit=state.unindentInherit;
+  auto& unindentDivDepth=state.unindentDivDepth;
+  auto& alignmentBlockDepth=state.alignmentBlockDepth;
+  auto& headingLevelOpen=state.headingLevelOpen;
+  auto& headingAlignOpen=state.headingAlignOpen;
+  auto& ornamentDepth=state.ornamentDepth;
+  auto& epigraphDepth=state.epigraphDepth;
+  auto& hgroupDepth=state.hgroupDepth;
+  auto& noIndentNextParagraph=state.noIndentNextParagraph;
+  auto& tableDepth=state.tableDepth;
+  auto& stack=state.stack;
+  auto& stackTop=state.stackTop;
+  auto& styleFloor=state.styleFloor;
+  auto& styleOverflowLogged=state.styleOverflowLogged;
+  auto& inBlock=state.inBlock;
+  auto& textAcc=state.textAcc;
   auto curStyle = [&]() -> StyleFrame& { return stack[stackTop]; };
 
   auto pushStyle = [&](const RunStyle st, const SizeStep sz) {
@@ -940,15 +954,6 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     styleFloor = 0;
     stack[0] = {RunStyle::Regular, SizeStep::Body};
   };
-
-  bool inBlock = false;
-  std::string textAcc;
-  // Cap accumulator; flush often so we never need a multi-KB unchecked grow.
-  if (!safeReserve(textAcc, 512)) {
-    LOG_ERR("RVIR", "textAcc reserve fail free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    return false;
-  }
 
   auto flushText = [&]() {
     if (out.failed() || textAcc.empty() || !inBlock) {
@@ -1001,8 +1006,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   auto mergeItalic = [&](RunStyle base) { return base | RunStyle::Italic; };
   auto mergeDecoration = [&](RunStyle base, RunStyle bit) { return base | bit; };
 
-  while (p < end && !out.failed()) {
+  while (input.ready() && !out.failed()) {
+    if(input.position()-started>=byteBudget)return Result::Working;
     if (*p == '<') {
+      if (!input.fullTag()) break;
       Tag tag;
       const size_t used = parseTag(p, end, tag);
       if (used == 0) {
@@ -1504,15 +1511,16 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         // Placeholder mode: classic "[Image: alt]" text only (no decode / no plate).
         if (imageRendering == 1) {
           closeBlock();
-          std::string label;
+          casper_memory::FallibleString label;
           if (alt && altLen > 0) {
-            std::string readable;
+            casper_memory::FallibleString readable;
             if (buildReadableAltText(alt, altLen, readable, 1) && !readable.empty()) {
               label = "[Image: ";
               label += readable;
               label += "]";
             }
           }
+          if(label.failed()){out.markFailed();return Result::Failed;}
           if (label.empty()) label = "[Image]";
           openBlock(BlockKind::Paragraph, Align::Center, kBlockNoIndent);
           out.setCurrentMarginsEmQ4(4, 4);
@@ -1525,7 +1533,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         // Prefer alt text for document captions (briefings, AAR headers, intercepts,
         // CLASSIFIED stamps). Memoranda body is usually real HTML; stamps/headers are imgs.
         if (alt && looksLikeDocumentAlt(alt, altLen)) {
-          std::string readable;
+          casper_memory::FallibleString readable;
           const size_t minOut = (altLen < 80) ? 6 : 24;  // short CLASSIFIED stamps OK
           if (buildReadableAltText(alt, altLen, readable, minOut)) {
             closeBlock();
@@ -1543,7 +1551,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         // Chapter-number plates (Hail Mary / CrossInk): alt is the title. The
         // JPEG often fails to decode and used to reserve a hollow full-width box.
         if (alt && side == 0 && looksLikeChapterHeadingAlt(alt, altLen)) {
-          std::string readable;
+          casper_memory::FallibleString readable;
           if (buildReadableAltText(alt, altLen, readable, 1) && !readable.empty()) {
             if (headingLevelOpen > 0 || titleDivDepth > 0) {
               flushText();
@@ -1576,10 +1584,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           if (use > 0) {
             // Drop consecutive identical src (defensive if twin attrs missing).
             if (!out.blocks().empty()) {
-              const Block& last = out.blocks().back();
+              const Block last = out.blocks().back();
               if (last.kind == BlockKind::Image && last.runCount > 0 && last.runBegin < out.runs().size()) {
-                const Run& lr = out.runs()[last.runBegin];
-                if (lr.textLen == use && out.textData() && std::memcmp(out.textData() + lr.textOff, src, use) == 0) {
+                const Run lr = out.runs()[last.runBegin];
+                if (lr.textLen == use && std::memcmp(out.runText(lr), src, use) == 0) {
                   if (headingLevelOpen > 0) reopenHeadingIfNeeded();
                   continue;
                 }
@@ -1624,7 +1632,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           }
         } else if (alt && altLen >= 12) {
           // No src / unsupported: classic fallback — show alt as text when useful.
-          std::string readable;
+          casper_memory::FallibleString readable;
           if (buildReadableAltText(alt, altLen, readable, looksLikeDocumentAlt(alt, altLen) ? 6 : 24)) {
             openBlock(BlockKind::Paragraph, Align::Left, kBlockNoIndent);
             (void)out.appendRun(RunStyle::Italic, SizeStep::Minus1, readable.data(), readable.size());
@@ -1752,7 +1760,11 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       continue;
     }
     const char* t0 = p;
-    while (p < end && *p != '<' && *p != '&') ++p;
+    const char* textEnd = input.eof() ? end : end - 4;
+    while (p < textEnd && *p != '<' && *p != '&') ++p;
+    if (p == textEnd && !input.eof()) {
+      while (p > t0 && (static_cast<unsigned char>(*p) & 0xc0) == 0x80) --p;
+    }
     // Chunk long text runs; flush before textAcc needs a large reallocation.
     size_t remain = static_cast<size_t>(p - t0);
     const char* chunk = t0;
@@ -1771,7 +1783,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     }
     while (remain > 0 && !out.failed()) {
       if (textAcc.size() > 1536) flushText();
-      const size_t take = std::min(remain, size_t(400));
+      const size_t take = std::max<size_t>(1, casper_memory::utf8Prefix(chunk, remain, std::min(remain, size_t(400))));
       if (!appendCollapsedText(textAcc, chunk, take, false)) {
         out.markFailed();
         break;
@@ -1783,11 +1795,46 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   }
 
   closeBlock();
-  // Partial chapter after OOM is still usable if we have any blocks.
-  if (out.failed() && !out.empty()) {
-    // leave failed_ set so caller can log; still return true for partial IR
-  }
-  return !out.empty();
+  if (!input.ok()) out.markFailed();
+  return out.failed()?Result::Failed:Result::Done;
+}
+} // namespace
+
+struct HtmlToIrSession::Impl {
+  HtmlInput input;
+  ParserState state;
+  ChapterIr* chapter;
+  uint8_t images;
+  Result result=Result::Working;
+  Impl(HalFile& file,ChapterIr& out,bool arm,uint8_t mode,bool(*cancel)(void*),void*ctx)
+      :input(file,cancel,ctx),chapter(&out),images(mode){state.dropCapArmed=arm;}
+};
+HtmlToIrSession::HtmlToIrSession(HalFile& file,const char* workPath,ChapterIr& out,bool arm,uint8_t images,
+                                 bool(*cancel)(void*),void*ctx) {
+  if(!out.beginPaged(workPath) || !casper_memory::allowAllocation()) {out.markFailed();return;}
+  impl_.reset(new(std::nothrow) Impl(file,out,arm,images,cancel,ctx));
+  if(!impl_)out.markFailed();
+}
+HtmlToIrSession::~HtmlToIrSession()=default;
+HtmlToIrSession::Result HtmlToIrSession::step(size_t byteBudget) {
+  if(!impl_)return Result::Failed;
+  if(impl_->result!=Result::Working)return impl_->result;
+  impl_->result=stepInput(impl_->input,impl_->state,*impl_->chapter,std::max<size_t>(1,byteBudget),impl_->images);
+  return impl_->result;
+}
+size_t HtmlToIrSession::consumed()const{return impl_?impl_->input.position():0;}
+bool HtmlToIr::convert(const char* html,size_t len,ChapterIr& out,bool arm,uint8_t images) {
+  out.clear();if(!html||!len)return false;
+  HtmlInput input(html,len);ParserState state;state.dropCapArmed=arm;
+  while(stepInput(input,state,out,8192,images)==HtmlToIrSession::Result::Working){}
+  return !out.empty(); // legacy helper exposes failed() for partial tests
+}
+bool HtmlToIr::convertFile(HalFile& file,const char* workPath,ChapterIr& out,bool arm,uint8_t images,
+                           bool(*cancel)(void*),void*ctx) {
+  HtmlToIrSession session(file,workPath,out,arm,images,cancel,ctx);
+  HtmlToIrSession::Result result;
+  do {result=session.step();} while(result==HtmlToIrSession::Result::Working);
+  return result==HtmlToIrSession::Result::Done;
 }
 
 }  // namespace rivulet

@@ -32,6 +32,8 @@ struct FixedPreserve {
 constexpr FixedPreserve kFixedPreserve[] = {
     {"progress.bin", "clear_preserve_progress.bin"},
     {"progress.bin.bak", "clear_preserve_progress.bin.bak"},
+    {"progress.rva0", "clear_preserve_progress.rva0"},
+    {"progress.rva1", "clear_preserve_progress.rva1"},
     {"reader_settings.bin", "clear_preserve_reader_settings.bin"},
     {"dictionary_history.txt", "clear_preserve_dictionary_history.txt"},
     {"meta.txt", "clear_preserve_meta.txt"},

@@ -45,6 +45,12 @@ class RivuletEngine {
     return ingestHtml(html, n, irPathSave, armDropCapFirstPara, imageRendering);
   }
 
+  bool ingestHtmlFile(HalFile& file, const char* workPath, uint8_t imageRendering = 0,
+                      bool (*cancel)(void*) = nullptr, void* ctx = nullptr);
+
+  // Finish a cooperative full-source conversion before image geometry/layout.
+  bool adoptIngestedChapter(const char* workPath);
+
   // Load Tier B IR from SD.
   bool loadIr(const char* irPath);
   // Valid after a failed loadIr: Oom means keep the file and retry after a scrub.
@@ -80,6 +86,10 @@ class RivuletEngine {
   bool resumeAtCursor(const GfxRenderer& renderer, const IrCursor& cursor, int maxWalkPages = 512);
   [[nodiscard]] IrCursor currentStartCursor() const;
   [[nodiscard]] bool hasCurrentStartCursor() const;
+  [[nodiscard]] bool mapCoversCursor(const IrCursor& cursor) const {
+    return !map_.failed() && (map_.complete() ||
+        (!map_.empty() && !(map_.pageStart(map_.knownPages()-1)<cursor)));
+  }
   bool nextPage(const GfxRenderer& renderer);
   bool prevPage(const GfxRenderer& renderer);
   // Why a turn failed. Callers MUST distinguish these: treating a layout failure
@@ -148,6 +158,7 @@ class RivuletEngine {
   //
   // Returns true if it laid a page out (i.e. did real work this tick).
   bool warmAheadPage(const GfxRenderer& renderer);
+  void releasePrefetch() { aheadValid_=behindValid_=false;ahead_.release();behind_.release(); }
   // Bidirectional indexing: keep the previous page's layout in RAM so page-back
   // is a move (same idea as ahead_ for forward). Warmed on idle.
   bool warmBehindPage(const GfxRenderer& renderer);
@@ -208,6 +219,7 @@ class RivuletEngine {
   LayoutParams makeMeasureParams(const GfxRenderer& renderer) const;
   bool layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c);
   void seedMapIfEmpty();
+  void resetMapStorage();
   // markComplete only if known page count is plausible vs IR estimate.
   void markMapCompleteIfPlausible(const GfxRenderer& renderer);
   bool tryLoadPageCache(int pageIndex);
@@ -234,6 +246,7 @@ class RivuletEngine {
   // idle tick (classic Section::estimatedTotalPages used the same idea).
   mutable float smoothedEstimate_ = 0.0f;
   mutable int smoothedAtKnown_ = -1;
+  std::string mapWorkPath_;
   std::string pageCacheDir_;
   mutable bool pageCacheDirReady_ = false;  // dir created/verified this session
   int pageCacheSpine_ = -1;                 // namespaces .rvpg files; -1 disables cache I/O

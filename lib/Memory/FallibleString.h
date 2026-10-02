@@ -49,6 +49,33 @@ class FallibleString {
     if (n > length_) std::memset(data() + length_, 0, n - length_);
     data()[n] = 0; length_ = n; return true;
   }
+  size_t capacity() const noexcept { return capacity_; }
+  bool reserve(size_t n) noexcept {
+    if(n<=capacity_)return !failed_;
+    if(n==std::numeric_limits<size_t>::max() || !allowAllocation()){failed_=true;return false;}
+    char* p=static_cast<char*>(std::malloc(n+1));
+    if(!p){failed_=true;return false;}
+    std::memcpy(p,data(),length_+1);std::free(heap_);heap_=p;capacity_=n;return true;
+  }
+  bool append(std::string_view s) noexcept {
+    if(s.size()>std::numeric_limits<size_t>::max()-length_-1){failed_=true;return false;}
+    const size_t size=length_+s.size();
+    if(size>capacity_){
+      if(!allowAllocation()){failed_=true;return false;}
+      char* p=static_cast<char*>(std::malloc(size+1));if(!p){failed_=true;return false;}
+      std::memcpy(p,data(),length_);if(!s.empty())std::memcpy(p+length_,s.data(),s.size());p[size]=0;
+      std::free(heap_);heap_=p;capacity_=size;
+    }else{if(!s.empty())std::memmove(data()+length_,s.data(),s.size());data()[size]=0;}
+    length_=size;return !failed_;
+  }
+  bool push_back(char c) noexcept { return append(std::string_view(&c,1)); }
+  void pop_back() noexcept { if(length_)data()[--length_]=0; }
+  char& operator[](size_t i) noexcept { return data()[i]; }
+  const char& operator[](size_t i) const noexcept { return data()[i]; }
+  char& back() noexcept { return data()[length_-1]; }
+  const char& back() const noexcept { return data()[length_-1]; }
+  FallibleString& operator+=(std::string_view s) noexcept {append(s);return *this;}
+  FallibleString& operator+=(const FallibleString& s) noexcept {append(s.view());return *this;}
   void clear() noexcept { length_ = 0; data()[0] = 0; failed_ = false; }
   bool empty() const noexcept { return length_ == 0; }
   bool failed() const noexcept { return failed_; }

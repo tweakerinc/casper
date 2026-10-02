@@ -6,6 +6,8 @@
 #include "../Memory/FallibleVector.h"
 
 #include "IrFormat.h"
+#include "PagedRecords.h"
+#include <memory>
 
 class HalFile;
 
@@ -34,33 +36,25 @@ struct Block {
   uint16_t imageH = 0;
 };
 
+static_assert(sizeof(Block) == 16 && sizeof(Run) == 8, "IR record layout");
+
 // In-memory chapter IR (Tier B working set). One chapter at a time.
 // Text is a malloc buffer — never std::string growth (that aborts under -fno-exceptions).
 class ChapterIr {
  public:
-  ChapterIr() = default;
-  ~ChapterIr() { freeText(); }
+  ChapterIr();
+  ~ChapterIr();
   ChapterIr(const ChapterIr&) = delete;
   ChapterIr& operator=(const ChapterIr&) = delete;
-  ChapterIr(ChapterIr&& o) noexcept { *this = std::move(o); }
-  ChapterIr& operator=(ChapterIr&& o) noexcept {
-    if (this == &o) return *this;
-    freeText();
-    openBlock_ = o.openBlock_;
-    failed_ = o.failed_;
-    blocks_ = std::move(o.blocks_);
-    runs_ = std::move(o.runs_);
-    textData_ = o.textData_;
-    textLen_ = o.textLen_;
-    textCap_ = o.textCap_;
-    o.textData_ = nullptr;
-    o.textLen_ = 0;
-    o.textCap_ = 0;
-    o.openBlock_ = false;
-    o.failed_ = false;
-    return *this;
-  }
+  ChapterIr(ChapterIr&& o) noexcept;
+  ChapterIr& operator=(ChapterIr&& o) noexcept;
 
+  // Spill chapter text AND metadata to SD with a constant-size working window.
+  // The base path is a derived cache; unique scratch files are never user data.
+  bool beginPaged(const char* basePath);
+  bool diskBacked() const { return disk_ != nullptr; }
+  static constexpr size_t kMaxRunBytes = 4096;
+  static constexpr size_t kMaxDiskText = 32U * 1024U * 1024U;
   void clear();
 
   void reserveForConvert(size_t htmlLen);
@@ -75,16 +69,16 @@ class ChapterIr {
   void setCurrentMarginsEmQ4(int8_t top, int8_t bottom);
   void markDropCapOnCurrent();
 
-  [[nodiscard]] const casper_memory::FallibleVector<Block>& blocks() const { return blocks_; }
-  [[nodiscard]] casper_memory::FallibleVector<Block>& blocksMutable() { return blocks_; }
-  [[nodiscard]] const casper_memory::FallibleVector<Run>& runs() const { return runs_; }
+  [[nodiscard]] const PagedRecords<Block>& blocks() const { return blocks_; }
+  [[nodiscard]] PagedRecords<Block>& blocksMutable() { estimateCached_=-1; return blocks_; }
+  [[nodiscard]] const PagedRecords<Run>& runs() const { return runs_; }
   [[nodiscard]] const char* textData() const { return textData_ ? textData_ : ""; }
   [[nodiscard]] size_t textSize() const { return textLen_; }
   // Compatibility for call sites that used textBlob().size().
   [[nodiscard]] size_t textBlobSize() const { return textLen_; }
   [[nodiscard]] size_t blockCount() const { return blocks_.size(); }
   [[nodiscard]] bool empty() const { return blocks_.empty(); }
-  [[nodiscard]] bool failed() const { return failed_; }
+  [[nodiscard]] bool failed() const;
   void clearFailed() { failed_ = false; }
   void markFailed() { failed_ = true; }
 
@@ -95,6 +89,8 @@ class ChapterIr {
   bool setRunText(size_t runIndex, const char* utf8, size_t len);
   bool setRunText(size_t runIndex, const std::string& s) { return setRunText(runIndex, s.data(), s.size()); }
 
+  size_t serializedSize() const;
+  bool writeRangeTo(HalFile& file,size_t offset,size_t bytes) const;
   bool saveToFile(const char* path) const;
   bool loadFromFile(const char* path);
   // Distinguish OOM from a bad header so callers can keep a just-read cache.
@@ -109,15 +105,21 @@ class ChapterIr {
   bool ensureRunsCapacity(size_t needExtra);
 
   bool openBlock_ = false;
-  bool failed_ = false;
-  casper_memory::FallibleVector<Block> blocks_;
-  casper_memory::FallibleVector<Run> runs_;
+  mutable int estimateCached_=-1, estimateW_=0,estimateH_=0,estimateEm_=0;
+  mutable float estimateLc_=0;
+  mutable bool failed_ = false;
+  struct Disk;
+  std::unique_ptr<Disk> disk_;
+  PagedRecords<Block> blocks_;
+  PagedRecords<Run> runs_;
   char* textData_ = nullptr;
   size_t textLen_ = 0;
   size_t textCap_ = 0;
 
   bool writeTo(HalFile& f) const;
-  LoadResult readFrom(HalFile& f);
+  bool appendText(const char* s, size_t n);
+  bool setupDisk(const char* path);
+  LoadResult mountPaged(const char* path, uint32_t blocks, uint32_t runs, uint32_t text);
 };
 
 }  // namespace rivulet

@@ -1,4 +1,5 @@
 #include "ChapterIr.h"
+#include "PagedText.h"
 
 #include <Esp.h>
 #include <HalStorage.h>
@@ -14,8 +15,8 @@ namespace rivulet {
 namespace {
 
 constexpr size_t kMaxTextBlob = 192 * 1024;
-constexpr size_t kMaxBlocks = 4096;
-constexpr size_t kMaxRuns = 32768;
+constexpr size_t kMaxBlocks = 65534;
+constexpr size_t kMaxRuns = 65534;
 
 bool canAlloc(const size_t bytes) {
   if (bytes == 0) return true;
@@ -28,6 +29,61 @@ bool canAlloc(const size_t bytes) {
 
 }  // namespace
 
+struct ChapterIr::Disk {
+  PagedText text;
+  char prefix[240]{};
+  mutable char run[kMaxRunBytes + 1]{};
+  mutable uint32_t cachedOffset = UINT32_MAX;
+  mutable uint16_t cachedLength = 0;
+};
+
+ChapterIr::ChapterIr() = default;
+ChapterIr::~ChapterIr() { clear(); }
+ChapterIr::ChapterIr(ChapterIr&& o) noexcept { *this = std::move(o); }
+ChapterIr& ChapterIr::operator=(ChapterIr&& o) noexcept {
+  if (this == &o) return *this;
+  clear();
+  openBlock_ = o.openBlock_; failed_ = o.failed_;
+  blocks_ = std::move(o.blocks_); runs_ = std::move(o.runs_);
+  disk_ = std::move(o.disk_);
+  textData_ = o.textData_; textLen_ = o.textLen_; textCap_ = o.textCap_;
+  o.textData_ = nullptr; o.textLen_ = o.textCap_ = 0;
+  o.openBlock_ = o.failed_ = false;
+  return *this;
+}
+bool ChapterIr::failed() const {
+  return failed_ || blocks_.failed() || runs_.failed() || (disk_ && disk_->text.failed());
+}
+bool ChapterIr::setupDisk(const char* path) {
+  if (!path || !*path) return false;
+  if (!casper_memory::allowAllocation()) return false;
+  disk_.reset(new (std::nothrow) Disk());
+  if (!disk_) return false;
+  static uint32_t serial = 0;  // callers hold the reader/render exclusion lock
+  const int n = std::snprintf(disk_->prefix, sizeof(disk_->prefix), "%s.w%lu", path,
+                              static_cast<unsigned long>(++serial));
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(disk_->prefix)) { disk_.reset(); return false; }
+  return true;
+}
+bool ChapterIr::beginPaged(const char* path) {
+  clear();
+  if (!setupDisk(path)) return false;
+  char name[256];
+  std::snprintf(name, sizeof(name), "%s.b", disk_->prefix);
+  if (!blocks_.create(name)) { clear(); return false; }
+  std::snprintf(name, sizeof(name), "%s.r", disk_->prefix);
+  if (!runs_.create(name)) { clear(); return false; }
+  std::snprintf(name, sizeof(name), "%s.t", disk_->prefix);
+  if (!disk_->text.create(name)) { clear(); return false; }
+  return true;
+}
+bool ChapterIr::appendText(const char* s, size_t n) {
+  if (disk_) return disk_->text.append(s, n);
+  if (!ensureTextCapacity(n)) return false;
+  if (n) std::memcpy(textData_ + textLen_, s, n);
+  return true;
+}
+
 void ChapterIr::freeText() {
   if (textData_) {
     std::free(textData_);
@@ -38,11 +94,13 @@ void ChapterIr::freeText() {
 }
 
 void ChapterIr::clear() {
+  estimateCached_=-1;
   openBlock_ = false;
   failed_ = false;
   blocks_.release();
   runs_.release();
   freeText();
+  disk_.reset();
 }
 
 bool ChapterIr::ensureTextCapacity(const size_t needExtra) {
@@ -92,6 +150,7 @@ bool ChapterIr::ensureRunsCapacity(const size_t needExtra) {
 }
 
 void ChapterIr::reserveForConvert(const size_t htmlLen) {
+  if (disk_) return;  // disk windows are fixed; no chapter-sized allocation
   // One-shot pre-size under the caller's FB loan so mid-convert does not thrash
   // realloc and fragment maxAlloc (partial IR → false chapter end).
   // Prose XHTML is typically ~40–60% text; leave room for HTML still in RAM + vectors.
@@ -193,42 +252,54 @@ void ChapterIr::endBlock() {
 }
 
 bool ChapterIr::appendRun(const RunStyle style, const SizeStep step, const char* utf8, const size_t len) {
-  if (failed_ || !openBlock_ || !utf8 || len == 0) return !failed_;
-  if (len > kMaxTextBlob || textLen_ > kMaxTextBlob - len) { failed_ = true; return false; }
+  estimateCached_=-1;
+  if (failed() || !openBlock_ || !utf8 || len == 0) return !failed();
+  const size_t limit = disk_ ? kMaxDiskText : kMaxTextBlob;
+  if (len > limit || textLen_ > limit - len) { failed_ = true; return false; }
   size_t off = 0;
   while (off < len) {
-    Run* last = (!runs_.empty() && blocks_.back().runCount) ? &runs_.back() : nullptr;
-    const bool join = last && last->style == style && last->sizeStep == step &&
-                      last->textOff + last->textLen == textLen_ && last->textLen < UINT16_MAX;
-    size_t take = std::min<size_t>(len - off, join ? UINT16_MAX - last->textLen : UINT16_MAX);
-    // The next run must start on a UTF-8 scalar boundary. Never saturate a run
-    // length while appending unreferenced bytes to the text blob.
-    if (off + take < len) {
-      while (take && (static_cast<unsigned char>(utf8[off + take]) & 0xC0) == 0x80) --take;
+    bool join = !runs_.empty() && blocks_.back().runCount;
+    Run last{};
+    if (join) {
+      last = static_cast<const PagedRecords<Run>&>(runs_).back();
+      join = last.style == style && last.sizeStep == step && last.textOff + last.textLen == textLen_ &&
+             last.textLen < kMaxRunBytes;
     }
-    if (take == 0 || !join) {
-      take = std::min<size_t>(len - off, UINT16_MAX);
-      if (off + take < len) {
-        while (take && (static_cast<unsigned char>(utf8[off + take]) & 0xC0) == 0x80) --take;
+    // Split at a real word separator when a storage run would otherwise end in
+    // a word. The suffix stays in the text store: only two tiny records change.
+    if (join && last.textLen + len - off > kMaxRunBytes && last.textLen > 1024) {
+      const char* bytes = runText(last);
+      size_t cut = last.textLen;
+      while (cut > last.textLen / 2 && bytes[cut-1] != ' ' && bytes[cut-1] != '\t') --cut;
+      if (cut < last.textLen && cut > last.textLen / 2) {
+        Run tail = last; tail.textOff += cut; tail.textLen -= cut;
+        if (!ensureRunsCapacity(1)) { failed_ = true; return false; }
+        runs_.back().textLen = static_cast<uint16_t>(cut);
+        if (!runs_.push_back(tail)) { failed_ = true; return false; }
+        ++blocks_.back().runCount; last = tail;
       }
-      if (!take || !ensureRunsCapacity(1) || !ensureTextCapacity(take)) { failed_ = true; return false; }
-      Run r;
-      r.textOff = static_cast<uint32_t>(textLen_);
-      r.textLen = static_cast<uint16_t>(take);
-      r.style = style; r.sizeStep = step;
-      std::memcpy(textData_ + textLen_, utf8 + off, take);
-      if (!runs_.push_back(r)) { failed_ = true; return false; }
-      textLen_ += take;
-      ++blocks_.back().runCount;
-    } else {
-      if (!ensureTextCapacity(take)) { failed_ = true; return false; }
-      std::memcpy(textData_ + textLen_, utf8 + off, take);
-      textLen_ += take;
-      last->textLen = static_cast<uint16_t>(last->textLen + take);
     }
-    off += take;
+    size_t take = std::min<size_t>(len-off, join ? kMaxRunBytes-last.textLen : kMaxRunBytes);
+    if (off+take < len) {
+      while (take && (static_cast<unsigned char>(utf8[off+take]) & 0xc0) == 0x80) --take;
+      // Prefer a word boundary for new long source spans as well.
+      size_t cut = take;
+      while (cut > take/2 && utf8[off+cut-1] != ' ' && utf8[off+cut-1] != '\t') --cut;
+      if (cut > take/2) take = cut;
+    }
+    if (!take) { join = false; take = std::min<size_t>(len-off, kMaxRunBytes); }
+    if (!join && !ensureRunsCapacity(1)) { failed_ = true; return false; }
+    if (!appendText(utf8+off, take)) { failed_ = true; return false; }
+    if (join) runs_.back().textLen = static_cast<uint16_t>(last.textLen + take);
+    else {
+      Run run; run.textOff = static_cast<uint32_t>(textLen_); run.textLen = static_cast<uint16_t>(take);
+      run.style = style; run.sizeStep = step;
+      if (!runs_.push_back(run)) { failed_ = true; return false; }
+      ++blocks_.back().runCount;
+    }
+    textLen_ += take; off += take;
   }
-  return true;
+  return !failed();
 }
 
 void ChapterIr::setCurrentIndentEmQ4(const uint8_t v) {
@@ -249,37 +320,33 @@ void ChapterIr::markDropCapOnCurrent() {
 }
 
 const char* ChapterIr::runText(const Run& r) const {
-  if (!textData_ || r.textOff > textLen_ || r.textLen > textLen_ - r.textOff) return "";
-  return textData_ + r.textOff;
+  if (r.textOff > textLen_ || r.textLen > textLen_ - r.textOff || r.textLen > kMaxRunBytes) {
+    failed_ = true;
+    if (disk_) { std::memset(disk_->run, 0, sizeof(disk_->run)); return disk_->run; }
+    return "";
+  }
+  if (!disk_) return textData_ ? textData_ + r.textOff : "";
+  if (disk_->cachedOffset != r.textOff || disk_->cachedLength != r.textLen) {
+    if (!disk_->text.readRange(r.textOff, disk_->run, r.textLen)) {
+      failed_ = true; std::memset(disk_->run, 0, sizeof(disk_->run));
+    }
+    disk_->run[r.textLen] = 0;
+    disk_->cachedOffset = r.textOff; disk_->cachedLength = r.textLen;
+  }
+  return disk_->run;
 }
-
 std::string ChapterIr::runString(const Run& r) const {
-  if (!textData_ || r.textOff > textLen_ || r.textLen > textLen_ - r.textOff) return {};
-  return std::string(textData_ + r.textOff, r.textLen);
+  const char* text = runText(r);
+  return failed() ? std::string() : std::string(text, r.textLen);
 }
-
-bool ChapterIr::setRunText(const size_t runIndex, const char* utf8, const size_t len) {
-  if (failed_ || !utf8 || len == 0 || runIndex >= runs_.size()) return false;
-  if (len > UINT16_MAX || len > kMaxTextBlob || textLen_ > kMaxTextBlob - len) {
-    LOG_ERR("RVIR", "setRunText blob cap");
-    return false;
-  }
-  if (!ensureTextCapacity(len)) {
-    LOG_ERR("RVIR", "setRunText OOM free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    return false;
-  }
-  Run& r = runs_[runIndex];
-  // Same length: overwrite in place (no blob growth).
-  if (r.textLen == len && r.textOff + len <= textLen_ && textData_) {
-    std::memcpy(textData_ + r.textOff, utf8, len);
-    return true;
-  }
-  r.textOff = static_cast<uint32_t>(textLen_);
-  r.textLen = static_cast<uint16_t>(std::min<size_t>(len, 65535));
-  std::memcpy(textData_ + textLen_, utf8, r.textLen);
-  textLen_ += r.textLen;
-  return true;
+bool ChapterIr::setRunText(size_t index, const char* s, size_t len) {
+  if (failed() || index >= runs_.size() || !s || len > kMaxRunBytes ||
+      textLen_ > (disk_ ? kMaxDiskText : kMaxTextBlob) - len) return false;
+  if (!appendText(s,len)) { failed_ = true; return false; }
+  Run& run = runs_[index]; run.textOff = static_cast<uint32_t>(textLen_); run.textLen = static_cast<uint16_t>(len);
+  textLen_ += len;
+  if (disk_) disk_->cachedOffset = UINT32_MAX;
+  return !failed();
 }
 
 bool ChapterIr::writeTo(HalFile& f) const {
@@ -291,112 +358,17 @@ bool ChapterIr::writeTo(HalFile& f) const {
   if (!serialization::tryWritePod(f, nBlocks)) return false;
   if (!serialization::tryWritePod(f, nRuns)) return false;
   if (!serialization::tryWritePod(f, nText)) return false;
-  for (const Block& b : blocks_) {
-    const uint8_t kind = static_cast<uint8_t>(b.kind);
-    const uint8_t align = static_cast<uint8_t>(b.align);
-    if (!serialization::tryWritePod(f, kind)) return false;
-    if (!serialization::tryWritePod(f, align)) return false;
-    if (!serialization::tryWritePod(f, b.flags)) return false;
-    if (!serialization::tryWritePod(f, b.indentEmQ4)) return false;
-    if (!serialization::tryWritePod(f, b.marginTopEmQ4)) return false;
-    if (!serialization::tryWritePod(f, b.marginBottomEmQ4)) return false;
-    if (!serialization::tryWritePod(f, b.runBegin)) return false;
-    if (!serialization::tryWritePod(f, b.runCount)) return false;
-    if (!serialization::tryWritePod(f, b.imageW)) return false;
-    if (!serialization::tryWritePod(f, b.imageH)) return false;
-  }
-  for (const Run& r : runs_) {
-    if (!serialization::tryWritePod(f, r.textOff)) return false;
-    if (!serialization::tryWritePod(f, r.textLen)) return false;
-    const uint8_t st = static_cast<uint8_t>(r.style);
-    const int8_t step = static_cast<int8_t>(r.sizeStep);
-    if (!serialization::tryWritePod(f, st)) return false;
-    if (!serialization::tryWritePod(f, step)) return false;
-  }
+  if (!blocks_.writeTo(f) || !runs_.writeTo(f)) return false;
+  if (disk_) return !failed() && disk_->text.writeTo(f);
   if (nText > 0 && textData_) {
     if (f.write(reinterpret_cast<const uint8_t*>(textData_), nText) != nText) return false;
   }
   return true;
 }
 
-ChapterIr::LoadResult ChapterIr::readFrom(HalFile& f) {
-  clear();
-  char magic[4] = {};
-  if (!serialization::tryReadPod(f, magic)) return LoadResult::Corrupt;
-  if (std::memcmp(magic, kIrMagic, 4) != 0) {
-    LOG_ERR("RVIR", "bad magic");
-    return LoadResult::Corrupt;
-  }
-  uint16_t ver = 0;
-  if (!serialization::tryReadPod(f, ver)) return LoadResult::Corrupt;
-  if (ver < kIrFormatVersionMin || ver > kIrFormatVersionMax) {
-    // Not a torn header — CrossPoint/CrossInk (or an older Casper) wrote this.
-    // Caller must keep the file. Deleting it forced a convert that abort()ed.
-    LOG_ERR("RVIR", "unsupported version %u (load %u-%u) — keep file", static_cast<unsigned>(ver),
-            static_cast<unsigned>(kIrFormatVersionMin), static_cast<unsigned>(kIrFormatVersionMax));
-    return LoadResult::StaleVersion;
-  }
-  uint32_t nBlocks = 0, nRuns = 0, nText = 0;
-  if (!serialization::tryReadPod(f, nBlocks)) return LoadResult::Corrupt;
-  if (!serialization::tryReadPod(f, nRuns)) return LoadResult::Corrupt;
-  if (!serialization::tryReadPod(f, nText)) return LoadResult::Corrupt;
-  if (nBlocks > kMaxBlocks || nRuns > kMaxRuns || nText > kMaxTextBlob) {
-    LOG_ERR("RVIR", "corrupt counts b=%u r=%u t=%u", nBlocks, nRuns, nText);
-    return LoadResult::Corrupt;
-  }
-  // resize can abort under -fno-exceptions if huge — cap checked above; probe first.
-  if (nBlocks > 0 && !canAlloc(nBlocks * sizeof(Block) + 64)) return LoadResult::Oom;
-  if (nRuns > 0 && !canAlloc(nRuns * sizeof(Run) + 64)) return LoadResult::Oom;
-  if (nText > 0 && !canAlloc(nText + 64)) return LoadResult::Oom;
-  // Validate the complete wire length before allocating anything. Block fields
-  // occupy 15 bytes, runs 8 bytes, and the header 18 bytes (no native padding).
-  const uint64_t expected = 18ULL + 15ULL * nBlocks + 8ULL * nRuns + nText;
-  if (expected != f.size()) return LoadResult::Corrupt;
-  if (!blocks_.resize(nBlocks) || !runs_.resize(nRuns)) return LoadResult::Oom;
-  for (uint32_t i = 0; i < nBlocks; ++i) {
-    uint8_t kind = 0, align = 0;
-    if (!serialization::tryReadPod(f, kind)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, align)) return LoadResult::Corrupt;
-    Block& b = blocks_[i];
-    b.kind = static_cast<BlockKind>(kind);
-    b.align = static_cast<Align>(align);
-    if (!serialization::tryReadPod(f, b.flags)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.indentEmQ4)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.marginTopEmQ4)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.marginBottomEmQ4)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.runBegin)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.runCount)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.imageW)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, b.imageH)) return LoadResult::Corrupt;
-    if (kind > static_cast<uint8_t>(BlockKind::Image) || align > 3 ||
-        b.runBegin > nRuns || b.runCount > nRuns - b.runBegin) return LoadResult::Corrupt;
-  }
-  for (uint32_t i = 0; i < nRuns; ++i) {
-    Run& r = runs_[i];
-    if (!serialization::tryReadPod(f, r.textOff)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, r.textLen)) return LoadResult::Corrupt;
-    uint8_t st = 0;
-    int8_t step = 2;
-    if (!serialization::tryReadPod(f, st)) return LoadResult::Corrupt;
-    if (!serialization::tryReadPod(f, step)) return LoadResult::Corrupt;
-    if ((st & ~uint8_t(0x3f)) != 0 || step < 0 || step > 4 ||
-        r.textOff > nText || r.textLen > nText - r.textOff) return LoadResult::Corrupt;
-    r.style = static_cast<RunStyle>(st);
-    r.sizeStep = static_cast<SizeStep>(step);
-  }
-  if (nText > 0) {
-    textData_ = static_cast<char*>(std::malloc(nText));
-    if (!textData_) return LoadResult::Oom;
-    textCap_ = nText;
-    textLen_ = nText;
-    if (f.read(reinterpret_cast<uint8_t*>(textData_), nText) != static_cast<int>(nText)) return LoadResult::Corrupt;
-  }
-  return LoadResult::Ok;
-}
-
 bool ChapterIr::saveToFile(const char* path) const {
   // A usable prefix is not a complete chapter and must never replace one.
-  if (!path || !*path || failed_ || blocks_.failed() || runs_.failed()) return false;
+  if (!path || !*path || failed()) return false;
   char temp[256];
   const int n = std::snprintf(temp, sizeof(temp), "%s.tmp", path);
   if (n <= 0 || static_cast<size_t>(n) >= sizeof(temp)) return false;
@@ -412,14 +384,46 @@ bool ChapterIr::saveToFile(const char* path) const {
   return true;
 }
 
+ChapterIr::LoadResult ChapterIr::mountPaged(const char* path, uint32_t nb, uint32_t nr, uint32_t nt) {
+  if (!setupDisk(path)) return LoadResult::Oom;
+  char name[256];
+  std::snprintf(name, sizeof(name), "%s.b", disk_->prefix);
+  if (!blocks_.mount(path,18,nb,name)) return LoadResult::Corrupt;
+  std::snprintf(name, sizeof(name), "%s.r", disk_->prefix);
+  if (!runs_.mount(path,18+nb*sizeof(Block),nr,name)) return LoadResult::Corrupt;
+  std::snprintf(name, sizeof(name), "%s.t", disk_->prefix);
+  if (!disk_->text.mount(path,18+nb*sizeof(Block)+nr*sizeof(Run),nt,name)) return LoadResult::Corrupt;
+  textLen_ = nt;
+  // Validate records in bounded windows before exposing any cursor to layout.
+  const auto& blocks = static_cast<const PagedRecords<Block>&>(blocks_);
+  const auto& runs = static_cast<const PagedRecords<Run>&>(runs_);
+  for (const Block b : blocks) {
+    if (static_cast<uint8_t>(b.kind) > static_cast<uint8_t>(BlockKind::Image) || static_cast<uint8_t>(b.align) > 3 ||
+        b.runBegin > nr || b.runCount > nr-b.runBegin) return LoadResult::Corrupt;
+  }
+  for (const Run run : runs) {
+    if ((static_cast<uint8_t>(run.style) & ~0x3f) || static_cast<uint8_t>(run.sizeStep) > 4 ||
+        run.textLen > kMaxRunBytes || run.textOff > nt || run.textLen > nt-run.textOff) return LoadResult::Corrupt;
+  }
+  return failed() ? LoadResult::Corrupt : LoadResult::Ok;
+}
+
 ChapterIr::LoadResult ChapterIr::loadFromFileEx(const char* path) {
+  clear();
   if (!path || !*path) return LoadResult::Corrupt;
-  HalFile f;
-  if (!Storage.openFileForRead("RVIR", path, f)) return LoadResult::Corrupt;
-  const LoadResult st = readFrom(f);
-  f.close();
-  if (st != LoadResult::Ok) clear();
-  return st;
+  HalFile file;
+  if (!Storage.openFileForRead("RVIR", path, file)) return LoadResult::Corrupt;
+  char magic[4]; uint16_t ver=0; uint32_t nb=0,nr=0,nt=0;
+  if (!serialization::tryReadPod(file,magic) || std::memcmp(magic,kIrMagic,4) ||
+      !serialization::tryReadPod(file,ver)) return LoadResult::Corrupt;
+  if (ver != kIrFormatVersion) return LoadResult::StaleVersion;
+  if (!serialization::tryReadPod(file,nb) || !serialization::tryReadPod(file,nr) || !serialization::tryReadPod(file,nt) ||
+      nb > kMaxBlocks || nr > kMaxRuns || nt > kMaxDiskText ||
+      18ULL + sizeof(Block)*uint64_t(nb) + sizeof(Run)*uint64_t(nr) + nt != file.size()) return LoadResult::Corrupt;
+  file.close();
+  const auto result = mountPaged(path,nb,nr,nt);
+  if (result != LoadResult::Ok) clear();
+  return result;
 }
 
 bool ChapterIr::loadFromFile(const char* path) { return loadFromFileEx(path) == LoadResult::Ok; }
@@ -429,6 +433,7 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
   if (viewportW < 16 || viewportH < 16 || bodyEmPx < 4) return 1;
   if (textLen_ == 0 && blocks_.empty()) return 1;
 
+  if(estimateCached_>=0 && estimateW_==viewportW && estimateH_==viewportH && estimateEm_==bodyEmPx && estimateLc_==lineCompression)return estimateCached_;
   // Heuristic that knows about Rivulet block kinds — not a classic section rebuild,
   // but far closer than "chars / fixed CPL" for chapters with images, HRs, and
   // large headings (the old estimate undercounted plate-heavy spines badly).
@@ -517,7 +522,37 @@ int ChapterIr::estimatePageCount(const int viewportW, const int viewportH, const
   if (pages >= 4) {
     pages = pages + std::max(1, pages / 12);
   }
+  estimateW_=viewportW;estimateH_=viewportH;estimateEm_=bodyEmPx;estimateLc_=lineCompression;estimateCached_=pages;
   return pages;
+}
+
+size_t ChapterIr::serializedSize() const {return 18+blocks_.size()*sizeof(Block)+runs_.size()*sizeof(Run)+textLen_;}
+bool ChapterIr::writeRangeTo(HalFile& file,size_t offset,size_t bytes) const {
+  if(failed() || offset>serializedSize() || bytes>serializedSize()-offset)return false;
+  uint8_t header[18]{};std::memcpy(header,kIrMagic,4);std::memcpy(header+4,&kIrFormatVersion,2);
+  const uint32_t nb=blocks_.size(),nr=runs_.size(),nt=textLen_;
+  std::memcpy(header+6,&nb,4);std::memcpy(header+10,&nr,4);std::memcpy(header+14,&nt,4);
+  alignas(std::max_align_t) uint8_t buffer[512];const size_t blocksEnd=18+nb*sizeof(Block),runsEnd=blocksEnd+nr*sizeof(Run);
+  while(bytes){size_t n=std::min(bytes,sizeof(buffer));
+    if(offset<18){n=std::min(n,18-offset);std::memcpy(buffer,header+offset,n);}
+    else if(offset<blocksEnd){
+      const size_t rel=offset-18,index=rel/sizeof(Block),in=rel%sizeof(Block);
+      if(!in && n>=sizeof(Block)){const size_t count=std::min(n/sizeof(Block),size_t(nb)-index);n=count*sizeof(Block);
+        if(!blocks_.readRange(index,reinterpret_cast<Block*>(buffer),count))return false;}
+      else {n=std::min(n,sizeof(Block)-in);const Block b=blocks_[index];std::memcpy(buffer,reinterpret_cast<const uint8_t*>(&b)+in,n);}
+    }else if(offset<runsEnd){
+      const size_t rel=offset-blocksEnd,index=rel/sizeof(Run),in=rel%sizeof(Run);
+      if(!in && n>=sizeof(Run)){const size_t count=std::min(n/sizeof(Run),size_t(nr)-index);n=count*sizeof(Run);
+        if(!runs_.readRange(index,reinterpret_cast<Run*>(buffer),count))return false;}
+      else {n=std::min(n,sizeof(Run)-in);const Run run=runs_[index];std::memcpy(buffer,reinterpret_cast<const uint8_t*>(&run)+in,n);}
+    }else {
+      const size_t rel=offset-runsEnd;n=std::min(n,textLen_-rel);
+      if(disk_){if(!disk_->text.readRange(rel,reinterpret_cast<char*>(buffer),n))return false;}
+      else std::memcpy(buffer,textData_+rel,n);
+    }
+    if(failed() || file.write(buffer,n)!=n)return false;
+    offset+=n;bytes-=n;
+  }return true;
 }
 
 }  // namespace rivulet

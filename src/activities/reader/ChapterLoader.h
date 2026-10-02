@@ -5,37 +5,17 @@
 
 #include <cstdint>
 #include <string>
+#include <memory>
 
 class GfxRenderer;
 
-// Getting one chapter's IR into a RivuletEngine.
-//
-// Sitting open (lendFrameBuffer=true) must produce IR when the EPUB has HTML.
-// Partial text is readable; returning fail is what flashed "Chapter not readable".
-//
-// Pipeline:
-//   framebuffer loan (cache + convert) so a 50 KB .rvir can deserialize
-//   cached .rvir for this Images mode, then sibling sN_m{0,1,2}.rvir
-//   else ZIP inflate -> SD -> prefix of HTML that fits -> HtmlToIr
-//        -> persist only a complete IR
-//
-// A successfully loaded .rvir is trusted. HTML is markup, so html>>text is
-// normal EPUB, not a truncated convert (see util/CachedIrPolicy.h,
-// util/ChapterLoadPolicy.h).
-//
-// It is separate from the reader activity so other callers can use it — the Home
-// screen indexes chapters while no book is open, where nothing has to be evicted
-// to make room and free heap is at its highest. Doing that from inside the reader
-// meant swapping the resident chapter out from under someone who was reading.
-//
-// Deliberately does NOT lay out or paint anything: callers decide what to do with
-// the loaded chapter (show a page, walk a page map, ...).
+// Full-source chapter acquisition. Cached IR and newly converted HTML use
+// bounded SD-backed record/text windows. The caller owns the target engine;
+// loading into a worker never evicts the active reader. No prefix is accepted
+// as a complete chapter, and image sizing uses the same callback as painting.
 namespace chapterload {
 
-// Callbacks into the owner. Heap preparation is required — every caller has its
-// own idea of what may be thrown away. Image preparation is optional: it probes
-// image dimensions for the current viewport, which a background indexer does not
-// need because it never paints.
+// Optional owner hooks; image geometry is required for faithful page counts.
 struct Hooks {
   void* ctx = nullptr;
   void (*prepareHeap)(void* ctx, bool aggressive) = nullptr;
@@ -64,15 +44,29 @@ struct Request {
   // later partial update paints blank over live UI. Sitting loadSpine leaves
   // this true so a CrossPoint .rvir can load instead of flashing
   // "Chapter not readable".
-  bool lendFrameBuffer = true;
+  bool lendFrameBuffer = false;
 };
 
 struct Result {
+  bool empty = false;      // verified empty source, not a failed load
   bool ok = false;         // chapter IR is loaded and usable
   bool fromCache = false;  // came from .rvir rather than a fresh convert
   bool partial = false;    // convert hit a cap/OOM; IR is truncated
 };
 
+class Session {
+ public:
+  enum class Status {Working,Done,Failed,Cancelled};
+  explicit Session(const Request& req,const Hooks& hooks={});
+  ~Session();
+  Session(const Session&)=delete;
+  Session& operator=(const Session&)=delete;
+  Status step();
+  const Result& result()const;
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 Result loadChapterIr(const Request& req, const Hooks& hooks);
 
 }  // namespace chapterload

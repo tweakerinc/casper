@@ -41,7 +41,7 @@ int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const
 void warmSdToks(const GfxRenderer& renderer, const int baseFontId, const ChapterIr& ch, const casper_memory::FallibleVector<Tok>& toks) {
   for (const auto& t : toks) {
     if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) continue;
-    const Run& run = ch.runs()[t.runIndex];
+    const Run run = ch.runs()[t.runIndex];
     const int fid = FontLadder::resolve(baseFontId, run.sizeStep);
     char buf[192];
     const size_t n = casper_memory::utf8Prefix(ch.runText(run) + t.byteOff, t.byteLen, sizeof(buf) - 1);
@@ -149,7 +149,7 @@ bool bytesAreOnlyClosingPunct(const char* s, const size_t n) {
 
 bool tokenIsOnlyClosingPunct(const ChapterIr& ch, const Tok& t) {
   if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) return false;
-  const Run& run = ch.runs()[t.runIndex];
+  const Run run = ch.runs()[t.runIndex];
   if (t.byteOff >= run.textLen) return false;
   const size_t n = std::min<size_t>(t.byteLen, run.textLen - t.byteOff);
   return bytesAreOnlyClosingPunct(ch.runText(run) + t.byteOff, n);
@@ -213,7 +213,7 @@ std::string takeDropLetter(const ChapterIr& ch, const Block& b, uint16_t& runInd
   runIndex = b.runBegin;
   byteOff = 0;
   for (uint16_t ri = b.runBegin; ri < b.runBegin + b.runCount && ri < runs.size(); ++ri) {
-    const Run& run = runs[ri];
+    const Run run = runs[ri];
     const unsigned char* p = reinterpret_cast<const unsigned char*>(ch.runText(run));
     const unsigned char* end = p + run.textLen;
     const unsigned char* start = p;
@@ -272,7 +272,7 @@ bool isSceneBreakRun(const ChapterIr& ch, const Block& b) {
   int glyphs = 0;
   const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
   for (uint16_t ri = b.runBegin; ri < runEnd && ri < ch.runs().size(); ++ri) {
-    const Run& r = ch.runs()[ri];
+    const Run r = ch.runs()[ri];
     const char* text = ch.runText(r);
     if (!text) return false;
     const char* p = text;
@@ -319,7 +319,7 @@ void advancePastBlock(const ChapterIr& ch, IrCursor& c) {
 
 }  // namespace
 
-bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& renderer, const LayoutParams& params,
+static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer, const LayoutParams& params,
                               const IrCursor& from, LaidOutPage& out) {
   out.clear();
   out.start = from;
@@ -425,7 +425,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       out.atChapterEnd = false;
       return false;
     }
-    const Block& block = chapter.blocks()[cur.blockIndex];
+    const Block block = chapter.blocks()[cur.blockIndex];
     // Normalize cursor into block. Stale page-map cursors can carry a runIndex
     // from a previous IR rebuild that falls outside this block's run range —
     // without clamping, tokenizeRuns yields nothing and we skip all text,
@@ -905,7 +905,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         if (!fillTokens(ti + 2)) { out.clear(); out.allocationFailed = true; return false; }
         if (ti >= toks.size()) break;
         const Tok& t = toks[ti];
-        const Run& run = chapter.runs()[t.runIndex];
+        const Run run = chapter.runs()[t.runIndex];
         SizeStep step = run.sizeStep;
         if (static_cast<int>(step) < static_cast<int>(headingFloor)) step = headingFloor;
         const int fid = FontLadder::resolve(baseFontId, step);
@@ -1063,7 +1063,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       int spacesLeft = spaces;
       for (size_t k = emitBegin; k < emitEnd; ++k) {
         const Tok& t = (*emit)[k];
-        const Run& run = chapter.runs()[t.runIndex];
+        const Run run = chapter.runs()[t.runIndex];
         SizeStep step = run.sizeStep;
         if (static_cast<int>(step) < static_cast<int>(headingFloor)) step = headingFloor;
         const int fid = FontLadder::resolve(baseFontId, step);
@@ -1165,9 +1165,16 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
   return !out.spans.empty() || !out.images.empty() || out.atChapterEnd || (out.end != from);
 }
 
+bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& renderer, const LayoutParams& params,
+                              const IrCursor& from, LaidOutPage& out) {
+  const bool ok=layoutPageImpl(chapter,renderer,params,from,out);
+  if (chapter.failed() || out.failed()) { out.clear(); return false; }
+  return ok;
+}
+
 bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer& renderer, const LayoutParams& params,
                                     PageMap& map) {
-  map.clear();
+  map.truncateFrom(0);
   map.setRenderKey(params.key);
   if (chapter.failed()) return false;
   if (chapter.empty()) { map.markComplete(0); return true; }

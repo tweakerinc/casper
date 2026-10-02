@@ -1,8 +1,10 @@
 #pragma once
+#include <ReadinessCoordinator.h>
 
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <RivuletEngine.h>
+#include <ProgressAnchor.h>
 
 #include <cstdint>
 #include <memory>
@@ -140,7 +142,6 @@ class RivuletReaderActivity final : public Activity {
   // lay out page 1 onto SD so a hop is deserialize + paint. Evicts the resident
   // IR; restore before any mid-chapter tap (see FutureChapterIndex.h).
   void tickFutureChapterIndex();
-  bool startFutureChapterIndex();
   void restoreAfterFutureIndex(bool forUser);
   void persistFutureMap(bool completeOnly);
   [[nodiscard]] bool futureIndexUserWantsControl() const;
@@ -187,6 +188,21 @@ class RivuletReaderActivity final : public Activity {
 
   std::shared_ptr<Epub> epub_;
   rivulet::RivuletEngine engine_;
+  rivulet::ReadinessCoordinator readiness_;
+  uint64_t sourceIdentity_=0;
+  mutable rivulet::ProgressAnchor contentAnchor_;
+  mutable bool contentAnchorValid_=false;
+  bool restoreContentAnchor_=false;
+  bool lastLoadEmpty_ = false;
+  bool readinessAlternate_ = false;
+  int lastCheckpointKnown_ = 0;
+  unsigned long currentIndexRetryAt_ = 0;
+  bool loadTargetChapter(rivulet::RivuletEngine& target, int spine, bool background, bool& empty);
+  void prepareChapterImagesFor(rivulet::RivuletEngine& target, const std::string& href);
+  void configureReadiness();
+  void requestChapterNavigation(int spine, int page);
+  void commitChapter(rivulet::RivuletEngine&& target, int spine);
+
   int imageCounter_ = 0;
   // Spine/page whose glyph page-buffer was retained after last paint (skip rescan).
   int glyphCacheSpine_ = -1;
@@ -227,6 +243,11 @@ class RivuletReaderActivity final : public Activity {
   unsigned long lastIdleMapMs_ = 0;
   mutable uint32_t smoothedBookTimeLeftSeconds_ = 0;
   bool ready_ = false;
+  bool initialLoadPending_ = false;
+  bool openMenuAfterLoad_ = false;
+  bool pendingFootnoteReturn_ = false;
+  int reflowPreviousOrientation_ = -1;
+  uint8_t reflowPreviousFollow_ = 0;
   bool error_ = false;
   bool firstPaint_ = true;
   bool ignoreNextConfirmRelease_ = false;

@@ -15,72 +15,84 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <cctype>
+#include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 
 #include "BookStatsActivity.h"
+#include "ChapterLoader.h"
 #include "ClippingStore.h"
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "DictionaryWordSelectActivity.h"
-#include "KOReaderCredentialStore.h"
-#include "KOReaderSyncActivity.h"
-#include "ProgressMapper.h"
-#include "clippings/ClippingsManager.h"
+#include "Epub/hyphenation/Hyphenator.h"
 #include "EpubReaderBookmarksActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderClippingListActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderMenuActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
-
+#include "FutureChapterIndex.h"
+#include "IdlePageMap.h"
+#include "KOReaderCredentialStore.h"
+#include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
+#include "PageTurnPolicy.h"
 #include "ProgressFile.h"
-
+#include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
 #include "ReaderActivity.h"
+#include "ReaderRenderKey.h"
 #include "ReaderUtils.h"
+#include "ReadingStatsUtils.h"
 #include "RecentBooksStore.h"
-#include "casper/CasperStats.h"
 #include "SdCardFontSystem.h"
+#include "StatsBackup.h"
 #include "activities/ActivityManager.h"
 #include "activities/ActivityResult.h"  // ClippingJumpResult, MenuResult, …
+#include "activities/home/BookActions.h"
 #include "activities/settings/StatusBarSettingsActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "components/themes/BaseTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
+#include "crosspoint/CrossPointStats.h"
 #include "fontIds.h"
-#include "activities/home/BookActions.h"
-#include "ReadingStatsUtils.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
-#include "util/CasperBookStore.h"
-
-#include "util/CasperPaths.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
+#include "util/DictLookupLayout.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FinishedBooks.h"
+#include "util/GlyphWeightPolicy.h"
+#include "util/OrientationPageRemap.h"
+#include "util/QrTimingLog.h"
 #include "util/ScreenshotInfo.h"
 #include "util/ScreenshotUtil.h"
+#include "util/SystemLog.h"
+#include "util/TaskWatchdog.h"
 #include "util/UiGhostPolicy.h"
-
-#include "Epub/hyphenation/Hyphenator.h"
-
-#include <climits>
-#include <cmath>
-#include <cctype>
-#include <cstring>
-#include <functional>
 
 namespace {
 
 constexpr size_t kInitialBookmarkCacheCapacity = 16;
 constexpr float kBookmarkProgressEpsilon = 0.0025f;
+// v49: 2s footnote scan after land blocked 1.8–2.0s and ate the next tap.
+constexpr unsigned long kFootnoteIdleDelayMs = 8000UL;
+// Device eb84fe08: MAP prewarm_glyphs abort=0 ms=4112 on the main loop, then
+// TURN drop why=s. Cap so a cold SD-font decompress cannot freeze taps.
+constexpr unsigned long kIdlePrewarmBudgetMs = 180UL;
 
-bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, const int page,
-                         const int pageCount, const float pageProgress01) {
+bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
+                         const float pageProgress01) {
   // Exact match when chapter page map still matches what was stored.
   if (bookmark.computedSpineIndex == spineIndex && bookmark.computedChapterPageCount == pageCount &&
       bookmark.computedChapterProgress == page) {
@@ -92,6 +104,21 @@ bool bookmarkMatchesPage(const BookmarkEntry& bookmark, const int spineIndex, co
   return std::fabs(bp - pageProgress01) <= kBookmarkProgressEpsilon;
 }
 
+bool gpioPeekHeldForIdleMap() { return gpio.peekRawHeld(); }
+
+unsigned long g_prewarmDeadlineMs = 0;
+
+bool gpioPeekOrPrewarmBudget() {
+  if (gpioPeekHeldForIdleMap()) return true;
+  return g_prewarmDeadlineMs != 0UL && millis() >= g_prewarmDeadlineMs;
+}
+
+void armSwallowAfterIdle(ReaderUtils::PageTurnLatch& latch, const unsigned long startedMs, const bool aborted) {
+  if (aborted) return;
+  const unsigned long now = millis();
+  if (now - startedMs >= pageturn::Limits::kSwallowMs) latch.armSwallow(now);
+}
+
 }  // namespace
 
 RivuletReaderActivity::RivuletReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -99,139 +126,42 @@ RivuletReaderActivity::RivuletReaderActivity(GfxRenderer& renderer, MappedInputM
     : Activity("RivuletReader", renderer, mappedInput), epub_(std::move(epub)) {}
 
 void RivuletReaderActivity::configureRenderKey() {
-  rivulet::RenderKey key;
-  key.fontId = SETTINGS.getReaderFontId();
-  // Fall back to Literata/SS ladder base if SD font (Rivulet v1 ladders are system-only).
-  if (renderer.isSdCardFont(key.fontId)) {
-    key.fontId = (SETTINGS.fontFamily == CasperSettings::LITERATA) ? LITERATA_12_FONT_ID : SOURCESERIF4_12_FONT_ID;
-    // Prefer matching size enum when possible.
-    // Builtin ladder: 10/12/14/16 only (8/18 map to nearest).
-    switch (SETTINGS.fontSize) {
-      case CasperSettings::SIZE_8:
-      case CasperSettings::SIZE_10:
-        key.fontId =
-            (SETTINGS.fontFamily == CasperSettings::LITERATA) ? LITERATA_10_FONT_ID : SOURCESERIF4_10_FONT_ID;
-        break;
-      case CasperSettings::SIZE_12:
-        key.fontId =
-            (SETTINGS.fontFamily == CasperSettings::LITERATA) ? LITERATA_12_FONT_ID : SOURCESERIF4_12_FONT_ID;
-        break;
-      case CasperSettings::SIZE_14:
-        key.fontId =
-            (SETTINGS.fontFamily == CasperSettings::LITERATA) ? LITERATA_14_FONT_ID : SOURCESERIF4_14_FONT_ID;
-        break;
-      case CasperSettings::SIZE_16:
-      case CasperSettings::SIZE_18:
-        key.fontId =
-            (SETTINGS.fontFamily == CasperSettings::LITERATA) ? LITERATA_16_FONT_ID : SOURCESERIF4_16_FONT_ID;
-        break;
-      default:
-        break;
-    }
-  }
-
-  // Match EpubReader computeReaderViewportLayout: top chrome air + bottom reserve
-  // for status bar AND dictionary/clip front-button hint strip so last lines
-  // stay readable when tools open.
-  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
-  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
-  const int screenMargin = static_cast<int>(SETTINGS.screenMargin);
-  const int statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-  const int hintStrip = UITheme::getInstance().getMetrics().buttonHintsHeight;
-  // Landscape front-key chrome is a *side* strip (CCW right / CW left). Keep body
-  // text clear of it so dictionary/clip can still see edge words (same idea as
-  // bottom reserve in portrait).
-  const auto orient = renderer.getOrientation();
-  const bool landscapeCw = orient == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool landscapeCcw = orient == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  const bool landscape = landscapeCw || landscapeCcw;
-  const int frontSideReserve = landscape ? BaseTheme::frontButtonHintReserve(renderer) : 0;
-
-  marginX_ = std::max(0, oLeft + screenMargin);
-  marginR_ = std::max(0, oRight + screenMargin);
-  if (landscapeCcw) {
-    marginR_ = std::max(marginR_, oRight + screenMargin + frontSideReserve);
-  } else if (landscapeCw) {
-    marginX_ = std::max(marginX_, oLeft + screenMargin + frontSideReserve);
-  }
-  // Top: screen margin + chrome extra (battery/clock). Avoid double-counting
-  // oriented top if it's already large on some panels.
-  marginY_ = std::max(0, oTop + screenMargin + ReaderUtils::readerTopChromeExtra());
-
-  // Bottom: status chrome (text lane + progress). In portrait the front-button
-  // hint strip also lives here; in landscape that chrome is on the side above.
-  int bottomReserve = screenMargin + ReaderUtils::readerBottomChromeExtra() + statusBarHeight;
-  if (!landscape) {
-    // Tools (dictionary / clip) draw the hint strip over the same band — keep a floor.
-    bottomReserve = std::max(bottomReserve, screenMargin + hintStrip);
-  }
-  if (statusBarHeight == 0 || statusBarHeight == UITheme::getInstance().getProgressBarHeight()) {
-    bottomReserve = std::max(
-        bottomReserve,
-        screenMargin + statusBarHeight + UITheme::getInstance().getMetrics().statusBarVerticalMargin +
-            ReaderUtils::readerBottomChromeExtra());
-  }
-  // Extra line of air for larger status-bar fonts (10–12 pt lanes).
-  if (SETTINGS.statusBarFontSize >= CasperSettings::STATUS_BAR_FONT_10) {
-    bottomReserve += 6;
-  }
-  marginB_ = std::max(0, oBottom + bottomReserve + ReaderUtils::kReaderBottomChromePad);
-
-  key.viewportW =
-      static_cast<uint16_t>(std::max(32, renderer.getScreenWidth() - marginX_ - marginR_));
-  key.viewportH =
-      static_cast<uint16_t>(std::max(32, renderer.getScreenHeight() - marginY_ - marginB_));
-  key.marginL = static_cast<uint8_t>(std::min(255, marginX_));
-  key.marginR = static_cast<uint8_t>(std::min(255, marginR_));
-  key.marginT = static_cast<uint8_t>(std::min(255, marginY_));
-  key.marginB = static_cast<uint8_t>(std::min(255, marginB_));
-  const float lc = SETTINGS.getReaderLineCompression();
-  key.lineCompressionQ8 = static_cast<uint16_t>(std::clamp(lc * 256.0f, 64.0f, 512.0f));
-  // bit0 = Book's Style only: PageLayouter honors IR CSS/heuristic align + spacers.
-  // Clear bit0 = force one align for all text (Left/Center/Right/Justify) — no CSS layout.
-  // bits 2-3 = forced align enum (JUSTIFIED=0 … RIGHT=3). bit1 = extra paragraph spacing.
-  // pad low nibble = Images mode; pad[5:4] = spacing height; bit7 legacy full.
-  key.flags = 0;
-  if (SETTINGS.paragraphAlignment == CasperSettings::BOOK_STYLE) {
-    key.flags |= 1;
-  } else {
-    // JUSTIFIED..RIGHT are 0..3; mask so BOOK_STYLE (4) never leaks into force bits.
-    const uint8_t force =
-        static_cast<uint8_t>(SETTINGS.paragraphAlignment % CasperSettings::BOOK_STYLE);
-    key.flags |= static_cast<uint8_t>((force & 0x3) << 2);
-  }
-  // Fingerprint Images mode + extra-para height so page maps invalidate on change.
-  key.pad = static_cast<uint8_t>(SETTINGS.imageRendering & 0x0F);
-  if (SETTINGS.extraParagraphSpacing != 0) {
-    key.flags |= 2;
-    const uint8_t h = SETTINGS.extraParagraphSpacingHeight;
-    if (h == CasperSettings::SPACING_FULL) {
-      key.flags |= 0x80;
-      key.pad = static_cast<uint8_t>(key.pad | (1u << 4));
-    } else if (h == CasperSettings::SPACING_QUARTER) {
-      key.pad = static_cast<uint8_t>(key.pad | (2u << 4));
-    }
-    // half: pad height bits stay 0, bit7 clear
-  }
-  if (SETTINGS.hyphenationEnabled) key.flags |= 0x10;
-  if (SETTINGS.focusReadingEnabled) key.flags |= 0x20;
-  if (SETTINGS.guideReadingEnabled) key.flags |= 0x40;
-  engine_.setRenderKey(key);
-  engine_.setLineCompression(lc);
-  LOG_DBG("RVR", "viewport %ux%u margins LTRB=%d,%d,%d,%d statusH=%d", key.viewportW, key.viewportH, marginX_,
-          marginY_, marginR_, marginB_, statusBarHeight);
+  // Shared with the Home background indexer — see ReaderRenderKey.h for why this
+  // must not be reader-private (maps built under a different key are discarded).
+  const readerkey::Layout layout = readerkey::compute(renderer);
+  marginX_ = layout.marginL;
+  marginY_ = layout.marginT;
+  marginR_ = layout.marginR;
+  marginB_ = layout.marginB;
+  engine_.setRenderKey(layout.key);
+  engine_.setLineCompression(layout.lineCompression);
+  LOG_DBG("RVR", "viewport %ux%u margins LTRB=%d,%d,%d,%d", layout.key.viewportW, layout.key.viewportH, marginX_,
+          marginY_, marginR_, marginB_);
 }
 
-bool RivuletReaderActivity::saveProgress() const {
-  if (!epub_ || !ready_ || casperBookDir_.empty()) return false;
-  // After releaseHeavyForUi the engine is empty — use held spine/page so menu
-  // leave / sleep never rewrites progress.bin as page 0.
-  const int spine = heavyReleasedForUi_ ? heldSpineForUi_ : spineIndex_;
-  const int page = heavyReleasedForUi_ ? heldPageForUi_ : engine_.currentPage();
-  const int pageCount =
-      heavyReleasedForUi_ ? std::max(page + 1, 1) : std::max(page + 1, engine_.chapterPageCount(&renderer));
+bool RivuletReaderActivity::saveProgress(const ProgressFlush flush) const {
+  if (!epub_ || crosspointBookDir_.empty()) return false;
+  // Allow save while chapter IR is released for a child UI (menu / fonts) —
+  // heldSpine/heldPage are the source of truth then. Block only when we have
+  // neither a live chapter nor a held place (avoids writing spine 0 by accident).
+  if (!ready_ && !heavyReleasedForUi_ && !futureIndexActive_) return false;
+  // After releaseHeavyForUi / future-chapter index the engine is not the
+  // reader's page — use the pinned place so sleep / leave never write page 0.
+  int spine = 0;
+  int page = 0;
+  pinnedReaderPlace(spine, page);
+  const int pageCount = (heavyReleasedForUi_ || futureIndexActive_)
+                            ? std::max(page + 1, lastSavedPageCount_ > 0 ? lastSavedPageCount_ : 1)
+                            : std::max(page + 1, engine_.chapterPageCount(&renderer));
   if (spine < 0 || spine > 0xFFFF || page < 0 || page > 0xFFFF || pageCount < 0 || pageCount > 0xFFFF) {
     return false;
+  }
+  // Nothing moved since the last write — skip the FAT round trip. Reported as
+  // success because the on-disk state already reflects this position, which is
+  // what every caller actually cares about.
+  const bool samePlace = spine == lastSavedSpine_ && page == lastSavedPage_ && pageCount == lastSavedPageCount_;
+  if (!progressflush::shouldWriteNow(progressFlush_, flush, millis(), samePlace)) {
+    return true;
   }
   uint8_t data[6];
   data[0] = static_cast<uint8_t>(spine & 0xFF);
@@ -240,19 +170,45 @@ bool RivuletReaderActivity::saveProgress() const {
   data[3] = static_cast<uint8_t>((page >> 8) & 0xFF);
   data[4] = static_cast<uint8_t>(pageCount & 0xFF);
   data[5] = static_cast<uint8_t>((pageCount >> 8) & 0xFF);
-  if (!ProgressFile::writeAtomic(casperBookDir_, data, sizeof(data))) {
-    LOG_ERR("RVR", "progress save fail %s", casperBookDir_.c_str());
+  if (!ProgressFile::writeAtomic(crosspointBookDir_, data, sizeof(data))) {
+    LOG_ERR("RVR", "progress save fail %s", crosspointBookDir_.c_str());
     return false;
   }
-  LOG_INF("RVR", "progress saved casper spine=%d page=%d dir=%s", spine, page, casperBookDir_.c_str());
+  lastSavedSpine_ = spine;
+  lastSavedPage_ = page;
+  lastSavedPageCount_ = pageCount;
+  LOG_INF("RVR", "progress saved spine=%d page=%d dir=%s", spine, page, crosspointBookDir_.c_str());
   return true;
+}
+
+void RivuletReaderActivity::tickDeferredProgress() {
+  if (!progressflush::tickDue(progressFlush_, millis())) return;
+  (void)saveProgress(ProgressFlush::Now);
 }
 
 void RivuletReaderActivity::persistProgressForSleep() {
   // Called while still foreground — before SleepActivity tears us down. Guarantees
   // progress.bin hits SD even if onExit is skipped or fails mid-teardown.
   if (!epub_ || !ready_) return;
+  // Silent next-chapter crawl / IR catch-up own the engine. Restore the page
+  // that is on glass before QR FASTs the framebuffer (otherwise X3 full-FAST
+  // of a wiped or next-chapter buffer is a black/wrong flash).
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
+  if (pendingChapterIrLoad_ >= 0) finishPendingChapterIr();
+  // Idle glyph prewarm / AA overlap leave the FB white or as the next page
+  // while glass still holds this one. QR sleep FASTs the FB; restore first.
+  if (activityManager.isCurrentActivity(this) && !futureIndexActive_ && !chapterNavBusy_) {
+    RenderLock lock(*this);
+    paintCurrentPageToFramebuffer();
+  }
+  if (futureIndexActive_) persistFutureMap(/*completeOnly=*/false);
   APP_STATE.openEpubPath = epub_->getPath();
+  // Always write on sleep — do not trust the no-op skip cache. A stale
+  // lastSavedPage_ (or an estimate-only pageCount mismatch) must not leave
+  // progress.bin on an older page across Quick Resume.
+  lastSavedSpine_ = -1;
+  lastSavedPage_ = -1;
+  lastSavedPageCount_ = -1;
   (void)saveProgress();
   persistHomeProgress(/*writeToDisk=*/true);
 }
@@ -278,8 +234,8 @@ void RivuletReaderActivity::loadProgress(int& outSpine, int& outPage) {
   };
 
   // v0.1.8 layout: progress.bin lives in the same folder as package cache
-  // (/.crosspoint/epub_<hash>/). casperBookDir_ is that path.
-  if (tryRead(casperBookDir_, "cache")) return;
+  // (/.crosspoint/epub_<hash>/). crosspointBookDir_ is that path.
+  if (tryRead(crosspointBookDir_, "cache")) return;
   if (epub_ && tryRead(epub_->getCachePath(), "epub-cache")) return;
 }
 
@@ -295,18 +251,19 @@ void RivuletReaderActivity::persistHomeProgress(const bool writeToDisk) {
   }
   const float saved = readingStats_.getProgressPercent();
   PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), saved);
-  CasperStats::setHomeProgress(epub_->getPath(), saved);
-  if (!writeToDisk || casperBookDir_.empty()) return;
+  CrossPointStats::setHomeProgress(epub_->getPath(), saved);
+  if (!writeToDisk || crosspointBookDir_.empty()) return;
   if (oldPct >= 0.0f && saved >= 0.0f && std::fabs(oldPct - saved) < 0.05f && !readingStats_.isCompleted) {
     return;
   }
-  CasperStats::saveBook(epub_->getPath(), readingStats_);
-  LOG_INF("RVR", "Home progress %.1f%% → CasperStats %s", static_cast<double>(saved), casperBookDir_.c_str());
+  CrossPointStats::saveBook(epub_->getPath(), readingStats_);
+  LOG_INF("RVR", "Home progress %.1f%% → CrossPointStats %s", static_cast<double>(saved), crosspointBookDir_.c_str());
 }
 
 void RivuletReaderActivity::noteForwardPageTurn() {
   if (!SETTINGS.readingStatsTrackingEnabled()) {
     lastPageTurnTime_ = millis();
+    lastForwardTurnMs_ = lastPageTurnTime_;
     return;
   }
   const unsigned long now = millis();
@@ -322,6 +279,7 @@ void RivuletReaderActivity::noteForwardPageTurn() {
     }
   }
   lastPageTurnTime_ = now;
+  lastForwardTurnMs_ = now;
 }
 
 void RivuletReaderActivity::jumpToPercent(const int percent) {
@@ -365,12 +323,12 @@ void RivuletReaderActivity::openBookStats() {
   const float pct = readingStats_.getProgressPercent();
   const bool hasEta = readingStats_.estimatedTimeLeftSeconds > 0;
   startActivityForResult(
-      std::make_unique<BookStatsActivity>(renderer, mappedInput, epub_->getTitle(), casperBookDir_, readingStats_, pct,
-                                          hasEta, readingStats_.estimatedTimeLeftSeconds, globalReadingStats_),
+      std::make_unique<BookStatsActivity>(renderer, mappedInput, epub_->getTitle(), crosspointBookDir_, readingStats_,
+                                          pct, hasEta, readingStats_.estimatedTimeLeftSeconds, globalReadingStats_),
       [this](const ActivityResult&) {
         // Reload in case user edited dates/completed.
-        if (!casperBookDir_.empty()) {
-          readingStats_ = BookReadingStats::load(casperBookDir_);
+        if (!crosspointBookDir_.empty()) {
+          readingStats_ = BookReadingStats::load(crosspointBookDir_);
         }
         requestUpdate();
       });
@@ -515,11 +473,10 @@ void RivuletReaderActivity::openDictionary() {
     pageFb.reset();
   }
 
-  startActivityForResult(
-      std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(boxes), std::move(pool),
-                                                     engine_.renderKey().fontId, std::move(pageFb),
-                                                     pageFb ? fbBytes : 0, marginX_, marginY_),
-      [this](const ActivityResult&) { requestUpdate(); });
+  startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(
+                             renderer, mappedInput, std::move(boxes), std::move(pool), engine_.renderKey().fontId,
+                             std::move(pageFb), pageFb ? fbBytes : 0, marginX_, marginY_),
+                         [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void RivuletReaderActivity::ensureClippingsLoaded() {
@@ -612,8 +569,8 @@ void RivuletReaderActivity::openClippingTool() {
                                         clip->wordCount, chapterTitle.c_str(), UINT16_MAX, text);
               bool exported = false;
               if (addResult == ClippingStore::AddResult::Added) {
-                exported = ClippingsManager::saveClipping(bookTitle, author, chapterTitle,
-                                                          static_cast<int>(page) + 1, text);
+                exported =
+                    ClippingsManager::saveClipping(bookTitle, author, chapterTitle, static_cast<int>(page) + 1, text);
                 if (!exported && !CLIPPINGS.removeClippingAt(clippingIndex)) {
                   LOG_ERR("RVR", "Failed to roll back clipping after export failure");
                 }
@@ -632,32 +589,61 @@ void RivuletReaderActivity::openClippingTool() {
 }
 
 std::string RivuletReaderActivity::currentPagePlainText(const size_t maxChars) const {
-  std::string text;
-  text.reserve(std::min(maxChars, static_cast<size_t>(256)));
+  // Stack gather — std::string += / reserve can abort() under -fno-exceptions
+  // (chapter-22 crash was operator new in a growing HTML buf). QR / bookmarks
+  // only need a short snippet.
+  char buf[256];
+  const size_t cap = std::min(maxChars, sizeof(buf) - 1);
+  size_t n = 0;
   for (const auto& sp : engine_.page().spans) {
     if (sp.text.empty()) continue;
-    if (!text.empty() && text.back() != ' ') text.push_back(' ');
-    text += sp.text;
-    if (text.size() >= maxChars) {
-      text.resize(maxChars);
-      break;
+    if (n > 0 && buf[n - 1] != ' ') {
+      if (n + 1 >= cap) break;
+      buf[n++] = ' ';
     }
+    const size_t room = (n < cap) ? (cap - n) : 0;
+    if (room == 0) break;
+    const size_t take = std::min(sp.text.size(), room);
+    std::memcpy(buf + n, sp.text.data(), take);
+    n += take;
+    if (take < sp.text.size()) break;
   }
-  return text;
+  buf[n] = '\0';
+  return std::string(buf, n);
 }
 
 void RivuletReaderActivity::ensureChapterFootnotes() {
   if (!epub_ || irDir_.empty()) return;
   if (footnoteCacheSpine_ == spineIndex_) return;
+  // Paint must never scan. loadSpine sets footnoteScanDeferred_ so first ink
+  // after a chapter convert (maxA≈31KB on the aborting device log) cannot
+  // enter this function. Idle clears the flag when heap recovers.
+  if (footnoteScanDeferred_) return;
+
   chapterFootnotes_.clear();
-  footnoteCacheSpine_ = spineIndex_;
+  currentPageFootnotes_.clear();
+
+  if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) {
+    LOG_ERR("RVR", "footnote scan skip low heap free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    footnoteScanDeferred_ = true;
+    return;
+  }
 
   char htmlPath[192];
   std::snprintf(htmlPath, sizeof(htmlPath), "%s/s%d.html", irDir_.c_str(), spineIndex_);
-  if (!Storage.exists(htmlPath)) return;
+  if (!Storage.exists(htmlPath)) {
+    footnoteCacheSpine_ = spineIndex_;
+    footnoteScanDeferred_ = false;
+    return;
+  }
 
   HalFile f;
-  if (!Storage.openFileForRead("RVR", htmlPath, f)) return;
+  if (!Storage.openFileForRead("RVR", htmlPath, f)) {
+    footnoteCacheSpine_ = spineIndex_;
+    footnoteScanDeferred_ = false;
+    return;
+  }
 
   // Once per spine: collect real footnote-style markers only.
   // Earlier we took any short internal <a> label (≤24 chars). TOC chapter
@@ -665,25 +651,24 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
   // titles did not — so Contents looked half-underlined. Classic EPUB underlines
   // all links; Rivulet only fakes note underlines at paint time, so the filter
   // must stay tight to marker shapes (1, [12], *, a) with a fragment href.
-  auto isFootnoteMarkerLabel = [](const std::string& clean) -> bool {
-    if (clean.empty() || clean.size() > 8) return false;
+  auto isFootnoteMarkerLabel = [](const char* clean, const size_t n) -> bool {
+    if (!clean || n == 0 || n > 8) return false;
     // Multi-word = TOC / cross-ref prose, not a note number.
-    if (clean.find(' ') != std::string::npos) return false;
+    for (size_t i = 0; i < n; ++i) {
+      if (clean[i] == ' ') return false;
+    }
 
     size_t b = 0;
-    size_t e = clean.size();
+    size_t e = n;
     // Strip [1] / (1) wrappers used by many note styles.
-    if (e - b >= 2 &&
-        ((clean[b] == '[' && clean[e - 1] == ']') || (clean[b] == '(' && clean[e - 1] == ')'))) {
+    if (e - b >= 2 && ((clean[b] == '[' && clean[e - 1] == ']') || (clean[b] == '(' && clean[e - 1] == ')'))) {
       ++b;
       --e;
     }
     if (b >= e || e - b > 6) return false;
 
     auto isDigit = [](unsigned char c) { return c >= '0' && c <= '9'; };
-    auto isAlpha = [](unsigned char c) {
-      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-    };
+    auto isAlpha = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
 
     // "*", "**", …
     bool allStar = true;
@@ -725,60 +710,122 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
 
   constexpr size_t kMaxScan = 64 * 1024;
   constexpr size_t kMaxFn = 48;
-  std::string buf;
-  buf.reserve(2048);
-  char chunk[512];
+  constexpr size_t kWin = 4096;
+  auto win = makeUniqueNoThrow<char[]>(kWin);
+  if (!win) {
+    LOG_ERR("RVR", "footnote scan OOM window");
+    footnoteScanDeferred_ = true;
+    return;
+  }
+  if (chapterFootnotes_.capacity() < kMaxFn) {
+    chapterFootnotes_.reserve(kMaxFn);
+  }
+  size_t winLen = 0;
   size_t total = 0;
+
+  auto startsWith = [](const char* s, size_t n, const char* pfx) -> bool {
+    const size_t pl = std::strlen(pfx);
+    return n >= pl && std::memcmp(s, pfx, pl) == 0;
+  };
+
   while (total < kMaxScan && chapterFootnotes_.size() < kMaxFn) {
-    const int n = f.read(chunk, sizeof(chunk));
+    // Peek only — gpio.update() would consume the edge the turn path needs.
+    if (gpioPeekHeldForIdleMap()) {
+      chapterFootnotes_.clear();
+      footnoteScanDeferred_ = true;
+      return;
+    }
+    resetTaskWatchdogIfSubscribed();
+    if (winLen >= kWin) {
+      const size_t keep = kWin / 2;
+      std::memmove(win.get(), win.get() + (winLen - keep), keep);
+      winLen = keep;
+    }
+    const size_t room = kWin - winLen;
+    const int n = f.read(win.get() + winLen, room);
     if (n <= 0) break;
-    buf.append(chunk, static_cast<size_t>(n));
+    winLen += static_cast<size_t>(n);
     total += static_cast<size_t>(n);
-    if (buf.size() > 8192) buf.erase(0, buf.size() - 4096);
 
     size_t pos = 0;
-    while (pos < buf.size() && chapterFootnotes_.size() < kMaxFn) {
-      const size_t aPos = buf.find("<a", pos);
-      if (aPos == std::string::npos) break;
-      const size_t tagEnd = buf.find('>', aPos);
-      if (tagEnd == std::string::npos) {
-        buf.erase(0, aPos);
-        pos = 0;
+    while (pos + 3 < winLen && chapterFootnotes_.size() < kMaxFn) {
+      size_t aPos = static_cast<size_t>(-1);
+      for (size_t i = pos; i + 1 < winLen; ++i) {
+        if (win[i] == '<' && (win[i + 1] == 'a' || win[i + 1] == 'A')) {
+          aPos = i;
+          break;
+        }
+      }
+      if (aPos == static_cast<size_t>(-1)) break;
+
+      size_t tagEnd = static_cast<size_t>(-1);
+      for (size_t i = aPos; i < winLen; ++i) {
+        if (win[i] == '>') {
+          tagEnd = i;
+          break;
+        }
+      }
+      if (tagEnd == static_cast<size_t>(-1)) {
+        if (aPos > 0) {
+          std::memmove(win.get(), win.get() + aPos, winLen - aPos);
+          winLen -= aPos;
+        }
         break;
       }
-      const size_t closeA = buf.find("</a", tagEnd);
-      if (closeA == std::string::npos) {
-        buf.erase(0, aPos);
-        pos = 0;
+      size_t closeA = static_cast<size_t>(-1);
+      for (size_t i = tagEnd + 1; i + 2 < winLen; ++i) {
+        if (win[i] == '<' && win[i + 1] == '/' && (win[i + 2] == 'a' || win[i + 2] == 'A')) {
+          closeA = i;
+          break;
+        }
+      }
+      if (closeA == static_cast<size_t>(-1)) {
+        if (aPos > 0) {
+          std::memmove(win.get(), win.get() + aPos, winLen - aPos);
+          winLen -= aPos;
+        }
         break;
       }
-      const std::string openTag = buf.substr(aPos, tagEnd - aPos + 1);
-      std::string label = buf.substr(tagEnd + 1, closeA - tagEnd - 1);
       pos = closeA + 3;
 
-      size_t hrefPos = openTag.find("href=");
-      if (hrefPos == std::string::npos) hrefPos = openTag.find("HREF=");
-      if (hrefPos == std::string::npos) continue;
-      hrefPos += 5;
-      char quote = 0;
-      if (hrefPos < openTag.size() && (openTag[hrefPos] == '"' || openTag[hrefPos] == '\'')) {
-        quote = openTag[hrefPos++];
+      const char* tag = win.get() + aPos;
+      const size_t tagLen = tagEnd - aPos + 1;
+      const char* hrefKey = nullptr;
+      for (size_t i = 0; i + 5 < tagLen; ++i) {
+        if ((tag[i] == 'h' || tag[i] == 'H') && (tag[i + 1] == 'r' || tag[i + 1] == 'R') &&
+            (tag[i + 2] == 'e' || tag[i + 2] == 'E') && (tag[i + 3] == 'f' || tag[i + 3] == 'F') && tag[i + 4] == '=') {
+          hrefKey = tag + i + 5;
+          break;
+        }
       }
-      size_t hrefEnd = quote ? openTag.find(quote, hrefPos) : openTag.find_first_of(" \t>", hrefPos);
-      if (hrefEnd == std::string::npos) continue;
-      std::string href = openTag.substr(hrefPos, hrefEnd - hrefPos);
-      if (href.empty()) continue;
-      if (href.rfind("http://", 0) == 0 || href.rfind("https://", 0) == 0 || href.rfind("mailto:", 0) == 0 ||
-          href.rfind("javascript:", 0) == 0) {
+      if (!hrefKey) continue;
+      char quote = 0;
+      if (*hrefKey == '"' || *hrefKey == '\'') quote = *hrefKey++;
+      const char* hrefEnd = hrefKey;
+      while (hrefEnd < tag + tagLen && *hrefEnd && *hrefEnd != quote && *hrefEnd != ' ' && *hrefEnd != '\t' &&
+             *hrefEnd != '>') {
+        ++hrefEnd;
+      }
+      const size_t hrefN = static_cast<size_t>(hrefEnd - hrefKey);
+      if (hrefN == 0 || hrefN >= 96) continue;
+      if (startsWith(hrefKey, hrefN, "http://") || startsWith(hrefKey, hrefN, "https://") ||
+          startsWith(hrefKey, hrefN, "mailto:") || startsWith(hrefKey, hrefN, "javascript:")) {
         continue;
       }
-      // Footnotes jump to a fragment; bare spine links are TOC / nav.
-      if (href.find('#') == std::string::npos) continue;
+      bool hasHash = false;
+      for (size_t i = 0; i < hrefN; ++i) {
+        if (hrefKey[i] == '#') {
+          hasHash = true;
+          break;
+        }
+      }
+      if (!hasHash) continue;
 
-      std::string clean;
-      clean.reserve(label.size());
+      char clean[12];
+      size_t cleanN = 0;
       bool inTag = false;
-      for (char c : label) {
+      for (size_t i = tagEnd + 1; i < closeA && cleanN + 1 < sizeof(clean); ++i) {
+        char c = win[i];
         if (c == '<') {
           inTag = true;
           continue;
@@ -789,29 +836,36 @@ void RivuletReaderActivity::ensureChapterFootnotes() {
         }
         if (inTag) continue;
         if (c == '\n' || c == '\r' || c == '\t') c = ' ';
-        if (c == ' ' && !clean.empty() && clean.back() == ' ') continue;
-        clean.push_back(c);
+        if (c == ' ' && cleanN > 0 && clean[cleanN - 1] == ' ') continue;
+        clean[cleanN++] = c;
       }
-      while (!clean.empty() && clean.front() == ' ') clean.erase(clean.begin());
-      while (!clean.empty() && clean.back() == ' ') clean.pop_back();
-      if (!isFootnoteMarkerLabel(clean)) continue;
+      while (cleanN > 0 && clean[0] == ' ') {
+        std::memmove(clean, clean + 1, --cleanN);
+      }
+      while (cleanN > 0 && clean[cleanN - 1] == ' ') --cleanN;
+      clean[cleanN] = '\0';
+      if (!isFootnoteMarkerLabel(clean, cleanN)) continue;
 
       bool dup = false;
       for (const auto& e : chapterFootnotes_) {
-        if (e.href[0] && href == e.href) {
+        if (e.href[0] && std::strncmp(e.href, hrefKey, hrefN) == 0 && e.href[hrefN] == '\0') {
           dup = true;
           break;
         }
       }
       if (dup) continue;
 
-      FootnoteEntry entry;
-      std::snprintf(entry.number, sizeof(entry.number), "%s", clean.c_str());
-      std::snprintf(entry.href, sizeof(entry.href), "%s", href.c_str());
+      FootnoteEntry entry{};
+      std::snprintf(entry.number, sizeof(entry.number), "%s", clean);
+      const size_t hrefCopy = hrefN < sizeof(entry.href) - 1 ? hrefN : sizeof(entry.href) - 1;
+      std::memcpy(entry.href, hrefKey, hrefCopy);
+      entry.href[hrefCopy] = '\0';
       chapterFootnotes_.push_back(entry);
     }
   }
-  f.close();
+  // Pin only after a finished attempt so a low-heap skip can retry on idle.
+  footnoteCacheSpine_ = spineIndex_;
+  footnoteScanDeferred_ = false;
   LOG_DBG("RVR", "chapter footnotes spine=%d n=%zu", spineIndex_, chapterFootnotes_.size());
 }
 
@@ -821,13 +875,25 @@ void RivuletReaderActivity::refreshPageFootnotes() {
   ensureChapterFootnotes();
   if (chapterFootnotes_.empty()) return;
 
-  const std::string pageText = currentPagePlainText(1500);
-  if (pageText.empty()) return;
+  // Search live spans — do not concatenate the page into a std::string (paint
+  // path, -fno-exceptions: += abort). Marker labels are short (1, [12], *).
+  auto pageHasMarker = [this](const char* label) -> bool {
+    if (!label || label[0] == '\0') return false;
+    const size_t n = std::strlen(label);
+    for (const auto& sp : engine_.page().spans) {
+      if (sp.text.size() < n) continue;
+      if (sp.text.find(label) != std::string::npos) return true;
+    }
+    return false;
+  };
 
   constexpr size_t kMaxFn = 12;
+  if (currentPageFootnotes_.capacity() < kMaxFn) {
+    currentPageFootnotes_.reserve(kMaxFn);
+  }
   for (const auto& e : chapterFootnotes_) {
     if (e.number[0] == '\0') continue;
-    if (pageText.find(e.number) == std::string::npos) continue;
+    if (!pageHasMarker(e.number)) continue;
     currentPageFootnotes_.push_back(e);
     if (currentPageFootnotes_.size() >= kMaxFn) break;
   }
@@ -836,13 +902,10 @@ void RivuletReaderActivity::refreshPageFootnotes() {
 
 void RivuletReaderActivity::paintFootnoteMarkers() {
   if (!ready_) return;
-  // Skip HTML scan + word-box build on cold first paint when open hints asked for
-  // speed (QR / settled Home). Footnotes still appear on the next paint / idle.
-  if (firstPaint_ && ReaderActivity::hasOpenHints()) {
-    if (currentPageFootnotes_.empty()) return;
-  } else {
-    refreshPageFootnotes();
-  }
+  // firstPaint_ is cleared at the top of render() before this runs, so it
+  // cannot gate the scan. footnoteScanDeferred_ is the real first-ink skip.
+  if (footnoteScanDeferred_) return;
+  refreshPageFootnotes();
   if (currentPageFootnotes_.empty()) return;
 
   // legacy: footnote refs are underlined in the body. Pure paint — never changes
@@ -886,8 +949,7 @@ void RivuletReaderActivity::paintFootnoteMarkers() {
     if (!hit) continue;
 
     // Underline just under the glyph box (classic TextBlock: ascender + 2 from line top).
-    const int asc = std::max(6, renderer.getFontAscenderSize(baseFont));
-    const int y = b.y + asc + 2;
+    const int y = dictlookup::wordUnderlineY(b.y, renderer.getFontAscenderSize(baseFont));
     const int x1 = b.x;
     const int x2 = b.x + std::max(2, static_cast<int>(b.width));
     renderer.drawLine(x1, y, x2, y, /*thickness=*/2, true);
@@ -899,9 +961,19 @@ void RivuletReaderActivity::paintClippingHighlights() {
   // First open: do not block on SD clippings load — highlights appear after idle/next paint.
   if (!clippingsLoaded_) {
     if (firstPaint_ && ReaderActivity::hasOpenHints()) return;
+    if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
     ensureClippingsLoaded();
   }
   if (!CLIPPINGS.hasClippings()) return;
+  if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 20 * 1024) {
+    LOG_ERR("RVR", "Skip clipping highlights (heap free=%u maxA=%u)", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return;
+  }
+
+  const uint16_t curPage = static_cast<uint16_t>(std::max(0, engine_.currentPage()));
+  const uint16_t curSpine = static_cast<uint16_t>(spineIndex_);
+  if (!CLIPPINGS.hasClippingForPage(curSpine, curPage)) return;
 
   std::vector<DictionaryWordSelectActivity::WordBox> boxes;
   std::vector<std::string> pool;
@@ -910,10 +982,8 @@ void RivuletReaderActivity::paintClippingHighlights() {
   }
   if (boxes.empty()) return;
 
-  const uint16_t curPage = static_cast<uint16_t>(std::max(0, engine_.currentPage()));
   const int pageCount = std::max(1, engine_.chapterPageCount(&renderer));
   const uint16_t curPageCount = static_cast<uint16_t>(std::min(pageCount, 65535));
-  const uint16_t curSpine = static_cast<uint16_t>(spineIndex_);
 
   // Word indices to highlight (capped).
   bool hl[256] = {};
@@ -924,88 +994,47 @@ void RivuletReaderActivity::paintClippingHighlights() {
     for (uint16_t i = a; i <= b && i < nWords; ++i) hl[i] = true;
   };
 
-  std::string clipText;
-  clipText.reserve(CLIPPING_TEXT_MAX);
-  CLIPPINGS.warmTextCache();
-
+  // Index-only. Text-search fallback used to std::string::resize the full body
+  // on every page paint and abort under -fno-exceptions when heap was tight.
   for (const Clipping& c : CLIPPINGS.getClippings()) {
     if (c.spineIndex != curSpine) continue;
-
-    // Fast path: same chapter pagination as when clipped.
-    if (c.pageCount == curPageCount && curPage >= c.startPage && curPage <= c.endPage) {
-      if (c.startPage == c.endPage && c.startPage == curPage) {
-        markRange(c.startWordIndex, c.endWordIndex);
-        continue;
-      }
-      // Multi-page clip: whole page if middle; partial ends not tracked well — mark all words.
-      if (curPage > c.startPage && curPage < c.endPage) {
-        for (size_t i = 0; i < nWords; ++i) hl[i] = true;
-        continue;
-      }
-      if (curPage == c.startPage) {
-        markRange(c.startWordIndex, static_cast<uint16_t>(nWords > 0 ? nWords - 1 : 0));
-        continue;
-      }
-      if (curPage == c.endPage) {
-        markRange(0, c.endWordIndex);
-        continue;
-      }
+    if (c.pageCount != curPageCount) continue;
+    if (curPage < c.startPage || curPage > c.endPage) continue;
+    if (c.startPage == c.endPage && c.startPage == curPage) {
+      markRange(c.startWordIndex, c.endWordIndex);
+      continue;
     }
-
-    // Fallback: text search on this page's word sequence.
-    clipText.clear();
-    if (!CLIPPINGS.readClippingText(c, clipText) || clipText.empty()) continue;
-    // Normalize to lowercase alphanumeric runs for fuzzy match.
-    auto normalize = [](const std::string& s) {
-      std::string o;
-      o.reserve(s.size());
-      for (unsigned char ch : s) {
-        if (std::isalnum(ch)) o.push_back(static_cast<char>(std::tolower(ch)));
-        else if (!o.empty() && o.back() != ' ') o.push_back(' ');
-      }
-      while (!o.empty() && o.back() == ' ') o.pop_back();
-      return o;
-    };
-    const std::string needle = normalize(clipText);
-    if (needle.size() < 4) continue;
-    std::string hay;
-    hay.reserve(512);
-    std::vector<size_t> wordEndInHay;
-    wordEndInHay.reserve(nWords);
-    for (size_t i = 0; i < nWords; ++i) {
-      if (!hay.empty()) hay.push_back(' ');
-      for (unsigned char ch : pool[i]) {
-        if (std::isalnum(ch)) hay.push_back(static_cast<char>(std::tolower(ch)));
-      }
-      wordEndInHay.push_back(hay.size());
+    if (curPage > c.startPage && curPage < c.endPage) {
+      for (size_t i = 0; i < nWords; ++i) hl[i] = true;
+      continue;
     }
-    const size_t at = hay.find(needle);
-    if (at == std::string::npos) continue;
-    const size_t endAt = at + needle.size();
-    size_t startW = 0;
-    size_t endW = nWords > 0 ? nWords - 1 : 0;
-    for (size_t i = 0; i < nWords; ++i) {
-      const size_t wStart = (i == 0) ? 0 : wordEndInHay[i - 1] + 1;
-      if (wStart <= at && wordEndInHay[i] > at) startW = i;
-      if (wStart < endAt) endW = i;
+    if (curPage == c.startPage) {
+      markRange(c.startWordIndex, static_cast<uint16_t>(nWords > 0 ? nWords - 1 : 0));
+      continue;
     }
-    markRange(static_cast<uint16_t>(startW), static_cast<uint16_t>(endW));
+    if (curPage == c.endPage) {
+      markRange(0, c.endWordIndex);
+    }
   }
 
+  // X4 is 1-bit. LightGray dither was a checkerboard rectangle over the line
+  // box (pixelated "boxes") and the glyph redraw never read as a highlight.
+  // Same mark as footnote refs: a 2px rule just under the em-box.
+  const int baseFont = engine_.renderKey().fontId;
   for (size_t i = 0; i < nWords; ++i) {
     if (!hl[i]) continue;
     const auto& b = boxes[i];
     int w = b.width;
-    // Extend to next word if also highlighted (continuous band).
-    if (i + 1 < nWords && hl[i + 1] && boxes[i + 1].y == b.y) {
-      const int gapEnd = boxes[i + 1].x;
-      if (gapEnd > b.x + w) w = gapEnd - b.x;
+    size_t last = i;
+    while (last + 1 < nWords && hl[last + 1] && boxes[last + 1].y == b.y) {
+      ++last;
+      const int end = boxes[last].x + boxes[last].width;
+      if (end > b.x + w) w = end - b.x;
     }
+    i = last;
     if (w <= 0) continue;
-    // Same pitch as body lines (Tight/Normal/Wide) so marks don't straddle rows.
-    const int h = std::max(1, renderer.getLineHeight(engine_.renderKey().fontId, SETTINGS.getReaderLineCompression()));
-    renderer.fillRectDither(b.x, b.y, w, h, Color::LightGray);
-    renderer.drawText(engine_.renderKey().fontId, b.x, b.y, b.text, true, b.style);
+    const int y = dictlookup::wordUnderlineY(b.y, renderer.getFontAscenderSize(baseFont));
+    renderer.drawLine(b.x, y, b.x + w, y, /*lineWidth=*/2, true);
   }
 }
 
@@ -1063,8 +1092,7 @@ void RivuletReaderActivity::navigateToHref(const std::string& hrefStr, const boo
     requestUpdate();
   } else {
     if (savePosition && footnoteDepth_ > 0) footnoteDepth_--;
-    GUI.drawPopup(renderer, "Chapter not readable", BaseTheme::kPopupCenterY, true);
-    delay(400);
+    flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
   }
 }
 
@@ -1107,11 +1135,11 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
       ready_ = false;
       const std::string moved = FinishedBooks::moveToFinished(src);
       if (!moved.empty() && moved != src) {
-        epub_ = std::make_shared<Epub>(moved, CasperPaths::kPackageCacheRoot);
+        epub_ = std::make_shared<Epub>(moved, CrossPointPaths::kPackageCacheRoot);
         epub_->load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
-        stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-        casperBookDir_ = CasperBook::bookDir(stableId_);
-        irDir_ = CasperBook::rivuletDir(stableId_);
+        stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+        crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+        irDir_ = CrossPointBook::rivuletDir(stableId_);
         APP_STATE.openEpubPath = moved;
         APP_STATE.saveToFile();
         ImageBlock::setExtractor(this, &RivuletReaderActivity::extractEpubItem);
@@ -1133,11 +1161,11 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
       ready_ = false;
       const std::string restored = FinishedBooks::restoreFromFinished(cur);
       if (!restored.empty() && restored != cur) {
-        epub_ = std::make_shared<Epub>(restored, CasperPaths::kPackageCacheRoot);
+        epub_ = std::make_shared<Epub>(restored, CrossPointPaths::kPackageCacheRoot);
         epub_->load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
-        stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-        casperBookDir_ = CasperBook::bookDir(stableId_);
-        irDir_ = CasperBook::rivuletDir(stableId_);
+        stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+        crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+        irDir_ = CrossPointBook::rivuletDir(stableId_);
         APP_STATE.openEpubPath = restored;
         APP_STATE.saveToFile();
         ImageBlock::setExtractor(this, &RivuletReaderActivity::extractEpubItem);
@@ -1155,7 +1183,7 @@ void RivuletReaderActivity::setBookCompleted(const bool completed) {
     }
   }
 
-  if (!casperBookDir_.empty()) readingStats_.save(casperBookDir_);
+  if (!crosspointBookDir_.empty()) readingStats_.save(crosspointBookDir_);
   PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), readingStats_.getProgressPercent());
   GUI.drawPopup(renderer, completed ? "Marked finished" : "Marked unfinished", BaseTheme::kPopupCenterY, true);
   delay(400);
@@ -1276,6 +1304,7 @@ bool RivuletReaderActivity::tryStartAutoKoUpload() {
 
 void RivuletReaderActivity::flushExitProgressAndStats() {
   if (!ready_ || !epub_) return;
+  if (futureIndexActive_) persistFutureMap(/*completeOnly=*/false);
   (void)saveProgress();
   // Home ring % always; session totals when tracking is on.
   const bool tracking = SETTINGS.readingStatsTrackingEnabled() && readingSessionStartMs_ != 0;
@@ -1314,33 +1343,61 @@ void RivuletReaderActivity::flushExitProgressAndStats() {
       readingStats_.estimatedTimeLeftSeconds = smoothedBookTimeLeftSeconds_;
     }
     PenumbraThemeUi::updateRecentsProgressForPath(epub_->getPath().c_str(), readingStats_.getProgressPercent());
-    CasperStats::saveBook(epub_->getPath(), readingStats_);
+    CrossPointStats::saveBook(epub_->getPath(), readingStats_);
     globalReadingStats_.save();
+    int logSpine = spineIndex_;
+    int logPage = engine_.hasChapter() ? engine_.currentPage() : 0;
+    pinnedReaderPlace(logSpine, logPage);
     LOG_INF("RVR", "exit stats+progress %.1f%% spine=%d page=%d id=%s",
-            static_cast<double>(readingStats_.getProgressPercent()), spineIndex_, engine_.currentPage(),
-            stableId_.c_str());
+            static_cast<double>(readingStats_.getProgressPercent()), logSpine, logPage, stableId_.c_str());
   } else {
-    LOG_INF("RVR", "exit progress spine=%d page=%d id=%s", spineIndex_, engine_.currentPage(), stableId_.c_str());
+    int logSpine = spineIndex_;
+    int logPage = engine_.hasChapter() ? engine_.currentPage() : 0;
+    pinnedReaderPlace(logSpine, logPage);
+    LOG_INF("RVR", "exit progress spine=%d page=%d id=%s", logSpine, logPage, stableId_.c_str());
   }
   readingSessionStartMs_ = 0;
 }
 
+bool RivuletReaderActivity::tryHandleBackExit() {
+  if (footnoteDepth_ > 0 && ready_ && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    restoreFootnotePosition();
+    return true;
+  }
+  return ReaderUtils::handleBackNavigation(
+      mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
+      {this, [](void* ctx) { static_cast<RivuletReaderActivity*>(ctx)->leaveReaderToHome(); }});
+}
+
+bool RivuletReaderActivity::backHeldLeaving() const {
+  return mappedInput.isPressed(MappedInputManager::Button::Back) ||
+         mappedInput.wasPressed(MappedInputManager::Button::Back);
+}
+
 void RivuletReaderActivity::leaveReaderToHome() {
+  if (futureIndexActive_) persistFutureMap(/*completeOnly=*/false);
+  int leaveSpine = spineIndex_;
+  int leavePage = engine_.hasChapter() ? engine_.currentPage() : 0;
+  pinnedReaderPlace(leaveSpine, leavePage);
+  SystemLog::logTiming("LEAVE", "reader spine=%d page=%d ready=%d busy=%d fre=%u", leaveSpine, leavePage,
+                       ready_ ? 1 : 0, chapterNavBusy_ ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()));
   if (tryStartAutoKoUpload()) {
     return;
   }
-  // Save progress while the book page stays on glass. Upper-left "Saving" with
-  // reader dark polarity (reader-only inverts only for this push).
+  // Windowed "Saving" on the page already on glass. A full FAST used to push a
+  // white FB (glyph scan / !ready_ render) over the book — the blank Saving
+  // screen. Wait for the render task so displayWindow does not race it.
   if (!activityManager.isSleepTransition() && ready_ && epub_) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_SAVING_STATS), /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+    activityManager.waitForRenderIdle();
+    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_SAVING_STATS), /*refresh=*/true);
     flushExitProgressAndStats();
     leaveExitFlushed_ = true;
+  } else {
+    activityManager.waitForRenderIdle();
   }
-  // Loop already waits before PopToHome; only block if a paint is still mid-flight.
-  activityManager.waitForRenderIdle();
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
   (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+  ReaderUtils::drainPageTurnEdges(mappedInput);
   Activity::onGoHome();
 }
 
@@ -1386,9 +1443,9 @@ bool RivuletReaderActivity::launchKOReaderSync(const bool leaveToHome, const boo
   }
   LOG_DBG("KOSync", "Epub released (heap after: %u)", static_cast<unsigned>(ESP.getFreeHeap()));
 
-  activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-      renderer, mappedInput, savedEpubPath, keepSpine, currentPage, totalPages, std::move(localKoPos),
-      std::move(localChapterName), paragraphIndex));
+  activityManager.replaceActivity(
+      std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, savedEpubPath, keepSpine, currentPage, totalPages,
+                                             std::move(localKoPos), std::move(localChapterName), paragraphIndex));
   return true;
 }
 
@@ -1399,14 +1456,30 @@ void RivuletReaderActivity::takeReaderScreenshot() {
   requestUpdate();
 }
 
+void RivuletReaderActivity::pinnedReaderPlace(int& spine, int& page) const {
+  if (heavyReleasedForUi_) {
+    spine = heldSpineForUi_;
+    page = heldPageForUi_;
+    return;
+  }
+  if (futureIndexActive_) {
+    spine = heldSpineForFuture_;
+    page = heldPageForFuture_;
+    return;
+  }
+  spine = spineIndex_;
+  page = engine_.hasChapter() ? engine_.currentPage() : 0;
+}
+
 float RivuletReaderActivity::bookProgress01() const {
   if (!epub_) return 0.0f;
-  const int spine = heavyReleasedForUi_ ? heldSpineForUi_ : spineIndex_;
-  const int page = heavyReleasedForUi_ ? heldPageForUi_ : engine_.currentPage();
-  const int chapterPages =
-      heavyReleasedForUi_ ? std::max(1, page + 1) : std::max(1, engine_.chapterPageCount(&renderer));
-  const float chapterFrac =
-      std::clamp(static_cast<float>(page) / static_cast<float>(chapterPages), 0.0f, 1.0f);
+  int spine = 0;
+  int page = 0;
+  pinnedReaderPlace(spine, page);
+  const int chapterPages = (heavyReleasedForUi_ || futureIndexActive_)
+                               ? std::max(1, page + 1)
+                               : std::max(1, engine_.chapterPageCount(&renderer));
+  const float chapterFrac = std::clamp(static_cast<float>(page) / static_cast<float>(chapterPages), 0.0f, 1.0f);
   return std::clamp(epub_->calculateProgress(spine, chapterFrac), 0.0f, 1.0f);
 }
 
@@ -1436,6 +1509,7 @@ void RivuletReaderActivity::prepareHeapForChapterLoad(const bool aggressive) {
   chapterFootnotes_.clear();
   currentPageFootnotes_.clear();
   footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
   glyphCacheSpine_ = -1;
   glyphCachePage_ = -1;
   // PNGdec ~50 KB held across convert is the main maxAlloc killer on X4 (no PSRAM).
@@ -1465,11 +1539,20 @@ void RivuletReaderActivity::releaseHeavyForUi() {
   // chapter IR + caches so Settings/Text/UI have contiguous heap. Keep epub_
   // package + spine/page numbers so restore is a short Loading + loadSpine, not
   // a cold open. Users never lose place; they may see a brief Loading on return.
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
   if (heavyReleasedForUi_) return;
   if (!epub_ || !ready_) return;
 
   heldSpineForUi_ = spineIndex_;
-  heldPageForUi_ = engine_.hasChapter() ? engine_.currentPage() : 0;
+  // Prefer live page; if the engine was already cleared, reuse last saved place.
+  if (engine_.hasChapter()) {
+    heldPageForUi_ = engine_.currentPage();
+  } else if (lastSavedSpine_ >= 0 && lastSavedPage_ >= 0) {
+    heldSpineForUi_ = lastSavedSpine_;
+    heldPageForUi_ = lastSavedPage_;
+  } else {
+    heldPageForUi_ = 0;
+  }
   (void)saveProgress();
   persistPageMapIfComplete();
   persistHomeProgress(/*writeToDisk=*/true);
@@ -1482,8 +1565,8 @@ void RivuletReaderActivity::releaseHeavyForUi() {
   }
   heavyReleasedForUi_ = true;
   LOG_INF("RVR", "releaseHeavyForUi spine=%d page=%d free %u→%u maxA %u→%u", heldSpineForUi_, heldPageForUi_,
-          static_cast<unsigned>(freeBefore), static_cast<unsigned>(ESP.getFreeHeap()),
-          static_cast<unsigned>(maxBefore), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+          static_cast<unsigned>(freeBefore), static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(maxBefore),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
 }
 
 bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
@@ -1492,6 +1575,14 @@ bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
     heavyReleasedForUi_ = false;
     return false;
   }
+
+  // A child activity had the foreground and may have touched SD (cache clear,
+  // sync, font install). Drop the saveProgress() skip-cache so the next save
+  // definitely writes rather than trusting state from before the excursion.
+  // Costs at most one extra write per child-UI return.
+  lastSavedSpine_ = -1;
+  lastSavedPage_ = -1;
+  lastSavedPageCount_ = -1;
 
   const int spine = heldSpineForUi_;
   const int page = heldPageForUi_;
@@ -1507,30 +1598,58 @@ bool RivuletReaderActivity::restoreAfterUi(const bool showLoading) {
   ImageBlock::setExtractor(this, &RivuletReaderActivity::extractEpubItem);
   configureRenderKey();
 
+  // Fonts / Reader UI often leave the heap fragmented — scrub before reload so
+  // goToPage(held) can rebuild the map instead of silently landing on page 0.
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+
   bool ok = false;
   {
     RenderLock lock(*this);
     ok = loadSpine(spine, page);
-    if (!ok) ok = loadSpine(spine, 0);
     if (!ok) {
-      // Last resort: any readable spine (should be rare).
-      const int n = epub_->getSpineItemsCount();
-      for (int i = 0; i < n; ++i) {
-        if (loadSpine(i, 0)) {
-          ok = true;
-          break;
-        }
-      }
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      ok = loadSpine(spine, page);
     }
+    if (!ok) ok = loadSpine(spine, 0);
+    if (!ok && tryHopToCachedPage(spine, page)) {
+      ok = true;
+      LOG_INF("RVR", "restoreAfterUi page-cache hop spine=%d page=%d", spine, engine_.currentPage());
+    }
+    // Never scan other spines here. Falling through to spine 0 is exactly what
+    // sent readers to book page 1 after Manage Fonts / Reader UI (logs: ERS open
+    // spine=0 after a child activity). CrossInk keeps the held place.
+  }
+
+  // If we opened the right chapter but landed far below the held page, retry once.
+  if (ok && page > 2 && engine_.currentPage() < page / 2) {
+    LOG_ERR("RVR", "restoreAfterUi shallow land spine=%d want=%d got=%d — retry", spine, page, engine_.currentPage());
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    RenderLock lock(*this);
+    if (loadSpine(spine, page)) {
+      ok = true;
+    }
+  }
+
+  if (!ok) {
+    // Keep the held place on SD so the next open / QR does not resume at 0.
+    heavyReleasedForUi_ = true;  // saveProgress must read heldSpine/heldPage
+    lastSavedSpine_ = -1;
+    lastSavedPage_ = -1;
+    lastSavedPageCount_ = -1;
+    (void)saveProgress();
+    heavyReleasedForUi_ = false;
+    showError(tr(STR_COULD_NOT_RESTORE_PAGE));
+    LOG_ERR("RVR", "restoreAfterUi failed spine=%d page=%d — progress pinned", spine, page);
+    return false;
   }
 
   heavyReleasedForUi_ = false;
   firstPaint_ = true;
-  if (!ok) {
-    showError("Could not restore page");
-    LOG_ERR("RVR", "restoreAfterUi failed spine=%d page=%d", spine, page);
-    return false;
-  }
+  // Re-pin progress to the actual landed page (may be closest-reachable).
+  lastSavedSpine_ = -1;
+  lastSavedPage_ = -1;
+  lastSavedPageCount_ = -1;
+  (void)saveProgress();
   LOG_INF("RVR", "restoreAfterUi ok spine=%d page=%d free=%u", spineIndex_, engine_.currentPage(),
           static_cast<unsigned>(ESP.getFreeHeap()));
   return true;
@@ -1541,34 +1660,54 @@ bool RivuletReaderActivity::loadTocChapter(const int tocSpineIndex, const int st
   const int n = epub_->getSpineItemsCount();
   if (tocSpineIndex < 0 || tocSpineIndex >= n) return false;
 
-  // Same model as every normal open: free prior chapter, load target, show
-  // page 0 (or startPage). Idle tickIdlePageMap builds the rest. No full-chapter
-  // walk, no jumping to later TOC entries.
   const int keepSpine = spineIndex_;
-  const int keepPage = engine_.currentPage();
+  const int keepPage = engine_.hasChapter() ? engine_.currentPage() : (heavyReleasedForUi_ ? heldPageForUi_ : 0);
   const bool canRestore = ready_ && engine_.hasChapter();
+  const bool canRestoreHeld = heavyReleasedForUi_ && heldSpineForUi_ >= 0;
 
-  prepareHeapForChapterLoad();
-  // Always open at the start of the chapter when picking from TOC (legacy).
-  (void)startPage;
-  if (loadSpine(tocSpineIndex, /*startPage=*/0)) {
-    LOG_INF("RVR", "loadTocChapter ok spine=%d page0 free=%u", tocSpineIndex,
+  // Already in RAM: this is the chapter they are reading. Do not clear + reload.
+  if (tocSpineIndex == spineIndex_ && engine_.hasChapter() && ready_) {
+    (void)startPage;
+    if (engine_.goToStart(renderer)) {
+      firstPaint_ = true;
+      heavyReleasedForUi_ = false;
+      LOG_INF("RVR", "loadTocChapter resident spine=%d", tocSpineIndex);
+      return true;
+    }
+  }
+
+  // Page cache from the sitting they just finished — no IR malloc, no convert.
+  if (tryHopToCachedPage(tocSpineIndex, 0)) {
+    LOG_INF("RVR", "loadTocChapter cached page0 spine=%d free=%u", tocSpineIndex,
             static_cast<unsigned>(ESP.getFreeHeap()));
     return true;
   }
 
-  // One retry after a harder heap scrub (font cache if still tight).
-  prepareHeapForChapterLoad();
-  if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
-    if (!fcm->isScanning() && ESP.getMaxAllocHeap() < 48 * 1024) fcm->clearCache();
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  (void)startPage;
+  if (loadSpine(tocSpineIndex, /*startPage=*/0)) {
+    heavyReleasedForUi_ = false;
+    LOG_INF("RVR", "loadTocChapter ok spine=%d page0 free=%u", tocSpineIndex, static_cast<unsigned>(ESP.getFreeHeap()));
+    return true;
   }
-  yield();
-  if (loadSpine(tocSpineIndex, 0)) return true;
+
+  prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (loadSpine(tocSpineIndex, 0)) {
+    heavyReleasedForUi_ = false;
+    return true;
+  }
+  if (tryHopToCachedPage(tocSpineIndex, 0)) return true;
 
   LOG_ERR("RVR", "loadTocChapter failed spine=%d — restore %d", tocSpineIndex, keepSpine);
   if (canRestore && keepSpine >= 0 && keepSpine < n) {
-    prepareHeapForChapterLoad();
-    if (loadSpine(keepSpine, keepPage) || loadSpine(keepSpine, 0)) return false;
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    if (loadSpine(keepSpine, keepPage) || loadSpine(keepSpine, 0) || tryHopToCachedPage(keepSpine, keepPage)) {
+      return false;
+    }
+  }
+  if (canRestoreHeld) {
+    (void)restoreAfterUi(/*showLoading=*/false);
+    return false;
   }
   ready_ = false;
   return false;
@@ -1576,322 +1715,37 @@ bool RivuletReaderActivity::loadTocChapter(const int tocSpineIndex, const int st
 
 bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage, const bool requireCompleteIr) {
   if (!epub_) return false;
-  const int n = epub_->getSpineItemsCount();
-  if (spineIndex < 0 || spineIndex >= n) return false;
 
-  const auto item = epub_->getSpineItem(spineIndex);
-  if (item.href.empty()) {
-    LOG_DBG("RVR", "spine %d empty href — skip", spineIndex);
+  // Chapter IR acquisition lives in ChapterLoader so the Home screen can index
+  // chapters with the same pipeline (see chapterload::loadChapterIr).
+  chapterload::Request req;
+  req.epub = epub_.get();
+  req.engine = &engine_;
+  req.renderer = &renderer;
+  req.irDir = irDir_;
+  req.spineIndex = spineIndex;
+  req.imageRendering = SETTINGS.imageRendering;
+  req.requireCompleteIr = requireCompleteIr;
+  req.bindPageCache = true;
+
+  chapterload::Hooks hooks;
+  hooks.ctx = this;
+  hooks.prepareHeap = [](void* ctx, const bool aggressive) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareHeapForChapterLoad(aggressive);
+  };
+  hooks.prepareImages = [](void* ctx, const char* href) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+
+  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
+  if (!loaded.ok) {
+    ready_ = false;
     return false;
   }
-
-  LOG_INF("RVR", "loadSpine %d href=%s free=%u maxAlloc=%u requireFull=%d", spineIndex, item.href.c_str(),
-          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-          requireCompleteIr ? 1 : 0);
-
-  // setupCacheDir already ran in onEnter; only ensure IR dir (cheap if exists).
-  if (!irDir_.empty()) Storage.ensureDirectoryExists(irDir_.c_str());
-
-  char irPath[192];
-  char htmlPath[192];
-  char tmpHtmlPath[200];
-  // IR/map fingerprint includes Images mode (Display/Placeholder/Suppress) so changing
-  // Settings → Images does not reuse IR that still has/omits plates.
-  const unsigned imgMode = static_cast<unsigned>(SETTINGS.imageRendering);
-  std::snprintf(irPath, sizeof(irPath), "%s/s%d_m%u.rvir", irDir_.c_str(), spineIndex, imgMode);
-  std::snprintf(htmlPath, sizeof(htmlPath), "%s/s%d.html", irDir_.c_str(), spineIndex);
-  std::snprintf(tmpHtmlPath, sizeof(tmpHtmlPath), "%s/s%d.html.tmp", irDir_.c_str(), spineIndex);
-
-  // Always free retained chapter + image/font caches before spine load.
-  // First open used to skip this when hasChapter() was false, leaving home-cover
-  // PNG / font cache holding maxAlloc and aborting mid-convert (issue #8).
-  const bool hasCachedIr = Storage.exists(irPath);
-  const bool needAggressive =
-      requireCompleteIr || !hasCachedIr || ESP.getMaxAllocHeap() < 48 * 1024 || ESP.getFreeHeap() < 60 * 1024;
-  if (!hasCachedIr || engine_.hasChapter() || needAggressive) {
-    prepareHeapForChapterLoad(needAggressive || requireCompleteIr);
-  }
-
-  // Prefer cached IR when present (no ZIP/HTML needed).
-  bool ok = false;
-  bool fromIrCache = false;
-  if (Storage.exists(irPath)) {
-    ok = engine_.loadIr(irPath);
-    if (ok) {
-      // Reject truncated IR from old OOM converts (mid-chapter "last page").
-      // If HTML on SD is much larger than IR text, force reconvert.
-      if (Storage.exists(htmlPath)) {
-        HalFile hf;
-        if (Storage.openFileForRead("RVR", htmlPath, hf)) {
-          const size_t htmlSz = hf.size();
-          hf.close();
-          const size_t textSz = engine_.chapter().textSize();
-          // Partial OOM IR left short text vs full XHTML (wrong "last page" mid-chapter).
-          // Prose chapters keep ~40%+ of HTML as text; heavy markup still >25%.
-          // Also reject tiny text against large HTML (classic truncated convert).
-          const bool shortVsHtml =
-              (htmlSz > 8000 && textSz > 0 && textSz * 5 / 2 < htmlSz) ||  // text < 40% of html
-              (htmlSz > 20000 && textSz < 5000);
-          if (shortVsHtml) {
-            LOG_ERR("RVR", "stale short IR spine=%d text=%u html=%u — reconvert", spineIndex,
-                    static_cast<unsigned>(textSz), static_cast<unsigned>(htmlSz));
-            engine_.clear();
-            Storage.remove(irPath);
-            char mapPath[200];
-            std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-            if (Storage.exists(mapPath)) Storage.remove(mapPath);
-            ok = false;
-          }
-        }
-      }
-    }
-    if (ok) {
-      fromIrCache = true;
-      LOG_DBG("RVR", "loaded IR %s", irPath);
-      char mapPath[200];
-      std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-      if (Storage.exists(mapPath) && engine_.loadPageMap(mapPath)) {
-        if (engine_.scrubStaleCompleteMap(renderer)) {
-          LOG_DBG("RVR", "page map %s was stale-complete — reopened pages=%d", mapPath,
-                  engine_.mapKnownPages());
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-        } else {
-          LOG_DBG("RVR", "loaded page map %s pages=%d", mapPath, engine_.chapterPageCount(nullptr));
-        }
-      }
-    } else if (Storage.exists(irPath)) {
-      LOG_DBG("RVR", "stale/bad IR %s — reconvert", irPath);
-      Storage.remove(irPath);
-    }
-  }
-
-  if (!ok) {
-    // Never accumulate chapter HTML in a std::string: reserve/append aborts on
-    // OOM under -fno-exceptions (crash was reserve(96KB) with maxAlloc~94KB).
-    // Match classic Section path: ZIP-inflate to SD under a framebuffer loan,
-    // then load with makeUniqueNoThrow (null on OOM, never abort).
-    // Cap HTML RAM: convert also needs headroom (crash: string growth abort on s89).
-    constexpr size_t kMaxHtml = 160 * 1024;
-
-    // Keep FB loan across stream + RAM load + convert so maxAlloc stays high.
-    // Two passes: prefer cached sN.html; on failure delete and re-stream from ZIP
-    // (stale/truncated HTML after cache wipe left chapter permanently unloadable).
-    {
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      LOG_INF("RVR", "html phase free=%u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-              static_cast<unsigned>(ESP.getMaxAllocHeap()));
-
-      for (int pass = 0; pass < 2 && !ok; ++pass) {
-        const bool forceRestream = (pass > 0);
-        if (forceRestream) {
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-          LOG_INF("RVR", "spine %d re-stream HTML from ZIP after convert/read fail", spineIndex);
-        }
-
-        const char* readPath = htmlPath;
-        if (forceRestream || !Storage.exists(htmlPath)) {
-          bool streamed = false;
-          for (int attempt = 0; attempt < 3 && !streamed; ++attempt) {
-            if (attempt > 0) delay(50);
-            if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-            HalFile tmpHtml;
-            if (!Storage.openFileForWrite("RVR", tmpHtmlPath, tmpHtml)) {
-              LOG_ERR("RVR", "spine %d open tmp HTML failed", spineIndex);
-              continue;
-            }
-            streamed = epub_->readItemContentsToStream(item.href, tmpHtml, 8192);
-            const uint32_t fileSize = tmpHtml.size();
-            tmpHtml.close();
-            if (!streamed) {
-              if (Storage.exists(tmpHtmlPath)) Storage.remove(tmpHtmlPath);
-              LOG_ERR("RVR", "spine %d ZIP stream fail free=%u maxAlloc=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              continue;
-            }
-            if (fileSize == 0) {
-              Storage.remove(tmpHtmlPath);
-              LOG_DBG("RVR", "spine %d HTML empty — skip", spineIndex);
-              return false;
-            }
-            if (fileSize > kMaxHtml) {
-              Storage.remove(tmpHtmlPath);
-              LOG_ERR("RVR", "spine %d HTML too large (%u) — skip", spineIndex, static_cast<unsigned>(fileSize));
-              return false;
-            }
-            if (Storage.rename(tmpHtmlPath, htmlPath)) {
-              readPath = htmlPath;
-            } else {
-              readPath = tmpHtmlPath;
-            }
-            LOG_DBG("RVR", "spine %d htmlBytes=%u", spineIndex, static_cast<unsigned>(fileSize));
-          }
-          if (!streamed) {
-            if (forceRestream) return false;
-            continue;
-          }
-        }
-
-        HalFile htmlFile;
-        if (!Storage.openFileForRead("RVR", readPath, htmlFile)) {
-          LOG_ERR("RVR", "spine %d open HTML failed", spineIndex);
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize == 0 || htmlSize > kMaxHtml) {
-          htmlFile.close();
-          LOG_DBG("RVR", "spine %d bad html size %u — discard", spineIndex, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-        if (!htmlBuf) {
-          htmlFile.close();
-          LOG_ERR("RVR", "spine %d HTML OOM size=%u free=%u maxAlloc=%u", spineIndex,
-                  static_cast<unsigned>(htmlSize), static_cast<unsigned>(ESP.getFreeHeap()),
-                  static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          // OOM: do not delete HTML; next open may have more heap.
-          return false;
-        }
-        const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-        htmlFile.close();
-        if (got < 0 || static_cast<size_t>(got) != htmlSize) {
-          LOG_ERR("RVR", "spine %d HTML short read %d/%u", spineIndex, got, static_cast<unsigned>(htmlSize));
-          if (Storage.exists(htmlPath)) Storage.remove(htmlPath);
-          continue;
-        }
-        htmlBuf[htmlSize] = 0;
-
-        // HTML is already allocated — free/maxA here are net of the HTML buffer.
-        // Old check required free >= htmlSize+24KB and double-counted HTML, so
-        // every mid-session convert "skipped low heap" and showed Empty page.
-        const size_t maxA = ESP.getMaxAllocHeap();
-        const size_t freeH = ESP.getFreeHeap();
-        if (maxA < 12 * 1024 || freeH < 14 * 1024) {
-          LOG_ERR("RVR", "spine %d convert skip low heap free=%u maxA=%u html=%u", spineIndex,
-                  static_cast<unsigned>(freeH), static_cast<unsigned>(maxA),
-                  static_cast<unsigned>(htmlSize));
-          htmlBuf.reset();
-          engine_.clear();
-          delay(20);
-          continue;
-        }
-
-        const uint32_t t0 = millis();
-        ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
-                                /*armDropCapFirstPara=*/false, SETTINGS.imageRendering);
-        // Partial OOM: clear IR, yield, retry once (still holding HTML + FB loan).
-        if (ok && engine_.chapter().failed() && pass == 0) {
-          LOG_ERR("RVR", "spine %d partial IR — retry convert free=%u maxA=%u", spineIndex,
-                  static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-          engine_.clear();
-          delay(30);
-          yield();
-          if (ESP.getMaxAllocHeap() >= 12 * 1024) {
-            ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, /*irPathSave=*/nullptr,
-                                    /*armDropCapFirstPara=*/false, SETTINGS.imageRendering);
-          }
-        }
-        htmlBuf.reset();  // free before layout / FB restore
-        LOG_INF("RVR", "ingestHtml %s partial=%d in %lums blocks=%u text=%u html=%u free=%u maxA=%u",
-                ok ? "ok" : "FAIL", (ok && engine_.chapter().failed()) ? 1 : 0,
-                static_cast<unsigned long>(millis() - t0),
-                static_cast<unsigned>(engine_.chapter().blockCount()),
-                static_cast<unsigned>(engine_.chapter().textSize()), static_cast<unsigned>(htmlSize),
-                static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-        if (ok && !engine_.chapter().failed()) {
-          prepareChapterImages(item.href);
-          // Persist only complete IR — partial OOM must not become a permanent short chapter.
-          if (irPath[0]) (void)engine_.chapter().saveToFile(irPath);
-          // Nuke any map built from a prior partial session for this spine.
-          char mapPath[200];
-          std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-        } else if (ok && engine_.chapter().failed()) {
-          // Never keep partial on disk; never keep a map that claims this is the whole chapter.
-          if (Storage.exists(irPath)) Storage.remove(irPath);
-          char mapPath[200];
-          std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-          if (Storage.exists(mapPath)) Storage.remove(mapPath);
-          if (requireCompleteIr) {
-            // Prev-chapter last page MUST be full IR. Drop partial and fail this pass.
-            LOG_ERR("RVR", "spine %d partial IR refused (requireFull) text=%u html=%u", spineIndex,
-                    static_cast<unsigned>(engine_.chapter().textSize()), static_cast<unsigned>(htmlSize));
-            engine_.clear();
-            ok = false;
-            // Exit FB loan loop to allow aggressive heap scrub + one outer retry.
-            break;
-          }
-          prepareChapterImages(item.href);
-          LOG_ERR("RVR", "spine %d using partial IR (not cached) text=%u html=%u", spineIndex,
-                  static_cast<unsigned>(engine_.chapter().textSize()),
-                  static_cast<unsigned>(htmlSize));
-        } else if (Storage.exists(htmlPath)) {
-          // Bad extract / convert — force ZIP re-stream on next pass.
-          Storage.remove(htmlPath);
-        }
-      }
-    }
-
-    // requireComplete: one more attempt after hard font-cache scrub outside the FB loan.
-    if (!ok && requireCompleteIr && Storage.exists(htmlPath)) {
-      prepareHeapForChapterLoad(/*aggressive=*/true);
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      HalFile htmlFile;
-      if (Storage.openFileForRead("RVR", htmlPath, htmlFile)) {
-        const size_t htmlSize = htmlFile.size();
-        if (htmlSize > 0 && htmlSize <= kMaxHtml) {
-          auto htmlBuf = makeUniqueNoThrow<uint8_t[]>(htmlSize + 1);
-          if (htmlBuf) {
-            const int got = htmlFile.read(htmlBuf.get(), htmlSize);
-            htmlFile.close();
-            if (got >= 0 && static_cast<size_t>(got) == htmlSize) {
-              htmlBuf[htmlSize] = 0;
-              LOG_INF("RVR", "spine %d requireFull reconvert free=%u maxA=%u", spineIndex,
-                      static_cast<unsigned>(ESP.getFreeHeap()),
-                      static_cast<unsigned>(ESP.getMaxAllocHeap()));
-              ok = engine_.ingestHtml(reinterpret_cast<const char*>(htmlBuf.get()), htmlSize, nullptr, false,
-                                      SETTINGS.imageRendering);
-              htmlBuf.reset();
-              if (ok && !engine_.chapter().failed()) {
-                prepareChapterImages(item.href);
-                if (irPath[0]) (void)engine_.chapter().saveToFile(irPath);
-                char mapPath[200];
-                std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex, imgMode);
-                if (Storage.exists(mapPath)) Storage.remove(mapPath);
-                LOG_INF("RVR", "spine %d requireFull OK text=%u", spineIndex,
-                        static_cast<unsigned>(engine_.chapter().textSize()));
-              } else {
-                LOG_ERR("RVR", "spine %d requireFull still partial/fail", spineIndex);
-                engine_.clear();
-                ok = false;
-                if (Storage.exists(irPath)) Storage.remove(irPath);
-              }
-            } else {
-              htmlFile.close();
-            }
-          } else {
-            htmlFile.close();
-          }
-        } else {
-          htmlFile.close();
-        }
-      }
-    }
-  } else if (fromIrCache) {
-    // Always re-size images for the current viewport. Cached IR may hold stale
-    // CSS-40% float widths from an older policy (Illuminae briefings too small).
-    // Probe is cheap (header only); do not rewrite IR every open.
-    prepareChapterImages(item.href);
-  }
-
-  if (!ok) {
-    LOG_ERR("RVR", "spine %d IR convert failed", spineIndex);
-    return false;
-  }
-
-  spineIndex_ = spineIndex;
+  const bool fromIrCache = loaded.fromCache;
+  // Defer spineIndex_ = spineIndex until layout succeeds (see below). A failed
+  // chapter-skip used to leave spineIndex_ on the new chapter with ready_=false
+  // → blank Loading, then recovery at book start.
   error_ = false;
   firstPaint_ = true;
 
@@ -1908,14 +1762,52 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   }
 
   const uint32_t tLayout = millis();
+  // startPage < 0: load IR (+ optional .rvpm) only — used by PageBack so we can
+  // goToLastPageNearEnd without first painting page 0 of the previous spine.
+  if (startPage < 0) {
+    spineIndex_ = spineIndex;
+    ready_ = true;
+    LOG_INF("RVR", "spine=%d ir-only text=%u blocks=%u map=%d free=%u ir=%d", spineIndex,
+            static_cast<unsigned>(engine_.chapter().textSize()), static_cast<unsigned>(engine_.chapter().blockCount()),
+            engine_.mapKnownPages(), static_cast<unsigned>(ESP.getFreeHeap()), fromIrCache ? 1 : 0);
+    if (footnoteCacheSpine_ != spineIndex) {
+      footnoteCacheSpine_ = -1;
+      footnoteScanDeferred_ = true;
+      chapterFootnotes_.clear();
+      currentPageFootnotes_.clear();
+      lastIdleMapMs_ = 0;
+    }
+    return true;
+  }
+
   // First page only (or resume page). Map extension is idle — same as every open.
+  // IMPORTANT: never silently fall back to page 0 when the user had a deep saved
+  // page (QR resume landed on ch6 p1 after saving p31 — goToPage failed on a
+  // stale/short .rvpm and the old code called goToStart).
   const int wantPage = std::max(0, startPage);
   bool laid = false;
   if (wantPage > 0) {
-    // Cap walk: resume, not full-chapter rebuild.
-    laid = engine_.goToPage(renderer, wantPage, /*maxWalkPages=*/64);
+    // Budget must cover the resume depth — a 64-page cap was only barely enough
+    // for mid-chapter resumes and failed when the map had to be rebuilt.
+    const int budget = std::max(96, wantPage + 64);
+    laid = engine_.goToPage(renderer, wantPage, budget);
     if (!laid) {
-      LOG_DBG("RVR", "spine %d goToPage(%d) failed — fall back to start", spineIndex, wantPage);
+      LOG_ERR("RVR", "spine %d goToPage(%d) failed (known=%d) — invalidate map and retry", spineIndex, wantPage,
+              engine_.mapKnownPages());
+      engine_.invalidatePageMap();
+      laid = engine_.goToPage(renderer, wantPage, budget);
+    }
+    if (!laid) {
+      // Land as close as we got — never wipe the reader back to page 0 of the
+      // chapter when they were dozens of pages in.
+      const int closest = std::max(0, engine_.mapKnownPages() - 1);
+      LOG_ERR("RVR", "spine %d resume %d unreachable — landing closest page=%d", spineIndex, wantPage, closest);
+      if (closest > 0) {
+        laid = engine_.goToPage(renderer, closest, budget);
+      }
+    }
+    if (!laid) {
+      LOG_ERR("RVR", "spine %d goToPage(%d) failed after retry — goToStart last resort", spineIndex, wantPage);
     }
   }
   if (!laid) {
@@ -1924,31 +1816,583 @@ bool RivuletReaderActivity::loadSpine(const int spineIndex, const int startPage,
   }
   if (!laid) {
     // Empty chapter (cover image only etc.) — try next spine.
+    // Do NOT leave spineIndex_/ready_ half-updated: caller may be chapter-skip.
     LOG_DBG("RVR", "spine %d empty layout — skip (%lums)", spineIndex, static_cast<unsigned long>(millis() - tLayout));
+    ready_ = false;
     return false;
   }
+  // Only commit the spine index after layout succeeded — a failed loadSpine
+  // used to leave spineIndex_ on the new chapter with ready_=false (blank
+  // Loading forever), then a later recovery opened spine 0.
+  if (spineIndex != spineIndex_) {
+    futureIndexedThisSession_ = 0;
+    futureIndexAbortedThisSitting_ = false;
+  }
+  spineIndex_ = spineIndex;
   ready_ = true;
 
   LOG_INF("RVR", "spine=%d ready page=%d pages~%d spans=%u font=%d layoutMs=%lu free=%u ir=%d", spineIndex,
-          engine_.currentPage(), engine_.chapterPageCount(nullptr),
-          static_cast<unsigned>(engine_.page().spans.size()), engine_.renderKey().fontId,
-          static_cast<unsigned long>(millis() - tLayout), static_cast<unsigned>(ESP.getFreeHeap()),
-          fromIrCache ? 1 : 0);
-  // Map-ahead / page-map SD save run on idle after first ink — not on the open path.
-  // ensureMapAhead layouts several pages and was a large chunk of "press → first page".
+          engine_.currentPage(), engine_.chapterPageCount(nullptr), static_cast<unsigned>(engine_.page().spans.size()),
+          engine_.renderKey().fontId, static_cast<unsigned long>(millis() - tLayout),
+          static_cast<unsigned>(ESP.getFreeHeap()), fromIrCache ? 1 : 0);
   updateBookmarkFlag();
-  // New spine → invalidate footnote cache; scan HTML lazily on first paint that needs it.
+  // New spine → drop footnote cache. Scan is idle-only (first paint of a
+  // just-converted chapter is the abort() site: std::string append at ~31KB maxA).
   if (footnoteCacheSpine_ != spineIndex) {
     footnoteCacheSpine_ = -1;
+    footnoteScanDeferred_ = true;
     chapterFootnotes_.clear();
     currentPageFootnotes_.clear();
+    lastIdleMapMs_ = 0;
+  }
+
+  // Index a small window around the land page so the first few turns are cheap.
+  // NOTHING heavy may run here: this is on the path to first ink. Building the
+  // previous spine's map inline pushed book open past 30 s (logs: repeated
+  // `activity_slow 9017ms/13184ms` after book.bin=MISS with no FIRST_INK at all,
+  // i.e. a white screen with Loading). All adjacent-chapter indexing is deferred
+  // to tickIdlePageMap, which only runs after the page is on glass.
+  if (!warmingAdjacent_) {
+    warmOpenNavigationWindow();
   }
   return true;
+}
+
+void RivuletReaderActivity::warmOpenNavigationWindow() {
+  // Deliberately does nothing on the open path.
+  //
+  // This used to run ensureMapAhead(10) — ten measure-layout passes — plus an
+  // ahead/behind paint, all before first ink. That is dead weight between the
+  // button press and the page appearing, and it runs again on every chapter
+  // change. tickIdlePageMap builds exactly the same window starting ~80ms after
+  // the page is on glass, where the user never feels it.
+}
+
+bool RivuletReaderActivity::spineHasPageMap(const int spine) const {
+  if (irDir_.empty() || spine < 0) return false;
+  char mapPath[200];
+  std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spine,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  return Storage.exists(mapPath);
+}
+
+bool RivuletReaderActivity::spineHasIrCache(const int spine) const {
+  if (irDir_.empty() || spine < 0) return false;
+  char irPath[200];
+  std::snprintf(irPath, sizeof(irPath), "%s/s%d_m%u.rvir", irDir_.c_str(), spine,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  return Storage.exists(irPath);
+}
+
+int RivuletReaderActivity::nextForwardUnmappedSpine() const {
+  if (!epub_ || irDir_.empty()) return -1;
+  const int n = epub_->getSpineItemsCount();
+  const int from = futureIndexActive_ ? heldSpineForFuture_ : spineIndex_;
+  for (int cand = from + 1; cand < n; ++cand) {
+    if (epub_->getSpineItem(cand).href.empty()) continue;
+    // First readable chapter after the reader's place. Do not skip a mapped
+    // or failed spine to crawl further (device: 24 done → 25 convert 15s).
+    if (cand == futureSkipSpine_) return -1;
+    // Never idle-convert. Device e38a3a71: StartForward cache=0 on DCC spine 33
+    // blocked the loop 33s (ingestHtml 16s + restore 8s) while sitting.
+    if (!spineHasIrCache(cand)) return -1;
+    if (engine_.hasPageCache(cand, 0)) return -1;
+    return cand;
+  }
+  return -1;
+}
+
+bool RivuletReaderActivity::futureIndexUserWantsControl() const {
+  if (ReaderUtils::anyPageTurnControlHeld(mappedInput)) return true;
+  if (mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Back)) {
+    return true;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+      mappedInput.wasReleased(MappedInputManager::Button::PageForward)) {
+    return true;
+  }
+  return ReaderUtils::isTouchMenuGesture(mappedInput);
+}
+
+void RivuletReaderActivity::persistFutureMap(const bool completeOnly) {
+  if (!futureIndexActive_ || futureIndexSpine_ < 0 || irDir_.empty()) return;
+  if (engine_.chapter().failed()) return;
+  const int known = engine_.mapKnownPages();
+  if (known <= 0) return;
+  if (completeOnly && !engine_.mapComplete()) return;
+
+  char mapPath[200];
+  const unsigned img = static_cast<unsigned>(SETTINGS.imageRendering);
+  if (engine_.mapComplete()) {
+    std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), futureIndexSpine_, img);
+    if (engine_.savePageMap(mapPath)) {
+      char partPath[208];
+      std::snprintf(partPath, sizeof(partPath), "%s.part", mapPath);
+      if (Storage.exists(partPath)) Storage.remove(partPath);
+      ++futureIndexedThisSession_;
+      SystemLog::logTiming("FIDX", "saved spine=%d pages=%d complete=1", futureIndexSpine_, known);
+    }
+    return;
+  }
+
+  // Incomplete progress lives in .rvpm.part so Home / spineHasPageMap never
+  // treat a half-walk as the real chapter length.
+  std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm.part", irDir_.c_str(), futureIndexSpine_, img);
+  if (engine_.savePageMap(mapPath)) {
+    futurePartSaveAtKnown_ = known;
+    SystemLog::logTiming("FIDX", "part spine=%d known=%d", futureIndexSpine_, known);
+  }
+}
+
+bool RivuletReaderActivity::startFutureChapterIndex() {
+  if (futureIndexActive_ || warmingAdjacent_ || !ready_ || !epub_ || irDir_.empty()) return false;
+  if (pendingChapterIrLoad_ >= 0) return false;
+  if (futureIndexUserWantsControl()) return false;
+  const int target = nextForwardUnmappedSpine();
+  if (target < 0) {
+    SystemLog::logTiming("FIDX", "no_forward after spine=%d", spineIndex_);
+    lastFutureWorkMs_ = millis();
+    return false;
+  }
+
+  heldSpineForFuture_ = spineIndex_;
+  heldPageForFuture_ = engine_.hasChapter() ? engine_.currentPage() : 0;
+  heldAtChapterEndForFuture_ = engine_.hasChapter() && engine_.page().atChapterEnd;
+  SystemLog::logTiming("FIDX", "begin spine=%d from=%d cache=%d page0=%d", target, heldSpineForFuture_,
+                       spineHasIrCache(target) ? 1 : 0, engine_.hasPageCache(target, 0) ? 1 : 0);
+  SystemLog::flush();
+  persistPageMapBestEffort();
+
+  warmingAdjacent_ = true;
+  futureIndexActive_ = true;
+  futureIndexSpine_ = target;
+  futureStallTicks_ = 0;
+  futurePartSaveAtKnown_ = 0;
+
+  // Silent: glass keeps the current page. Do not paint Indexing — last-page
+  // Indexing (9206393c) froze a 2-sentence ending for 16s+. Abort on GPIO.
+  activityManager.waitForRenderIdle();
+
+  chapterload::Request req;
+  req.epub = epub_.get();
+  req.engine = &engine_;
+  req.renderer = &renderer;
+  req.irDir = irDir_;
+  req.spineIndex = target;
+  req.imageRendering = SETTINGS.imageRendering;
+  // Page 1 on SD is the hop payload. requireFull retries ingestHtml and was
+  // the 21s freeze (8fa5688f FIDX load_fail spine=27). Partial IR that lays
+  // out page 0 is enough; tickPendingChapterIr completes later.
+  req.requireCompleteIr = false;
+  req.bindPageCache = true;
+  // Panel still holds the reader's page. Lending the FB hands it back white
+  // and a later windowed paint would flash blank over live text.
+  req.lendFrameBuffer = false;
+
+  chapterload::Hooks hooks;
+  hooks.ctx = this;
+  hooks.prepareHeap = [](void* ctx, const bool aggressive) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareHeapForChapterLoad(aggressive);
+  };
+  hooks.prepareImages = [](void* ctx, const char* href) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+  hooks.shouldAbort = [](void* ctx) {
+    auto* self = static_cast<RivuletReaderActivity*>(ctx);
+    // Live sample: mappedInput is otherwise stale for the whole convert
+    // (16s+), so a Next tap was invisible and the hop never promoted.
+    gpio.update();
+    if (self->futureIndexForwardHeld() && self->heldAtChapterEndForFuture_) return false;
+    return self->futureIndexUserWantsControl();
+  };
+
+  const uint32_t t0 = millis();
+  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
+  lastFutureWorkMs_ = millis();
+  // shouldAbort already sampled; a second update() would drop a Back release.
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
+  gpio.update();
+
+  if (!loaded.ok || loaded.partial || engine_.chapter().failed()) {
+    const bool userNow = futureIndexUserWantsControl();
+    LOG_ERR("RVR", "FIDX load fail spine=%d ok=%d partial=%d user=%d", target, loaded.ok ? 1 : 0,
+            loaded.partial ? 1 : 0, userNow ? 1 : 0);
+    SystemLog::logTiming("FIDX", "load_fail spine=%d ms=%lu user=%d", target, static_cast<unsigned long>(millis() - t0),
+                         userNow ? 1 : 0);
+    if (!userNow) futureSkipSpine_ = target;
+    restoreAfterFutureIndex(/*forUser=*/userNow);
+    return false;
+  }
+
+  // Resume an aborted walk if .part is still on SD (same render key).
+  // A fresh convert means the IR changed — drop the old cursors.
+  char partPath[208];
+  std::snprintf(partPath, sizeof(partPath), "%s/s%d_m%u.rvpm.part", irDir_.c_str(), target,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  if (Storage.exists(partPath)) {
+    if (!loaded.fromCache || !engine_.loadPageMap(partPath) || engine_.mapComplete()) {
+      Storage.remove(partPath);
+    } else {
+      futurePartSaveAtKnown_ = engine_.mapKnownPages();
+    }
+  }
+
+  SystemLog::logTiming("FIDX", "load spine=%d cache=%d known=%d ms=%lu fre=%u maxA=%u", target,
+                       loaded.fromCache ? 1 : 0, engine_.mapKnownPages(), static_cast<unsigned long>(millis() - t0),
+                       static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
+    promoteFutureIndexToCurrent();
+    return true;
+  }
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
+  if (futureIndexUserWantsControl()) {
+    restoreAfterFutureIndex(/*forUser=*/true);
+    return true;
+  }
+
+  // Page 1 on SD is the hop payload. Do not walk the rest of the future chapter
+  // (device: 44 pages / ~63s).
+  engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+  const bool laid = engine_.goToStart(renderer);
+  engine_.setMapAbortCheck(nullptr);
+  gpio.update();
+  SystemLog::logTiming("FIDX", "page0 spine=%d laid=%d cache=%d", target, laid ? 1 : 0,
+                       engine_.hasPageCache(target, 0) ? 1 : 0);
+  if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
+    promoteFutureIndexToCurrent();
+    return true;
+  }
+  if (tryHandleBackExit()) return false;
+  if (backHeldLeaving()) return false;
+  if (futureIndexUserWantsControl() || !laid) {
+    if (!laid && !futureIndexUserWantsControl()) futureSkipSpine_ = target;
+    restoreAfterFutureIndex(/*forUser=*/futureIndexUserWantsControl());
+    return laid;
+  }
+  persistFutureMap(/*completeOnly=*/false);
+  ++futureIndexedThisSession_;
+  restoreAfterFutureIndex(/*forUser=*/false);
+  return true;
+}
+
+void RivuletReaderActivity::restoreAfterFutureIndex(const bool forUser) {
+  if (!futureIndexActive_) return;
+  // Set before the blocking IR reload: restore is 1–8s on device and the turn
+  // key is still down. getHeldTime() then exceeds BOOKMARK_HOLD_MS (400ms) and
+  // fires the side long-press (Dark Mode / HALF scrub) — "dark mode without
+  // input". Same latch as a chapter hop after a multi-second load.
+  if (forUser) {
+    futureIndexAbortedThisSitting_ = true;
+    ignoreNextSideRelease_ = true;
+    ignoreNextConfirmRelease_ = true;
+    pageTurnLatch_.waitingRelease = true;
+  }
+  forceFastAfterChapterNav_ = true;
+
+  const int spine = heldSpineForFuture_;
+  const int page = heldPageForFuture_;
+  // A failed goToStart leaves known=1 incomplete. Persisting that .part then
+  // reloading the held spine hung the device (bcff8a47 FIDX spine=93 laid=0).
+  if (engine_.mapComplete()) {
+    persistFutureMap(/*completeOnly=*/true);
+  } else if (engine_.mapKnownPages() >= 2) {
+    persistFutureMap(/*completeOnly=*/false);
+  }
+
+  // Engine swap must not race a paint / async FAST / glyph prewarm.
+  activityManager.waitForRenderIdle();
+  resetTaskWatchdogIfSubscribed();
+  const uint32_t t0 = millis();
+  bool ok = false;
+  {
+    RenderLock lock(*this);
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    ok = loadSpine(spine, page);
+    if (!ok) ok = loadSpine(spine, 0);
+  }
+
+  futureIndexActive_ = false;
+  futureIndexSpine_ = -1;
+  warmingAdjacent_ = false;
+  firstPaint_ = false;
+  lastFutureWorkMs_ = millis();
+  futureStallTicks_ = 0;
+  heldAtChapterEndForFuture_ = false;
+
+  // A following tap in this same loop() will layout the next page. Do not also
+  // warm-ahead here — that was a second layout on a just-reloaded IR.
+  if (!ok && forUser) {
+    showError(tr(STR_COULD_NOT_RESTORE_PAGE));
+  }
+  SystemLog::logTiming("FIDX", "restore spine=%d page=%d ok=%d user=%d ms=%lu fre=%u", spine, page, ok ? 1 : 0,
+                       forUser ? 1 : 0, static_cast<unsigned long>(millis() - t0),
+                       static_cast<unsigned>(ESP.getFreeHeap()));
+  // Silent crawl never painted over the glass — a requestUpdate here would
+  // FAST the same page after a multi-second swap and look like a freeze.
+  // User abort already calls turnNext/turnPrev which requestUpdate.
+  if (forUser || !ok) requestUpdate();
+}
+
+bool RivuletReaderActivity::futureIndexForwardHeld() const {
+  return mappedInput.isPressed(MappedInputManager::Button::PageForward) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+}
+
+bool RivuletReaderActivity::futureIndexBackHeld() const {
+  return mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+         mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+}
+
+void RivuletReaderActivity::promoteFutureIndexToCurrent() {
+  if (!futureIndexActive_) return;
+  persistFutureMap(/*completeOnly=*/engine_.mapComplete());
+  const int target = futureIndexSpine_;
+  futureIndexActive_ = false;
+  warmingAdjacent_ = false;
+  futureIndexSpine_ = -1;
+  futureIndexAbortedThisSitting_ = false;
+  futureStallTicks_ = 0;
+  heldAtChapterEndForFuture_ = false;
+  ignoreNextSideRelease_ = true;
+  ignoreNextConfirmRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
+  forceFastAfterChapterNav_ = true;
+
+  spineIndex_ = target;
+  ready_ = true;
+  footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
+  chapterFootnotes_.clear();
+  currentPageFootnotes_.clear();
+  firstPaint_ = true;
+  pageMapDirty_ = true;
+
+  if (!engine_.goToStart(renderer)) {
+    showError("Could not open chapter");
+    SystemLog::logTiming("FIDX", "promote_fail spine=%d", target);
+    return;
+  }
+  lastPageTurnTime_ = millis();
+  lastForwardTurnMs_ = lastPageTurnTime_;
+  noteForwardPageTurn();
+  persistPageMapIfComplete();
+  (void)saveProgress(ProgressFlush::Now);
+  persistHomeProgress(/*writeToDisk=*/true);
+  updateBookmarkFlag();
+  SystemLog::logTiming("FIDX", "promote spine=%d page=%d known=%d complete=%d", target, engine_.currentPage() + 1,
+                       engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0);
+  requestUpdate();
+}
+
+void RivuletReaderActivity::tickFutureChapterIndex() {
+  if (!ready_ || !epub_ || !firstInkDone_ || chapterNavBusy_ || heavyReleasedForUi_) return;
+  if (pendingChapterIrLoad_ >= 0) return;
+  if (activityManager.isRenderInProgress()) return;
+
+  futureindex::Input in;
+  in.futureResident = futureIndexActive_;
+  in.currentMapComplete = !futureIndexActive_ && engine_.mapComplete() && !engine_.chapter().failed();
+  in.aheadWarm = futureIndexActive_ || engine_.aheadWarm() || (engine_.hasChapter() && engine_.page().atChapterEnd);
+  in.atChapterEnd = !futureIndexActive_ && engine_.hasChapter() && engine_.page().atChapterEnd;
+  in.heldAtChapterEnd = heldAtChapterEndForFuture_;
+  in.firstInkDone = firstInkDone_;
+  in.controlHeld = futureIndexUserWantsControl();
+  in.forwardHeld = futureIndexForwardHeld();
+  in.futureMapComplete = futureIndexActive_ && engine_.mapComplete();
+  in.futureHasFirstPage = futureIndexActive_ && engine_.mapKnownPages() >= 1;
+  in.heapTight = ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 24 * 1024;
+  in.heapOkToConvert = ESP.getMaxAllocHeap() >= futureindex::Limits::kMinMaxAllocToStart &&
+                       ESP.getFreeHeap() >= futureindex::Limits::kMinFreeToStart;
+  in.futureStallTicks = futureStallTicks_;
+  in.forwardIndexedThisSession = futureIndexedThisSession_;
+  in.userAbortedThisSitting = futureIndexAbortedThisSitting_;
+  in.footnoteScanPending = footnoteScanDeferred_;
+  in.nowMs = millis();
+  in.lastTurnMs = lastForwardTurnMs_;
+  in.lastWorkMs = lastFutureWorkMs_;
+  // SD exists() only when a start is otherwise legal. Probing every idle tick
+  // would take the storage mutex while the user is still turning pages.
+  const bool maybeStart = futureindex::Limits::kIdleForwardIndex && !futureIndexActive_ && in.currentMapComplete &&
+                          in.aheadWarm && !in.userAbortedThisSitting && !in.footnoteScanPending && !in.controlHeld &&
+                          !in.heapTight && in.forwardIndexedThisSession < futureindex::Limits::kMaxForwardChapters &&
+                          futureindex::quietLongEnough(in, futureindex::Limits::kQuietAfterTurnMs) &&
+                          futureindex::workGapElapsed(in, futureindex::Limits::kStartGapMs);
+  if (maybeStart) {
+    const int target = nextForwardUnmappedSpine();
+    // hasForwardTarget is layout-only: nextForwardUnmappedSpine returns -1
+    // when the next spine has no .rvir, so idle never runs ingestHtml.
+    in.hasForwardTarget = target >= 0 && spineHasIrCache(target);
+    const bool layoutOnly = in.hasForwardTarget;
+    const uint32_t needA =
+        layoutOnly ? futureindex::Limits::kMinMaxAllocLayoutOnly : futureindex::Limits::kMinMaxAllocToStart;
+    const uint32_t needF = layoutOnly ? futureindex::Limits::kMinFreeLayoutOnly : futureindex::Limits::kMinFreeToStart;
+    in.heapOkToConvert = ESP.getMaxAllocHeap() >= needA && ESP.getFreeHeap() >= needF;
+    if (in.hasForwardTarget && !in.heapOkToConvert) {
+      // Quiet window already elapsed. Drop font/PNG caches only — not the live IR.
+      if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
+        if (!fcm->isScanning()) fcm->clearCache();
+      }
+      PngToFramebufferConverter::releaseWarmIfHeapTight(needA);
+      in.heapOkToConvert = ESP.getMaxAllocHeap() >= needA && ESP.getFreeHeap() >= needF;
+      if (!in.heapOkToConvert) {
+        SystemLog::logTiming("FIDX", "skip_heap maxA=%u fre=%u needA=%u needF=%u layout=%d",
+                             static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getFreeHeap()),
+                             static_cast<unsigned>(needA), static_cast<unsigned>(needF), layoutOnly ? 1 : 0);
+        lastFutureWorkMs_ = millis();
+        // Map-walk fragmentation does not heal this sitting (8fa5688f maxA stayed
+        // ~31–40KB). Do not retry a 21s convert every quiet window.
+        futureIndexedThisSession_ = futureindex::Limits::kMaxForwardChapters;
+      }
+    }
+  }
+
+  switch (futureindex::decide(in)) {
+    case futureindex::Decision::None:
+      return;
+    case futureindex::Decision::StartForward:
+      (void)startFutureChapterIndex();
+      return;
+    case futureindex::Decision::Promote:
+      promoteFutureIndexToCurrent();
+      return;
+    case futureindex::Decision::MeasurePage: {
+      const int knownBefore = engine_.mapKnownPages();
+      const bool progressed = engine_.extendPageMap(renderer, /*maxPages=*/1);
+      lastFutureWorkMs_ = millis();
+      if (progressed) {
+        futureStallTicks_ = 0;
+        if (engine_.mapKnownPages() - futurePartSaveAtKnown_ >= 4) {
+          persistFutureMap(/*completeOnly=*/false);
+        }
+      } else {
+        ++futureStallTicks_;
+      }
+      SystemLog::logTiming("FIDX", "measure spine=%d known=%d->%d complete=%d prog=%d stall=%d fre=%u",
+                           futureIndexSpine_, knownBefore, engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
+                           progressed ? 1 : 0, futureStallTicks_, static_cast<unsigned>(ESP.getFreeHeap()));
+      if (tryHandleBackExit()) return;
+      if (backHeldLeaving()) return;
+      const bool userNow = futureIndexUserWantsControl();
+      const bool wantNext = futureIndexForwardHeld() && heldAtChapterEndForFuture_;
+      if (engine_.mapComplete()) {
+        persistFutureMap(/*completeOnly=*/true);
+        if (wantNext)
+          promoteFutureIndexToCurrent();
+        else
+          restoreAfterFutureIndex(/*forUser=*/userNow);
+      } else if (futureStallTicks_ >= futureindex::Limits::kGiveUpStalls) {
+        futureSkipSpine_ = futureIndexSpine_;
+        restoreAfterFutureIndex(/*forUser=*/userNow);
+      } else if (userNow) {
+        if (wantNext)
+          promoteFutureIndexToCurrent();
+        else
+          restoreAfterFutureIndex(/*forUser=*/true);
+      }
+      return;
+    }
+    case futureindex::Decision::FinishRestore:
+      persistFutureMap(/*completeOnly=*/engine_.mapComplete());
+      restoreAfterFutureIndex(/*forUser=*/false);
+      return;
+    case futureindex::Decision::AbortRestore:
+      if (tryHandleBackExit()) return;
+      if (backHeldLeaving()) return;
+      if (futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
+        promoteFutureIndexToCurrent();
+        return;
+      }
+      if (in.futureStallTicks >= futureindex::Limits::kGiveUpStalls) {
+        futureSkipSpine_ = futureIndexSpine_;
+      }
+      restoreAfterFutureIndex(/*forUser=*/in.controlHeld);
+      return;
+  }
+}
+
+// Images are deliberately absent: they are already 1-bit dithered plates baked
+// into the BW frame that storeBwBuffer snapshots, and re-decoding them under
+// that ~48 KB hold is what aborted image-heavy pages (Fourth Wing's dragon /
+// ornament pages at free~40KB maxA~24KB → operator new abort).
+void RivuletReaderActivity::paintTextLayerForAa() {
+  engine_.paint(renderer, marginX_, marginY_);
+  paintClippingHighlights();
+  paintFootnoteMarkers();
+}
+
+void RivuletReaderActivity::scheduleAaCatchUp() {
+  // The try counter is deliberately NOT reset here: it is what bounds a page
+  // whose heap never recovers, and the render that schedules the next attempt is
+  // the same render that failed the last one. It resets when AA actually runs,
+  // or when we move to a different page (which gets its own budget).
+  const int spine = spineIndex_;
+  const int page = engine_.currentPage();
+  if (spine != aaCatchUpSpine_ || page != aaCatchUpPage_) {
+    aaCatchUpSpine_ = spine;
+    aaCatchUpPage_ = page;
+    aaCatchUpTries_ = 0;
+  }
+  if (aaCatchUpTries_ >= kAaCatchUpMaxTries) return;
+  aaCatchUpPending_ = true;
+  aaCatchUpAtMs_ = millis() + kAaCatchUpDelayMs;
+}
+
+// Ask for a repaint that is allowed to run AA. Deliberately does NOT paint here.
+//
+// The first version did the greyscale passes inline, and it never once fired on
+// device — no AACU line of any kind in a full capture. Two reasons it could not
+// work: loop() runs on the main task while render() runs on the render task, so
+// painting from here is the wrong task for the job; and it guarded itself with
+// eight early returns, seven of them silent, so there was no way to see which
+// one was eating it. Requesting a render instead removes both problems — the
+// paint happens where every other paint happens, under the lock the render task
+// already holds, and the outcome shows up on the normal PAGE line as why=c.
+void RivuletReaderActivity::tickAaCatchUp() {
+  if (!aaCatchUpPending_) return;
+
+  // Settings can change between scheduling and firing.
+  if (SETTINGS.textAntiAliasing == 0 || darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled())) {
+    aaCatchUpPending_ = false;
+    return;
+  }
+  if (!ready_ || chapterNavBusy_ || warmingAdjacent_) return;
+  // A held control means a turn is coming; that repaint supersedes this one.
+  if (ReaderUtils::anyPageTurnControlHeld(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Back)) {
+    return;
+  }
+  if (activityManager.isRenderInProgress()) return;
+  // v51: three AACU BW paints in ~1.3s on the same page while maxA=26KB, then
+  // sleep persist raced the still-busy render task. Another paint cannot make
+  // storeBwBuffer fit; wait for heap to recover or give up with the page BW.
+  if (lastPageTurnTime_ != 0UL && (millis() - lastPageTurnTime_) < 800UL) return;
+  if (!renderer.canStoreBwBuffer(kAaPaintHeadroom)) {
+    aaCatchUpAtMs_ = millis() + 2000UL;
+    return;
+  }
+  if (static_cast<long>(millis() - aaCatchUpAtMs_) < 0) return;
+
+  aaCatchUpPending_ = false;
+  ++aaCatchUpTries_;
+  forceAaThisRender_ = true;
+  SystemLog::logTiming("AACU", "request spine=%d page=%d try=%u fre=%u maxA=%u", spineIndex_, engine_.currentPage() + 1,
+                       static_cast<unsigned>(aaCatchUpTries_), static_cast<unsigned>(ESP.getFreeHeap()),
+                       static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  requestUpdate();
 }
 
 void RivuletReaderActivity::persistPageMapIfComplete() {
   // Never persist a map built on partial OOM IR — that froze "last page" mid-chapter
   // (e.g. DCC Ch1 ending on the T'Ghee totem line instead of the saferoom).
+  // Future-index holds another spine in the engine — writing that map onto
+  // this chapter's .rvpm would poison the page count the user is reading.
+  if (futureIndexActive_) return;
+  if (!pageMapDirty_) return;
   if (!engine_.mapComplete() || irDir_.empty() || engine_.chapter().failed()) return;
   char mapPath[200];
   std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex_,
@@ -1959,25 +2403,350 @@ void RivuletReaderActivity::persistPageMapIfComplete() {
   }
 }
 
+void RivuletReaderActivity::persistPageMapBestEffort() {
+  // FIDX restore must goToPage(held) without walking. Save even an incomplete
+  // map — complete=false in the file so Home does not treat it as sealed.
+  if (futureIndexActive_) return;
+  if (irDir_.empty() || engine_.chapter().failed()) return;
+  if (engine_.mapKnownPages() <= 0) return;
+  char mapPath[200];
+  std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), spineIndex_,
+                static_cast<unsigned>(SETTINGS.imageRendering));
+  if (engine_.savePageMap(mapPath) && engine_.mapComplete()) pageMapDirty_ = false;
+}
+
+void RivuletReaderActivity::bindEnginePageCacheDir() {
+  if (irDir_.empty()) {
+    engine_.clearPageCacheDir();
+    engine_.setPageCacheSpine(-1);
+    return;
+  }
+  const std::string pagesDir = irDir_ + "/pages";
+  Storage.ensureDirectoryExists(pagesDir.c_str());
+  engine_.setPageCacheDir(pagesDir.c_str());
+}
+
+bool RivuletReaderActivity::tryHopToCachedPage(const int targetSpine, const int page) {
+  if (targetSpine < 0) return false;
+  bindEnginePageCacheDir();
+  int hop = std::max(0, page);
+  if (!engine_.hasPageCache(targetSpine, hop)) hop = 0;
+  if (!engine_.hasPageCache(targetSpine, hop)) return false;
+  if (engine_.hasChapter()) prepareHeapForChapterLoad(/*aggressive=*/true);
+  if (!engine_.loadOrphanPageCache(targetSpine, hop)) {
+    if (hop == 0 || !engine_.loadOrphanPageCache(targetSpine, 0)) return false;
+  }
+
+  pendingChapterIrLoad_ = targetSpine;
+  spineIndex_ = targetSpine;
+  ready_ = true;
+  error_ = false;
+  firstPaint_ = true;
+  footnoteCacheSpine_ = -1;
+  footnoteScanDeferred_ = true;
+  chapterFootnotes_.clear();
+  currentPageFootnotes_.clear();
+  pageMapDirty_ = true;
+  futureIndexedThisSession_ = 0;
+  futureIndexAbortedThisSitting_ = false;
+  if (heavyReleasedForUi_) heavyReleasedForUi_ = false;
+  SystemLog::logTiming("TURN", "chapter_cached_hop spine=%d page=%d spans=%u", targetSpine, engine_.currentPage() + 1,
+                       static_cast<unsigned>(engine_.page().spans.size()));
+  return true;
+}
+
+bool RivuletReaderActivity::tryHopToCachedFirstPage(const int targetSpine) {
+  return tryHopToCachedPage(targetSpine, 0);
+}
+
+void RivuletReaderActivity::tickPendingChapterIr() {
+  if (pendingChapterIrLoad_ < 0) return;
+  if (futureIndexActive_ || chapterNavBusy_ || heavyReleasedForUi_) return;
+  if (activityManager.isRenderInProgress()) return;
+
+  const int target = pendingChapterIrLoad_;
+  pendingChapterIrLoad_ = -1;
+
+  chapterload::Request req;
+  req.epub = epub_.get();
+  req.engine = &engine_;
+  req.renderer = &renderer;
+  req.irDir = irDir_;
+  req.spineIndex = target;
+  req.imageRendering = SETTINGS.imageRendering;
+  req.requireCompleteIr = false;
+  req.bindPageCache = true;
+  req.lendFrameBuffer = false;
+
+  chapterload::Hooks hooks;
+  hooks.ctx = this;
+  hooks.prepareHeap = [](void* ctx, const bool aggressive) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareHeapForChapterLoad(aggressive);
+  };
+  hooks.prepareImages = [](void* ctx, const char* href) {
+    static_cast<RivuletReaderActivity*>(ctx)->prepareChapterImages(href ? href : "");
+  };
+
+  const uint32_t t0 = millis();
+  const chapterload::Result loaded = chapterload::loadChapterIr(req, hooks);
+  if (!loaded.ok) {
+    LOG_ERR("RVR", "chapter IR catchup fail spine=%d", target);
+    SystemLog::logTiming("TURN", "chapter_ir_catchup_fail spine=%d ms=%lu", target,
+                         static_cast<unsigned long>(millis() - t0));
+    bindEnginePageCacheDir();
+    (void)engine_.loadOrphanPageCache(target, 0);
+    return;
+  }
+  if (!engine_.goToStart(renderer)) {
+    LOG_ERR("RVR", "chapter IR catchup goToStart fail spine=%d", target);
+  }
+  SystemLog::logTiming("TURN", "chapter_ir_catchup spine=%d cache=%d ms=%lu", target, loaded.fromCache ? 1 : 0,
+                       static_cast<unsigned long>(millis() - t0));
+}
+
+void RivuletReaderActivity::finishPendingChapterIr() {
+  if (pendingChapterIrLoad_ < 0) return;
+  activityManager.waitForRenderIdle();
+  tickPendingChapterIr();
+}
+
+void RivuletReaderActivity::overlapAheadDuringRefresh() {
+  // Layout only — PageLayouter measures via getTextAdvanceX, never drawPixel.
+  // Safe while the panel is still reading the framebuffer.
+  if (pendingChapterIrLoad_ >= 0 || futureIndexActive_ || !engine_.hasChapter()) return;
+  if (engine_.aheadWarm()) return;
+  if (engine_.page().atChapterEnd) return;
+  if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
+  if (engine_.warmAheadPage(renderer)) {
+    SystemLog::logTiming("TURN", "overlap_ahead spine=%d next=%d", spineIndex_, engine_.currentPage() + 2);
+  }
+}
+
+void RivuletReaderActivity::prewarmAheadGlyphs() {
+  if (futureIndexActive_ || !engine_.aheadWarm()) return;
+  if (!canRetainGlyphCache()) return;
+  // Device e38a3a71: 4.1s next-page paint at maxA after a sitting (abort=0).
+  // Skip when the largest free block cannot hold another decompress.
+  if (ESP.getMaxAllocHeap() < 32 * 1024) return;
+  // FIDX restore + IR catchup already blocked the loop for seconds; glyph
+  // prewarm then held RenderLock for 2–5s more (device 300ec1c0). Skip until
+  // the reader has been idle again.
+  if (lastFutureWorkMs_ != 0UL && (millis() - lastFutureWorkMs_) < 4000UL) return;
+  // Paint writes the framebuffer and FontDecompressor is not re-entrant.
+  // Device crash after a FIDX restore+turn: idle prewarm on the main task ran
+  // ~50ms after requestUpdate, while render() still held the FB (async FAST +
+  // FDC "Decompression failed" with healthy heap, then reboot).
+  if (activityManager.isRenderInProgress() || renderer.isFontCacheScanning()) return;
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return;
+  const int nextPage = engine_.currentPage() + 1;
+  if (glyphCacheSpine_ == spineIndex_ && glyphCachePage_ == nextPage) return;
+  if (gpioPeekHeldForIdleMap()) return;
+
+  const unsigned long t0 = millis();
+  g_prewarmDeadlineMs = t0 + kIdlePrewarmBudgetMs;
+  RenderLock lock(*this);
+  if (!engine_.aheadWarm()) {
+    g_prewarmDeadlineMs = 0;
+    return;
+  }
+  // Record next-page spans into the scan buckets without painting. Scan-mode
+  // paint + clearOnEnter wiped the live page's glyphs and left a white plate
+  // on glass when a FAST landed mid-prewarm (X3 4.1s prewarm / X4 blank SD
+  // pages). clearOnEnter stays false so the page on glass keeps its cache.
+  auto scope = fcm->createPrewarmScope(/*clearOnEnter=*/false, /*clearOnExit=*/false);
+  bool aborted = false;
+  const auto& ahead = engine_.aheadPage();
+  for (const auto& sp : ahead.spans) {
+    if (gpioPeekOrPrewarmBudget()) {
+      aborted = true;
+      break;
+    }
+    if (sp.text.empty()) continue;
+    renderer.ensureSdCardFontReady(sp.fontId, sp.text.c_str());
+    fcm->recordText(sp.text.c_str(), sp.fontId, static_cast<EpdFontFamily::Style>(sp.epdStyle));
+  }
+  aborted = scope.endScanAndPrewarm(&gpioPeekOrPrewarmBudget) || aborted;
+  g_prewarmDeadlineMs = 0;
+  const unsigned long dt = millis() - t0;
+  const bool userAbort = gpioPeekHeldForIdleMap();
+  // Budget abort: do not retry this page — one 4s SD-font face would loop.
+  // GPIO abort: leave unmarked so a later idle tick can finish.
+  if (!aborted || (!userAbort && dt >= kIdlePrewarmBudgetMs)) {
+    glyphCacheSpine_ = spineIndex_;
+    glyphCachePage_ = nextPage;
+  }
+  if (dt >= 50UL) {
+    SystemLog::logTiming("MAP", "prewarm_glyphs page=%d abort=%d ms=%lu", nextPage + 1, aborted ? 1 : 0, dt);
+  }
+  armSwallowAfterIdle(pageTurnLatch_, t0, aborted);
+}
+
+void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
+  // Cached chapter-hop paints page 1 from .rvpg with no IR yet (hasChapter false).
+  // Still rewrite the FB so QR sleep diffs the page on glass, not an empty buffer.
+  if (!ready_ || futureIndexActive_ || chapterNavBusy_) return;
+  renderer.clearScreen(0xFF);
+  engine_.paint(renderer, marginX_, marginY_);
+  if (engine_.hasChapter()) {
+    paintPageImages();
+    paintClippingHighlights();
+    paintFootnoteMarkers();
+  }
+  renderStatusBar();
+}
+
 void RivuletReaderActivity::tickIdlePageMap() {
-  if (!ready_ || !epub_ || engine_.mapComplete()) return;
-  // Don't steal the bus while any page-turn control is held.
-  if (ReaderUtils::anyPageTurnControlHeld(mappedInput) ||
-      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+  if (futureIndexActive_ || pendingChapterIrLoad_ >= 0) return;
+  if (activityManager.isRenderInProgress()) return;
+  if (!ready_ || !epub_ || !firstInkDone_ || !engine_.hasChapter()) return;
+  if (ReaderUtils::anyPageTurnControlHeld(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
     return;
   }
   const unsigned long now = millis();
-  if (lastIdleMapMs_ != 0 && (now - lastIdleMapMs_) < 40) return;
-  lastIdleMapMs_ = now;
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
 
-  if (!engine_.extendPageMap(renderer, rivulet::RivuletEngine::kIdleMapPagesPerTick)) return;
-  pageMapDirty_ = true;
-  if (engine_.mapComplete()) {
+  static int s_lastLoggedKnown = -1;
+  static int s_lastLoggedSpine = -1;
+  static unsigned long s_lastMapLogMs = 0;
+  static int s_stallTicks = 0;
+  static int s_idleGaveUpSpine = -1;
+
+  // Turn speed first: warm next page in RAM ASAP (no SD). Only 50ms after a turn.
+  // 0029 disabled this and every forward turn paid a full layout — felt unusable.
+  // If ahead is still cold, do NOT fall through to extendPageMap: a 1.5s measure
+  // walk of the map tail (device log known=3→4) steals the next tap and the
+  // user still pays a full paint layout on the turn.
+  if (!engine_.aheadWarm()) {
+    const bool atChapterEnd = engine_.hasChapter() && engine_.page().atChapterEnd;
+    if (!atChapterEnd) {
+      if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
+        engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+        const unsigned long tAhead = millis();
+        const bool warmed = engine_.warmAheadPage(renderer);
+        engine_.setMapAbortCheck(nullptr);
+        armSwallowAfterIdle(pageTurnLatch_, tAhead, gpioPeekHeldForIdleMap());
+        if (warmed && now - s_lastMapLogMs >= 5000UL) {
+          s_lastMapLogMs = now;
+          SystemLog::logTiming("MAP", "warm_ahead spine=%d page=%d", spineIndex_, engine_.currentPage() + 1);
+        }
+      }
+      return;
+    }
+  }
+
+  // Next page is laid out: decompress its glyphs so the coming tap skips scan.
+  // Wait 2s after a turn — device e38a3a71 painted the next page for 4.1s
+  // (prewarm_glyphs abort=0) 50ms after the tap and froze the following press.
+  if (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1) {
+    if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL) {
+      prewarmAheadGlyphs();
+    }
+  }
+
+  // Behind warm after a chapter land (PageBack onto last page). Not on the
+  // turn path — that added SD/layout onto the 3.5s Back the user already felt.
+  if (!engine_.behindWarm() && engine_.currentPage() > 0 &&
+      (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
+    engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+    const unsigned long tBehind = millis();
+    const bool warmed = engine_.warmBehindPage(renderer);
+    engine_.setMapAbortCheck(nullptr);
+    armSwallowAfterIdle(pageTurnLatch_, tBehind, gpioPeekHeldForIdleMap());
+    if (warmed) return;
+  }
+
+  // Footnotes ~2s on chapter 32. Wait 8s after the last turn (or first ink if
+  // they have not turned) so a flip-through is not blocked by HTML scanning.
+  const unsigned long quietFrom = lastPageTurnTime_ != 0UL ? lastPageTurnTime_ : firstInkAtMs_;
+  if (footnoteScanDeferred_ && firstInkDone_ && quietFrom != 0UL && (now - quietFrom) >= kFootnoteIdleDelayMs &&
+      ESP.getMaxAllocHeap() >= 12 * 1024 && ESP.getFreeHeap() >= 20 * 1024) {
+    // Start-of-bite peek: a tap during the previous 600ms scan aborts and
+    // re-defers, and the next loop would immediately restart the scan.
+    if (gpioPeekHeldForIdleMap()) return;
+    footnoteScanDeferred_ = false;
+    const unsigned long t0 = millis();
+    ensureChapterFootnotes();
+    const unsigned long dt = millis() - t0;
+    if (dt >= 200UL) {
+      SystemLog::logTiming("NOTE", "footnotes spine=%d ms=%u abort=%d", spineIndex_, static_cast<unsigned>(dt),
+                           footnoteScanDeferred_ ? 1 : 0);
+    }
+    armSwallowAfterIdle(pageTurnLatch_, t0, gpioPeekHeldForIdleMap());
+    lastFutureWorkMs_ = millis();
+    resetTaskWatchdogIfSubscribed();
+    // Scan is per chapter; paint is per page. Without a repaint the sitting
+    // page would keep bare numbers until a dummy turn. Only refresh when this
+    // page actually has markers — no flash for a page with none.
+    if (!footnoteScanDeferred_ && !chapterFootnotes_.empty()) {
+      refreshPageFootnotes();
+      if (!currentPageFootnotes_.empty()) requestUpdate();
+    }
+    return;
+  }
+
+  // Map seal: keep measuring this chapter until complete (classic 1.5/1.6
+  // `isPartial` keep-ticking). One layoutPage per bite; peek-GPIO abort so a
+  // tap during the ~1.7s measure is not eaten. Quiet after a turn so flip-
+  // through stays snappy. v50 cap=1 sat on page 16 with known=21 for 37s and
+  // never sealed — status bounced 34→33→35 as the heuristic guessed.
+  idlemap::Input mapIn;
+  mapIn.firstInkDone = firstInkDone_;
+  mapIn.mapComplete = engine_.mapComplete();
+  mapIn.controlHeld = false;  // already returned above if a control is held
+  mapIn.knownPages = engine_.mapKnownPages();
+  mapIn.currentPage = engine_.currentPage();
+  mapIn.nowMs = now;
+  mapIn.lastTurnMs = lastPageTurnTime_;
+  mapIn.lastWorkMs = lastIdleMapMs_;
+  if (!idlemap::shouldMeasure(mapIn) || s_idleGaveUpSpine == spineIndex_) return;
+
+  const int knownBefore = engine_.mapKnownPages();
+  const int est = engine_.chapterPageCount(&renderer);
+  engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
+  const unsigned long tBite = millis();
+  const bool progressed = engine_.extendPageMap(renderer, idlemap::Limits::kPagesPerBite);
+  engine_.setMapAbortCheck(nullptr);
+  lastIdleMapMs_ = millis();
+  armSwallowAfterIdle(pageTurnLatch_, tBite, gpio.peekRawHeld());
+  const int knownAfter = engine_.mapKnownPages();
+  if (progressed) {
+    pageMapDirty_ = true;
+    s_stallTicks = 0;
+  } else if (gpio.peekRawHeld()) {
+    // Bite aborted because a button went down mid-layout. Not a stuck map.
+    s_stallTicks = 0;
+  } else {
+    ++s_stallTicks;
+    if (s_stallTicks >= 3 && knownAfter > 0) {
+      if (engine_.tryCompleteMapAtEnd(renderer)) {
+        pageMapDirty_ = true;
+        s_stallTicks = 0;
+        SystemLog::logTiming("MAP", "try_complete spine=%d known=%d complete=%d", spineIndex_, engine_.mapKnownPages(),
+                             engine_.mapComplete() ? 1 : 0);
+      } else if (s_stallTicks >= 8) {
+        s_idleGaveUpSpine = spineIndex_;
+        SystemLog::logTiming("MAP", "idle_give_up spine=%d known=%d est=%d stall=%d", spineIndex_, knownAfter, est,
+                             s_stallTicks);
+      }
+    }
+  }
+
+  const bool nowComplete = engine_.mapComplete();
+  if (nowComplete || !progressed || knownAfter != s_lastLoggedKnown || spineIndex_ != s_lastLoggedSpine ||
+      (now - s_lastMapLogMs) >= 5000UL) {
+    s_lastLoggedKnown = knownAfter;
+    s_lastLoggedSpine = spineIndex_;
+    s_lastMapLogMs = now;
+    SystemLog::logTiming("MAP", "spine=%d known=%d->%d est=%d complete=%d prog=%d stall=%d page=%d fre=%u maxA=%u",
+                         spineIndex_, knownBefore, knownAfter, est, nowComplete ? 1 : 0, progressed ? 1 : 0,
+                         s_stallTicks, engine_.currentPage() + 1, static_cast<unsigned>(ESP.getFreeHeap()),
+                         static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  }
+  if (nowComplete) {
     persistPageMapIfComplete();
-    // Drop the chapter "~" once — one full refresh, not every idle tick.
-    requestUpdate();
+    s_stallTicks = 0;
   }
 }
 
@@ -2006,10 +2775,9 @@ void RivuletReaderActivity::updateBookmarkFlag() {
   const int page = engine_.currentPage();
   const int pageCount = std::max(page + 1, engine_.chapterPageCount(&renderer));
   const float prog = bookProgress01();
-  currentPageBookmarked_ =
-      std::any_of(cachedBookmarks_.begin(), cachedBookmarks_.end(), [&](const BookmarkEntry& b) {
-        return bookmarkMatchesPage(b, spineIndex_, page, pageCount, prog);
-      });
+  currentPageBookmarked_ = std::any_of(cachedBookmarks_.begin(), cachedBookmarks_.end(), [&](const BookmarkEntry& b) {
+    return bookmarkMatchesPage(b, spineIndex_, page, pageCount, prog);
+  });
 }
 
 std::string RivuletReaderActivity::pageSummaryForBookmark() const {
@@ -2126,8 +2894,8 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
   auto& blocks = chapter.blocksMutable();
   if (blocks.empty()) return;
   // Suppress / Placeholder bake at convert; still zero plates if stale IR slipped through.
-  if (SETTINGS.imageRendering == CasperSettings::IMAGES_SUPPRESS ||
-      SETTINGS.imageRendering == CasperSettings::IMAGES_PLACEHOLDER) {
+  if (SETTINGS.imageRendering == CrossPointSettings::IMAGES_SUPPRESS ||
+      SETTINGS.imageRendering == CrossPointSettings::IMAGES_PLACEHOLDER) {
     int n = 0;
     for (auto& b : blocks) {
       if (b.kind != rivulet::BlockKind::Image) continue;
@@ -2212,11 +2980,13 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
     ImageDimsProbe probe;
     const bool streamOk = epub_->readItemContentsToStream(resolved, probe, 1024, /*allowEarlyStop=*/true);
     if (!probe.getDimensions(dims) || dims.width <= 0 || dims.height <= 0) {
-      // Fallback box so the page still reserves space — paint may still extract/decode.
-      dims.width = static_cast<uint16_t>(viewW);
-      dims.height = static_cast<uint16_t>(std::max(64, viewH / 3));
-      LOG_ERR("RVR", "image dims probe fail streamOk=%d path=%s — using %dx%d", streamOk ? 1 : 0,
-              resolved.c_str(), dims.width, dims.height);
+      // Do not invent a viewport-sized box. Hail Mary chapter plates that fail
+      // the probe used to layout as a hollow rectangle with no title ink.
+      LOG_ERR("RVR", "image dims probe fail streamOk=%d path=%s — skip plate", streamOk ? 1 : 0, resolved.c_str());
+      b.imageW = 0;
+      b.imageH = 0;
+      ++skipped;
+      continue;
     }
 
     int iw = dims.width;
@@ -2229,8 +2999,7 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
     // Illuminae briefings are ~723px document plates with CSS float:right; width:40%.
     // On e-ink 40% is unreadable. Large document floats become nearly full-width
     // centered plates; only small stamps stay as true side floats.
-    const bool docFloatPlate =
-        (leftFloat || rightFloat) && !isOrnament && dims.width >= 280 && dims.height >= 120;
+    const bool docFloatPlate = (leftFloat || rightFloat) && !isOrnament && dims.width >= 280 && dims.height >= 120;
     if (docFloatPlate) {
       b.flags = static_cast<uint16_t>(b.flags & ~(rivulet::kBlockFloatLeft | rivulet::kBlockFloatRight));
       leftFloat = false;
@@ -2265,9 +3034,9 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
       iw = targetW;
     }
 
-    // Letter-shrink ONLY narrow LEFT floats (Alice ornate C). Never shrink figright
-    // plates (183×450) — that produced the tiny white box on page 3.
-    // Ornaments stay centered (kBlockOrnament) — never mis-tagged as letter floats.
+    // Letter-shrink ONLY narrow LEFT floats (Alice ornate C / figleft). Never
+    // invent a float for a small centered ornament — v0.1.9 wrapped chapter
+    // flourishes into the first body lines and left-aligned the title.
     const int bodyLineEst = std::max(18, renderer.getLineHeight(engine_.renderKey().fontId, 1.0f));
     const int maxLetterW = std::max(120, (viewW * 28) / 100);
     const bool letterGlyph = !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW;
@@ -2277,22 +3046,13 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
         iw = std::max(1, (iw * targetH) / ih);
         ih = targetH;
       }
-    } else if (!isOrnament && !leftFloat && !rightFloat && iw <= maxLetterW && iw <= ih * 2 &&
-               ih <= bodyLineEst * 4) {
-      // Heuristic letter without float class.
-      const int targetH = bodyLineEst * 2;
-      if (ih > targetH && ih > 0) {
-        iw = std::max(1, (iw * targetH) / ih);
-        ih = targetH;
-      }
-      b.flags = static_cast<uint16_t>(b.flags | rivulet::kBlockFloatLeft);
     }
     b.imageW = static_cast<uint16_t>(std::min(65535, iw));
     b.imageH = static_cast<uint16_t>(std::min(65535, ih));
     ++prepared;
-    LOG_INF("RVR", "image[%u] %s %dx%d (src %dx%d) orn=%d L=%d R=%d", static_cast<unsigned>(bi),
-            resolved.c_str(), iw, ih, static_cast<int>(dims.width), static_cast<int>(dims.height),
-            isOrnament ? 1 : 0, leftFloat ? 1 : 0, rightFloat ? 1 : 0);
+    LOG_INF("RVR", "image[%u] %s %dx%d (src %dx%d) orn=%d L=%d R=%d", static_cast<unsigned>(bi), resolved.c_str(), iw,
+            ih, static_cast<int>(dims.width), static_cast<int>(dims.height), isOrnament ? 1 : 0, leftFloat ? 1 : 0,
+            rightFloat ? 1 : 0);
 
     // Store package-absolute path on the IR run so paint/extract never depend on
     // baseDir + "../Images/..." re-resolution (fragile after IR cache reload).
@@ -2301,16 +3061,15 @@ void RivuletReaderActivity::prepareChapterImages(const std::string& spineHref) {
     }
   }
   if (prepared > 0 || skipped > 0) {
-    LOG_INF("RVR", "prepareChapterImages spine=%s prepared=%d skipped=%d free=%u maxA=%u", spineHref.c_str(),
-            prepared, skipped, static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    LOG_INF("RVR", "prepareChapterImages spine=%s prepared=%d skipped=%d free=%u maxA=%u", spineHref.c_str(), prepared,
+            skipped, static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
 }
 
 void RivuletReaderActivity::paintPageImages() {
   if (!epub_ || !ready_) return;
-  if (SETTINGS.imageRendering == CasperSettings::IMAGES_SUPPRESS ||
-      SETTINGS.imageRendering == CasperSettings::IMAGES_PLACEHOLDER) {
+  if (SETTINGS.imageRendering == CrossPointSettings::IMAGES_SUPPRESS ||
+      SETTINGS.imageRendering == CrossPointSettings::IMAGES_PLACEHOLDER) {
     return;  // convert already omitted/replaced plates; never decode
   }
   const auto& plates = engine_.page().images;
@@ -2326,8 +3085,11 @@ void RivuletReaderActivity::paintPageImages() {
     if (slash != std::string::npos) baseDir = item.href.substr(0, slash + 1);
   }
   // Prefer rivulet/img; fall back to package-adjacent if irDir was empty.
-  std::string imgCacheDir = irDir_.empty() ? (casperBookDir_ + "/rivulet/img/") : (irDir_ + "/img/");
-  Storage.ensureDirectoryExists(imgCacheDir.c_str());
+  std::string imgCacheDir = irDir_.empty() ? (crosspointBookDir_ + "/rivulet/img/") : (irDir_ + "/img/");
+  if (!imgCacheDirReady_) {
+    Storage.ensureDirectoryExists(imgCacheDir.c_str());
+    imgCacheDirReady_ = true;
+  }
 
   // Free PNG warm so chapter ornaments / full plates can allocate the decoder.
   PngToFramebufferConverter::releaseWarmIfHeapTight(/*minMaxAllocBytes=*/48 * 1024);
@@ -2362,30 +3124,41 @@ void RivuletReaderActivity::paintPageImages() {
     return nc > 0 ? cands[0] : std::string{};
   };
 
-  int painted = 0;
-  for (const auto& plate : plates) {
-    if (plate.href.empty() || plate.w <= 0 || plate.h <= 0) continue;
-    std::string resolved = resolveItemPath(plate.href);
-    if (resolved.empty() || !ImageDecoderFactory::isFormatSupported(resolved)) {
-      // Do not draw a hollow white box for unsupported images (SVG ornaments).
-      // Layout already skips 0×0 plates; any residual plate is simply omitted.
-      LOG_ERR("RVR", "paint skip image href=%s resolved=%s", plate.href.c_str(),
-              resolved.empty() ? "(empty)" : resolved.c_str());
-      continue;
-    }
-
+  auto destForHref = [&](const std::string& resolved) -> std::string {
     std::string ext;
     const auto dot = resolved.rfind('.');
     if (dot != std::string::npos) ext = resolved.substr(dot);
-    // Stable cache file name from path hash (no counter drift across paints).
     const size_t h = std::hash<std::string>{}(resolved);
     char name[48];
     std::snprintf(name, sizeof(name), "%08x%s", static_cast<unsigned>(h & 0xffffffffu),
                   ext.empty() ? ".img" : ext.c_str());
-    const std::string destPath = imgCacheDir + name;
+    return imgCacheDir + name;
+  };
 
-    LOG_INF("RVR", "paint image %s -> %s at %d,%d %dx%d", resolved.c_str(), destPath.c_str(),
-            marginX_ + plate.x, marginY_ + plate.y, plate.w, plate.h);
+  int painted = 0;
+  for (const auto& plate : plates) {
+    if (plate.href.empty() || plate.w <= 0 || plate.h <= 0) continue;
+
+    // IR rewrite stores a package-absolute href. If that hash is already on SD,
+    // skip the ZIP getItemSize probe (central-directory walk on every paint).
+    const std::string hrefDecoded = FsHelpers::decodeUriEscapes(plate.href);
+    std::string destPath = destForHref(hrefDecoded);
+    std::string resolved = hrefDecoded;
+    if (!Storage.exists(destPath.c_str())) {
+      resolved = resolveItemPath(plate.href);
+      if (resolved.empty() || !ImageDecoderFactory::isFormatSupported(resolved)) {
+        // Do not draw a hollow white box for unsupported images (SVG ornaments).
+        LOG_ERR("RVR", "paint skip image href=%s resolved=%s", plate.href.c_str(),
+                resolved.empty() ? "(empty)" : resolved.c_str());
+        continue;
+      }
+      destPath = destForHref(resolved);
+    } else if (!ImageDecoderFactory::isFormatSupported(resolved)) {
+      continue;
+    }
+
+    LOG_DBG("RVR", "paint image %s -> %s at %d,%d %dx%d", resolved.c_str(), destPath.c_str(), marginX_ + plate.x,
+            marginY_ + plate.y, plate.w, plate.h);
     ImageBlock ib(destPath, resolved, plate.w, plate.h);
     ib.render(renderer, marginX_ + plate.x, marginY_ + plate.y);
     ++painted;
@@ -2410,9 +3183,9 @@ void RivuletReaderActivity::onEnter() {
   ImageBlock::clearSessionRenderFailures();
 
   // --- Ownership pillars: stable id + /.crosspoint/book_<id>/ + ledger ---
-  stableId_ = CasperBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
-  casperBookDir_ = CasperBook::bookDir(stableId_);
-  irDir_ = CasperBook::rivuletDir(stableId_);
+  stableId_ = CrossPointBook::openBook(epub_->getPath(), epub_->getTitle(), epub_->getAuthor());
+  crosspointBookDir_ = CrossPointBook::bookDir(stableId_);
+  irDir_ = CrossPointBook::rivuletDir(stableId_);
 
   configureRenderKey();
   epub_->setupCacheDir();  // package book.bin under /.crosspoint (or legacy hit)
@@ -2422,7 +3195,7 @@ void RivuletReaderActivity::onEnter() {
   // book stats + global stats (0.1.5 opened the page first).
   const bool snappyOpen = ReaderActivity::hasOpenHints();
   if (!snappyOpen) {
-    readingStats_ = CasperStats::loadBook(epub_->getPath());
+    readingStats_ = CrossPointStats::loadBook(epub_->getPath());
     if (SETTINGS.readingStatsTrackingEnabled()) {
       globalReadingStats_ = GlobalReadingStats::load();
     }
@@ -2430,7 +3203,9 @@ void RivuletReaderActivity::onEnter() {
     pendingStatsLoad_ = true;
   }
   readingSessionStartMs_ = millis();
-  lastPageTurnTime_ = readingSessionStartMs_;
+  lastPageTurnTime_ = 0;
+  lastForwardTurnMs_ = 0;
+  firstInkAtMs_ = 0;
 
   // Sticky path for QR in RAM immediately; SD write deferred until after first ink
   // (state.json save was ~100–200ms on the critical open path).
@@ -2445,20 +3220,21 @@ void RivuletReaderActivity::onEnter() {
   }
   pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
 
-  // QR / warm open: glass already has the page (or home) — never FAST a Loading
-  // status over it. Cold open without hints still shows a corner cue.
-  if (!snappyOpen) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+  // Home already windowed "Opening" when open hints are set. Painting it again
+  // after FrameBufferLoan (epub load wipes RAM FB) then window-refreshing can
+  // promote a full FAST of a white buffer — the blank Opening screen.
+  if (!QrTimingLog::active() && !ReaderActivity::hasOpenHints()) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
   }
 
   // Hyphenation language from OPF (Liang patterns).
   Hyphenator::setPreferredLanguage(epub_->getLanguage());
 
-  LOG_INF("RVR", "onEnter path=%s id=%s casper=%s spines=%d free=%u maxAlloc=%u", epub_->getPath().c_str(),
-          stableId_.c_str(), casperBookDir_.c_str(), epub_->getSpineItemsCount(),
+  LOG_INF("RVR", "onEnter path=%s id=%s dir=%s spines=%d free=%u maxAlloc=%u", epub_->getPath().c_str(),
+          stableId_.c_str(), crosspointBookDir_.c_str(), epub_->getSpineItemsCount(),
           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
-  // Resume: casper progress.bin → legacy package/Casper progress.bin →
+  // Resume: CrossPoint progress.bin → legacy package progress.bin →
   // stats % (home ring) → first-open land past cover spines.
   int resumeSpine = -1;
   int resumePage = 0;
@@ -2470,7 +3246,7 @@ void RivuletReaderActivity::onEnter() {
     const float statsPct = readingStats_.getProgressPercent();
     if (statsPct >= 1.0f) {
       LOG_INF("RVR", "progress.bin missing; resuming from stats %.1f%%", static_cast<double>(statsPct));
-      // jumpToPercent loads spine + page and saves casper progress.bin.
+      // jumpToPercent loads spine + page and saves progress.bin.
       jumpToPercent(static_cast<int>(statsPct + 0.5f));
       if (ready_) {
         requestUpdate();
@@ -2518,8 +3294,8 @@ void RivuletReaderActivity::onEnter() {
   // Path-keyed bookmarks under /.crosspoint/bookmarks (migrate + classic share this).
   loadCachedBookmarks();
   // QR slept on the book menu: reopen it after first paint so wake lands in-menu.
-  if (APP_STATE.sleepResumeTarget == CasperState::RESUME_READER_MENU) {
-    APP_STATE.sleepResumeTarget = CasperState::RESUME_READER;
+  if (APP_STATE.sleepResumeTarget == CrossPointState::RESUME_READER_MENU) {
+    APP_STATE.sleepResumeTarget = CrossPointState::RESUME_READER;
     openReaderMenu();
     return;
   }
@@ -2532,8 +3308,7 @@ void RivuletReaderActivity::onExit() {
   if (!leaveExitFlushed_) {
     flushExitProgressAndStats();
   } else {
-    LOG_INF("RVR", "exit (pre-flushed) spine=%d page=%d id=%s", spineIndex_, engine_.currentPage(),
-            stableId_.c_str());
+    LOG_INF("RVR", "exit (pre-flushed) spine=%d page=%d id=%s", spineIndex_, engine_.currentPage(), stableId_.c_str());
   }
   readingSessionStartMs_ = 0;
   leaveExitFlushed_ = false;
@@ -2546,9 +3321,12 @@ void RivuletReaderActivity::onExit() {
 
 void RivuletReaderActivity::openReaderMenu() {
   if (!epub_ || !ready_) return;
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/true);
   const uint32_t t0 = millis();
-  // Snapshot menu chrome numbers *before* releaseHeavyForUi clears the chapter.
-  // Keep this path free of SD clippings/footnote scans (those made open feel stuck).
+  // Snapshot menu chrome numbers while the chapter is still warm. Do NOT
+  // releaseHeavyForUi here — that SD save + IR/font scrub made every menu open
+  // feel multi-second. Release only when launching heap-heavy children (Fonts /
+  // Reader UI). Cancel / light actions keep the chapter in RAM for instant return.
   const int page = (engine_.hasChapter() ? engine_.currentPage() : heldPageForUi_) + 1;
   const int total = std::max(page, engine_.hasChapter() ? engine_.chapterPageCount(&renderer) : page);
   const int bookProgressPercent = std::clamp(static_cast<int>(bookProgress01() * 100.0f + 0.5f), 0, 100);
@@ -2561,37 +3339,43 @@ void RivuletReaderActivity::openReaderMenu() {
   const bool hasBookmarks = !cachedBookmarks_.empty();
   const bool pageBookmarked = currentPageBookmarked_;
   const bool bookCompleted = readingStats_.isCompleted;
+  const bool canRestoreStats = epub_ && hasRestorableBookStats(epub_->getPath().c_str());
+  // Cheap pin so sleep / crash during the menu still has a place — no IR drop.
+  (void)saveProgress();
   LOG_INF("RVR", "openReaderMenu prep=%lums page=%d/%d spine=%d bm=%zu clips=%d fn=%d",
           static_cast<unsigned long>(millis() - t0), page, total, spineIndex_, cachedBookmarks_.size(),
           hasClips ? 1 : 0, hasFootnotes ? 1 : 0);
-
-  // Save place + free chapter IR/caches so Settings/Text UI have heap headroom.
-  // Return path restores with top-left status (progress already on SD).
-  releaseHeavyForUi();
 
   const uint8_t darkModeOnOpen = SETTINGS.readerDarkMode;
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, title, page, total, bookProgressPercent,
                                                SETTINGS.orientation, hasFootnotes, hasBookmarks, hasClips,
-                                               pageBookmarked, bookCompleted),
+                                               pageBookmarked, bookCompleted, canRestoreStats),
       [this, darkModeOnOpen](const ActivityResult& result) {
         using MA = EpubReaderMenuActivity::MenuAction;
         int action = -1;
         if (const auto* menu = std::get_if<MenuResult>(&result.data)) {
           // Orientation / front-button follow apply even when cancelled.
           if (SETTINGS.orientation != menu->orientation) {
-            // Loading on the orientation still visible (e.g. portrait upper-left),
-            // not the destination — applyOrientation first would park the cue on
-            // the wrong physical corner (portrait→CCW looked like upper-right).
             GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+            const int keepSpine = spineIndex_;
+            const int keepPage = engine_.hasChapter() ? engine_.currentPage() : heldPageForUi_;
+            const int keepCount =
+                std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer)
+                                                 : (lastSavedPageCount_ > 0 ? lastSavedPageCount_ : keepPage + 1));
+            const bool keepCursorValid = engine_.hasCurrentStartCursor();
+            const rivulet::IrCursor keepCursor = engine_.currentStartCursor();
             SETTINGS.orientation = menu->orientation;
             SETTINGS.frontButtonFollowOrientation =
-                CasperSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
+                CrossPointSettings::defaultFrontButtonFollowForOrientation(menu->orientation);
             SETTINGS.saveToFile();
             ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-            // Chapter is released — restore at held page with new key (not goToStart).
             configureRenderKey();
-            (void)restoreAfterUi(/*showLoading=*/false);
+            if (heavyReleasedForUi_) {
+              (void)restoreAfterUi(/*showLoading=*/false);
+            } else {
+              (void)relayoutChapterForViewport(keepSpine, keepPage, keepCount, keepCursor, keepCursorValid);
+            }
             firstPaint_ = true;
           } else if (SETTINGS.frontButtonFollowOrientation != menu->frontButtonFollowOrientation) {
             SETTINGS.frontButtonFollowOrientation = menu->frontButtonFollowOrientation;
@@ -2605,7 +3389,7 @@ void RivuletReaderActivity::openReaderMenu() {
         // Live Dark Mode toggle never returns an action — scrub polarity on leave.
         if (SETTINGS.readerDarkMode != darkModeOnOpen) {
           firstPaint_ = true;
-          pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+          pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
         }
 
         // Leave reader: no restore needed (onExit / leave path handles cleanup).
@@ -2614,14 +3398,24 @@ void RivuletReaderActivity::openReaderMenu() {
           return;
         }
 
-        // Fonts / Reader UI: keep chapter released for the child; restore when
-        // that child returns (see those handlers).
-        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI)) {
+        // Fonts / Reader UI / chapter list need contiguous heap — release now.
+        // Chapter select then loads from .rvir / page cache instead of fighting
+        // the resident IR. Cancel restores the held place.
+        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI) ||
+            action == static_cast<int>(MA::SELECT_CHAPTER)) {
+          releaseHeavyForUi();
           onReaderMenuAction(action);
           return;
         }
 
-        // Back to reading (cancel) or any action that needs the page: restore first.
+        // Delete cache paints its own Deleting/Opening chrome and full reload —
+        // do not requestUpdate() afterward (that raced the status off the glass).
+        if (action == static_cast<int>(MA::DELETE_CACHE)) {
+          onReaderMenuAction(action);
+          return;
+        }
+
+        // Back to reading (cancel) or any action that needs the page.
         if (heavyReleasedForUi_) {
           (void)restoreAfterUi();
         }
@@ -2655,12 +3449,13 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                   firstPaint_ = true;
                   (void)saveProgress();
                 } else {
-                  // loadTocChapter restores the previous spine; do not leave Empty page.
-                  GUI.drawPopup(renderer, "Chapter not readable", BaseTheme::kPopupCenterY, true);
-                  delay(600);
                   firstPaint_ = true;
+                  requestUpdate();
+                  return;
                 }
               }
+            } else if (heavyReleasedForUi_) {
+              (void)restoreAfterUi();
             }
             requestUpdate();
           });
@@ -2673,29 +3468,35 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                              [this](const ActivityResult&) {
                                (void)SETTINGS.saveToFile();
                                configureRenderKey();
-                               if (heavyReleasedForUi_) {
-                                 (void)restoreAfterUi();
-                               } else {
-                                 firstPaint_ = true;
+                               // Always restore the held place — never goToStart.
+                               if (!restoreAfterUi()) {
+                                 LOG_ERR("RVR", "Manage Reader UI restore failed — progress pinned");
                                }
                                requestUpdate();
                              });
       return;
     case MA::MANAGE_FONTS:
       // Chapter released while fonts UI runs; restore to held page (reflow via load).
-      startActivityForResult(
-          std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
-                                                 TextSettingsActivity::Tab::Family),
-          [this](const ActivityResult&) {
-            configureRenderKey();
-            if (heavyReleasedForUi_) {
-              (void)restoreAfterUi();
-            } else {
-              (void)engine_.goToStart(renderer);
-              firstPaint_ = true;
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                                    TextSettingsActivity::Tab::Family),
+                             [this](const ActivityResult&) {
+                               configureRenderKey();
+                               // NEVER goToStart here — that reset readers to chapter page 1 (and
+                               // cascading progress.bin=0) after checking AA / font settings.
+                               if (!heavyReleasedForUi_) {
+                                 // Should be released from openReaderMenu; re-hold from progress if not.
+                                 int spine = spineIndex_;
+                                 int page = engine_.currentPage();
+                                 loadProgress(spine, page);
+                                 heldSpineForUi_ = spine;
+                                 heldPageForUi_ = std::max(0, page);
+                                 heavyReleasedForUi_ = true;
+                               }
+                               if (!restoreAfterUi()) {
+                                 LOG_ERR("RVR", "Manage Fonts restore failed — progress pinned");
+                               }
+                               requestUpdate();
+                             });
       return;
     case MA::GO_TO_PERCENT: {
       const int initial = std::clamp(static_cast<int>(bookProgress01() * 100.0f + 0.5f), 0, 100);
@@ -2781,18 +3582,31 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       return;
     }
     case MA::DELETE_STATS: {
-      // Wipe stats under book_<id> plus any legacy epub_*/legacy folders
-      // loadForBook might still find (same as File Browser → Delete Book Stats).
+      // Move live stats into <cache>/.trash — Recover Stats puts them back.
       if (epub_) {
-        (void)BookReadingStats::removeForBook(epub_->getPath());
-        LOG_INF("RVR", "deleted stats for %s", epub_->getPath().c_str());
-      } else if (!casperBookDir_.empty()) {
-        (void)BookReadingStats::remove(casperBookDir_);
-        LOG_INF("RVR", "deleted casper stats %s", casperBookDir_.c_str());
+        (void)stashDeletedBookStats(epub_->getPath().c_str());
+        LOG_INF("RVR", "stashed stats for %s", epub_->getPath().c_str());
+      } else if (!crosspointBookDir_.empty()) {
+        (void)BookReadingStats::stashToTrash(crosspointBookDir_);
+        LOG_INF("RVR", "stashed stats %s", crosspointBookDir_.c_str());
       }
       readingStats_ = BookReadingStats{};
       PenumbraThemeUi::invalidateRecentsProgressCache();
-      GUI.drawPopup(renderer, "Stats deleted", BaseTheme::kPopupCenterY, true);
+      GUI.drawPopup(renderer, tr(STR_BOOK_STATS_DELETED), BaseTheme::kPopupCenterY, true);
+      delay(400);
+      requestUpdate();
+      return;
+    }
+    case MA::RESTORE_STATS: {
+      if (!epub_ || !restoreBookStats(epub_->getPath().c_str())) {
+        GUI.drawPopup(renderer, tr(STR_BOOK_STATS_RESTORE_FAILED), BaseTheme::kPopupCenterY, true);
+        delay(400);
+        requestUpdate();
+        return;
+      }
+      readingStats_ = CrossPointStats::loadBook(epub_->getPath());
+      PenumbraThemeUi::invalidateRecentsProgressCache();
+      GUI.drawPopup(renderer, tr(STR_BOOK_STATS_RESTORED), BaseTheme::kPopupCenterY, true);
       delay(400);
       requestUpdate();
       return;
@@ -2801,7 +3615,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       readingStats_.avgSecondsPerForwardPage = 0;
       readingStats_.paceSampleCount = 0;
       readingStats_.estimatedTimeLeftSeconds = 0;
-      if (!casperBookDir_.empty()) readingStats_.save(casperBookDir_);
+      if (!crosspointBookDir_.empty()) readingStats_.save(crosspointBookDir_);
       GUI.drawPopup(renderer, "Pace reset", BaseTheme::kPopupCenterY, true);
       delay(400);
       requestUpdate();
@@ -2810,9 +3624,33 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
     case MA::DELETE_CACHE: {
       // Full derived-cache wipe for this book (package book.bin + rivulet IR/HTML).
       // Keeps progress.bin + stats under book_<id>/. Forces ZIP re-extract on open.
+      // Capture place BEFORE wipe — loadSpine() defaults to page 0 and the old
+      // "walk first 24 spines" fallback jumped readers (e.g. book start → ch6).
+      int keepSpine = heavyReleasedForUi_ ? heldSpineForUi_ : spineIndex_;
+      int keepPage = heavyReleasedForUi_ ? heldPageForUi_ : engine_.currentPage();
+      {
+        int progSpine = -1, progPage = 0;
+        loadProgress(progSpine, progPage);
+        if (progSpine >= 0) {
+          keepSpine = progSpine;
+          keepPage = std::max(0, progPage);
+        }
+      }
+      // Upper-left "Deleting" like Home "Opening" / exit "Saving".
+      // Menu dismiss leaves the menu still in the FB — wipe paper first so an
+      // 8pt corner label is not lost on busy menu ink, then FAST-refresh.
+      activityManager.waitForRenderIdle();
+      renderer.clearScreen();  // white paper — menu ink must not hide the label
+      GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
       if (epub_) {
         clearBookCache(epub_->getPath());
-        LOG_INF("RVR", "cleared book cache path=%s", epub_->getPath().c_str());
+        if (!irDir_.empty()) {
+          const bool rivOk = wipeCacheDirectory(irDir_);
+          SystemLog::logTiming("CACHE", "menu wipe rivulet=%d spine=%d page=%d", rivOk ? 1 : 0, keepSpine, keepPage);
+        }
+        LOG_INF("RVR", "cleared book cache path=%s — restore spine=%d page=%d", epub_->getPath().c_str(), keepSpine,
+                keepPage);
+        GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
         // Package dir may have been removed — recreate before reload.
         epub_->setupCacheDir();
         // book.bin may be gone; reload spine/TOC from the epub.
@@ -2821,24 +3659,37 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
           return;
         }
       } else if (!irDir_.empty() && Storage.exists(irDir_.c_str())) {
-        Storage.removeDir(irDir_.c_str());
+        (void)wipeCacheDirectory(irDir_);
         LOG_INF("RVR", "cleared rivulet cache %s", irDir_.c_str());
+        GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
       }
       if (!irDir_.empty()) Storage.ensureDirectoryExists(irDir_.c_str());
-      // Prefer current spine; walk for a readable chapter if cover/empty.
-      bool loaded = loadSpine(spineIndex_);
+      // Reset engine render caches; then reopen at the saved place.
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      if (!irDir_.empty()) {
+        const std::string pagesDir = irDir_ + "/pages";
+        Storage.ensureDirectoryExists(pagesDir.c_str());
+        engine_.setPageCacheDir(pagesDir.c_str());
+      } else {
+        engine_.clearPageCacheDir();
+        engine_.setPageCacheSpine(-1);
+      }
+      bool loaded = loadSpine(keepSpine, keepPage);
+      if (!loaded) loaded = loadSpine(keepSpine, 0);
       if (!loaded && epub_) {
+        // Last resort: nearest readable spine around the saved place (not spine 0 walk).
         const int n = epub_->getSpineItemsCount();
-        for (int i = 0; i < n && i < 24; ++i) {
-          if (i == spineIndex_) continue;
-          if (loadSpine(i)) {
-            loaded = true;
-            break;
-          }
+        for (int delta = 1; delta < n && !loaded; ++delta) {
+          if (keepSpine + delta < n && loadSpine(keepSpine + delta, 0)) loaded = true;
+          if (!loaded && keepSpine - delta >= 0 && loadSpine(keepSpine - delta, 0)) loaded = true;
         }
       }
       if (loaded) {
         firstPaint_ = true;
+        lastSavedSpine_ = -1;
+        lastSavedPage_ = -1;
+        lastSavedPageCount_ = -1;
+        (void)saveProgress();
         requestUpdate();
       } else {
         showError("No readable chapters");
@@ -2861,19 +3712,29 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
 }
 
 bool RivuletReaderActivity::turnNext(const int skipPages) {
+  finishPendingChapterIr();
   int remaining = std::max(1, skipPages);
+  bool crossedChapter = false;
+  bool cachedHop = false;
   while (remaining-- > 0) {
+    const bool hadAhead = engine_.aheadWarm();
+    const uint32_t tTurn = millis();
     if (engine_.nextPage(renderer)) {
-      pageMapDirty_ = true;
-      if (engine_.mapComplete()) persistPageMapIfComplete();
+      // .rvpm already on SD when the map is complete — rewriting it every turn
+      // is a FAT write on the path the user feels. Only dirty an incomplete map.
+      if (!engine_.mapComplete()) pageMapDirty_ = true;
+      aaCatchUpPending_ = false;
+      SystemLog::logTiming("TURN", "next spine=%d page=%d ahead=%d ms=%lu fre=%u maxA=%u", spineIndex_,
+                           engine_.currentPage() + 1, hadAhead ? 1 : 0, static_cast<unsigned long>(millis() - tTurn),
+                           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       continue;
     }
     // Only leave the chapter when live layout says the chapter is finished.
     // nextPage also fails on mid-chapter layout stuck — advancing the spine
     // there made chapter 1 look like it was only 2–3 pages long.
-    if (!engine_.page().atChapterEnd) {
-      LOG_ERR("RVR", "nextPage stuck mid-chapter spine=%d page=%d known=%d — not advancing spine",
-              spineIndex_, engine_.currentPage(), engine_.mapKnownPages());
+    if (engine_.lastTurnFail() == rivulet::RivuletEngine::TurnFail::LayoutFailed || !engine_.page().atChapterEnd) {
+      LOG_ERR("RVR", "nextPage stuck mid-chapter spine=%d page=%d known=%d — not advancing spine", spineIndex_,
+              engine_.currentPage(), engine_.mapKnownPages());
       // Try one more progressive walk step before giving up on this turn.
       if (engine_.goToPage(renderer, engine_.currentPage() + 1, /*maxWalkPages=*/32)) {
         pageMapDirty_ = true;
@@ -2882,133 +3743,292 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
       requestUpdate();
       return false;
     }
-    // Advance spine
+    // Seal + persist this spine's page map BEFORE opening the next file so one
+    // PageBack from the next spine's page 0 can map-hit "last page" (CrossInk).
+    if (engine_.sealMapAtChapterEnd()) {
+      pageMapDirty_ = true;
+      persistPageMapIfComplete();
+    }
+    // Immediate next non-empty spine only. Walking later files after a failed
+    // convert is what skipped DCC 33→34→36 on a font change (log_00001_4aa3).
     const int n = epub_->getSpineItemsCount();
-    bool advanced = false;
-    for (int i = spineIndex_ + 1; i < n; ++i) {
-      if (loadSpine(i)) {
-        advanced = true;
+    const int fromSpine = spineIndex_;
+    const int fromPage = engine_.currentPage();
+    int nextSpine = -1;
+    for (int i = fromSpine + 1; i < n; ++i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        nextSpine = i;
         break;
       }
     }
-    if (!advanced) {
-      GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
+    if (nextSpine < 0) {
+      GUI.drawPopup(renderer, tr(STR_END_OF_BOOK), BaseTheme::kPopupCenterY, true);
       delay(400);
       (void)saveProgress();
       requestUpdate();
       return false;
     }
+
+    bool advanced = false;
+    forceFastAfterChapterNav_ = true;
+    activityManager.waitForRenderIdle();
+
+    if (tryHopToCachedFirstPage(nextSpine)) {
+      advanced = true;
+      cachedHop = true;
+    }
+
+    if (!advanced) {
+      chapterNavBusy_ = true;
+      SystemLog::armHangWatch("chapter_next");
+      // Paint Loading on glass before the IR load. turnNext used to call
+      // loadSpine with no status and no chapterNavBusy_ (v49 DCC: 3s freeze on
+      // last page → spine 24 with no upper-left cue). waitForRenderIdle first so
+      // displayWindow does not race the render task.
+      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      if (loadSpine(nextSpine)) {
+        advanced = true;
+      }
+      chapterNavBusy_ = false;
+      SystemLog::disarmHangWatch();
+    }
+    if (advanced) {
+      SystemLog::logTiming("TURN", "chapter_next %d->%d page=1 cached=%d ms=%lu", fromSpine, spineIndex_,
+                           cachedHop ? 1 : 0, static_cast<unsigned long>(millis() - tTurn));
+    }
+    if (!advanced) {
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      if (spineIndex_ != fromSpine || !ready_ || !engine_.hasChapter()) {
+        if (!loadSpine(fromSpine, fromPage)) {
+          (void)loadSpine(fromSpine, 0);
+        }
+      }
+      firstPaint_ = true;
+      requestUpdate();
+      flashHeldReaderPopup(tr(STR_CHAPTER_NOT_READABLE));
+      return false;
+    }
+    crossedChapter = true;
+    forceFastAfterChapterNav_ = true;
   }
   noteForwardPageTurn();
-  (void)saveProgress();
-  persistHomeProgress(true);
+  // Latch already waits for release (one press → one page). ignoreNextSideRelease_
+  // returns from loop() before idle warm-ahead — keep it for slow chapter hops,
+  // where the side key is still held after a multi-second load. A cached first
+  // page is a normal turn: idle must run so chapter_ir_catchup can land.
+  if (crossedChapter && !cachedHop) ignoreNextSideRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
+  (void)saveProgress(crossedChapter ? ProgressFlush::Now : ProgressFlush::Deferred);
+  // In-chapter turns: update the in-memory home percent only. CrossPointStats /
+  // recents hits SD on chapter change, sleep, and leave (Resource Protocol 8).
+  persistHomeProgress(/*writeToDisk=*/crossedChapter);
   updateBookmarkFlag();
   requestUpdate();
   return true;
 }
 
 bool RivuletReaderActivity::turnPrev(const int skipPages) {
+  finishPendingChapterIr();
   int remaining = std::max(1, skipPages);
+  bool crossedChapter = false;
   while (remaining-- > 0) {
-    if (engine_.prevPage(renderer)) continue;
-    // Previous spine → confirmed last page of that chapter (wait before paint).
-    // legacy: pendingPageJump=UINT16_MAX + blocking full section build before paint.
+    const uint32_t tTurn = millis();
+    // In-chapter: page N → N-1 (must work after landing on ch6 page 38).
+    if (engine_.prevPage(renderer)) {
+      aaCatchUpPending_ = false;
+      SystemLog::logTiming("TURN", "prev spine=%d page=%d ms=%lu fre=%u maxA=%u", spineIndex_,
+                           engine_.currentPage() + 1, static_cast<unsigned long>(millis() - tTurn),
+                           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      continue;
+    }
+
+    // prevPage() failing does NOT mean "chapter start". A transient layout/heap
+    // failure mid-chapter used to fall through here and open the previous spine,
+    // which is why one Back could jump a whole chapter. Only a real boundary may
+    // change spine; anything else stays on the current page.
+    if (engine_.lastTurnFail() == rivulet::RivuletEngine::TurnFail::LayoutFailed || !engine_.atChapterStart()) {
+      LOG_ERR("RVR", "pageBack layout failed mid-chapter spine=%d page=%d — staying", spineIndex_,
+              engine_.currentPage());
+      SystemLog::logTiming("BACK", "layout_fail spine=%d page=%d fre=%u", spineIndex_, engine_.currentPage(),
+                           static_cast<unsigned>(ESP.getFreeHeap()));
+      requestUpdate();
+      return true;
+    }
+
+    // Only at page 0 of this spine: open previous spine at its REAL last page
+    // with a full page map (CrossInk section.bin). Goal:
+    //   ch7 p1 → Back → ch6 p38 → Back → ch6 p37 → … → ch6 p1 → Back → prior spine
+    // Never land as "page 0 / 1-page map" of ch6 — that made the next Back hop to ch5.
     const int originSpine = spineIndex_;
     const int originPage = engine_.currentPage();
+    const int n = epub_->getSpineItemsCount();
+
+    int targetSpine = -1;
+    for (int i = originSpine - 1; i >= 0; --i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        targetSpine = i;
+        break;
+      }
+    }
+
     bool advanced = false;
-    for (int i = spineIndex_ - 1; i >= 0; --i) {
+    if (targetSpine >= 0) {
       chapterNavBusy_ = true;
-      // Chapter walk can take a few seconds — small status, not a center pill.
+      forceFastAfterChapterNav_ = true;
+      SystemLog::armHangWatch("chapter_back");
+      // Do not displayWindow from the main task — that raced the render task
+      // and the next full ink was a 3.2s HALF (device log refresh=3257ms).
+      activityManager.waitForRenderIdle();
       GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
-      // requireCompleteIr: same as legacy/Witchhunt full section build — never
-      // land on partial OOM IR (that painted the totem line as "end of chapter").
       prepareHeapForChapterLoad(/*aggressive=*/true);
-      if (!loadSpine(i, /*startPage=*/0, /*requireCompleteIr=*/true)) {
-        chapterNavBusy_ = false;
-        continue;
+      const uint32_t tLoad = millis();
+      // Prefer a complete convert, but NEVER end up with nothing: requireCompleteIr
+      // makes loadSpine return false for a partial IR, and the old code then
+      // restored chapter 7 without a word — the "Back just refreshes" report.
+      // Order: normal load → complete-IR retry → accept whatever converted.
+      bool loaded = loadSpine(targetSpine, /*startPage=*/-1, /*requireCompleteIr=*/false);
+      if (loaded && engine_.chapter().failed()) {
+        prepareHeapForChapterLoad(/*aggressive=*/true);
+        const bool full = loadSpine(targetSpine, -1, /*requireCompleteIr=*/true);
+        if (!full) {
+          // Complete convert did not fit in RAM. Re-load the partial and use it.
+          prepareHeapForChapterLoad(/*aggressive=*/true);
+          loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/false);
+        }
+      } else if (!loaded) {
+        prepareHeapForChapterLoad(/*aggressive=*/true);
+        loaded = loadSpine(targetSpine, -1, /*requireCompleteIr=*/false);
       }
-      if (engine_.chapter().failed()) {
-        LOG_ERR("RVR", "prev-chapter spine=%d still partial after requireFull — skip", i);
-        engine_.clear();
-        chapterNavBusy_ = false;
-        continue;
+      const bool partialIr = loaded && engine_.chapter().failed();
+      if (partialIr) {
+        // A partial convert is why a chapter can look like it has a single page —
+        // and why Back then lands on its first page instead of its last.
+        SystemLog::logTiming("IR", "partial spine=%d blocks=%u text=%u free=%u maxA=%u", targetSpine,
+                             static_cast<unsigned>(engine_.chapter().blockCount()),
+                             static_cast<unsigned>(engine_.chapter().textSize()),
+                             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
       }
-      const uint32_t t0 = millis();
-      const bool atEnd = engine_.goToLastPage(renderer, /*maxWalkPages=*/1024);
-      LOG_INF("RVR", "prev-chapter spine=%d lastPage=%d known=%d complete=%d end=%d text=%u walkMs=%lu",
-              spineIndex_, engine_.currentPage(), engine_.mapKnownPages(), engine_.mapComplete() ? 1 : 0,
-              atEnd ? 1 : 0, static_cast<unsigned>(engine_.chapter().textSize()),
-              static_cast<unsigned long>(millis() - t0));
-      if (atEnd && engine_.mapComplete() && !engine_.chapter().failed()) {
-        persistPageMapIfComplete();
+      // These land in /.crosspoint-logs so a user capture shows exactly which step
+      // failed — LOG_INF only reaches serial, which is why earlier captures had
+      // no evidence for "Back does nothing".
+      SystemLog::logTiming("BACK", "load spine=%d ok=%d partial=%d text=%u blocks=%u ms=%lu fre=%u", targetSpine,
+                           loaded ? 1 : 0, engine_.chapter().failed() ? 1 : 0,
+                           static_cast<unsigned>(engine_.chapter().textSize()),
+                           static_cast<unsigned>(engine_.chapter().blockCount()),
+                           static_cast<unsigned long>(millis() - tLoad), static_cast<unsigned>(ESP.getFreeHeap()));
+      if (loaded) {
+        const uint32_t t0 = millis();
+        // Full page-map walk (or .rvpm hit). Leaves currentPage_ = last index.
+        // On a partial IR we still land on the last page we could build.
+        bool landed = engine_.goToLastPageNearEnd(renderer, /*maxForwardPages=*/1024, partialIr);
+        if (!landed) {
+          landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024, partialIr);
+        }
+        if (!landed) {
+          // Last resort: show page 1 of the previous chapter. Not the paper-book
+          // behaviour, but the reader MUST move — silently repainting the page the
+          // user pressed Back on is the single worst outcome.
+          landed = engine_.goToStart(renderer);
+          if (landed) {
+            LOG_ERR("RVR", "pageBack fell back to page 1 of spine=%d", targetSpine);
+            SystemLog::logTiming("BACK", "fallback_page1 spine=%d partial=%d", targetSpine, partialIr ? 1 : 0);
+          }
+        }
+        // Accept a verified end, a deep page, or the page-1 fallback above.
+        const bool okLand = landed;
+        LOG_INF("RVR", "pageBack prev-spine=%d page=%d/%d end=%d ok=%d walkMs=%lu", targetSpine,
+                engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()), engine_.page().atChapterEnd ? 1 : 0,
+                okLand ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+        SystemLog::logTiming("BACK",
+                             "land spine=%d page=%d/%d end=%d ok=%d walkPages=%d block=%d/%u stop=%u skips=%d "
+                             "stallKind=%d walk=%lums fre=%u",
+                             targetSpine, engine_.currentPage() + 1, std::max(1, engine_.mapKnownPages()),
+                             engine_.page().atChapterEnd ? 1 : 0, okLand ? 1 : 0, engine_.lastWalkPages(),
+                             engine_.lastWalkBlock(), static_cast<unsigned>(engine_.chapter().blockCount()),
+                             static_cast<unsigned>(engine_.lastWalkStop()), engine_.lastWalkSkips(),
+                             engine_.lastWalkStallKind(), static_cast<unsigned long>(millis() - t0),
+                             static_cast<unsigned>(ESP.getFreeHeap()));
+        if (okLand) {
+          persistPageMapIfComplete();
+          // behind_ is warmed on idle — doing it here added layout/SD to the
+          // already-slow chapter Back and delayed first ink.
+          advanced = true;
+          crossedChapter = true;
+        }
       }
       chapterNavBusy_ = false;
-      // Only accept as landed if layout is at chapter end of FULL IR.
-      if (!atEnd || engine_.chapter().failed()) {
-        LOG_ERR("RVR", "prev-chapter did not confirm last page on spine=%d — try earlier", i);
-        continue;
-      }
-      advanced = true;
-      break;
+      SystemLog::disarmHangWatch();
     }
-    chapterNavBusy_ = false;
+
     if (!advanced) {
-      // Restore origin so a failed walk never leaves an empty/mid chapter on screen.
-      if (spineIndex_ != originSpine || engine_.currentPage() != originPage || !engine_.page().atChapterEnd) {
+      SystemLog::logTiming("BACK", "restore spine=%d page=%d (prev target=%d unusable)", originSpine, originPage,
+                           targetSpine);
+      if (spineIndex_ != originSpine || engine_.currentPage() != originPage || !ready_) {
         prepareHeapForChapterLoad();
         if (!loadSpine(originSpine, originPage)) {
           (void)loadSpine(originSpine, 0);
         }
       }
-      // Already at start of book, or no readable previous spine — no-op.
+      // Tell the user. A bare repaint of the page they pressed Back on reads as
+      // "the firmware is broken"; naming the reason is honest and debuggable.
+      if (targetSpine >= 0) {
+        firstPaint_ = true;
+        requestUpdate();
+        flashHeldReaderPopup(tr(STR_PREV_CHAPTER_UNAVAILABLE));
+      } else {
+        requestUpdate();
+      }
       return true;
     }
   }
-  lastPageTurnTime_ = millis();  // backward turns reset dwell baseline only
-  (void)saveProgress();
-  persistHomeProgress(true);
+  lastPageTurnTime_ = millis();
+  // Chapter hops only: the side key is still held after a multi-second load.
+  // In-chapter Back must reach tickIdlePageMap so behind/ahead can warm.
+  if (crossedChapter) ignoreNextSideRelease_ = true;
+  pageTurnLatch_.waitingRelease = true;
+  (void)saveProgress(crossedChapter ? ProgressFlush::Now : ProgressFlush::Deferred);
+  persistHomeProgress(/*writeToDisk=*/crossedChapter);
   updateBookmarkFlag();
-  // Do NOT set firstPaint_ here — that armed FORCE_SCRUB and made every Back
-  // page a full HALF flash (v0.1.5 stayed FAST on in-chapter prev).
   requestUpdate();
   return true;
 }
 
 bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
   switch (function) {
-    case CasperSettings::LP_MENU_DICTIONARY:
+    case CrossPointSettings::LP_MENU_DICTIONARY:
       openDictionary();
       return true;
-    case CasperSettings::LP_MENU_CLIPPINGS:
+    case CrossPointSettings::LP_MENU_CLIPPINGS:
       openClippingTool();
       return true;
-    case CasperSettings::LP_MENU_BOOKMARK:
+    case CrossPointSettings::LP_MENU_BOOKMARK:
       toggleBookmark();
       return true;
-    case CasperSettings::LP_MENU_KOSYNC:
+    case CrossPointSettings::LP_MENU_KOSYNC:
       return launchKOReaderSync();
-    case CasperSettings::LP_MENU_READING_STATS:
+    case CrossPointSettings::LP_MENU_READING_STATS:
       if (!SETTINGS.readingStatsTrackingEnabled()) return false;
       openBookStats();
       return true;
-    case CasperSettings::LP_MENU_SLEEP:
+    case CrossPointSettings::LP_MENU_SLEEP:
       activityManager.goToSleep();
       return true;
-    case CasperSettings::LP_MENU_FORCE_REFRESH:
+    case CrossPointSettings::LP_MENU_FORCE_REFRESH:
       pagesUntilFullRefresh_ = 0;
       firstPaint_ = true;
       requestUpdate();
       return true;
-    case CasperSettings::LP_MENU_FILE_BROWSER:
+    case CrossPointSettings::LP_MENU_FILE_BROWSER:
       activityManager.goToFileBrowser();
       return true;
-    case CasperSettings::LP_MENU_FILE_TRANSFER:
+    case CrossPointSettings::LP_MENU_FILE_TRANSFER:
       activityManager.goToFileTransfer();
       return true;
-    case CasperSettings::LP_MENU_SCREENSHOT:
+    case CrossPointSettings::LP_MENU_SCREENSHOT:
       takeReaderScreenshot();
       return true;
-    case CasperSettings::LP_MENU_FOOTNOTES:
+    case CrossPointSettings::LP_MENU_FOOTNOTES:
       // Same as power FOOTNOTES / menu: restore stack, jump one, or open list.
       if (footnoteDepth_ > 0) {
         restoreFootnotePosition();
@@ -3016,65 +4036,175 @@ bool RivuletReaderActivity::fireMenuShortcut(const uint8_t function) {
         openFootnotesMenu();
       }
       return true;
-    case CasperSettings::LP_MENU_DISABLED:
+    case CrossPointSettings::LP_MENU_CHAPTER_SKIP:
+      chapterSkipNext();
+      return true;
+    case CrossPointSettings::LP_MENU_ORIENTATION_CHANGE:
+      cycleReadingOrientation(/*nextTriggered=*/false);
+      return true;
+    case CrossPointSettings::LP_MENU_ORIENTATION_FLIP:
+      flipReadingOrientation();
+      return true;
+    case CrossPointSettings::LP_MENU_DARK_MODE: {
+      // In-reader shortcut: toggle reader-scoped dark (book dark, Home stays light).
+      const bool on = !(SETTINGS.readerDarkMode != 0 && SETTINGS.darkModeReaderOnly != 0);
+      SETTINGS.readerDarkMode = on ? 1 : 0;
+      if (on) SETTINGS.darkModeReaderOnly = 1;
+      SETTINGS.saveToFile();
+      renderer.setInvertOnDisplay(false);  // never whole-UI from a reader hold
+      firstPaint_ = true;
+      requestUpdate();
+      return true;
+    }
+    case CrossPointSettings::LP_MENU_DISABLED:
     default:
       return false;
   }
 }
 
-void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
-  const uint8_t count = static_cast<uint8_t>(CasperSettings::ORIENTATION_COUNT);
-  if (count == 0) return;
-  const uint8_t cur = SETTINGS.orientation;
-  const uint8_t neu =
-      nextTriggered ? static_cast<uint8_t>((cur + count - 1) % count) : static_cast<uint8_t>((cur + 1) % count);
-  if (neu == cur) return;
+bool RivuletReaderActivity::relayoutChapterForViewport(const int keepSpine, const int keepPage, const int keepCount,
+                                                       const rivulet::IrCursor& keepCursor,
+                                                       const bool keepCursorValid) {
+  // Prefer the IR cursor of the page on glass. Scaling keepPage into
+  // chapterPageCountForEta after setRenderKey used the new-viewport heuristic
+  // (device eb84fe08: 23/46 → 41/~81, live portrait was 53 pages).
+  if (keepCursorValid && engine_.hasChapter() && keepSpine == spineIndex_) {
+    if (!irDir_.empty()) {
+      char mapPath[200];
+      std::snprintf(mapPath, sizeof(mapPath), "%s/s%d_m%u.rvpm", irDir_.c_str(), keepSpine,
+                    static_cast<unsigned>(SETTINGS.imageRendering));
+      if (Storage.exists(mapPath)) {
+        (void)engine_.loadPageMap(mapPath);
+        (void)engine_.scrubStaleCompleteMap(renderer);
+      }
+    }
+    if (engine_.resumeAtCursor(renderer, keepCursor)) {
+      LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d cursor=1", keepSpine, keepPage + 1, keepCount,
+              engine_.currentPage() + 1, std::max(1, engine_.chapterPageCountForEta(&renderer)));
+      firstPaint_ = true;
+      ready_ = true;
+      return true;
+    }
+  }
+  const int newCount = std::max(1, engine_.hasChapter() ? engine_.chapterPageCountForEta(&renderer) : keepCount);
+  const int page = orientpage::remap(keepPage, keepCount, newCount);
+  LOG_INF("RVR", "orient remap spine=%d page %d/%d -> %d/~%d cursor=0", keepSpine, keepPage, keepCount, page, newCount);
+  if (loadSpine(keepSpine, page)) return true;
+  return loadSpine(keepSpine, 0);
+}
+
+void RivuletReaderActivity::flashHeldReaderPopup(const char* msg) {
+  if (!msg || !msg[0]) return;
+  activityManager.waitForRenderIdle();
+  GUI.drawPopup(renderer, msg, BaseTheme::kPopupCenterY, true);
+}
+
+void RivuletReaderActivity::applyReadingOrientation(const uint8_t neu) {
+  if (neu >= CrossPointSettings::ORIENTATION_COUNT || neu == SETTINGS.orientation) return;
 
   const int keepSpine = spineIndex_;
   const int keepPage = engine_.currentPage();
-  const int keepCount = std::max(1, engine_.chapterPageCount(&renderer));
+  const int keepCount = std::max(1, engine_.chapterPageCountForEta(&renderer));
+  const bool keepCursorValid = engine_.hasCurrentStartCursor();
+  const rivulet::IrCursor keepCursor = engine_.currentStartCursor();
 
   // Corner status while still on the current orientation (see menu path).
   GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
 
   SETTINGS.orientation = neu;
-  SETTINGS.frontButtonFollowOrientation = CasperSettings::defaultFrontButtonFollowForOrientation(neu);
+  SETTINGS.frontButtonFollowOrientation = CrossPointSettings::defaultFrontButtonFollowForOrientation(neu);
   SETTINGS.saveToFile();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   configureRenderKey();
 
-  if (loadSpine(keepSpine)) {
-    const int nowCount = std::max(1, engine_.chapterPageCount(&renderer));
-    int page = keepPage;
-    if (keepCount > 0 && nowCount != keepCount) {
-      page = static_cast<int>((static_cast<float>(keepPage) / static_cast<float>(keepCount)) *
-                                  static_cast<float>(nowCount) +
-                              0.5f);
-      page = std::clamp(page, 0, nowCount - 1);
-    }
-    (void)engine_.goToPage(renderer, page, /*maxWalkPages=*/512);
+  if (relayoutChapterForViewport(keepSpine, keepPage, keepCount, keepCursor, keepCursorValid)) {
     firstPaint_ = true;
     (void)saveProgress();
   }
   requestUpdate();
 }
 
+void RivuletReaderActivity::cycleReadingOrientation(const bool nextTriggered) {
+  const uint8_t count = static_cast<uint8_t>(CrossPointSettings::ORIENTATION_COUNT);
+  if (count == 0) return;
+  const uint8_t cur = SETTINGS.orientation;
+  const uint8_t neu =
+      nextTriggered ? static_cast<uint8_t>((cur + count - 1) % count) : static_cast<uint8_t>((cur + 1) % count);
+  applyReadingOrientation(neu);
+}
+
+void RivuletReaderActivity::flipReadingOrientation() {
+  // Portrait ↔ Flip With. Either side long-press toggles; if currently elsewhere,
+  // first flip lands on Portrait so the pair is always reachable in one hold.
+  uint8_t other = SETTINGS.orientationFlipWith;
+  if (other == CrossPointSettings::PORTRAIT || other >= CrossPointSettings::ORIENTATION_COUNT) {
+    other = CrossPointSettings::LANDSCAPE_CCW;
+  }
+  const uint8_t neu = (SETTINGS.orientation == CrossPointSettings::PORTRAIT)
+                          ? other
+                          : static_cast<uint8_t>(CrossPointSettings::PORTRAIT);
+  applyReadingOrientation(neu);
+}
+
 void RivuletReaderActivity::chapterSkipNext() {
   if (!epub_) return;
   const int n = epub_->getSpineItemsCount();
-  for (int i = spineIndex_ + 1; i < n; ++i) {
-    if (loadSpine(i)) {
-      firstPaint_ = true;
-      (void)saveProgress();
-      persistHomeProgress(true);
-      updateBookmarkFlag();
-      requestUpdate();
-      return;
+  const int originSpine = spineIndex_;
+  const int originPage = engine_.currentPage();
+
+  // Immediate next TOC chapter only — never scan ch6→ch7→…→ch12 (font change
+  // OOM used that walk to skip a ton of chapters and then saveProgress pinned it).
+  int targetSpine = -1;
+  const int tocCount = epub_->getTocItemsCount();
+  const int tocIdx = epub_->getTocIndexForSpineIndex(originSpine);
+  if (tocCount > 0 && tocIdx >= 0) {
+    for (int t = tocIdx + 1; t < tocCount; ++t) {
+      const int spine = epub_->getTocItem(t).spineIndex;
+      if (spine >= 0 && spine < n && spine != originSpine) {
+        targetSpine = spine;
+        break;
+      }
+    }
+  } else {
+    for (int i = originSpine + 1; i < n; ++i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        targetSpine = i;
+        break;
+      }
     }
   }
-  GUI.drawPopup(renderer, "End of book", BaseTheme::kPopupCenterY, true);
-  delay(400);
+
+  bool advanced = false;
+  if (targetSpine >= 0) {
+    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
+    prepareHeapForChapterLoad(/*aggressive=*/true);
+    bool loaded = loadSpine(targetSpine, /*startPage=*/0);
+    if (!loaded) {
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      loaded = loadSpine(targetSpine, 0);
+    }
+    advanced = loaded;
+  }
+
+  if (advanced) {
+    firstPaint_ = true;
+    forceFastAfterChapterNav_ = true;
+    (void)saveProgress();
+    persistHomeProgress(true);
+    updateBookmarkFlag();
+    requestUpdate();
+    return;
+  }
+
+  if (spineIndex_ != originSpine || !ready_) {
+    prepareHeapForChapterLoad();
+    if (!loadSpine(originSpine, originPage)) {
+      (void)loadSpine(originSpine, 0);
+    }
+  }
+  firstPaint_ = true;
   requestUpdate();
+  flashHeldReaderPopup(targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_END_OF_BOOK));
 }
 
 void RivuletReaderActivity::chapterSkipPrev() {
@@ -3084,6 +4214,7 @@ void RivuletReaderActivity::chapterSkipPrev() {
     if (engine_.goToPage(renderer, 0, /*maxWalkPages=*/64) || engine_.goToStart(renderer)) {
       lastPageTurnTime_ = millis();
       firstPaint_ = true;
+      forceFastAfterChapterNav_ = true;
       (void)saveProgress();
       persistHomeProgress(true);
       updateBookmarkFlag();
@@ -3091,51 +4222,83 @@ void RivuletReaderActivity::chapterSkipPrev() {
       return;
     }
   }
+  const int n = epub_->getSpineItemsCount();
   const int originSpine = spineIndex_;
   const int originPage = engine_.currentPage();
-  for (int i = spineIndex_ - 1; i >= 0; --i) {
+
+  // Immediate previous TOC chapter only — never scan ch6→ch5→…→ch3 (that is
+  // what landed users on chapter 3 after a long blink rebuild).
+  int targetSpine = -1;
+  const int tocCount = epub_->getTocItemsCount();
+  const int tocIdx = epub_->getTocIndexForSpineIndex(originSpine);
+  if (tocCount > 0 && tocIdx > 0) {
+    for (int t = tocIdx - 1; t >= 0; --t) {
+      const int spine = epub_->getTocItem(t).spineIndex;
+      if (spine >= 0 && spine < n && spine != originSpine) {
+        targetSpine = spine;
+        break;
+      }
+    }
+  } else {
+    for (int i = originSpine - 1; i >= 0; --i) {
+      if (!epub_->getSpineItem(i).href.empty()) {
+        targetSpine = i;
+        break;
+      }
+    }
+  }
+
+  bool advanced = false;
+  if (targetSpine >= 0) {
     chapterNavBusy_ = true;
     GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/true);
     prepareHeapForChapterLoad(/*aggressive=*/true);
-    if (!loadSpine(i, /*startPage=*/0, /*requireCompleteIr=*/true)) {
-      chapterNavBusy_ = false;
-      continue;
+    bool loaded = loadSpine(targetSpine, /*startPage=*/0, /*requireCompleteIr=*/true);
+    if (!loaded || engine_.chapter().failed()) {
+      prepareHeapForChapterLoad(/*aggressive=*/true);
+      loaded = loadSpine(targetSpine, 0, /*requireCompleteIr=*/false);
     }
-    if (engine_.chapter().failed()) {
-      engine_.clear();
-      chapterNavBusy_ = false;
-      continue;
-    }
-    const bool atEnd = engine_.goToLastPage(renderer, /*maxWalkPages=*/1024);
-    if (atEnd && engine_.mapComplete() && !engine_.chapter().failed()) {
-      persistPageMapIfComplete();
+    if (loaded && !engine_.chapter().failed()) {
+      const bool landed = engine_.goToBestEffortLastPage(renderer, /*maxWalkPages=*/1024);
+      if (landed && (engine_.page().atChapterEnd || engine_.currentPage() > 0)) {
+        if (engine_.sealMapAtChapterEnd()) {
+          pageMapDirty_ = true;
+          persistPageMapIfComplete();
+        }
+        advanced = true;
+      }
     }
     chapterNavBusy_ = false;
-    if (!atEnd || engine_.chapter().failed()) continue;
+  }
+
+  if (advanced) {
     lastPageTurnTime_ = millis();
     firstPaint_ = true;
+    forceFastAfterChapterNav_ = true;
     (void)saveProgress();
     persistHomeProgress(true);
     updateBookmarkFlag();
     requestUpdate();
     return;
   }
-  chapterNavBusy_ = false;
-  // Restore origin if no previous chapter confirmed its last page.
+
   if (spineIndex_ != originSpine) {
     prepareHeapForChapterLoad();
     if (!loadSpine(originSpine, originPage)) {
       (void)loadSpine(originSpine, 0);
     }
   }
+  firstPaint_ = true;
+  requestUpdate();
+  flashHeldReaderPopup(targetSpine >= 0 ? tr(STR_CHAPTER_NOT_READABLE) : tr(STR_START_OF_BOOK));
 }
 
 bool RivuletReaderActivity::tryLongPressShortcut(const uint8_t function, bool& suppressRelease) {
-  if (function == CasperSettings::LP_MENU_DISABLED) return false;
+  if (function == CrossPointSettings::LP_MENU_DISABLED) return false;
   // Already fired this hold (or release still pending after child activity).
   if (suppressRelease) return false;
   const unsigned long needHold =
-      (function == CasperSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+      (function == CrossPointSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
   if (mappedInput.getHeldTime() < needHold) return false;
   if (!fireMenuShortcut(function)) return false;
   suppressRelease = true;
@@ -3143,49 +4306,86 @@ bool RivuletReaderActivity::tryLongPressShortcut(const uint8_t function, bool& s
   return true;
 }
 
+// Fire side long-press while the key is still held (Confirm-style). Must not wait
+// for release: on release isPressed is false, so the old path always fell through
+// to turnPrev/turnNext ("assigned Dark Mode, release went to previous page").
+bool RivuletReaderActivity::trySideLongPressShortcut() {
+  if (ignoreNextSideRelease_) return false;
+  const bool sideA = gpio.isPressed(HalGPIO::BTN_UP);    // X3 Left / X4 Up
+  const bool sideB = gpio.isPressed(HalGPIO::BTN_DOWN);  // X3 Right / X4 Down
+  if (!sideA && !sideB) return false;
+
+  const uint8_t action = sideA ? SETTINGS.longPressSideA : SETTINGS.longPressSideB;
+  if (action == CrossPointSettings::LP_MENU_DISABLED) return false;
+
+  const unsigned long needHold =
+      (action == CrossPointSettings::LP_MENU_KOSYNC) ? ReaderUtils::GO_HOME_MS : ReaderUtils::BOOKMARK_HOLD_MS;
+  if (mappedInput.getHeldTime() < needHold) return false;
+
+  bool ok = false;
+  if (action == CrossPointSettings::LP_MENU_CHAPTER_SKIP) {
+    // Physical side A (left/up) = back; side B (right/down) = forward.
+    if (sideA) {
+      chapterSkipPrev();
+    } else {
+      chapterSkipNext();
+    }
+    ok = true;
+  } else if (action == CrossPointSettings::LP_MENU_ORIENTATION_CHANGE) {
+    cycleReadingOrientation(/*nextTriggered=*/sideB);
+    ok = true;
+  } else {
+    ok = fireMenuShortcut(action);
+  }
+  if (!ok) return false;
+
+  ignoreNextSideRelease_ = true;
+  // Latch must wait for release too, or a residual edge can still turn the page.
+  pageTurnLatch_.waitingRelease = true;
+  pendingConfirmMenuOpen_ = false;
+  LOG_INF("RVR", "side long-press hw=%s action=%u", sideA ? "A" : "B", static_cast<unsigned>(action));
+  return true;
+}
+
 void RivuletReaderActivity::loop() {
+  // Back before future-index promote/restore: FIDX user-control used to
+  // restore+FAST (and turnPrev if PageBack ghosted) then return, so Back
+  // release never left and Saving painted the restored/previous page.
+  if (tryHandleBackExit()) return;
+  if (futureIndexActive_ && backHeldLeaving()) {
+    return;
+  }
+
+  // Future-chapter IR is in the engine; glass still shows the reader's page.
+  // PageForward on the last page is the hop (promote). Mid-chapter Next restores
+  // then turns — promoting here would skip the rest of the chapter.
+  if (futureIndexActive_ && futureIndexForwardHeld() && heldAtChapterEndForFuture_) {
+    promoteFutureIndexToCurrent();
+    return;
+  }
+  if (futureIndexActive_ && futureIndexUserWantsControl()) {
+    const bool wantNext = futureIndexForwardHeld();
+    const bool wantPrev = futureIndexBackHeld();
+    restoreAfterFutureIndex(/*forUser=*/true);
+    if (wantNext) {
+      (void)turnNext();
+    } else if (wantPrev) {
+      (void)turnPrev();
+    }
+    return;
+  }
+
   if (error_) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       onGoHome();
     }
     return;
   }
-  if (!ready_) return;
-
-  // Footnote stack: Back restores the link origin before leaving the book.
-  if (footnoteDepth_ > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    restoreFootnotePosition();
+  if (!ready_) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      leaveReaderToHome();
+    }
     return;
-  }
-
-  // Long-press Back: same action list as Long-Press Menu. Suppress the release
-  // so it does not also trigger leave-to-home (classic parity).
-  if (ignoreNextBackRelease_) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-        !mappedInput.isPressed(MappedInputManager::Button::Back)) {
-      ignoreNextBackRelease_ = false;
-      (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
-      (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
-    }
-  } else {
-    if (mappedInput.isPressed(MappedInputManager::Button::Back) &&
-        SETTINGS.longPressBackFunction != CasperSettings::LP_MENU_DISABLED) {
-      if (tryLongPressShortcut(SETTINGS.longPressBackFunction, ignoreNextBackRelease_)) {
-        LOG_INF("RVR", "long-press Back → shortcut %u",
-                static_cast<unsigned>(SETTINGS.longPressBackFunction));
-        return;
-      }
-    }
-    // Back → Home (drains residual edges so Home doesn't see Menu).
-    // Leave path runs settings-driven KOReader auto-sync when enabled.
-    if (ReaderUtils::handleBackNavigation(mappedInput, activityManager, epub_ ? epub_->getPath().c_str() : "",
-                                          {this, [](void* ctx) {
-                                             auto* self = static_cast<RivuletReaderActivity*>(ctx);
-                                             self->leaveReaderToHome();
-                                           }})) {
-      return;
-    }
   }
 
   // Deferred single Confirm after double-press window → menu (classic wiring).
@@ -3196,7 +4396,7 @@ void RivuletReaderActivity::loop() {
   }
 
   // Confirm: long-press = SETTINGS.longPressMenuFunction (Dictionary default);
-  // double-tap = SETTINGS.doublePressMenuFunction (Clipping Tool default on Casper);
+  // double-tap = SETTINGS.doublePressMenuFunction (Clipping Tool default on CrossPoint);
   // single short = menu (deferred when double-press is enabled).
   if (ignoreNextConfirmRelease_) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -3206,7 +4406,7 @@ void RivuletReaderActivity::loop() {
     }
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const uint8_t dbl = SETTINGS.doublePressMenuFunction;
-    if (dbl != CasperSettings::LP_MENU_DISABLED) {
+    if (dbl != CrossPointSettings::LP_MENU_DISABLED) {
       if (pendingConfirmMenuOpen_ && (millis() - lastConfirmReleaseMs_) < ReaderUtils::DOUBLE_PRESS_MENU_MS) {
         pendingConfirmMenuOpen_ = false;
         LOG_INF("RVR", "double-press Confirm → shortcut %u", static_cast<unsigned>(dbl));
@@ -3226,11 +4426,26 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
+  // Side long-press: fire while held (before page-turn latch eats the release).
+  if (trySideLongPressShortcut()) {
+    return;
+  }
+  if (ignoreNextSideRelease_) {
+    if (!gpio.isPressed(HalGPIO::BTN_UP) && !gpio.isPressed(HalGPIO::BTN_DOWN)) {
+      ignoreNextSideRelease_ = false;
+      // Drain page-turn edges from this release so Home/reader don't double-act.
+      (void)mappedInput.wasPressed(MappedInputManager::Button::PageBack);
+      (void)mappedInput.wasReleased(MappedInputManager::Button::PageBack);
+      (void)mappedInput.wasPressed(MappedInputManager::Button::PageForward);
+      (void)mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+    }
+    return;
+  }
+
   // Long-press Confirm must run before page-turn latch so hold is not eaten.
   if (!ignoreNextConfirmRelease_ && mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
     if (tryLongPressShortcut(SETTINGS.longPressMenuFunction, ignoreNextConfirmRelease_)) {
-      LOG_INF("RVR", "long-press Confirm → shortcut %u",
-              static_cast<unsigned>(SETTINGS.longPressMenuFunction));
+      LOG_INF("RVR", "long-press Confirm → shortcut %u", static_cast<unsigned>(SETTINGS.longPressMenuFunction));
       return;
     }
   }
@@ -3241,9 +4456,9 @@ void RivuletReaderActivity::loop() {
       !mappedInput.wasReleased(MappedInputManager::Button::Down)) {
     const unsigned long held = mappedInput.getHeldTime();
     const auto pwrAction = held < SETTINGS.getPowerButtonLongPressDuration()
-                               ? static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
-                               : static_cast<CasperSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
-    if (pwrAction == CasperSettings::SHORT_PWRBTN::FOOTNOTES) {
+                               ? static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.shortPwrBtn)
+                               : static_cast<CrossPointSettings::SHORT_PWRBTN>(SETTINGS.longPwrBtn);
+    if (pwrAction == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
       if (footnoteDepth_ > 0) {
         // Quick-return from footnote body (Settings → Pwr Btn Footnote Back is product default on).
         if (SETTINGS.pwrBtnFootnoteBack != 0 || footnoteDepth_ > 0) {
@@ -3265,6 +4480,29 @@ void RivuletReaderActivity::loop() {
   nextTriggered = nextTriggered || touch.next;
   const bool fromTouch = touch.prev || touch.next;
   if (!pageTurnLatch_.accept(prevTriggered, nextTriggered, fromTilt, fromTouch, mappedInput)) {
+    // Log every rejected edge, not just the ghost classes. Waiting and Interval
+    // used to be silent, so a capture of "I pressed next three times" showed no
+    // TURN line at all and could not distinguish a dropped edge from an edge
+    // that never reached the reader (see InputPollPolicy).
+    if (pageTurnLatch_.lastWhy != pageturn::Why::Idle) {
+      SystemLog::logTiming("TURN", "drop why=%c tilt=%d touch=%d held=%d", pageturn::whyChar(pageTurnLatch_.lastWhy),
+                           fromTilt ? 1 : 0, fromTouch ? 1 : 0,
+                           ReaderUtils::anyPageTurnControlHeld(mappedInput) ? 1 : 0);
+    }
+    // No page-turn edge (normal idle) — accept() returns false. This used to
+    // return before tickIdlePageMap(), so sitting on a page never advanced the
+    // chapter map (device: 2 min hold, map stuck at 2/est, zero MAP lines).
+    // A raw press that has not committed yet must not start a footnote/map
+    // bite: those run for hundreds of ms and the tap is gone before the next
+    // gpio.update() (device: long press then turned, no TURN for the shorts).
+    if (gpio.isDebouncePending() || gpio.peekRawHeld()) {
+      return;
+    }
+    tickAaCatchUp();
+    tickDeferredProgress();
+    tickPendingChapterIr();
+    tickIdlePageMap();
+    tickFutureChapterIndex();
     return;
   }
 
@@ -3274,27 +4512,11 @@ void RivuletReaderActivity::loop() {
   }
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
-  const bool longPress = !fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS;
+  (void)heldMs;
 
-  // Settings → Long-Press Buttons = Chapter Skip.
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    if (nextTriggered) {
-      chapterSkipNext();
-      return;
-    }
-    if (prevTriggered) {
-      chapterSkipPrev();
-      return;
-    }
-  }
-
-  // Settings → Long-Press Buttons = Orientation Change.
-  if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
-    if (prevTriggered || nextTriggered) {
-      cycleReadingOrientation(nextTriggered);
-      return;
-    }
-  }
+  // Side long-press is handled while held (trySideLongPressShortcut above). Do not
+  // re-interpret the release edge here — isPressed is false on release, so that
+  // path always fell through to turnPrev/turnNext.
 
   if (prevTriggered) {
     (void)turnPrev(1);
@@ -3305,9 +4527,16 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
-  // B: idle progressive map for *current chapter only* (D: never whole book).
-  // Also first chance to extend map after open (map-ahead no longer blocks loadSpine).
+  // A: pay off any greyscale pass owed to the page already on glass. Before the
+  //    map work so a deferred first ink sharpens promptly rather than queueing
+  //    behind SD I/O.
+  tickAaCatchUp();
+  tickDeferredProgress();
+  tickPendingChapterIr();
+  // B: idle progressive map for the current chapter.
   tickIdlePageMap();
+  // C: once this chapter is sealed, slowly map upcoming chapters (half pace).
+  tickFutureChapterIndex();
 }
 
 bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, const bool bookEstimate) const {
@@ -3318,8 +4547,10 @@ bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, con
     const unsigned long nowMs = millis();
     if (nowMs >= readingSessionStartMs_) {
       const uint32_t sessionSecs = static_cast<uint32_t>((nowMs - readingSessionStartMs_) / 1000UL);
-      if (liveTotalSeconds <= UINT32_MAX - sessionSecs) liveTotalSeconds += sessionSecs;
-      else liveTotalSeconds = UINT32_MAX;
+      if (liveTotalSeconds <= UINT32_MAX - sessionSecs)
+        liveTotalSeconds += sessionSecs;
+      else
+        liveTotalSeconds = UINT32_MAX;
     }
   }
 
@@ -3332,7 +4563,7 @@ bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, con
   }
 
   const int currentPage1 = engine_.currentPage() + 1;
-  const int chapterPages = std::max(1, engine_.chapterPageCount(&renderer));
+  const int chapterPages = std::max(1, engine_.chapterPageCountForEta(&renderer));
   const float sectionChapterProg = static_cast<float>(currentPage1) / static_cast<float>(chapterPages);
   const float bookProg = epub_->calculateProgress(spineIndex_, sectionChapterProg);
   const float chapterStartProg = epub_->calculateProgress(spineIndex_, 0.0f);
@@ -3340,8 +4571,7 @@ bool RivuletReaderActivity::formatTimeLeftLabel(char* buf, const size_t len, con
 
   float remainingPages = 0.0f;
   if (bookEstimate) {
-    remainingPages =
-        estimateRemainingBookPages(chapterPages, currentPage1, bookProg, chapterStartProg, chapterEndProg);
+    remainingPages = estimateRemainingBookPages(chapterPages, currentPage1, bookProg, chapterStartProg, chapterEndProg);
   } else {
     remainingPages = static_cast<float>(std::max(0, chapterPages - currentPage1));
   }
@@ -3384,10 +4614,13 @@ void RivuletReaderActivity::renderStatusBar() const {
   const int chapterPage = engine_.currentPage() + 1;
   const int chapterPageCount = std::max(chapterPage, engine_.chapterPageCount(&renderer));
   const float bookProgress = bookProgress01() * 100.0f;
-  // Classic: chapter "~" only while indexing (isBuilding). Book pages always estimated.
-  // Do not invent extra ETA markers — status bar already uses this single ~.
+  // Chapter "~" is meaningful: it clears once this chapter's page map completes.
+  // Book "~" was hardcoded true, so it could never clear — a permanent marker
+  // conveys nothing and is what reads as "the ~ never goes away". Book pages are
+  // derived from byte progress and are always approximate; that is understood
+  // without decorating every single frame with it.
   const bool pageCountEstimated = !engine_.mapComplete();
-  const bool bookPageEstimated = true;
+  constexpr bool bookPageEstimated = false;
 
   // Single call — same path as classic EpubReader. Do NOT also draw
   // drawSystemStatusBar / drawTopStatusBarClock (those are Home chrome and
@@ -3437,8 +4670,7 @@ void RivuletReaderActivity::renderStatusBar() const {
     if (chapterSpan > 0.001f) {
       const float pagesPerBookFrac = static_cast<float>(chapterPageCount) / chapterSpan;
       bookPageCount = std::max(1, static_cast<int>(pagesPerBookFrac + 0.5f));
-      bookPage = std::max(1, std::min(bookPageCount,
-                                     static_cast<int>(bookProgress01() * pagesPerBookFrac + 0.5f)));
+      bookPage = std::max(1, std::min(bookPageCount, static_cast<int>(bookProgress01() * pagesPerBookFrac + 0.5f)));
     }
   }
 
@@ -3446,10 +4678,9 @@ void RivuletReaderActivity::renderStatusBar() const {
   char timeLeftChapter[48] = {};
   const char* bookTl =
       (sb.wantsTimeLeftBook && formatTimeLeftLabel(timeLeftBook, sizeof(timeLeftBook), true)) ? timeLeftBook : nullptr;
-  const char* chapTl =
-      (sb.wantsTimeLeftChapter && formatTimeLeftLabel(timeLeftChapter, sizeof(timeLeftChapter), false))
-          ? timeLeftChapter
-          : nullptr;
+  const char* chapTl = (sb.wantsTimeLeftChapter && formatTimeLeftLabel(timeLeftChapter, sizeof(timeLeftChapter), false))
+                           ? timeLeftChapter
+                           : nullptr;
 
   // Always pass titles when slots want them (already gated). Battery / clock /
   // progress bar / all six corners come from SETTINGS.statusBarSpec() inside
@@ -3462,9 +4693,13 @@ void RivuletReaderActivity::renderStatusBar() const {
 }
 
 bool RivuletReaderActivity::handleForcedRefresh() {
+  // Device 8fa5688f: MAIN force_refresh then the log died — HALF started while
+  // the previous async FAST or a silent FIDX swap still owned the panel.
+  activityManager.waitForRenderIdle();
+  if (futureIndexActive_) restoreAfterFutureIndex(/*forUser=*/false);
   {
     RenderLock lock(*this);
-    pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+    pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
   }
   requestUpdate();
   return true;
@@ -3481,31 +4716,43 @@ ScreenshotInfo RivuletReaderActivity::getScreenshotInfo() const {
     }
     info.title[n] = '\0';
   }
-  info.spineIndex = spineIndex_;
-  info.currentPage = engine_.currentPage() + 1;
-  info.totalPages = std::max(info.currentPage, engine_.chapterPageCount(&renderer));
+  int shotSpine = spineIndex_;
+  int shotPage = engine_.hasChapter() ? engine_.currentPage() : 0;
+  pinnedReaderPlace(shotSpine, shotPage);
+  info.spineIndex = shotSpine;
+  info.currentPage = shotPage + 1;
+  info.totalPages =
+      std::max(info.currentPage, futureIndexActive_ ? info.currentPage : engine_.chapterPageCount(&renderer));
   info.progressPercent = static_cast<int>(bookProgress01() * 100.0f + 0.5f);
   return info;
 }
 
 void RivuletReaderActivity::render(RenderLock&& lock) {
   (void)lock;
+  // Future-index swapped the engine but the panel still has the reader's page.
+  // Clearing here would paint the wrong chapter (or white) over live text.
+  if (futureIndexActive_) return;
+
+  // Corner cue only. Do not clearScreen + full FAST — that replaced Home or
+  // the live page with white paper (exit Saving, book open, chapter Back).
+  if (chapterNavBusy_ || error_ || !ready_) {
+    if (error_) {
+      renderer.clearScreen(0xFF);
+      GUI.drawPopup(renderer, errorMsg_.c_str(), BaseTheme::kPopupCenterY, true);
+      return;
+    }
+    // Leave/sleep already owns the plate (Saving / last page). A Loading wipe
+    // here is the white box on Dark Mode while Home is still coming up.
+    if (activityManager.hasPendingActivityChange() || activityManager.isSleepTransition()) {
+      return;
+    }
+    const char* msg = tr(STR_LOADING_POPUP);
+    GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/true);
+    return;
+  }
+
   // 0xFF = white paper; clearScreen(false) is 0 = solid black (bug that ate all text).
   renderer.clearScreen(0xFF);
-
-  // Prev-chapter walk yields; never paint mid-chapter body as if it were the end.
-  if (chapterNavBusy_) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
-    return;
-  }
-
-  if (error_ || !ready_) {
-    const char* msg = error_ ? errorMsg_.c_str() : tr(STR_LOADING_POPUP);
-    GUI.drawTopLeftStatus(renderer, msg, /*refresh=*/false);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
-    return;
-  }
 
   if (!engine_.ensureLaidOut(renderer)) {
     renderer.drawText(UI_10_FONT_ID, marginX_, marginY_ + 40, "Empty page", true, EpdFontFamily::REGULAR);
@@ -3517,6 +4764,8 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
   const size_t nImgs = engine_.page().images.size();
   LOG_DBG("RVR", "paint spans=%u images=%u page=%d", static_cast<unsigned>(nSpans), static_cast<unsigned>(nImgs),
           engine_.currentPage());
+
+  const uint32_t tPaint0 = millis();
 
   // Classic-style page glyph prewarm: scan → decompress needed glyphs into RAM
   // page buffers → real paint. Retain when heap allows so reverse/next turn and
@@ -3557,8 +4806,9 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     // Footnote markers: underline only (paint-time). Does not reflow Book's Style.
     paintFootnoteMarkers();
   };
-  paintPageContent();
-  renderStatusBar();
+  // Text + overlays only — used by the AA greyscale passes. See
+  // paintTextLayerForAa for why images are excluded.
+  auto paintTextForAa = [this]() { paintTextLayerForAa(); };
   // Reader-only dark: displayWithRefreshCycle inverts for the panel push only
   // (FB stays light paint-space so home / sleep never inherit inverted bits).
 
@@ -3575,43 +4825,142 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     if (hadOpenHints) {
       if (preferFastFirst) {
         // Cached open / clean BW home: FAST first ink (0.1.5 snappy open).
-        if (pagesUntilFullRefresh_ == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
+        if (pagesUntilFullRefresh_ == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB) {
           pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
         }
       } else {
-        // Cold book.bin or greys residual: one HALF scrub on first ink only.
-        pagesUntilFullRefresh_ = CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
+        // Home only declines preferFast when greys are still mid-flight.
+        // book.bin missing is not a residual — that used to HALF every cache
+        // delete (device: preferFast=0 refresh=3182ms).
+        pagesUntilFullRefresh_ = CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB;
       }
+    }
+  }
+  if (forceFastAfterChapterNav_) {
+    forceFastAfterChapterNav_ = false;
+    // Never HALF-scrub the first ink after a chapter hop (PageBack land was
+    // refresh=3257ms on X3). Keep the interval countdown at 2+.
+    if (pagesUntilFullRefresh_ <= 1) {
+      const int freq = SETTINGS.getRefreshFrequency();
+      pagesUntilFullRefresh_ = (freq > 1) ? freq : 2;
     }
   }
 
   // 2-bit fonts need greys multipass for smooth edges. Without it, AA fringes
-  // either vanish (BW threshold) or look speckled (all fringes → black). Match
-  // Txt: Text AA on + not dark mode → greys; else BW refresh cycle.
-  // Skip AA on fast first-ink (QR/wake preferFast) so open stays snappy.
-  const bool aaThisFrame = SETTINGS.textAntiAliasing != 0 && !ReaderUtils::readerDarkModeEnabled() &&
-                           !(preferFastFirst && hadOpenHints) && !deferAa;
+  // either vanish (BW threshold) or look speckled (all fringes → black).
+  //
+  // Force scrub stays BW HALF: AA's gray nudge never consumed FORCE_SCRUB, so a
+  // long-press refresh with AA on used to feel dead. Everything else that wants
+  // AA goes through renderAntiAliased, which now pushes the BW page onto the
+  // panel (displayGrayscaleBase) before the greys — that was the missing step
+  // that made every AA-on turn look like "page did not load" until a scrub.
+  const bool forceScrub = (pagesUntilFullRefresh_ == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool heapOkForAa = renderer.canStoreBwBuffer(kAaPaintHeadroom);
+  const bool aaWanted =
+      SETTINGS.textAntiAliasing != 0 && !darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled());
+  // Catch-up flag kept for a heap-recovery retry; it no longer has to paper over
+  // a preferFast/defer skip, because those no longer decline AA.
+  const bool aaCatchUp = forceAaThisRender_;
+  forceAaThisRender_ = false;
+  const bool aaThisFrame = aaWanted && heapOkForAa && !forceScrub;
+  const char aaWhy = !aaWanted      ? 'o'  // off in settings (or dark mode)
+                     : forceScrub   ? 's'  // long-press / interval scrub owns this frame
+                     : !heapOkForAa ? 'h'  // storeBwBuffer would not fit
+                     : aaCatchUp    ? 'c'  // heap-recovery catch-up
+                                    : '-';    // ran (or will run)
+
+  // BW glyph weight: Mild when AA is off (fills holes, no bold capitals).
+  // Normal when AA is on so the greyscale multipass still has light fringe.
+  renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(glyphweight::reader(aaWanted)));
+  paintPageContent();
+  renderStatusBar();
 
   const uint32_t tRefresh = millis();
+  // The BW page is already painted into the framebuffer above. AA puts it on
+  // glass (base) then enhances; if AA cannot run we must still push the BW frame
+  // or the turn silently shows the previous page.
+  bool aaRan = false;
   if (aaThisFrame) {
-    ReaderUtils::renderAntiAliased(renderer, [&]() {
-      renderer.clearScreen(0x00);
-      paintPageContent();
-      // Status bar stays BW chrome (same as classic — not re-AA'd into greys).
-    });
+    // FAST base keeps open/turn snappy; the gray nudge is the "smooths a moment
+    // later" the user remembers. Half scrub stays on the non-AA path above.
+    aaRan = ReaderUtils::renderAntiAliased(renderer, [&]() { paintTextForAa(); }, HalDisplay::FAST_REFRESH);
+    if (aaRan) {
+      const int freq = SETTINGS.getRefreshFrequency();
+      if (freq != CrossPointSettings::REFRESH_COUNTDOWN_DISABLED && pagesUntilFullRefresh_ > 1) {
+        pagesUntilFullRefresh_--;
+      }
+    }
+  }
+  bool asyncRefresh = false;
+  if (!aaRan) {
+    const int freq = SETTINGS.getRefreshFrequency();
+    const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
+    const bool maintDue = !disabled && pagesUntilFullRefresh_ <= 1 && pagesUntilFullRefresh_ >= 0;
+    // Async FAST only: reader-only dark inverts the FB around the push, and a
+    // HALF/soft maintain must stay blocking so we never draw during the waveform.
+    asyncRefresh = !forceScrub && !maintDue && renderer.supportsAsyncRefresh() && !ReaderUtils::readerOnlyDarkPaint();
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_, asyncRefresh);
+    if (asyncRefresh) {
+      overlapAheadDuringRefresh();
+      renderer.waitRefreshComplete();
+    }
   } else {
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh_);
+    // AA is blocking; the panel already holds this page. Warm next now so the
+    // following tap is free — v51 AA opens logged ahead=0 then TURN ms=1240.
+    overlapAheadDuringRefresh();
+  }
+
+  // Heap refused AA this frame: ask for a recovery pass once the page is on
+  // glass in BW. PreferFast/defer no longer need this — they go through AA.
+  if (aaRan) {
+    aaCatchUpPending_ = false;
+    aaCatchUpTries_ = 0;
+  } else if (aaWanted && !forceScrub && !heapOkForAa) {
+    scheduleAaCatchUp();
+  } else {
+    aaCatchUpPending_ = false;
   }
   if (hadOpenHints || preferFastFirst) {
     LOG_INF("RVR", "first_ink refresh=%lums preferFast=%d aa=%d wall=%lums",
-            static_cast<unsigned long>(millis() - tRefresh), preferFastFirst ? 1 : 0, aaThisFrame ? 1 : 0,
+            static_cast<unsigned long>(millis() - tRefresh), preferFastFirst ? 1 : 0, aaRan ? 1 : 0,
             openWallMs != 0 ? static_cast<unsigned long>(millis() - openWallMs) : 0UL);
   }
+
+  // The Rivulet reader had no render-path entry in /.crosspoint-logs at all — the old
+  // PAGE/ERS lines belonged to the classic reader and went away with it. That is
+  // why a report of "pages do not load" could not be checked against a capture.
+  // One line per painted page: which page, whether AA ran, and the heap it ran on.
+  SystemLog::logTiming(
+      "PAGE",
+      "spine=%d page=%d/%d map=%d/%s aa=%d ran=%d why=%c paint=%lums refresh=%lums ahead=%d async=%d fre=%u maxA=%u",
+      spineIndex_, engine_.currentPage() + 1, std::max(1, engine_.chapterPageCount(nullptr)), engine_.mapKnownPages(),
+      engine_.mapComplete() ? "done" : "est", aaThisFrame ? 1 : 0, aaRan ? 1 : 0, aaWhy,
+      static_cast<unsigned long>(tRefresh - tPaint0), static_cast<unsigned long>(millis() - tRefresh),
+      engine_.aheadWarm() ? 1 : 0, asyncRefresh ? 1 : 0, static_cast<unsigned>(ESP.getFreeHeap()),
+      static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+  // Layout geometry: how much of the viewport the page actually used, and whether
+  // one more body line would have fitted. slack >= bodyLine means we are leaving a
+  // usable line on the table (reserve too generous or a block margin blocked it).
+  {
+    const auto& rk = engine_.renderKey();
+    const int bodyLine = std::max(1, renderer.getLineHeight(rk.fontId, SETTINGS.getReaderLineCompression()));
+    const int contentH = engine_.page().contentH;
+    const int slack = static_cast<int>(rk.viewportH) - contentH;
+    SystemLog::logTiming("FIT", "vpH=%u used=%d slack=%d bodyLine=%d spare_lines=%d mT=%d mB=%d statusH=%d menuF=%u",
+                         static_cast<unsigned>(rk.viewportH), contentH, slack, bodyLine,
+                         bodyLine > 0 ? slack / bodyLine : 0, marginY_, marginB_,
+                         UITheme::getInstance().getStatusBarHeight(), static_cast<unsigned>(SETTINGS.menuFontSize));
+  }
+
+  // Page is on glass — adjacent-chapter indexing may now run on the idle tick.
+  if (!firstInkDone_) firstInkAtMs_ = millis();
+  firstInkDone_ = true;
 
   // After glass has the page: stats + path + recents (never on critical open).
   if (pendingStatsLoad_) {
     pendingStatsLoad_ = false;
-    readingStats_ = CasperStats::loadBook(epub_->getPath());
+    readingStats_ = CrossPointStats::loadBook(epub_->getPath());
     if (SETTINGS.readingStatsTrackingEnabled()) {
       globalReadingStats_ = GlobalReadingStats::load();
     }

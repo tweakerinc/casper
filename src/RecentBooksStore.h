@@ -10,7 +10,7 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
-  // Casper Home progress: 0–10000 = 0.00–100.00%, 0xFFFF = unknown.
+  // CrossPoint Home progress: 0–10000 = 0.00–100.00%, 0xFFFF = unknown.
   // Written on reader leave so Home never opens per-book stats files.
   uint16_t progressPercentMilli = 0xFFFF;
 
@@ -83,7 +83,7 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   // Update Home progress for a path already on the list. Returns true if changed.
   bool setProgressMilli(const std::string& path, uint16_t progressPercentMilli);
 
-  // Needed by CasperStats (ensureLoaded is private otherwise).
+  // Needed by CrossPointStats (ensureLoaded is private otherwise).
   void ensureLoadedPublic() { ensureLoaded(); }
 };
 

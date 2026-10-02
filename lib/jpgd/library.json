@@ -1,0 +1,12 @@
+{
+  "name": "jpgd",
+  "version": "2.00-casper1",
+  "description": "Vendored jpeg-compressor jpgd (progressive JPEG) with SD coeff spill",
+  "license": "Unlicense OR Apache-2.0",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}

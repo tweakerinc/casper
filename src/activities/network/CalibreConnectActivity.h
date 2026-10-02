@@ -5,7 +5,7 @@
 #include <string>
 
 #include "activities/Activity.h"
-#include "network/CasperWebServer.h"
+#include "network/CrossPointWebServer.h"
 
 enum class CalibreConnectState { WIFI_SELECTION, SERVER_STARTING, SERVER_RUNNING, ERROR };
 
@@ -16,7 +16,7 @@ enum class CalibreConnectState { WIFI_SELECTION, SERVER_STARTING, SERVER_RUNNING
 class CalibreConnectActivity final : public Activity {
   CalibreConnectState state = CalibreConnectState::WIFI_SELECTION;
 
-  std::unique_ptr<CasperWebServer> webServer;
+  std::unique_ptr<CrossPointWebServer> webServer;
   std::string connectedIP;
   std::string connectedSSID;
   unsigned long lastHandleClientTime = 0;

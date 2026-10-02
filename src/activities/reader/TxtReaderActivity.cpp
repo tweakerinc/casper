@@ -8,14 +8,15 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
@@ -358,27 +359,27 @@ void TxtReaderActivity::renderPage() {
         int x = cachedOrientedMarginLeft;
         const bool lineIsRtl = BidiUtils::startsWithRtl(line.c_str(), BidiUtils::RTL_PARAGRAPH_PROBE_DEPTH);
         uint8_t effectiveAlignment = cachedParagraphAlignment;
-        if (lineIsRtl && (effectiveAlignment == CasperSettings::LEFT_ALIGN ||
-                          effectiveAlignment == CasperSettings::JUSTIFIED)) {
-          effectiveAlignment = CasperSettings::RIGHT_ALIGN;
+        if (lineIsRtl && (effectiveAlignment == CrossPointSettings::LEFT_ALIGN ||
+                          effectiveAlignment == CrossPointSettings::JUSTIFIED)) {
+          effectiveAlignment = CrossPointSettings::RIGHT_ALIGN;
         }
         const int textWidth = renderer.getTextAdvanceX(cachedFontId, line.c_str(), EpdFontFamily::REGULAR);
 
         // Apply text alignment
         switch (effectiveAlignment) {
-          case CasperSettings::LEFT_ALIGN:
+          case CrossPointSettings::LEFT_ALIGN:
           default:
             // x already set to left margin
             break;
-          case CasperSettings::CENTER_ALIGN: {
+          case CrossPointSettings::CENTER_ALIGN: {
             x = cachedOrientedMarginLeft + (contentWidth - textWidth) / 2;
             break;
           }
-          case CasperSettings::RIGHT_ALIGN: {
+          case CrossPointSettings::RIGHT_ALIGN: {
             x = cachedOrientedMarginLeft + contentWidth - textWidth;
             break;
           }
-          case CasperSettings::JUSTIFIED:
+          case CrossPointSettings::JUSTIFIED:
             // For plain text, justified is treated as left-aligned
             // (true justification would require word spacing adjustments)
             break;
@@ -402,9 +403,13 @@ void TxtReaderActivity::renderPage() {
   // Reader-only dark: displayWithRefreshCycle inverts around the panel push only.
   // AA re-paints light greys — skip AA in dark mode.
 
-  if (SETTINGS.textAntiAliasing && !ReaderUtils::readerDarkModeEnabled()) {
-    ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
-  } else {
+  // BW frame is already painted above; AA sits on top of it. A failed AA pass must
+  // still fall through to the BW refresh or the page never reaches the panel.
+  bool aaRan = false;
+  if (SETTINGS.textAntiAliasing && !darkmode::skipReaderGrayscale(ReaderUtils::readerDarkModeEnabled())) {
+    aaRan = ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
+  }
+  if (!aaRan) {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   // scope destructor clears font cache via FontCacheManager

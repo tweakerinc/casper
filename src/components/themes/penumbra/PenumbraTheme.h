@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "components/themes/minimal/MinimalTheme.h"
 
 class GfxRenderer;
@@ -33,7 +33,8 @@ constexpr ThemeMetrics makeValues() {
   v.homeRecentBooksCount = 5;
   v.homeContinueReadingInMenu = false;
   v.homeMenuTopOffset = 0;
-  v.buttonHintsHeight = 48;
+  // Text-only footer band — see MinimalTheme (drawButtonHints is shared).
+  v.buttonHintsHeight = 34;
   return v;
 }
 

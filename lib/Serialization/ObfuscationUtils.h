@@ -30,12 +30,12 @@ String obfuscateToBase64(const std::string& plaintext);
 // Returns empty string on invalid base64 input; sets *ok to false if decode fails.
 std::string deobfuscateFromBase64(const char* encoded, bool* ok = nullptr);
 
-// Shared Casper / legacy WiFi credential envelope (same wifi.json on SD):
+// Shared CrossPoint / legacy WiFi credential envelope (same wifi.json on SD):
 //   password_obf = base64( XOR( "CPV1" || salt[4] || password, eFuse MAC ) )
-// Casper reads and writes this so users can swap firmware without re-entering WiFi.
+// CrossPoint reads and writes this so users can swap firmware without re-entering WiFi.
 String obfuscateWifiPasswordToBase64(const std::string& plaintext);
 
-// Strip a CPV1 envelope from an already de-XORed blob. Bare passwords (legacy Casper)
+// Strip a CPV1 envelope from an already de-XORed blob. Bare passwords (legacy CrossPoint)
 // are returned unchanged. Always safe to call on wifi credential payloads.
 std::string unwrapWifiPassword(std::string deobfuscated);
 

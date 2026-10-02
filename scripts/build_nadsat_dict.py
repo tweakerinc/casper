@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build a Nadsat StarDict pack for Casper / XTEINK from This Chick Reads.
+"""Build a Nadsat StarDict pack for CrossPoint / XTEINK from This Chick Reads.
 
 Primary source (plain-English origins the reader preferred):
   https://thischickreads.com/nadsat-language-glossary/
 
-Format (Casper docs/dictionary.md):
+Format (CrossPoint docs/dictionary.md):
   /dictionaries/Nadsat/nadsat.{ifo,idx,dict}
   sametypesequence=m, 32-bit offsets, plain .dict
   Latin script only (no Cyrillic — stock device fonts are Latin)
@@ -58,7 +58,7 @@ _ORIGIN_START = re.compile(
 def fetch_html(dest: Path) -> Path:
     req = urllib.request.Request(
         SOURCE_URL,
-        headers={"User-Agent": "CasperDictBuilder/1.0 (offline glossary pack; +https://github.com/)"},
+        headers={"User-Agent": "CrossPointDictBuilder/1.0 (offline glossary pack; +https://github.com/)"},
     )
     with urllib.request.urlopen(req, timeout=45) as resp:
         data = resp.read()
@@ -257,7 +257,7 @@ def parse_thischickreads_html(html: str) -> dict[str, str]:
 def write_tsv(path: Path, entries: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(f"# Nadsat glossary for Casper — source: {SOURCE_URL}\n")
+        f.write(f"# Nadsat glossary for CrossPoint — source: {SOURCE_URL}\n")
         f.write("# headword\\tdefinition (UTF-8, Latin-only)\n")
         f.write("headword\tdefinition\n")
         for k in sorted(entries.keys(), key=lambda s: s.lower()):
@@ -391,14 +391,14 @@ def main() -> int:
         description=(
             "Nadsat slang glossary for A Clockwork Orange. "
             f"Adapted from {SOURCE_URL} (plain-English origins). "
-            "Latin script only for XTEINK/Casper fonts. "
+            "Latin script only for XTEINK/CrossPoint fonts. "
             "Meta entry 'nadsat' credits Anthony Burgess."
         ),
     )
 
     readme = out_dir / "README.txt"
     readme.write_text(
-        "Nadsat dictionary for Casper / XTEINK\n"
+        "Nadsat dictionary for CrossPoint / XTEINK\n"
         "=====================================\n\n"
         "Install: copy this folder to the SD card:\n\n"
         "  /dictionaries/Nadsat/\n\n"

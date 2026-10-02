@@ -6,10 +6,10 @@
 #include <Logging.h>
 #include <Xtc.h>
 
-#include "util/CasperPaths.h"
-
 #include <algorithm>
 #include <iterator>
+
+#include "util/CrossPointPaths.h"
 
 bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentBook>& out) {
   out.clear();
@@ -22,7 +22,13 @@ bool RecentBooksStore::parseBooksArray(JsonVariantConst doc, std::vector<RecentB
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
     book.coverBmpPath = obj["coverBmpPath"] | "";
-    // Casper progress field (missing → unknown).
+    // c31: full-res progressive covers. Recents saved under c30 would skip JPEG
+    // forever on the muddy 1/8 thumb.
+    for (size_t pos = 0; (pos = book.coverBmpPath.find("thumb_c30_", pos)) != std::string::npos;) {
+      book.coverBmpPath.replace(pos, 10, "thumb_c31_");
+      pos += 10;
+    }
+    // CrossPoint progress field (missing → unknown).
     if (obj["progressMilli"].is<int>() || obj["progressMilli"].is<unsigned int>()) {
       const int m = obj["progressMilli"] | -1;
       book.progressPercentMilli = (m >= 0 && m <= 10000) ? static_cast<uint16_t>(m) : 0xFFFF;
@@ -71,8 +77,7 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
             static_cast<unsigned>(loaded.size()), static_cast<unsigned>(recentBooks.size()));
     for (const auto& d : loaded) {
       const bool have =
-          std::any_of(recentBooks.begin(), recentBooks.end(),
-                      [&](const RecentBook& b) { return b.path == d.path; });
+          std::any_of(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == d.path; });
       if (!have && recentBooks.size() < static_cast<size_t>(MAX_RECENT_BOOKS)) {
         recentBooks.push_back(d);
       }
@@ -96,7 +101,7 @@ void RecentBooksStore::ensureLoaded() {
 }
 
 void RecentBooksStore::mergeMissingFromDisk() {
-  // Merge Casper + legacy foreign-root recent only before v2 migrate completes.
+  // Merge CrossPoint + legacy foreign-root recent only before v2 migrate completes.
   auto mergeFile = [this](const char* path) -> size_t {
     JsonDocument doc;
     if (!PersistableStoreBase::readDocFromFile(path, doc)) return 0;
@@ -104,8 +109,8 @@ void RecentBooksStore::mergeMissingFromDisk() {
     parseBooksArray(doc.as<JsonVariantConst>(), disk);
     size_t added = 0;
     for (const auto& d : disk) {
-      const bool have = std::any_of(recentBooks.begin(), recentBooks.end(),
-                                    [&](const RecentBook& b) { return b.path == d.path; });
+      const bool have =
+          std::any_of(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == d.path; });
       if (!have && recentBooks.size() < static_cast<size_t>(MAX_RECENT_BOOKS)) {
         recentBooks.push_back(d);
         ++added;
@@ -128,15 +133,18 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   ensureLoaded();
   mergeMissingFromDisk();
 
-  // Remove existing entry if present (path match).
+  // Remove existing entry if present (path match). Keep its Home progress —
+  // a 4-field insert used to default progressPercentMilli to unknown and the
+  // Recents bars went blank until the next stats save.
+  uint16_t keptProgress = 0xFFFF;
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it != recentBooks.end()) {
+    keptProgress = it->progressPercentMilli;
     recentBooks.erase(it);
   }
 
-  // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath, keptProgress});
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -245,12 +253,12 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
   // blank until the book is opened, and entries with missing title are omitted from recent list.
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
-    Epub epub(path, CasperPaths::kPackageCacheRoot);
+    Epub epub(path, CrossPointPaths::kPackageCacheRoot);
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
     // Handle XTC file
-    Xtc xtc(path, CasperPaths::kPackageCacheRoot);
+    Xtc xtc(path, CrossPointPaths::kPackageCacheRoot);
     if (xtc.load()) {
       return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
     }

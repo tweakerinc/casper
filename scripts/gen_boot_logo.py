@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Optional: lightly smooth the *original* Casper sheet-ghost Logo120.
+Optional: lightly smooth the *original* CrossPoint sheet-ghost Logo120.
 
 Default product logo is git-tracked src/images/Logo120.h (do not redesign).
 This script only softens stair-step edges; it must not flood-fill the white body.

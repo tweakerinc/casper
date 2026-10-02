@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -14,12 +15,15 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
+#include "util/ReaderChromePolicy.h"
+#include "util/SystemChromePolicy.h"
 
 // Internal constants
 namespace {
@@ -115,9 +119,32 @@ void displayPopupWithDarkMode(const GfxRenderer& renderer, const HalDisplay::Ref
     renderer.invertScreen();
     renderer.displayBuffer(mode);
     renderer.invertScreen();
+    renderer.notePanelInverted(true);
     return;
   }
   renderer.displayBuffer(mode);
+}
+
+// Corner Loading/Saving/Opening. Windowed FAST cannot drive white glyphs onto a
+// dark plate (X3 displayWindow is a full FAST, still differential). HALF when
+// whole-UI Dark Mode is on so the label is light on dark.
+void displayCornerStatusWithDarkMode(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+  const bool sysWide = darkmode::systemWide(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0);
+  const bool needTempInvert = sysWide && !renderer.getInvertOnDisplay();
+  if (needTempInvert) renderer.invertScreen();
+  if (darkmode::statusCueNeedsHalf(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else {
+    // Window the corner on X3 and X4. X4 used to FAST the whole framebuffer
+    // here — if Home had not painted yet that was a white plate with only
+    // "Rendering Cover" in the corner. Dark Mode still HALF-scrubs so the
+    // glyph is light on dark.
+    renderer.displayWindow(x, y, w, h);
+  }
+  if (needTempInvert) {
+    renderer.invertScreen();
+    renderer.notePanelInverted(true);
+  }
 }
 
 constexpr int homeMenuMargin = 20;
@@ -155,10 +182,10 @@ void BaseTheme::batteryIconSizeForStatusFont(const GfxRenderer& renderer, int& o
 }
 
 int BaseTheme::batteryGroupWidth(const GfxRenderer& renderer, const uint8_t displayMode) {
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode =
-      displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT ? displayMode
-                                                               : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
+                           ? displayMode
+                           : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
   const bool showPct = mode != M::BATTERY_DISPLAY_ICON;
   int iconW = 0, iconH = 0;
@@ -234,8 +261,8 @@ void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t
 void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const uint8_t displayMode) const {
   // Left aligned: icon on left, percentage on right (or percent-only text at rect.x).
   // rect.x / rect.y are the group origin; icon size follows status-bar font (not fixed metrics).
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode = displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                            ? displayMode
                            : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
@@ -269,8 +296,8 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const ui
 void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const uint8_t displayMode) const {
   // Right aligned: percentage on left of icon, icon flush right (or percent-only flush right).
   // rect's right edge is the flush-right anchor when width is the icon slot.
-  using M = CasperSettings::BATTERY_DISPLAY_MODE;
-  const uint8_t mode = displayMode < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  using M = CrossPointSettings::BATTERY_DISPLAY_MODE;
+  const uint8_t mode = displayMode < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                            ? displayMode
                            : static_cast<uint8_t>(M::BATTERY_DISPLAY_ICON_PERCENT);
   const bool showIcon = mode != M::BATTERY_DISPLAY_PERCENT;
@@ -331,10 +358,21 @@ int BaseTheme::frontButtonHintReserve(const GfxRenderer& renderer) {
   const bool landscape =
       o == GfxRenderer::Orientation::LandscapeClockwise || o == GfxRenderer::Orientation::LandscapeCounterClockwise;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  if (!landscape) return metrics.buttonHintsHeight;
+  if (!landscape) {
+    return readerchrome::portraitHintStrip(metrics.buttonHintsHeight, !gpio.deviceIsX3());
+  }
   // Landscape: thin side strip for stacked CAPS (10 pt bold) — one letter wide.
   constexpr int kLandscapeFrontHintDepth = 34;
   return std::max(metrics.sideButtonHintsWidth, kLandscapeFrontHintDepth);
+}
+
+int BaseTheme::frontButtonFooterLayoutH(const GfxRenderer& renderer) {
+  const int strip = frontButtonHintReserve(renderer);
+  const auto o = renderer.getOrientation();
+  const bool landscape =
+      o == GfxRenderer::Orientation::LandscapeClockwise || o == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  if (landscape) return strip;
+  return readerchrome::portraitFooterLayoutH(UITheme::getInstance().getMetrics().buttonHintsHeight, !gpio.deviceIsX3());
 }
 
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
@@ -402,9 +440,15 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
     return;
   }
 
-  // Portrait / Portrait inverted.
-  const int barY = inverted ? 0 : (pageHeight - stripDepth);
-  const int stubY = inverted ? 0 : (pageHeight - smallButtonHeight);
+  // Portrait / Portrait inverted. X4's extra 8px of portrait height sits under
+  // the 34px band (same barY as X3). Reader overlay still uses frontButtonHintReserve.
+  const int edgePad = readerchrome::portraitFooterEdgePad(!gpio.deviceIsX3());
+  const int barY = readerchrome::portraitFooterBarY(pageHeight, stripDepth, edgePad, inverted);
+  const int stubY = inverted ? barY : (barY + stripDepth - smallButtonHeight);
+  if (edgePad > 0) {
+    const int padY = inverted ? 0 : (barY + stripDepth);
+    renderer.fillRect(0, padY, pageWidth, edgePad, false);
+  }
 
   for (int i = 0; i < 4; i++) {
     int x = buttonPositions[i];
@@ -499,15 +543,18 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
 
 namespace {
 // Row height for shared lists (Library / Recents / Settings). Short titles stay
-// single-line dense; wrapped titles use tighter line step and a taller row only
-// for that item.
+// single-line dense; wrapped titles keep full leading (plus 4px) and a taller
+// row only for that item.
 constexpr int kBaseTitleSubtitleGap = 2;
 constexpr int kBaseRowPad = 8;
 
 int baseTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
   const int advanceY = renderer.getLineHeight(titleFont);
   if (nLines <= 1) return advanceY;
-  return std::max(18, (advanceY * 7) / 10);
+  // Device (X4 Settings, Text Wrapping): 70% of advanceY stacked the second
+  // line's ascenders into the first line's descenders. Keep full leading plus a
+  // few pixels so wrapped titles do not touch.
+  return advanceY + 4;
 }
 
 int baseTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {
@@ -538,16 +585,16 @@ int BaseTheme::getListRowStep(bool hasSubtitle) const {
   // measures with the live font for multi-line wrap.
   int rowHeight = hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   switch (SETTINGS.menuFontSize) {
-    case CasperSettings::MENU_FONT_XSMALL:
+    case CrossPointSettings::MENU_FONT_XSMALL:
       rowHeight = std::max(26, rowHeight - 4);
       break;
-    case CasperSettings::MENU_FONT_SMALL:
+    case CrossPointSettings::MENU_FONT_SMALL:
       rowHeight = std::max(28, rowHeight - 2);
       break;
-    case CasperSettings::MENU_FONT_MEDIUM:
+    case CrossPointSettings::MENU_FONT_MEDIUM:
       rowHeight += 8;
       break;
-    case CasperSettings::MENU_FONT_LARGE:
+    case CrossPointSettings::MENU_FONT_LARGE:
       rowHeight += 14;
       break;
     default:
@@ -562,13 +609,44 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return std::max(1, contentHeight / rowStep);
 }
 
+int BaseTheme::listSectionHeaderHeight(const GfxRenderer& renderer) {
+  // Slot = chrome + verticalSpacing. Chrome is centered in that slot so the
+  // gap above the first rule equals the gap below the second (the previous
+  // paint sat the top rule flush on Anti-Ghosting and dumped all the air
+  // under the bottom rule, which is why Long-Press Left felt dropped).
+  constexpr int kRuleThickness = 1;
+  constexpr int kBandExtraPad = 10;
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+  const int gap = UITheme::getInstance().getMetrics().verticalSpacing;
+  return kRuleThickness + lineH + kBandExtraPad + kRuleThickness + gap;
+}
+
+void BaseTheme::drawListSectionHeader(const GfxRenderer& renderer, int x, int width, int y, const char* title) {
+  constexpr int kRuleThickness = 1;
+  constexpr int kBandExtraPad = 10;
+  const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+  const int chromeH = kRuleThickness + lineH + kBandExtraPad + kRuleThickness;
+  const int totalH = listSectionHeaderHeight(renderer);
+  const int y0 = y + std::max(0, (totalH - chromeH) / 2);
+  const int sidePad = UITheme::getInstance().getMetrics().contentSidePadding;
+  const int maxTitleW = std::max(40, width - sidePad * 2);
+  renderer.drawLine(x, y0, x + width - 1, y0, kRuleThickness, true);
+  const int titleY = y0 + kRuleThickness + kBandExtraPad / 2;
+  const char* label = (title != nullptr) ? title : "";
+  const auto truncated = renderer.truncatedText(UI_10_FONT_ID, label, maxTitleW, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, titleY, truncated.c_str(), true, EpdFontFamily::BOLD);
+  const int bottomRuleY = y0 + kRuleThickness + lineH + kBandExtraPad;
+  renderer.drawLine(x, bottomRuleY, x + width - 1, bottomRuleY, kRuleThickness, true);
+}
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          const std::function<bool(int index)>& rowDimmed,
-                         const std::function<bool(int index)>& rowApplied) const {
+                         const std::function<bool(int index)>& rowApplied,
+                         const std::function<bool(int index)>& rowCentered) const {
   (void)highlightValue;
   // Icons reserved title width for no gain on Bare/Penumbra; ignore rowIcon.
   (void)rowIcon;
@@ -623,6 +701,9 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // If selection is below what a dense pack from pageStart can show, slide start up.
   auto measureRowH = [&](int i) -> int {
+    if (rowCentered && rowCentered(i)) {
+      return listSectionHeaderHeight(renderer);
+    }
     int rowTextWidth = contentWidth - BaseMetrics::values.contentSidePadding * 2;
     const auto itemName = rowTitle(i);
     std::vector<std::string> titleLines =
@@ -668,7 +749,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     if (applied) rowTextWidth -= kRadioReserve;
 
     std::string valueText;
-    if (rowValue != nullptr) {
+    const bool centered = rowCentered && rowCentered(i);
+    if (!centered && rowValue != nullptr) {
       valueText = rowValue(i);
       if (!valueText.empty()) {
         int maxValW = std::max(0, rowTextWidth - 40 - minValueGap);
@@ -692,7 +774,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     std::string subtitleDrawn;
     int subtitleLineH = 0;
-    if (rowSubtitle != nullptr) {
+    if (!centered && rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       if (!subtitleText.empty()) {
         subtitleDrawn = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
@@ -700,9 +782,17 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight =
+        centered ? listSectionHeaderHeight(renderer)
+                 : computeListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
+    }
+
+    if (centered) {
+      drawListSectionHeader(renderer, rect.x, contentWidth, itemY, itemName.c_str());
+      itemY += rowHeight;
+      continue;
     }
 
     // Focus: bold only — no outline/fill (boxes still ghosted on FAST scroll).
@@ -717,7 +807,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     }
 
     // Apply checkerboard dither to create gray text effect for dimmed items
-    if (rowDimmed && rowDimmed(i) && !focused) {
+    if (rowDimmed && rowDimmed(i) && !focused && !centered) {
       const int dimH = renderer.getLineHeight(titleFont);
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textY + static_cast<int>(li) * lineStep;
@@ -1155,15 +1245,27 @@ Rect BaseTheme::drawTopLeftStatus(const GfxRenderer& renderer, const char* messa
   const int x = viewLeft + kPadX;
   const int y = viewTop + kPadY;
   // White wipe under the label so residual home/reader ink does not dirty the word.
-  const int wipeW = textW + 4;
+  //
+  // Size the wipe to the WIDEST corner status, not to this message. Sizing per
+  // message meant a short word left whatever sat in the left status slot poking
+  // out to its right: "Loading" covered the battery %, but "Saving" on book exit
+  // did not. A constant box also stops the wipe jittering as the word changes.
+  int statusW = textW;
+  for (const StrId id :
+       {StrId::STR_LOADING_POPUP, StrId::STR_INDEXING, StrId::STR_STATUS_SAVING_STATS, StrId::STR_STATUS_OPENING,
+        StrId::STR_RENDERING_COVER, StrId::STR_STATUS_DELETING, StrId::STR_STATUS_DELETED, StrId::STR_SLEEPING,
+        StrId::STR_BOOTING, StrId::STR_ENTERING_SLEEP}) {
+    statusW = std::max(statusW, renderer.getTextWidth(kFont, I18N.get(id)));
+  }
+  // Never eat into the middle slot — clamp to just short of centre.
+  const int maxWipeW = std::max(textW + 4, (renderer.getScreenWidth() / 2) - x);
+  const int wipeW = std::min(statusW + 4, maxWipeW);
   const int wipeH = textH + 2;
   renderer.fillRect(x - 1, y - 1, wipeW + 2, wipeH + 2, false);
   renderer.drawText(kFont, x, y, message, /*black=*/true);
 
   if (refresh) {
-    // FAST only — the old center Loading pill used HALF and ghosted into the next
-    // page. A few glyphs in the corner leave almost no residual under FAST.
-    displayPopupWithDarkMode(renderer, HalDisplay::FAST_REFRESH);
+    displayCornerStatusWithDarkMode(renderer, x - 1, y - 1, wipeW + 2, wipeH + 2);
   }
   return Rect{x - 1, y - 1, wipeW + 2, wipeH + 2};
 }
@@ -1265,16 +1367,16 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Master battery visibility (Settings → Display → Battery Show/Hide). Preview
   // can ignore the master so Customize Reader UI still shows Battery slots.
   const bool batteryMasterOn =
-      SETTINGS.hideBatteryPercentage == CasperSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
+      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
   const bool batteryAllowed = batteryMasterOn || previewIgnoreBatteryMasterHide;
   // Preview can ignore master hide but still uses the reader's battery display mode.
-  const uint8_t batteryDisplay = sb.batteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  const uint8_t batteryDisplay = sb.batteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                                      ? sb.batteryDisplay
-                                     : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
-  const bool showBattIcon = batteryAllowed && batteryDisplay != CasperSettings::BATTERY_DISPLAY_PERCENT;
-  const bool showBattPct = batteryAllowed && batteryDisplay != CasperSettings::BATTERY_DISPLAY_ICON;
+                                     : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+  const bool showBattIcon = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
+  const bool showBattPct = batteryAllowed && batteryDisplay != CrossPointSettings::BATTERY_DISPLAY_ICON;
 
-  const int topTextY = metrics.topPadding + kTopChromeBatteryY;
+  const int topTextY = chromeClockY(metrics);
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
   const int rightX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;
   const int screenW = renderer.getScreenWidth();
@@ -1322,7 +1424,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // align: 0=left, 1=center, 2=right. Returns drawn width (0 if empty).
   auto drawSlot = [&](uint8_t content, int anchorX, int y, int align, int maxWidth) -> int {
-    using C = CasperSettings::STATUS_BAR_CORNER_CONTENT;
+    using C = CrossPointSettings::STATUS_BAR_CORNER_CONTENT;
     if (content == C::CORNER_HIDE) return 0;
 
     if (content == C::CORNER_BATTERY) {
@@ -1433,7 +1535,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                              paddingBottom + (fillMargin ? 1 : 0);
     // bookProgress is 0–100 float; never cast through size_t (truncates 0–1 by mistake to 0).
     float progressPct = 0.0f;
-    if (sb.progressBarMode == CasperSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
+    if (sb.progressBarMode == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
       progressPct = bookProgress;
     } else if (pageCount > 0) {
       progressPct = (static_cast<float>(currentPage) / static_cast<float>(pageCount)) * 100.0f;
@@ -1467,7 +1569,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   }
 
   // Lower middle — centered in remaining lane (title-aware truncation).
-  if (sb.lowerMiddle != CasperSettings::CORNER_HIDE) {
+  if (sb.lowerMiddle != CrossPointSettings::CORNER_HIDE) {
     const int midY = textY - textYOffset;
     const int usable = screenW - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
     const int sidePad = std::max(leftClusterWidth, rightClusterWidth) + 24;
@@ -1503,10 +1605,9 @@ void BaseTheme::drawTopStatusBarClock(const GfxRenderer& renderer, int topY, con
   // Same SMALL_FONT_ID as battery % for a uniform top row.
   constexpr int kClockFont = SMALL_FONT_ID;
   const int textWidth = renderer.getTextWidth(kClockFont, timeText);
-  const int lineHeight = renderer.getLineHeight(kClockFont);
   const int textX = (renderer.getScreenWidth() - textWidth) / 2;
-  const int baseTopY = topY >= 0 ? topY : orientedMarginTop + metrics.topPadding;
-  const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineHeight) / 2);
+  const int originY = topY < 0 ? orientedMarginTop + metrics.topPadding : (topY == 0 ? metrics.topPadding : topY);
+  const int textY = originY + kTopChromeBatteryY;
   renderer.drawText(kClockFont, textX, textY, timeText);
 }
 
@@ -1514,18 +1615,18 @@ int BaseTheme::systemStatusSideReserve(const GfxRenderer& renderer) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int reserve = kTopChromeInsetX + metrics.contentSidePadding;
   // Battery with percent is the widest typical side content (icon scales with status font).
-  const uint8_t battMode = SETTINGS.systemBatteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+  const uint8_t battMode = SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                                ? SETTINGS.systemBatteryDisplay
-                               : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
+                               : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
   const int battW = batteryGroupWidth(renderer, battMode);
   // Clock sample for 12h (wider) — "12:00 PM".
   const int clockW = renderer.getTextWidth(SMALL_FONT_ID, "12:00 PM");
   const int sideContent = std::max(battW, clockW);
   // If either outer slot has content, reserve for title centering.
-  if (SETTINGS.systemStatusBarLeft != CasperSettings::SYS_SLOT_HIDE ||
-      SETTINGS.systemStatusBarRight != CasperSettings::SYS_SLOT_HIDE) {
+  if (SETTINGS.systemStatusBarLeft != CrossPointSettings::SYS_SLOT_HIDE ||
+      SETTINGS.systemStatusBarRight != CrossPointSettings::SYS_SLOT_HIDE) {
     reserve += sideContent;
-  } else if (SETTINGS.systemStatusBarMiddle != CasperSettings::SYS_SLOT_HIDE) {
+  } else if (SETTINGS.systemStatusBarMiddle != CrossPointSettings::SYS_SLOT_HIDE) {
     // Middle-only: still leave a modest margin so title does not collide with center chrome.
     reserve += sideContent / 2;
   }
@@ -1540,8 +1641,9 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
                                    &orientedMarginLeft);
   (void)orientedMarginBottom;
 
-  const int baseTopY = topY >= 0 ? topY : orientedMarginTop + metrics.topPadding;
-  const int batteryY = baseTopY + kTopChromeBatteryY;
+  const int originY = topY < 0 ? orientedMarginTop + metrics.topPadding : (topY == 0 ? metrics.topPadding : topY);
+  const int chromeY = systemchrome::textY(orientedMarginTop, renderer.getScreenHeight());
+  const int batteryY = chromeY;
   const int screenW = renderer.getScreenWidth();
   const int leftX = orientedMarginLeft + kTopChromeInsetX;
   const int rightX = screenW - orientedMarginRight - kTopChromeInsetX;
@@ -1553,12 +1655,13 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     batteryIconSizeForStatusFont(renderer, iconW, iconH);
     (void)iconW;
     const int clearH = std::max(iconH + 10, metrics.statusBarVerticalMargin);
-    renderer.fillRect(orientedMarginLeft, baseTopY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
+    const int clearY = std::min(originY, orientedMarginTop);
+    renderer.fillRect(orientedMarginLeft, clearY, screenW - orientedMarginLeft - orientedMarginRight, clearH, false);
   }
 
   char timeBuf[16];
   const char* timeText = previewTime;
-  if (timeText == nullptr && SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK)) {
+  if (timeText == nullptr && SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_CLOCK)) {
     if (halClock.isAvailable()) {
       if (halClock.formatTime(timeBuf, sizeof(timeBuf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) {
         timeText = timeBuf;
@@ -1578,23 +1681,21 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     if (timeText == nullptr || timeText[0] == '\0') return;
     constexpr int kClockFont = SMALL_FONT_ID;
     const int textWidth = renderer.getTextWidth(kClockFont, timeText);
-    const int lineHeight = renderer.getLineHeight(kClockFont);
-    const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineHeight) / 2);
     int textX = centerX - textWidth / 2;
     if (align == 0)
       textX = leftX;
     else if (align == 2)
       textX = rightX - textWidth;
-    renderer.drawText(kClockFont, textX, textY, timeText);
+    renderer.drawText(kClockFont, textX, chromeY, timeText);
   };
 
   auto drawBatteryAt = [&](int align) {
     int battW = 0, battH = 0;
     batteryIconSizeForStatusFont(renderer, battW, battH);
-    const uint8_t mode = SETTINGS.systemBatteryDisplay < CasperSettings::BATTERY_DISPLAY_MODE_COUNT
+    const uint8_t mode = SETTINGS.systemBatteryDisplay < CrossPointSettings::BATTERY_DISPLAY_MODE_COUNT
                              ? SETTINGS.systemBatteryDisplay
-                             : static_cast<uint8_t>(CasperSettings::BATTERY_DISPLAY_ICON_PERCENT);
-    const bool showIcon = mode != CasperSettings::BATTERY_DISPLAY_PERCENT;
+                             : static_cast<uint8_t>(CrossPointSettings::BATTERY_DISPLAY_ICON_PERCENT);
+    const bool showIcon = mode != CrossPointSettings::BATTERY_DISPLAY_PERCENT;
     const int groupW = batteryGroupWidth(renderer, mode);
     if (align == 2) {
       const int iconX = showIcon ? (rightX - battW) : (rightX - groupW);
@@ -1613,9 +1714,10 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
     // "Battery 15% · Charge Soon"
     snprintf(warnBuf, sizeof(warnBuf), "Battery %d%% · %s", warnPctShow, tr(STR_CHARGE_SOON));
     constexpr int kFont = SMALL_FONT_ID;
-    const int lineH = renderer.getLineHeight(kFont);
-    const int textY = baseTopY + std::max(2, (metrics.statusBarVerticalMargin - lineH) / 2);
-    const int maxW = std::max(40, (screenW / 2) - 16);
+    using S = CrossPointSettings::SYSTEM_STATUS_SLOT;
+    const bool sidesOccupied =
+        SETTINGS.systemStatusBarLeft != S::SYS_SLOT_HIDE || SETTINGS.systemStatusBarRight != S::SYS_SLOT_HIDE;
+    const int maxW = systemchrome::warningMaxWidth(screenW, leftX, screenW - rightX, sidesOccupied);
     const std::string vis = renderer.truncatedText(kFont, warnBuf, maxW);
     const int tw = renderer.getTextWidth(kFont, vis.c_str());
     int textX = centerX - tw / 2;
@@ -1623,11 +1725,11 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
       textX = leftX;
     else if (align == 2)
       textX = rightX - tw;
-    renderer.drawText(kFont, textX, textY, vis.c_str());
+    renderer.drawText(kFont, textX, chromeY, vis.c_str());
   };
 
   auto drawSlot = [&](uint8_t content, int align) {
-    using S = CasperSettings::SYSTEM_STATUS_SLOT;
+    using S = CrossPointSettings::SYSTEM_STATUS_SLOT;
     if (content == S::SYS_SLOT_BATTERY) {
       drawBatteryAt(align);
     } else if (content == S::SYS_SLOT_CLOCK) {
@@ -1648,7 +1750,7 @@ void BaseTheme::drawSystemStatusBar(const GfxRenderer& renderer, int topY, const
 
   // Settings preview: if no slot has Battery Warning yet, sample it in Middle
   // so the user still sees the message while configuring.
-  if (forceBatteryWarningPreview && !SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY_WARNING)) {
+  if (forceBatteryWarningPreview && !SETTINGS.systemStatusBarHas(CrossPointSettings::SYS_SLOT_BATTERY_WARNING)) {
     drawBatteryWarningAt(/*align=*/1);
   }
 }
@@ -1707,7 +1809,7 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, 
   // Leave room for button hints below and a small top margin so the dialog never
   // spills past the screen edges (long pickers like Customize Reader slots).
   const int topMargin = 8;
-  const int bottomMargin = metrics.buttonHintsHeight + 8;
+  const int bottomMargin = frontButtonFooterLayoutH(renderer) + 8;
   const int maxDialogH = std::max(rowHeight + innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap,
                                   pageHeight - topMargin - bottomMargin);
   const int chromeH = innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap;

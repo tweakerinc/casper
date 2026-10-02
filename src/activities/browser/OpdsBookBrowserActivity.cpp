@@ -8,7 +8,7 @@
 #include <OpdsStream.h>
 #include <WiFi.h>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"

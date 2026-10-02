@@ -4,9 +4,10 @@
 
 // Home hero cover generation for Bare / Stats / Stats-Life.
 //
-// Epub::generateThumbBmp(H) writes floor(H*3/4)×H (3:4 contain-fit, c30 balanced
-// Atkinson — Casper v0.1.3). Same JpegToBmpConverter for all themes. Nearest-
-// neighbor scale of that 2-bit dither = gridlines / bands — gen size must match plate.
+// Epub::generateThumbBmp(H) writes floor(H*3/4)×H (3:4 contain-fit, c31 full-res
+// progressive JPEG + balanced Atkinson). Same JpegToBmpConverter for all themes.
+// Nearest-neighbor scale of that 2-bit dither = gridlines / bands — gen size must
+// match plate.
 //   Bare           → fixed 420×560
 //   Stats+Stats-Life → ONE shared height key (same thumb file for both themes)
 //
@@ -24,6 +25,8 @@ constexpr int imageHeight = bareImageHeight;
 constexpr int thumbHeight = bareImageHeight;
 // Compact shelf thumbs (legacy Dashboard helper paths still reference this size).
 constexpr int homeShelfThumbHeight = 168;
+// Legacy 0009 first-paint size. Do not generate this; blit 560 from SD instead.
+constexpr int previewThumbHeight = 280;
 
 // Height key so gen width == maxCoverW (3:4 plate fills the column).
 inline int thumbHeightForCoverWidth(const int maxCoverW) {

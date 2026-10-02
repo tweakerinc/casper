@@ -5,7 +5,7 @@
 // engine. Section-cache validation keys on every field: a section file built
 // with a different spec is discarded and rebuilt.
 //
-// Build one via CasperSettings::readerRenderSpec(width, height), which
+// Build one via CrossPointSettings::readerRenderSpec(width, height), which
 // fills every field: the settings-derived ones from the store, the viewport
 // from the caller. Taking the viewport as arguments is what keeps a spec from
 // existing in a half-filled state — the 0 defaults below are a last-resort

@@ -41,7 +41,7 @@ std::string PersistableStoreBase::extractPassword(JsonVariantConst doc, bool& ne
     pass = doc["password"] | "";
     if (!pass.empty()) needsResave = true;
   } else {
-    // WiFi (and any other store using this helper): accept legacy/Casper CPV1
+    // WiFi (and any other store using this helper): accept legacy/CrossPoint CPV1
     // envelope or bare password. Do not force a resave — keep the SD file
     // interchangeable with legacy.
     pass = obfuscation::unwrapWifiPassword(std::move(pass));

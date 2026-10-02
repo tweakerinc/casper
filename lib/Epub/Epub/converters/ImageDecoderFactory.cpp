@@ -1,6 +1,7 @@
 #include "ImageDecoderFactory.h"
 
 #include <Logging.h>
+#include <Memory.h>
 
 #include <memory>
 #include <string>
@@ -23,14 +24,25 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
     ext = "";
   }
 
+  // nothrow throughout: bare `new` aborts under -fno-exceptions, and decoders are
+  // constructed lazily on the image-paint path where the heap is tightest.
+  // Callers already handle a null decoder (the "no decoder found" path below).
   if (JpegToFramebufferConverter::supportsFormat(ext)) {
     if (!jpegDecoder) {
-      jpegDecoder.reset(new JpegToFramebufferConverter());
+      jpegDecoder = makeUniqueNoThrow<JpegToFramebufferConverter>();
+      if (!jpegDecoder) {
+        LOG_ERR("DEC", "OOM: JPEG decoder for %s", imagePath.c_str());
+        return nullptr;
+      }
     }
     return jpegDecoder.get();
   } else if (PngToFramebufferConverter::supportsFormat(ext)) {
     if (!pngDecoder) {
-      pngDecoder.reset(new PngToFramebufferConverter());
+      pngDecoder = makeUniqueNoThrow<PngToFramebufferConverter>();
+      if (!pngDecoder) {
+        LOG_ERR("DEC", "OOM: PNG decoder for %s", imagePath.c_str());
+        return nullptr;
+      }
     }
     return pngDecoder.get();
   }

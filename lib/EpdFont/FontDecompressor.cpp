@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <cstdlib>
@@ -306,8 +307,14 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
   }
   PageSlot& slot = pageSlots[pageSlotCount];
 
-  // Step 1: Collect unique glyph indices needed for this page
-  uint32_t neededGlyphs[MAX_PAGE_GLYPHS];
+  // Step 1: Collect unique glyph indices needed for this page.
+  // Heap, not stack: 512×4 = 2048 bytes (CLAUDE.md stack limit is < 256).
+  // SdCardFont already heap-allocates the same table for this reason.
+  auto neededGlyphs = makeUniqueNoThrow<uint32_t[]>(MAX_PAGE_GLYPHS);
+  if (!neededGlyphs) {
+    LOG_ERR("FDC", "OOM: neededGlyphs %u bytes", static_cast<unsigned>(MAX_PAGE_GLYPHS * sizeof(uint32_t)));
+    return -1;
+  }
   uint16_t glyphCount = 0;
   bool glyphCapWarned = false;
 
@@ -379,7 +386,11 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   // Step 2: Compute total buffer size and collect unique groups
   uint32_t totalBytes = 0;
-  uint16_t neededGroups[128];
+  auto neededGroups = makeUniqueNoThrow<uint16_t[]>(128);
+  if (!neededGroups) {
+    LOG_ERR("FDC", "OOM: neededGroups");
+    return -1;
+  }
   uint8_t groupCount = 0;
   bool groupCapWarned = false;
 
@@ -440,7 +451,16 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
 
   // Step 3b: Pre-scan to compute each needed glyph's byte-aligned offset within its group.
   // This avoids recomputing aligned offsets per group during extraction in step 4.
-  uint32_t groupAlignedTracker[128] = {};  // running byte-aligned offset for each needed group
+  auto groupAlignedTracker = makeUniqueNoThrow<uint32_t[]>(128);
+  if (!groupAlignedTracker) {
+    LOG_ERR("FDC", "OOM: groupAlignedTracker");
+    free(slot.buffer);
+    free(slot.glyphs);
+    slot = {};
+    --pageSlotCount;
+    return -1;
+  }
+  for (uint8_t z = 0; z < 128; ++z) groupAlignedTracker[z] = 0;
 
   if (fontData->glyphToGroup) {
     // Frequency-grouped: single O(totalGlyphs) pass through glyphToGroup

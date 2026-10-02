@@ -40,6 +40,12 @@ class HalClock {
   bool getDateTime(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
                    uint8_t* weekday = nullptr) const;
 
+  // Always fills a civil time: live RTC, last-good stamp that survives panic
+  // reboot, or this binary's compile date. sourceOut is "rtc", "last-good", or
+  // "firmware". Used by crash_report and as a last resort for FAT stamps.
+  void getDateTimeOrFallback(uint16_t& year, uint8_t& month, uint8_t& day, uint8_t& hour, uint8_t& minute,
+                             const char** sourceOut = nullptr) const;
+
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).

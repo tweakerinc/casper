@@ -6,22 +6,23 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "DropCapPolicy.h"
 #include "Epub/hyphenation/Hyphenator.h"
 #include "FontLadder.h"
+#include "IrTokenizer.h"
 
 namespace rivulet {
 namespace {
 
-struct Tok {
-  uint16_t runIndex = 0;
-  uint16_t byteOff = 0;
-  uint16_t byteLen = 0;
-  bool space = false;
-};
+// Token shape lives in IrTokenizer.h (IrTok). `w` is still the layout memo:
+// measured once in the fit loop, reused when emitting spans. Reset to -1
+// whenever byteOff/byteLen are rewritten. Spaces stay uncached.
+using Tok = IrTok;
 
 int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const float lc) {
   const int fid = FontLadder::resolve(baseFontId, step);
@@ -32,6 +33,22 @@ int lineH(const GfxRenderer& r, const int baseFontId, const SizeStep step, const
     h = static_cast<int>(h * (lc > 0.1f ? lc : 1.0f) + 0.5f);
   }
   return std::max(10, h);
+}
+
+// ParsedText warms SD glyph advances before measuring. Rivulet must too,
+// or SD packs keep 0-width metrics. Stack buffer, no heap.
+void warmSdToks(const GfxRenderer& renderer, const int baseFontId, const ChapterIr& ch, const std::vector<Tok>& toks) {
+  for (const auto& t : toks) {
+    if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) continue;
+    const Run& run = ch.runs()[t.runIndex];
+    const int fid = FontLadder::resolve(baseFontId, run.sizeStep);
+    char buf[192];
+    const uint16_t n = t.byteLen < 191 ? t.byteLen : 191;
+    std::memcpy(buf, ch.runText(run) + t.byteOff, n);
+    buf[n] = '\0';
+    const uint8_t styleMask = static_cast<uint8_t>(1u << (FontLadder::epdStyleBits(run.style) & 0x03));
+    renderer.ensureSdCardFontReady(fid, buf, styleMask);
+  }
 }
 
 int measureWord(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st, const char* s, const size_t n) {
@@ -78,87 +95,12 @@ uint32_t tokenLastCp(const ChapterIr& ch, const Tok& t) {
 
 // Inter-word gap: classic ParsedText uses getSpaceAdvance (space + flanking kern).
 // getSpaceAdvance already floors negative kern; we never go below that floor here.
-int measureInterWordSpace(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st,
-                          const uint32_t leftCp, const uint32_t rightCp) {
+int measureInterWordSpace(const GfxRenderer& r, const int fontId, const EpdFontFamily::Style st, const uint32_t leftCp,
+                          const uint32_t rightCp) {
   const int base = r.getSpaceWidth(fontId, st);
   const int basePx = base > 0 ? base : 1;
   if (leftCp == 0 || rightCp == 0) return basePx;
   return r.getSpaceAdvance(fontId, leftCp, rightCp, st);
-}
-
-bool isAsciiWordByte(const unsigned char c) {
-  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-}
-
-// Last byte of previous non-empty run content that is a "word" char (Latin).
-// Used to heal style-boundary glue when IR dropped the inter-run space.
-bool runEndsWithWordChar(const ChapterIr& ch, const Run& run) {
-  if (run.textLen == 0) return false;
-  const char* base = ch.runText(run);
-  // Walk last UTF-8 scalar; treat any non-ASCII letter-like as word (Cyrillic etc.).
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(base);
-  const unsigned char* end = p + run.textLen;
-  uint32_t last = 0;
-  while (p < end) {
-    const unsigned char* before = p;
-    last = utf8NextCodepoint(&p);
-    if (last == 0 || p == before) break;
-  }
-  if (last == 0) return false;
-  if (last < 128) return isAsciiWordByte(static_cast<unsigned char>(last));
-  // Non-ASCII: treat as word if not common punctuation/space.
-  return last != 0x00A0 && last != 0x2013 && last != 0x2014 && last != 0x2026;
-}
-
-bool runStartsWithWordChar(const ChapterIr& ch, const Run& run, const uint16_t byteOff) {
-  if (byteOff >= run.textLen) return false;
-  const char* base = ch.runText(run) + byteOff;
-  const unsigned char* u = reinterpret_cast<const unsigned char*>(base);
-  const uint32_t cp = utf8NextCodepoint(&u);
-  if (cp == 0) return false;
-  if (cp < 128) return isAsciiWordByte(static_cast<unsigned char>(cp));
-  return cp != 0x00A0;
-}
-
-void tokenizeFrom(const ChapterIr& ch, const uint16_t runBegin, const uint16_t runCount, const uint16_t startRun,
-                  const uint16_t startByte, std::vector<Tok>& out) {
-  out.clear();
-  const auto& runs = ch.runs();
-  const uint16_t runEnd = static_cast<uint16_t>(runBegin + runCount);
-  uint16_t ri = startRun < runBegin ? runBegin : startRun;
-  uint16_t bo = (ri == startRun) ? startByte : 0;
-  int prevRunWithText = -1;
-  for (; ri < runEnd && ri < runs.size(); ++ri, bo = 0) {
-    const Run& run = runs[ri];
-    if (bo >= run.textLen) continue;
-    const char* base = ch.runText(run);
-    // Heal missing space between style runs: "Vampire" + "skill" (old IR stripped
-    // the leading space after </i>). Do not inject before punctuation (": You've").
-    if (prevRunWithText >= 0 && bo == 0 && runStartsWithWordChar(ch, run, 0) &&
-        runEndsWithWordChar(ch, runs[static_cast<size_t>(prevRunWithText)])) {
-      // Synthetic space: reuse current runIndex with byteLen 0 + space flag is wrong
-      // for measure; use a 1-byte space from this run only if present — else mark
-      // space with byteLen 0 and special-case measure… Prefer: space token that
-      // measureInterWordSpace handles (t.space true, text ignored).
-      out.push_back(Tok{ri, 0, 0, true});
-    }
-    const char* p = base + bo;
-    const char* end = base + run.textLen;
-    bool emitted = false;
-    while (p < end) {
-      if (*p == ' ' || *p == '\t') {
-        out.push_back(Tok{ri, static_cast<uint16_t>(p - base), 1, true});
-        ++p;
-        emitted = true;
-        continue;
-      }
-      const char* w0 = p;
-      while (p < end && *p != ' ' && *p != '\t') ++p;
-      out.push_back(Tok{ri, static_cast<uint16_t>(w0 - base), static_cast<uint16_t>(p - w0), false});
-      emitted = true;
-    }
-    if (emitted) prevRunWithText = static_cast<int>(ri);
-  }
 }
 
 // Closing punctuation that must not start a line alone ("distinction." → not "distinction" / ".").
@@ -210,6 +152,15 @@ bool tokenIsOnlyClosingPunct(const ChapterIr& ch, const Tok& t) {
   if (t.byteOff >= run.textLen) return false;
   const size_t n = std::min<size_t>(t.byteLen, run.textLen - t.byteOff);
   return bytesAreOnlyClosingPunct(ch.runText(run) + t.byteOff, n);
+}
+
+// Ordinal suffixes and footnote markers (6 + th, H + 2) share no space token
+// with the stem. Keep them on the same line — slight overflow is better than
+// "6" at the right margin and "th" alone on the next.
+bool tokenIsAttachedScript(const ChapterIr& ch, const Tok& t) {
+  if (t.space || t.byteLen == 0 || t.runIndex >= ch.runs().size()) return false;
+  const uint8_t st = static_cast<uint8_t>(ch.runs()[t.runIndex].style);
+  return (st & kRunStyleScriptMask) != 0;
 }
 
 // Optional hyphen-style break only — never force-split ordinary words mid-letter.
@@ -271,9 +222,8 @@ std::string takeDropLetter(const ChapterIr& ch, const Block& b, uint16_t& runInd
       if (cp == ' ' || cp == '\t' || cp == 0x00A0 || cp == 0x200B) continue;
       // Soft hyphen / combining — not a drop-cap host.
       if (cp == 0x00AD || (cp >= 0x0300 && cp <= 0x036F)) continue;
-      const bool letter =
-          (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0x00C0 && cp <= 0x024F) ||
-          (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x0400 && cp <= 0x04FF);
+      const bool letter = (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= 0x00C0 && cp <= 0x024F) ||
+                          (cp >= 0x0370 && cp <= 0x03FF) || (cp >= 0x0400 && cp <= 0x04FF);
       if (!letter) return {};
       std::string s;
       utf8AppendCodepoint(cp, s);
@@ -310,6 +260,50 @@ bool glyphInkMetrics(const GfxRenderer& renderer, const int fontId, const EpdFon
   return true;
 }
 
+// Publisher scene-break fallback: EPUBs pair a decorative separator (usually an
+// inline <svg>, sometimes an unsupported raster) with a plain-text alternative
+// like "* * *" or "· · ·" for readers that cannot draw it. We deliberately skip
+// SVG (HtmlToIr) and 0x0 images (below), so that fallback is what the reader
+// actually sees — it is book content, not a rendering failure. Treat it as a real
+// thematic break (centred, with air) instead of a stray left-aligned body line.
+bool isSceneBreakRun(const ChapterIr& ch, const Block& b) {
+  if (b.kind != BlockKind::Paragraph || b.runCount == 0) return false;
+  int glyphs = 0;
+  const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+  for (uint16_t ri = b.runBegin; ri < runEnd && ri < ch.runs().size(); ++ri) {
+    const Run& r = ch.runs()[ri];
+    const char* text = ch.runText(r);
+    if (!text) return false;
+    const char* p = text;
+    const char* end = text + r.textLen;
+    while (p < end) {
+      const uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&p));
+      if (cp == 0) break;
+      if (cp == ' ' || cp == '\t' || cp == 0x00A0) continue;
+      switch (cp) {
+        case '*':
+        case '.':
+        case '-':
+        case '_':
+        case '~':
+        case 0x00B7:                        // ·
+        case 0x2013:                        // –
+        case 0x2014:                        // —
+        case 0x2022:                        // •
+        case 0x2042:                        // ⁂
+        case 0x2043:                        // ⁃
+        case 0x2731:                        // ✱
+        case 0x273B:                        // ❋
+          if (++glyphs > 12) return false;  // a real sentence, not a separator
+          continue;
+        default:
+          return false;
+      }
+    }
+  }
+  return glyphs > 0;
+}
+
 bool atEnd(const ChapterIr& ch, const IrCursor& c) { return c.blockIndex >= ch.blocks().size(); }
 
 void advancePastBlock(const ChapterIr& ch, IrCursor& c) {
@@ -341,10 +335,10 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
   const float lc = params.lineCompression > 0.1f ? params.lineCompression : 1.0f;
   const int bodyLine = lineH(renderer, baseFontId, SizeStep::Body, lc);
-  const int bodyEm =
-      std::max(8, params.bodyEmPx > 0 ? params.bodyEmPx : renderer.getFontAscenderSize(baseFontId));
+  const int bodyEm = std::max(8, params.bodyEmPx > 0 ? params.bodyEmPx : renderer.getFontAscenderSize(baseFontId));
 
   int y = 0;
+  bool pageHasProse = false;
   IrCursor cur = from;
 
   int dropW = 0;
@@ -394,16 +388,49 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     }
   }
 
+  // Per-layout scratch, hoisted out of the block/line loops below so their
+  // capacity is reused instead of being rebuilt from scratch. These used to be
+  // declared inside the loops — `toks` per block and `lineToks` +
+  // `hyphenPrefixStorage` per LINE — which meant a fresh allocate/grow/free cycle
+  // for every line of every page turn.
+  std::vector<Tok> toks;
+  std::vector<Tok> lineToks;
+  std::string hyphenPrefixStorage;  // owns the "prefix-" string for the current line
+
+  // Reserve the span vector once. A page holds one GlyphSpan per word
+  // (sizeof ≈ 48 B with its owned std::string), so an unreserved fill grew
+  // through ~9 reallocations, and the last of those needs the old and new
+  // buffers live at the same time — a transient contiguous demand of tens of KB
+  // at exactly the moment the heap is tightest. Estimate lines × words-per-line,
+  // assuming an average word occupies ~3em, and clamp so a tiny font or a huge
+  // viewport cannot reserve something absurd (over-reserving GlyphSpan is
+  // expensive, so the cap matters as much as the floor).
+  // (skipped entirely on a measure-only pass — nothing is emitted, so reserving
+  // would just hand back a ~14 KB allocation per page walked.)
+  if (!params.measureOnly) {
+    const int linesPerPage = std::max(1, viewH / std::max(1, bodyLine));
+    const int wordsPerLine = std::max(1, viewW / std::max(1, bodyEm * 3));
+    size_t spanEstimate = static_cast<size_t>(linesPerPage) * static_cast<size_t>(wordsPerLine);
+    if (spanEstimate < 32) spanEstimate = 32;
+    if (spanEstimate > 512) spanEstimate = 512;
+    out.spans.reserve(spanEstimate);
+  }
+
   // Process blocks until page full or chapter ends.
   while (!atEnd(chapter, cur) && y < viewH) {
+    if (params.shouldAbort && params.shouldAbort()) {
+      out.aborted = true;
+      out.end = from;
+      out.atChapterEnd = false;
+      return false;
+    }
     const Block& block = chapter.blocks()[cur.blockIndex];
     // Normalize cursor into block. Stale page-map cursors can carry a runIndex
     // from a previous IR rebuild that falls outside this block's run range —
-    // without clamping, tokenizeFrom yields nothing and we skip all text,
+    // without clamping, tokenizeRuns yields nothing and we skip all text,
     // marking chapter-end after a handful of empty pages.
     const uint16_t blockRunEnd = static_cast<uint16_t>(block.runBegin + block.runCount);
-    if (cur.runIndex < block.runBegin || cur.runIndex >= blockRunEnd ||
-        (block.runCount == 0 && cur.byteInRun != 0)) {
+    if (cur.runIndex < block.runBegin || cur.runIndex >= blockRunEnd || (block.runCount == 0 && cur.byteInRun != 0)) {
       cur.runIndex = block.runBegin;
       cur.byteInRun = 0;
     } else if (cur.runIndex < chapter.runs().size()) {
@@ -412,25 +439,36 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     }
     const bool atBlockStart = (cur.runIndex == block.runBegin && cur.byteInRun == 0);
     const bool isHeading = (block.kind >= BlockKind::Heading1 && block.kind <= BlockKind::Heading6);
+    const bool isChapterHead = block.kind == BlockKind::Heading1 || block.kind == BlockKind::Heading2;
     // Book's Style: per-block IR align (CSS/heuristics from HtmlToIr).
-    // Force L/C/R/J: same user align for every text block — no CSS "center this title".
+    // Force L/C/R/J applies to body paragraphs only. Headings stay at IR align —
+    // classic engine always defaulted h1–h6 to center (e-reader convention).
     Align blockAlign = block.align;
-    if (forceUserAlign &&
-        (block.kind == BlockKind::Paragraph || isHeading)) {
+    if (forceUserAlign && block.kind == BlockKind::Paragraph) {
       blockAlign = userAlign;
     }
+    // Its text is never drawn (a rule replaces it below); we only need the flag
+    // here so the margin block can give the rule its air.
+    const bool sceneBreak = isSceneBreakRun(chapter, block);
 
     if ((block.flags & kBlockForcePageBreak) != 0 && y > 0 && atBlockStart) {
       break;
     }
 
-    // Drop-cap paragraph prefers top of page.
-    if ((block.flags & kBlockDropCap) != 0 && y > 0 && atBlockStart) {
+    // Drop-cap after leftover prose starts a new page. After a chapter heading
+    // on this page it stays — title + opening paragraph belong together.
+    if ((block.flags & kBlockDropCap) != 0 && dropCapStartsNewPage(atBlockStart, y > 0, pageHasProse)) {
       break;
     }
 
     int marginTop = (block.marginTopEmQ4 * bodyEm) / 16;
     int marginBottom = (block.marginBottomEmQ4 * bodyEm) / 16;
+    if (sceneBreak) {
+      // Give it the air a drawn separator would have had, so it reads as a break
+      // in the prose rather than a short orphan line.
+      marginTop = std::max(marginTop, (y > 0) ? bodyLine : 0);
+      marginBottom = std::max(marginBottom, bodyLine);
+    }
     if (forceUserAlign) {
       // Plain modes: ignore CSS/book vertical rhythm; uniform simple gaps.
       if (block.kind == BlockKind::Spacer) {
@@ -440,8 +478,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         continue;
       }
       if (isHeading) {
-        marginTop = (y > 0) ? bodyLine / 3 : 0;
-        marginBottom = bodyLine / 4;
+        marginTop = bodyLine / 3;
+        marginBottom = isChapterHead ? bodyLine / 2 : bodyLine / 4;
       } else if (block.kind == BlockKind::Paragraph) {
         marginTop = 0;
         if (params.extraParagraphSpacing) {
@@ -467,9 +505,17 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         marginBottom = extraParaGapPx(bodyLine, params.extraParagraphSpacingHeight);
       }
     }
+    // Chapter titles need air from the top chrome and before the ornament / body.
+    // v0.1.9 skipped heading top at y=0 and auto-floated small images, which
+    // glued "Introduction" to the bezel and wrapped the flourish into the prose.
+    if (isChapterHead) {
+      if (y == 0) marginTop = std::max(marginTop, bodyLine / 2);
+      marginBottom = std::max(marginBottom, bodyLine / 2);
+    }
     // Apply top margin with collapse against previous block's trailing margin.
     // Collapse only in Book's Style (CSS adjacent-margin behavior).
-    if (atBlockStart && (y > 0 || block.kind == BlockKind::Spacer)) {
+    // Headings at y=0 still take their top margin (chapter-open air).
+    if (atBlockStart && (y > 0 || block.kind == BlockKind::Spacer || isHeading)) {
       int applyTop = marginTop;
       if (bookStyle && trailingCollapsePx > 0) {
         // Collapse: only the excess of this top over the already-applied trailing.
@@ -479,16 +525,24 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       if (y >= viewH && block.kind != BlockKind::Spacer) break;
     }
 
-    if (block.kind == BlockKind::HorizontalRule) {
+    // A scene-break fallback ("* * *") is the publisher's stand-in for a graphic
+    // we do not draw. Print sets that as a rule, not as typed asterisks, so paint
+    // our own rule and drop the characters entirely — same treatment as <hr>.
+    if (block.kind == BlockKind::HorizontalRule || sceneBreak) {
       trailingCollapsePx = 0;
       if (y + bodyLine > viewH && y > 0) break;
-      GlyphSpan sp;
-      sp.x = 0;
-      sp.y = static_cast<int16_t>(y);
-      sp.fontId = FontLadder::resolve(baseFontId, SizeStep::Body);
-      sp.epdStyle = FontLadder::epdStyleBits(RunStyle::Regular);
-      sp.text = "————————";
-      out.spans.push_back(std::move(sp));
+      // Typeset rule: a short centred hairline with air either side, the way a
+      // print book sets a section break. This used to be a literal row of em-dash
+      // glyphs, which reads as typed-out punctuation and disappears entirely on a
+      // font without U+2014.
+      if (!params.measureOnly) {
+        RulePlate rule;
+        rule.w = static_cast<int16_t>(std::max(24, (viewW * 22) / 100));
+        rule.x = static_cast<int16_t>((viewW - rule.w) / 2);
+        rule.y = static_cast<int16_t>(y + bodyLine / 2);
+        rule.h = static_cast<int16_t>(std::max(1, bodyEm / 12));
+        out.rules.push_back(rule);
+      }
       y += bodyLine + marginBottom;
       advancePastBlock(chapter, cur);
       continue;
@@ -522,8 +576,7 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         }
       }
       const bool letterGlyph =
-          !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW &&
-          (ih <= 0 || ih <= bodyLine * 6 || iw <= ih * 2);
+          !isOrnament && leftFloat && iw > 0 && iw <= maxLetterW && (ih <= 0 || ih <= bodyLine * 6 || iw <= ih * 2);
       const bool figureFloat = !isOrnament && (leftFloat || rightFloat) && !letterGlyph;
 
       if (letterGlyph) {
@@ -653,6 +706,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
             FontLadder::resolve(baseFontId, SizeStep::Plus1),
         };
         const int nCand = (candidates[1] != candidates[0]) ? 2 : 1;
+        renderer.ensureSdCardFontReady(bodyFaceId, letter.c_str());
+        if (nCand > 1) renderer.ensureSdCardFontReady(candidates[1], letter.c_str());
 
         int bestFaceId = bodyFaceId;
         int bestScale = 2;
@@ -669,15 +724,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           const int paintH = gH * scale;
           if (paintH <= 0 || paintH > maxPaintH) return;
           const auto styleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(faceStyle) |
-                                                                  static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+                                                                   static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
           const int w = renderer.getTextAdvanceX(fontId, letter.c_str(), styleBits, scale);
           if (w < 8 || w > maxW) return;
           // Tallest that still fits under maxPaintH; prefer scale 2 and body face.
-          const bool better = !found || paintH > bestPaintH ||
-                              (paintH == bestPaintH && scale < bestScale) ||
-                              (paintH == bestPaintH && scale == bestScale && fontId == bodyFaceId &&
-                               bestFaceId != bodyFaceId) ||
-                              (paintH == bestPaintH && scale == bestScale && w < bestW);
+          const bool better =
+              !found || paintH > bestPaintH || (paintH == bestPaintH && scale < bestScale) ||
+              (paintH == bestPaintH && scale == bestScale && fontId == bodyFaceId && bestFaceId != bodyFaceId) ||
+              (paintH == bestPaintH && scale == bestScale && w < bestW);
           if (!better) return;
           found = true;
           bestPaintH = paintH;
@@ -731,8 +785,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           cap.x = 0;
           cap.y = static_cast<int16_t>(capTop);
           cap.fontId = bestFaceId;
-          cap.epdStyle = static_cast<uint8_t>((bestBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) |
-                                              EpdFontFamily::DROP_CAP);
+          cap.epdStyle =
+              static_cast<uint8_t>((bestBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) | EpdFontFamily::DROP_CAP);
           cap.dropScale = static_cast<uint8_t>(bestScale);
           cap.text = letter;
           out.spans.push_back(std::move(cap));
@@ -747,8 +801,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       }
     }
 
-    std::vector<Tok> toks;
-    tokenizeFrom(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
+    tokenizeRuns(chapter, block.runBegin, block.runCount, bodyRun, bodyByte, toks);
+    warmSdToks(renderer, baseFontId, chapter, toks);
 
     int indent = 0;
     // No first-line indent beside drop-cap OR letter float (classic flushes indent).
@@ -756,8 +810,8 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
     if (!besideFloat && atBlockStart) {
       if (forceUserAlign) {
         // Plain modes: simple first-line indent for Left/Justify only (not CSS).
-        if ((userAlign == Align::Left || userAlign == Align::Justify) &&
-            block.kind == BlockKind::Paragraph && !dropCapActive) {
+        if ((userAlign == Align::Left || userAlign == Align::Justify) && block.kind == BlockKind::Paragraph &&
+            !dropCapActive) {
           indent = (16 * bodyEm) / 16;  // 1em — common body indent
         }
       } else if ((block.flags & kBlockNoIndent) == 0) {
@@ -773,13 +827,22 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
 
     // Heading size floor (classic ladder): h1=+2, h2=+1 — measure + paint.
     SizeStep headingFloor = SizeStep::Body;
-    if (block.kind == BlockKind::Heading1) headingFloor = SizeStep::Plus2;
-    else if (block.kind == BlockKind::Heading2) headingFloor = SizeStep::Plus1;
+    if (block.kind == BlockKind::Heading1)
+      headingFloor = SizeStep::Plus2;
+    else if (block.kind == BlockKind::Heading2)
+      headingFloor = SizeStep::Plus1;
 
     while (ti < toks.size()) {
+      // A wrap after a word leaves ti on the following space token. If that space
+      // starts the next line it paints as a left indent, and under Justify it
+      // absorbs extra glue — the "air," indent and "He   emerged,   angrily"
+      // stretched last-line bugs. Skip leading spaces every line.
+      while (ti < toks.size() && toks[ti].space) ++ti;
+      if (ti >= toks.size()) break;
+
       // Use largest step so mid-heading page breaks leave enough vertical room.
-      const int probeLineH = lineH(renderer, baseFontId,
-                                   headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
+      const int probeLineH =
+          lineH(renderer, baseFontId, headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
       if (y + probeLineH > viewH) {
         // Page full mid-block.
         cur.runIndex = toks[ti].runIndex;
@@ -787,7 +850,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
         out.end = cur;
         out.contentH = static_cast<int16_t>(y);
         out.atChapterEnd = false;
-        return !out.spans.empty() || !out.images.empty();
+        // Must use the SAME success test as the normal return below. A measure-only
+        // pass never emits spans, so testing spans/images alone reported "failed"
+        // for every page that fills mid-block — even though out.end advanced. Page
+        // maps therefore truncated, chapter page counts came out short, and the
+        // last-page walk had to skip whole blocks (99 of 158 on one chapter).
+        // Headings tripped it hardest: probeLineH uses the h1/h2 size floor, so a
+        // heading near the bottom of a page always overflows the probe.
+        return !out.spans.empty() || !out.images.empty() || (out.end != from);
       }
 
       const int xLeft = xBase(y) + (firstLine ? indent : 0);
@@ -797,9 +867,11 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       size_t lineStart = ti;
       int lineW = 0;
       size_t lineEnd = ti;
-      // When hyphenation splits a word, we inject prefix/suffix tokens for this line only.
-      std::vector<Tok> lineToks;
-      std::string hyphenPrefixStorage;  // owns "prefix-" string for this line
+      // When hyphenation splits a word, we inject prefix/suffix tokens for this line
+      // only. Hoisted to the function scope above; clear (not reallocate) per line so
+      // the capacity carries over.
+      lineToks.clear();
+      hyphenPrefixStorage.clear();
       bool usedHyphenSplit = false;
       while (ti < toks.size()) {
         const Tok& t = toks[ti];
@@ -815,12 +887,15 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           if (ti > 0 && !toks[ti - 1].space) leftCp = tokenLastCp(chapter, toks[ti - 1]);
           if (ti + 1 < toks.size() && !toks[ti + 1].space) rightCp = tokenFirstCp(chapter, toks[ti + 1]);
           tw = measureInterWordSpace(renderer, fid, st, leftCp, rightCp);
+        } else if (t.w >= 0) {
+          tw = t.w;  // already measured (previous line attempt, or an earlier pass)
         } else {
           tw = measureWord(renderer, fid, st, chapter.runText(run) + t.byteOff, t.byteLen);
+          if (tw >= 0 && tw <= INT16_MAX) toks[ti].w = static_cast<int16_t>(tw);
         }
         if (lineW + tw > maxW && lineEnd > lineStart) {
-          // Keep "." / "," / "!" with the preceding word (slight overflow ok).
-          if (!t.space && tokenIsOnlyClosingPunct(chapter, t)) {
+          // Keep "." / "," / "!" and glued super/sub suffixes with the stem.
+          if (!t.space && (tokenIsOnlyClosingPunct(chapter, t) || tokenIsAttachedScript(chapter, t))) {
             lineW += tw;
             lineEnd = ti + 1;
             ++ti;
@@ -840,11 +915,15 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
               prefixTok.byteOff = 0;
               prefixTok.byteLen = static_cast<uint16_t>(hyphenPrefixStorage.size());
               prefixTok.space = false;
+              // Prefix text lives in hyphenPrefixStorage, not the run; prefW is its
+              // measured width, so the emit loop can reuse it directly.
+              prefixTok.w = (prefW >= 0 && prefW <= INT16_MAX) ? static_cast<int16_t>(prefW) : -1;
               lineToks.push_back(prefixTok);
               lineW += prefW;
               usedHyphenSplit = true;
               toks[ti].byteOff = static_cast<uint16_t>(t.byteOff + prefBytes);
               toks[ti].byteLen = static_cast<uint16_t>(t.byteLen - prefBytes);
+              toks[ti].w = -1;  // token now covers only the suffix — remeasure
               break;
             }
           }
@@ -863,12 +942,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
               Tok prefixTok = t;
               prefixTok.byteOff = 0;
               prefixTok.byteLen = static_cast<uint16_t>(hyphenPrefixStorage.size());
+              prefixTok.w = (prefW >= 0 && prefW <= INT16_MAX) ? static_cast<int16_t>(prefW) : -1;
               lineToks.clear();
               lineToks.push_back(prefixTok);
               lineW = prefW;
               usedHyphenSplit = true;
               toks[ti].byteOff = static_cast<uint16_t>(t.byteOff + prefBytes);
               toks[ti].byteLen = static_cast<uint16_t>(t.byteLen - prefBytes);
+              toks[ti].w = -1;  // token now covers only the suffix — remeasure
               lineEnd = lineStart;
               break;
             }
@@ -901,8 +982,17 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       int justifyExtra = 0;
       int spaces = 0;
       // No justify while still wrapping beside the drop-cap float.
+      // Only justify when another *word* remains after this line — trailing
+      // space tokens alone must not stretch the last visual line of a paragraph.
       const bool inDropFloat = dropW > 0 && y < dropBottom;
-      if (lineAlign == Align::Justify && !inDropFloat && ti < toks.size()) {
+      bool moreWordsAfter = false;
+      for (size_t j = ti; j < toks.size(); ++j) {
+        if (!toks[j].space) {
+          moreWordsAfter = true;
+          break;
+        }
+      }
+      if (lineAlign == Align::Justify && !inDropFloat && moreWordsAfter) {
         for (size_t k = emitBegin; k < emitEnd; ++k) {
           if ((*emit)[k].space) ++spaces;
         }
@@ -960,23 +1050,30 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
           x += sw;
           continue;
         }
-        // Shared baseline on the line: drawText baseline = y + ascender(fid).
-        // Set y so all spans share baseline = lineBoxTop + maxAscOnLine.
-        const int spanAsc = std::max(1, renderer.getFontAscenderSize(fid));
-        const int paintTop = lineBoxTop + maxAscOnLine - spanAsc;
-        GlyphSpan sp;
-        sp.x = static_cast<int16_t>(x);
-        sp.y = static_cast<int16_t>(std::max(0, paintTop));
-        sp.fontId = fid;
-        sp.epdStyle = FontLadder::epdStyleBits(run.style);
         // Hyphen prefix lives in hyphenPrefixStorage (last emit token when split).
-        if (usedHyphenSplit && k + 1 == emitEnd && !hyphenPrefixStorage.empty()) {
-          sp.text = hyphenPrefixStorage;
-        } else {
-          sp.text.assign(chapter.runText(run) + t.byteOff, t.byteLen);
+        const bool isHyphenPrefix = usedHyphenSplit && k + 1 == emitEnd && !hyphenPrefixStorage.empty();
+        const char* tokBytes = isHyphenPrefix ? hyphenPrefixStorage.data() : chapter.runText(run) + t.byteOff;
+        const size_t tokLen = isHyphenPrefix ? hyphenPrefixStorage.size() : t.byteLen;
+
+        // Reuse the width the fitting loop already measured for this exact
+        // (fontId, style, bytes) triple — see Tok::w. Falls back to measuring
+        // only when the token was never measured (defensive; should not happen).
+        const int advance = (t.w >= 0) ? static_cast<int>(t.w) : measureWord(renderer, fid, st, tokBytes, tokLen);
+
+        if (!params.measureOnly) {
+          // Shared baseline on the line: drawText baseline = y + ascender(fid).
+          // Set y so all spans share baseline = lineBoxTop + maxAscOnLine.
+          const int spanAsc = std::max(1, renderer.getFontAscenderSize(fid));
+          const int paintTop = lineBoxTop + maxAscOnLine - spanAsc;
+          GlyphSpan sp;
+          sp.x = static_cast<int16_t>(x);
+          sp.y = static_cast<int16_t>(std::max(0, paintTop));
+          sp.fontId = fid;
+          sp.epdStyle = FontLadder::epdStyleBits(run.style);
+          sp.text.assign(tokBytes, tokLen);
+          out.spans.push_back(std::move(sp));
         }
-        x += measureWord(renderer, fid, st, sp.text.data(), sp.text.size());
-        out.spans.push_back(std::move(sp));
+        x += advance;
       }
 
       y += thisLineH;
@@ -1002,6 +1099,14 @@ bool PageLayouter::layoutPage(const ChapterIr& chapter, const GfxRenderer& rende
       dropW = 0;
       dropBottom = 0;
       dropIsRight = false;
+    }
+    if (block.kind == BlockKind::Paragraph) {
+      pageHasProse = true;
+    } else if (block.kind == BlockKind::Image) {
+      const uint16_t deco = static_cast<uint16_t>(kBlockOrnament | kBlockFloatLeft | kBlockFloatRight);
+      if ((block.flags & deco) == 0) {
+        pageHasProse = true;
+      }
     }
     advancePastBlock(chapter, cur);
   }
@@ -1031,16 +1136,35 @@ bool PageLayouter::buildFullPageMap(const ChapterIr& chapter, const GfxRenderer&
   map.resetWithStart(cur);
 
   LaidOutPage page;
+  // A single unlayoutable block (broken image, empty cell) must not truncate the
+  // whole map — skip past it instead of returning an incomplete 1-2 page map.
+  int skips = 0;
+  // One skip per block: the walk never revisits a block, so this cannot spin, and
+  // a flat cap truncated long chapters partway through (see goToLastPage).
+  const int kMaxBlockSkips = static_cast<int>(chapter.blocks().size()) + 8;
   for (int guard = 0; guard < 20000; ++guard) {
+    // A long chapter is thousands of layoutPage() calls. Without a yield the
+    // whole walk is one uninterruptible block: the caller's loop stops sampling
+    // input for many seconds (indistinguishable from a hang) and the task
+    // watchdog is in play. extendPageMap() already yields on the same cadence.
+    if ((guard & 3) == 3) yield();
     if (!layoutPage(chapter, renderer, params, cur, page)) {
+      if (!page.atChapterEnd && cur.blockIndex + 1 < chapter.blocks().size() && ++skips <= kMaxBlockSkips) {
+        ++cur.blockIndex;
+        cur.runIndex = chapter.blocks()[cur.blockIndex].runBegin;
+        cur.byteInRun = 0;
+        map.setPageStart(map.knownPages() > 0 ? map.knownPages() - 1 : 0, cur);
+        continue;
+      }
       // Failed layout is not a chapter end — leave incomplete.
       return map.knownPages() > 0;
     }
     if (page.atChapterEnd) {
       const int est = chapter.estimatePageCount(params.key.viewportW, params.key.viewportH, params.bodyEmPx,
                                                 params.lineCompression);
-      // Refuse absurdly short completes (same guard as RivuletEngine).
-      if (!(est >= 6 && map.knownPages() * 2 + 1 < est)) {
+      // Only refuse absurd 1–3 page "completes" for large chapters — not honest maps
+      // that are merely shorter than a padded estimate.
+      if (!(est >= 10 && map.knownPages() <= 3)) {
         map.markComplete(map.knownPages());
       }
       return true;

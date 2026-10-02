@@ -11,16 +11,15 @@
 #include <string>
 #include <vector>
 
+#include "BookReadingStats.h"
 #include "GlobalReadingStats.h"
 #include "ReadingStatsUtils.h"
 
 namespace {
 constexpr char LOG_TAG[] = "SBACK";
-// Prefer Casper path; fall back to legacy Casper if not migrated yet.
 constexpr char GLOBAL_STATS_PATH[] = "/.crosspoint/global_stats.bin";
-// Same path as shipped v0.1.8 (optional lifetime-stats copies; not day-to-day stats).
-constexpr char BACKUP_DIR[] = "/.casper-stats-backup";
-constexpr int DEFAULT_BACKUP_KEEP_COUNT = 7;
+constexpr const char* BACKUP_DIR = statsbackup::kDir;
+constexpr int DEFAULT_BACKUP_KEEP_COUNT = statsbackup::kKeepSnaps;
 
 struct BackupName {
   char value[64] = {};
@@ -171,9 +170,13 @@ bool writeBackupFile(const char* path, const uint8_t* data, const size_t size) {
 
   return true;
 }
+
 }  // namespace
 
 bool backupGlobalStats(const bool manual, char* outFileName, const size_t outFileNameLen) {
+  if (!Storage.exists(BACKUP_DIR) && Storage.exists(statsbackup::kLegacyCasperDir)) {
+    Storage.rename(statsbackup::kLegacyCasperDir, BACKUP_DIR);
+  }
   if (!Storage.ensureDirectoryExists(BACKUP_DIR)) {
     LOG_ERR(LOG_TAG, "Could not create stats backup directory: %s", BACKUP_DIR);
     return false;
@@ -253,4 +256,26 @@ int pruneBackups(const int keep) {
     LOG_DBG(LOG_TAG, "Pruned %d old stats backup(s)", removed);
   }
   return removed;
+}
+
+bool stashDeletedBookStats(const char* bookPath) {
+  if (!bookPath || bookPath[0] == '\0') return false;
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
+  if (cacheDir.empty()) return false;
+  return BookReadingStats::stashToTrash(cacheDir);
+}
+
+bool restoreBookStats(const char* bookPath) {
+  if (!bookPath || bookPath[0] == '\0') return false;
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
+  if (cacheDir.empty()) return false;
+  if (!BookReadingStats::restoreFromTrash(cacheDir)) return false;
+  (void)BookReadingStats::loadForBook(bookPath);
+  return true;
+}
+
+bool hasRestorableBookStats(const char* bookPath) {
+  if (!bookPath || bookPath[0] == '\0') return false;
+  const std::string cacheDir = BookReadingStats::cachePathForBook(bookPath);
+  return !cacheDir.empty() && BookReadingStats::hasTrash(cacheDir);
 }

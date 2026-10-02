@@ -280,7 +280,7 @@ class OptionPopup {
 
     const int optionCount = static_cast<int>(ownedStrings.size());
     const int topMargin = 8;
-    const int bottomMargin = metrics.buttonHintsHeight + 8;
+    const int bottomMargin = BaseTheme::frontButtonFooterLayoutH(renderer) + 8;
     const int maxDialogH = std::max(rowHeight + innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap,
                                     pageHeight - topMargin - bottomMargin);
     const int chromeH = innerPadding * 2 + titleLineHeight + metrics.optionPopupTitleGap;

@@ -15,7 +15,7 @@ namespace rivulet {
 class HtmlToIr {
  public:
   // imageRendering: 0=Display (raster plates), 1=Placeholder (alt as "[Image: …]"),
-  // 2=Suppress (omit img entirely). Matches CasperSettings::IMAGE_RENDERING.
+  // 2=Suppress (omit img entirely). Matches CrossPointSettings::IMAGE_RENDERING.
   // Font glyphs and text drop-caps are unrelated — this only affects <img>/ornaments.
   static bool convert(const char* html, size_t len, ChapterIr& out, bool armDropCapOnFirstParagraph = false,
                       uint8_t imageRendering = 0);

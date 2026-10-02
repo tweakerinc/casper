@@ -13,7 +13,7 @@
 #include "util/TaskWatchdog.h"
 
 namespace {
-constexpr const char* HOSTNAME = "casper";
+constexpr const char* HOSTNAME = "crosspoint";
 }  // namespace
 
 void CalibreConnectActivity::onEnter() {
@@ -80,10 +80,11 @@ void CalibreConnectActivity::startWebServer() {
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
 
-  webServer.reset(new CasperWebServer());
-  webServer->begin();
+  // nothrow: the ERROR state below is the graceful failure the user sees.
+  webServer.reset(new (std::nothrow) CrossPointWebServer());
+  if (webServer) webServer->begin();
 
-  if (webServer->isRunning()) {
+  if (webServer && webServer->isRunning()) {
     state = CalibreConnectState::SERVER_RUNNING;
     requestUpdate();
   } else {

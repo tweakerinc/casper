@@ -8,15 +8,15 @@
 
 #include <algorithm>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
-#include "util/FinishedBooks.h"
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
@@ -245,42 +245,41 @@ void FileBrowserActivity::toggleHiddenFiles() {
 void FileBrowserActivity::showBookActionMenu(const std::string& fullPath, const std::string& displayName) {
   // Menu activity handles cache/stats/pace/description itself and stays open.
   // Parent only handles terminal results so this folder (basepath) is preserved.
-  startActivityForResult(
-      std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, displayName, fullPath,
-                                                  /*includeRemoveFromRecents=*/false,
-                                                  /*openedFromLongPress=*/true),
-      [this, fullPath](const ActivityResult& result) {
-        lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
-        lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-        if (result.isCancelled) {
-          requestUpdate();
-          return;
-        }
-        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
-        if (!actionResult) {
-          requestUpdate();
-          return;
-        }
-        switch (static_cast<FileBrowserAction>(actionResult->action)) {
-          case FileBrowserAction::Open:
-            onSelectBook(fullPath);
-            return;
-          case FileBrowserAction::Delete:
-            // File already removed by the menu activity; refresh this folder listing.
-            loadFiles();
-            if (files.empty()) {
-              selectorIndex = 0;
-            } else if (selectorIndex >= files.size()) {
-              selectorIndex = files.size() - 1;
-            }
-            requestUpdate(true);
-            return;
-          default:
-            // Side-effect actions finish inside the menu; should not reach here.
-            requestUpdate();
-            return;
-        }
-      });
+  startActivityForResult(std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, displayName, fullPath,
+                                                                     /*includeRemoveFromRecents=*/false,
+                                                                     /*openedFromLongPress=*/true),
+                         [this, fullPath](const ActivityResult& result) {
+                           lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+                           lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
+                           const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+                           if (!actionResult) {
+                             requestUpdate();
+                             return;
+                           }
+                           switch (static_cast<FileBrowserAction>(actionResult->action)) {
+                             case FileBrowserAction::Open:
+                               onSelectBook(fullPath);
+                               return;
+                             case FileBrowserAction::Delete:
+                               // File already removed by the menu activity; refresh this folder listing.
+                               loadFiles();
+                               if (files.empty()) {
+                                 selectorIndex = 0;
+                               } else if (selectorIndex >= files.size()) {
+                                 selectorIndex = files.size() - 1;
+                               }
+                               requestUpdate(true);
+                               return;
+                             default:
+                               // Side-effect actions finish inside the menu; should not reach here.
+                               requestUpdate();
+                               return;
+                           }
+                         });
 }
 
 void FileBrowserActivity::loop() {
@@ -311,8 +310,8 @@ void FileBrowserActivity::loop() {
   const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight =
-      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+  const int contentHeight = renderer.getScreenHeight() - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) -
+                            metrics.verticalSpacing - pathReserved;
 
   // Long-press Confirm on a book file ΓåÆ same action menu as Recents / Dashboard.
   if (mode == Mode::Books && !files.empty() && selectorIndex < files.size() &&
@@ -511,19 +510,21 @@ void FileBrowserActivity::render(RenderLock&&) {
   const int pathReserved = pathLineHeight + metrics.verticalSpacing;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+      pageHeight - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing - pathReserved;
   if (files.empty()) {
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     // No row icons; extension on the right (epub) marks files vs folders.
-    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
-                 [this](int index) { return getFileName(files[index]); }, nullptr, nullptr,
-                 [this](int index) { return getFileExtensionLabel(files[index]); }, false);
+    GUI.drawList(
+        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
+        [this](int index) { return getFileName(files[index]); }, nullptr, nullptr,
+        [this](int index) { return getFileExtensionLabel(files[index]); }, false);
   }
 
   // Full path display (+ root hint for hidden-files toggle)
-  const int pathY = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
+  const int pathY =
+      pageHeight - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing - pathLineHeight;
   const int separatorY = pathY - metrics.verticalSpacing / 2;
   renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 1, true);
   const int pathMaxWidth = pageWidth - metrics.contentSidePadding * 2;

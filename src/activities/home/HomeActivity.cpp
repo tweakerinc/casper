@@ -16,15 +16,14 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <vector>
 
 #include "BookActions.h"
-#include "CasperSettings.h"
-#include "CasperState.h"
+#include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
-#include "util/CasperPaths.h"
-
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
@@ -38,15 +37,22 @@
 #include "components/themes/bare/BareTheme.h"
 #include "components/themes/penumbra/PenumbraTheme.h"
 #include "fontIds.h"
+#include "util/CoverRenderPolicy.h"
+#include "util/CoverThumbFiles.h"
+#include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
+#include "util/HomeSideStepPolicy.h"
+#include "util/SystemChromeLive.h"
 #include "util/SystemLog.h"
+#include "util/ThumbCachePolicy.h"
 #include "util/UiGhostPolicy.h"
 
 namespace {
 
 // Home long-press (Menu→Settings, Read→book menu).
-// Keep clearly above debounce (~5–20ms) and below "sticky hold" feel.
-// 200ms: snappy hold; short taps still release before threshold.
-constexpr unsigned long READ_LONG_PRESS_MS = 200;
+// Match FileBrowser / reader GO_HOME_MS. 200ms was a slow tap and opened the
+// book-action menu instead of Read.
+constexpr unsigned long READ_LONG_PRESS_MS = 500;
 // Abort greys while still holding so ActivityManager idle wait is short.
 constexpr unsigned long LONG_PRESS_PRECANCEL_MS = 70;
 
@@ -57,11 +63,11 @@ bool isDashboardScrollTheme() { return false; }
 bool usesRecentBookSideNav() { return false; }
 
 bool isBareTheme() {
-  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::BARE;
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::BARE;
 }
 
 bool isPenumbraTheme() {
-  return static_cast<CasperSettings::UI_THEME>(SETTINGS.uiTheme) == CasperSettings::UI_THEME::PENUMBRA;
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::PENUMBRA;
 }
 
 // Stats (FocusTheme) is not in this firmware build.
@@ -98,6 +104,15 @@ bool isAnyFrontButtonPressed(const MappedInputManager& mappedInput) {
          mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) || mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT);
 }
 
+bool homeControlsHeld(const MappedInputManager& mappedInput) {
+  return isAnyFrontButtonPressed(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+         mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+         mappedInput.isPressed(MappedInputManager::Button::Left) ||
+         mappedInput.isPressed(MappedInputManager::Button::Right) ||
+         mappedInput.isPressed(MappedInputManager::Button::Up) ||
+         mappedInput.isPressed(MappedInputManager::Button::Down);
+}
+
 // Popup menu: Dashboard BACK (Menu) / Bare CONFIRM (Menu).
 // Settings is always in the Menu list (front bar is Menu · Library · Recents · Read).
 // Recents is a front button — not duplicated in the popup menu.
@@ -124,14 +139,14 @@ int buildMinimalMenuItems(MinimalMenuItem* out, int maxItems, const bool hasOpds
   return n;
 }
 
-// Same path as EpubReaderActivity save: Epub(path, CasperPaths::kPackageCacheRoot).getCachePath().
+// Same path as EpubReaderActivity save: Epub(path, CrossPointPaths::kPackageCacheRoot).getCachePath().
 // Constructor hashes the path; load() is not required for the cache directory.
 std::string getRecentBookCachePath(const RecentBook& book) {
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, CasperPaths::kPackageCacheRoot).getCachePath();
+    return Epub(book.path, CrossPointPaths::kPackageCacheRoot).getCachePath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
-    return std::string(CasperPaths::kPackageCacheRoot) + "/xtc_" +
+    return std::string(CrossPointPaths::kPackageCacheRoot) + "/xtc_" +
            std::to_string(std::hash<std::string>{}(book.path));
   }
   if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
@@ -145,7 +160,7 @@ BookReadingStats loadRecentBookStats(const RecentBook& book) {
   return BookReadingStats::loadForBook(book.path);
 }
 
-// Dashboard progress %: prefer recent.json (CasperStats); no multi-path SD hunt.
+// Dashboard progress %: prefer recent.json (CrossPointStats); no multi-path SD hunt.
 float loadRecentBookProgressPercent(const RecentBook& book) {
   if (book.progressPercentMilli != 0xFFFF) {
     return static_cast<float>(book.progressPercentMilli) / 100.0f;
@@ -154,53 +169,109 @@ float loadRecentBookProgressPercent(const RecentBook& book) {
 }
 
 // Treat only real BMPs as present (corrupt partial files must re-enter gen).
-bool thumbLooksValid(const std::string& path) {
-  if (path.empty() || !Storage.exists(path.c_str())) return false;
-  HalFile probe;
-  if (!Storage.openFileForRead("HOME", path, probe)) return false;
-  char sig[2] = {};
-  const size_t n = probe.read(sig, 2);
-  const size_t sz = probe.size();
-  probe.close();
-  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62;
+// Prefer open over exists() — exists() false-negatives after the reader made
+// every Home return decode JPEG even when thumb_c31_560.bmp was on SD.
+// A header-only leftover (BM + 70 bytes) is not a jacket.
+bool thumbLooksValid(const std::string& path) { return coverthumb::fileIsValidBmp("HOME", path); }
+
+bool thumbLooksPresent(const std::string& path) { return coverthumb::fileLooksPresent("HOME", path); }
+
+bool fallbackThumbLooksValid(const std::string& templatePath) {
+  return thumbLooksValid(UITheme::getCoverThumbPath(templatePath, HomeCoverMetrics::previewThumbHeight)) ||
+         thumbLooksValid(UITheme::getCoverThumbPath(templatePath, HomeCoverMetrics::homeShelfThumbHeight));
 }
 
-// Phase 1 (A1): bind hero paths when thumbs already exist so the first home paint
-// can multipass immediately (skip shell-only HALF → gen → multipass).
-// Returns true when no cover generation work is required.
-bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int heroH, bool shelfTheme, int shelfH) {
+bool recentsCoverLooksPaintable(const RecentBook& book, int heroH) {
+  if (book.coverBmpPath.empty()) return false;
+  if (thumbLooksValid(UITheme::getCoverThumbPath(book.coverBmpPath, heroH))) return true;
+  return fallbackThumbLooksValid(book.coverBmpPath);
+}
+
+thumbcache::DiskThumb classifyRecentCover(const RecentBook& book, int heroH) {
+  bool hero = false;
+  bool fallback = false;
+  bool present = false;
+  auto consider = [&](const std::string& path, const bool isHero) {
+    if (path.empty()) return;
+    if (thumbLooksValid(path)) {
+      if (isHero)
+        hero = true;
+      else
+        fallback = true;
+    } else if (thumbLooksPresent(path)) {
+      present = true;
+    }
+  };
+  if (!book.coverBmpPath.empty()) {
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, heroH), true);
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::previewThumbHeight), false);
+    consider(UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::homeShelfThumbHeight), false);
+  }
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
+    consider(epub.getThumbBmpPath(heroH), true);
+    consider(epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight), false);
+    consider(epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight), false);
+  } else if (FsHelpers::hasXtcExtension(book.path)) {
+    Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+    consider(xtc.getThumbBmpPath(heroH), true);
+    consider(xtc.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight), false);
+    consider(xtc.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight), false);
+  }
+  return thumbcache::classify(hero, fallback, present && !hero && !fallback);
+}
+
+void paintRenderingCoverCue(GfxRenderer& renderer) {
+  GUI.drawTopLeftStatus(renderer, tr(STR_RENDERING_COVER), /*refresh=*/true);
+  SystemLog::logTiming("HOME", "rendering_cover cue dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
+}
+
+bool shouldArmIdleHeroUpgrade(const std::vector<RecentBook>& recentBooks, int heroH) {
+  if (recentBooks.empty()) return false;
+  return coverrender::generateHero(classifyRecentCover(recentBooks[0], heroH));
+}
+
+template <typename BookFmt>
+bool bookFmtLooksPaintable(BookFmt& bookFmt, int heroH) {
+  const bool hero = thumbLooksValid(bookFmt.getThumbBmpPath(heroH));
+  const bool fallback = thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight)) ||
+                        thumbLooksValid(bookFmt.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight));
+  return thumbcache::skipJpeg(thumbcache::classify(hero, fallback));
+}
+
+// Bind when any cached thumb exists so Home return blits SD art.
+// A missing shelf/hero-size file must not force JPEG — leftover 280/168 is enough.
+bool bindExistingHeroThumbsIfReady(std::vector<RecentBook>& recentBooks, int heroH, bool /*shelfTheme*/,
+                                   int /*shelfH*/) {
   if (recentBooks.empty()) {
     return true;
   }
   for (RecentBook& book : recentBooks) {
     if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
-      const std::string heroPath = epub.getThumbBmpPath(heroH);
-      if (!thumbLooksValid(heroPath)) {
-        return false;
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        continue;
       }
-      if (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH))) {
+      Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
+      if (!bookFmtLooksPaintable(epub, heroH)) {
         return false;
       }
       if (book.coverBmpPath.empty()) {
         book.coverBmpPath = epub.getThumbBmpPath();
       }
     } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
-      // Path-only probe — avoid full XTC load when the hero BMP is already on disk.
-      const std::string heroPath = xtc.getThumbBmpPath(heroH);
-      if (!thumbLooksValid(heroPath)) {
-        return false;
+      if (recentsCoverLooksPaintable(book, heroH)) {
+        continue;
       }
-      if (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH))) {
+      Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+      if (!bookFmtLooksPaintable(xtc, heroH)) {
         return false;
       }
       if (book.coverBmpPath.empty()) {
         book.coverBmpPath = xtc.getThumbBmpPath();
       }
     }
-    // txt/md/etc.: no cover gen.
   }
+  SystemLog::logTiming("HOME", "cover_bind skip_jpeg n=%d", static_cast<int>(recentBooks.size()));
   return true;
 }
 }  // namespace
@@ -221,13 +292,12 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   const auto pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int bandTop = metrics.topPadding + metrics.homeTopPadding;
-  const int bandBottom = pageHeight - metrics.buttonHintsHeight;
+  const int bandBottom = pageHeight - BaseTheme::frontButtonFooterLayoutH(renderer);
 
   MinimalMenuItem menuItems[6];
   const int menuCount =
       buildMinimalMenuItems(menuItems, 6, hasOpdsServers, !recentBooks.empty(), /*includeSettings=*/true);
-  const int menuH =
-      menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
+  const int menuH = menuCount > 0 ? menuCount * metrics.menuRowHeight + (menuCount - 1) * metrics.menuSpacing : 0;
   const int menuTop = bandTop + std::max(0, (bandBottom - bandTop - menuH) / 2);
   const Rect menuRect{0, menuTop, pageWidth, std::max(menuH, 1)};
   auto menuLabel = [&menuItems](int index) { return std::string(menuItems[index].label); };
@@ -249,7 +319,10 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   // become the sparse menu with no glass update — the following FAST sees zero
   // differential and the main home image remains fully visible on glass.
   renderer.setRenderMode(GfxRenderer::BW);
-  renderer.restoreBwBuffer();  // no-op if multipass already freed the store
+  renderer.restoreBwBuffer();  // FB is still the home BW shell
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  UiGhostPolicy::noteBwOnPanel();
+  coverGrayOnPanel = false;
 
   renderer.clearScreen(0xFF);
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding}, nullptr);
@@ -259,8 +332,9 @@ void HomeActivity::paintMinimalMenu(const bool bandOnly) {
   homeMenuShellOnPanel = true;
   coverGrayOnPanel = false;
   coverRendered = false;
-  // Same open path as Library (FAST + soft settle). DTM1 still holds home BW so
-  // the differential actually drives home → menu. Up/Down = band FAST only.
+  // Same open path as Settings (X3: FAST + settle; X4: one HALF). DTM1 still
+  // holds home BW so the differential actually drives home → menu.
+  // Up/Down = band FAST only.
   UiGhostPolicy::displaySoftOpen(renderer, /*softCount=*/1);
 }
 
@@ -285,18 +359,12 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
-  recentsLoading = true;
-  bool showingLoading = false;
-
   // Per-theme hero height so gen matches the on-screen plate (1:1, no grids).
-  // Shelf still needs a compact 168px row when that theme is active.
   const int heroH = homeHeroThumbHeight(renderer, coverHeight);
   const bool shelfTheme = isDashboardRecentsTheme();
   const int shelfH = HomeCoverMetrics::homeShelfThumbHeight;
 
-  auto heroThumbExists = [&](auto& bookFmt) -> bool { return thumbLooksValid(bookFmt.getThumbBmpPath(heroH)); };
   auto ensureThumbs = [&](auto& bookFmt) -> bool {
-    // Generate hero first; only then optional shelf size (no second full decode when hero ok).
     bool anyOk = bookFmt.generateThumbBmp(heroH);
     if (shelfTheme && !thumbLooksValid(bookFmt.getThumbBmpPath(shelfH))) {
       anyOk = bookFmt.generateThumbBmp(shelfH) || anyOk;
@@ -304,80 +372,102 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     return anyOk;
   };
 
-  // Pre-scan so we only free the on-screen cover snapshot when generation work
-  // is required (returning from the reader with thumbs already on disk used to
-  // wipe a good paint and race into a blank frame).
-  bool anyNeedWork = false;
-  for (const RecentBook& book : recentBooks) {
-    if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
-      if (!heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)))) {
-        anyNeedWork = true;
-        break;
-      }
-    } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
-      if (!xtc.load()) {
-        anyNeedWork = true;
-        break;
-      }
-      if (!heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)))) {
-        anyNeedWork = true;
-        break;
-      }
-    }
-  }
+  auto bookNeedsHero = [&](const RecentBook& book) -> bool {
+    return coverrender::generateHero(classifyRecentCover(book, heroH));
+  };
 
-  if (anyNeedWork) {
-    // Free snapshot RAM for decode heap, but do NOT clear coverGrayOnPanel when
-    // the panel already shows a good multipass (retry would flash black 5–10s later).
-    if (!coverGrayOnPanel) {
-      freeCoverBuffer();
-      coverRendered = false;
-      coverBufferStored = false;
-    } else if (coverBuffer) {
-      free(coverBuffer);
-      coverBuffer = nullptr;
-      coverBufferSize = 0;
-      coverBufferStored = false;
-      // keep coverRendered / coverGrayOnPanel — panel is still correct
-    }
-  }
-
-  // Upper-left "Loading" into the framebuffer only — do NOT window/HALF refresh
-  // here. On X4 (SSD1677), a window while greys are on glass can promote to a full
-  // HALF clean and black-flash in a loop. Next multipass/home paint shows it once.
-  auto showProgress = [&](int /*progress*/, int /*total*/) {
-    if (!showingLoading) {
-      GUI.drawTopLeftStatus(renderer, tr(STR_LOADING_POPUP), /*refresh=*/false);
-      showingLoading = true;
+  auto armRetry = [this, heroH](const bool fromGen) {
+    const auto disk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Missing : classifyRecentCover(recentBooks[0], heroH);
+    if (coverrender::keepRetrying(coverGenAttempts, disk, coverGrayOnPanel)) {
+      coverNeedsRetry = true;
+      const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *
+                               static_cast<unsigned>(std::max<uint8_t>(1, coverGenAttempts));
+      coverRetryAtMs = millis() + delayMs;
+      LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %ums disk=%d", static_cast<unsigned>(coverGenAttempts),
+              static_cast<unsigned>(coverrender::kMaxGenAttempts), delayMs, static_cast<int>(disk));
+      SystemLog::logTiming("HOME", "cover_gen retry %u/%u disk=%d fromGen=%d",
+                           static_cast<unsigned>(coverGenAttempts),
+                           static_cast<unsigned>(coverrender::kMaxGenAttempts), static_cast<int>(disk),
+                           fromGen ? 1 : 0);
+    } else {
+      coverNeedsRetry = false;
+      if (disk != thumbcache::DiskThumb::Hero) {
+        SystemLog::logTiming("HOME", "cover_gen gave_up attempts=%u disk=%d",
+                             static_cast<unsigned>(coverGenAttempts), static_cast<int>(disk));
+      }
     }
   };
 
-  const int total = std::max(1, static_cast<int>(recentBooks.size()));
-  int progress = 0;
+  bool anyNeedWork = false;
+  for (const RecentBook& book : recentBooks) {
+    if (bookNeedsHero(book)) {
+      anyNeedWork = true;
+      break;
+    }
+  }
+
+  if (!anyNeedWork) {
+    recentsLoaded = true;
+    recentsLoading = false;
+    const auto disk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Hero : classifyRecentCover(recentBooks[0], heroH);
+    if (disk != thumbcache::DiskThumb::Hero) {
+      coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
+      coverRendered = false;
+      coverGrayOnPanel = false;
+      requestUpdate();
+    }
+    armRetry(false);
+    return;
+  }
+
+  // Shell must already be on glass. Generating before the first Home paint
+  // FAST/windowed the cue onto an empty FB (white plate + "Rendering Cover").
+  if (coverrender::genWaitsForHomeShell() && !homeUiReady) {
+    recentsLoading = false;
+    coverNeedsRetry = true;
+    coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+    return;
+  }
+  activityManager.waitForRenderIdle();
+
+  // Cue on glass first. recentsLoading then blocks render(); a framebuffer-only
+  // stamp would never appear. Dark Mode uses HALF via drawTopLeftStatus.
+  if (coverrender::showRenderingCoverCue(true, homeUiReady)) {
+    paintRenderingCoverCue(renderer);
+  }
+
+  recentsLoading = true;
+
+  // Free snapshot RAM for JPEG. Keep coverGrayOnPanel so the current plate
+  // stays until the new 560 is ready (then one intentional remultipass).
+  if (coverBuffer) {
+    free(coverBuffer);
+    coverBuffer = nullptr;
+    coverBufferSize = 0;
+    coverBufferStored = false;
+  }
+  if (!coverGrayOnPanel) {
+    coverRendered = false;
+  }
+
   bool anyNewThumb = false;
   bool anyTransientFail = false;
-  bool pathsUpdated = false;
-  for (RecentBook& book : recentBooks) {
-    if (FsHelpers::hasEpubExtension(book.path)) {
-      Epub epub(book.path, CasperPaths::kPackageCacheRoot);
-      const bool needWork = !heroThumbExists(epub) || (shelfTheme && !thumbLooksValid(epub.getThumbBmpPath(shelfH)));
-      if (needWork) {
-        showProgress(progress, total);
-        // Free snapshot RAM for decode, but keep coverGrayOnPanel if the panel
-        // already shows a settled multipass (avoids delayed black re-flash).
-        if (!coverGrayOnPanel) {
-          freeCoverBuffer();
-        } else if (coverBuffer) {
-          free(coverBuffer);
-          coverBuffer = nullptr;
-          coverBufferSize = 0;
-          coverBufferStored = false;
-        }
+
+  {
+    GfxRenderer::FrameBufferLoan decodeLoan(renderer, coverrender::loanFramebufferForDecode());
+    SystemLog::logTiming("HOME", "cover_gen start free=%u maxAlloc=%u n=%d", static_cast<unsigned>(ESP.getFreeHeap()),
+                         static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<int>(recentBooks.size()));
+
+    for (RecentBook& book : recentBooks) {
+      if (!bookNeedsHero(book)) {
+        continue;
+      }
+      if (FsHelpers::hasEpubExtension(book.path)) {
+        Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
         LOG_DBG("HOME", "Cover gen free heap before: %u maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
                 static_cast<unsigned>(ESP.getMaxAllocHeap()));
-        // Prefer existing book.bin (fast). Only full-index if cache is missing.
         bool loaded = epub.load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true);
         if (!loaded) {
           loaded = epub.load(/*buildIfMissing=*/true, /*skipLoadingCss=*/true);
@@ -385,104 +475,47 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         if (!loaded) {
           LOG_ERR("HOME", "EPUB load failed for cover: %s", book.path.c_str());
           anyTransientFail = true;
-        } else {
-          // Warm synopsis cache while the EPUB is already open (miss = one OPF
-          // metadata pass here instead of a multi-second stall on Synopsis).
-          (void)epub.getDescription();
-          if (ensureThumbs(epub)) {
-            const std::string templatePath = epub.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
-            book.coverBmpPath = templatePath;
-            anyNewThumb = true;
-          } else {
-            LOG_ERR("HOME", "Thumb generate failed for: %s (heap=%u maxAlloc=%u)", book.path.c_str(),
-                    static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
-            anyTransientFail = true;
-          }
-        }
-        // Epub object + metadata cache go out of scope next — yield so the heap
-        // can coalesce before the next book’s JPEG decode.
-        delay(1);
-      } else {
-        // Thumbs already ready: still warm synopsis for the focused (first) recent
-        // so opening Synopsis does not cold-parse OPF on the critical path.
-        if (progress == 0) {
-          const std::string descPath = epub.getCachePath() + "/description.html";
-          if (!Storage.exists(descPath.c_str())) {
-            if (epub.load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true) ||
-                epub.load(/*buildIfMissing=*/true, /*skipLoadingCss=*/true)) {
-              (void)epub.getDescription();
-            }
-          }
-        }
-        if (book.coverBmpPath.empty()) {
+        } else if (ensureThumbs(epub)) {
           const std::string templatePath = epub.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
-          pathsUpdated = true;
+          anyNewThumb = true;
+        } else {
+          LOG_ERR("HOME", "Thumb generate failed for: %s (heap=%u maxAlloc=%u)", book.path.c_str(),
+                  static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+          anyTransientFail = true;
         }
-      }
-    } else if (FsHelpers::hasXtcExtension(book.path)) {
-      Xtc xtc(book.path, CasperPaths::kPackageCacheRoot);
-      if (xtc.load()) {
-        const bool needWork = !heroThumbExists(xtc) || (shelfTheme && !thumbLooksValid(xtc.getThumbBmpPath(shelfH)));
-        if (needWork) {
-          showProgress(progress, total);
-          if (ensureThumbs(xtc)) {
-            const std::string templatePath = xtc.getThumbBmpPath();
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
-            book.coverBmpPath = templatePath;
-            anyNewThumb = true;
-          } else {
-            anyTransientFail = true;
-          }
-        } else if (book.coverBmpPath.empty()) {
+        delay(1);
+      } else if (FsHelpers::hasXtcExtension(book.path)) {
+        Xtc xtc(book.path, CrossPointPaths::kPackageCacheRoot);
+        if (xtc.load() && ensureThumbs(xtc)) {
           const std::string templatePath = xtc.getThumbBmpPath();
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, templatePath);
           book.coverBmpPath = templatePath;
-          pathsUpdated = true;
+          anyNewThumb = true;
+        } else {
+          anyTransientFail = true;
         }
-      } else {
-        anyTransientFail = true;
       }
     }
-    progress++;
   }
 
-  // Stop render-path re-entry (loop only kicks when !recentsLoaded).
   recentsLoaded = true;
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
+  (void)anyTransientFail;
+  armRetry(true);
 
-  // Only retry gen when the panel still has no good gray cover (not after success).
-  if (anyTransientFail && coverGenAttempts < kMaxCoverGenAttempts && !coverGrayOnPanel) {
-    coverNeedsRetry = true;
-    coverRetryAtMs = millis() + 1500UL * coverGenAttempts;
-    LOG_DBG("HOME", "Cover gen will retry (%u/%u) in %lums", static_cast<unsigned>(coverGenAttempts),
-            static_cast<unsigned>(kMaxCoverGenAttempts), static_cast<unsigned long>(1500UL * coverGenAttempts));
-  } else {
-    coverNeedsRetry = false;
-  }
-
-  // Repaint only for new pixels, or one multipass after the first BW shell paint.
-  // Never re-multipass solely because a background gen retry ran, and never when
-  // greys are already settled (idle black-flash bug).
-  if (anyNewThumb && !coverGrayOnPanel) {
+  if (anyNewThumb && coverrender::paintWhenHeroArrives()) {
     freeCoverBuffer();
     coverRendered = false;
     coverBufferStored = false;
+    coverGrayOnPanel = false;
     requestUpdate();
-  } else if (anyNewThumb && coverGrayOnPanel) {
-    // New thumb on disk but panel already shows gray of prior art — soft update
-    // next intentional paint only (do not multipass on a timer).
-    LOG_DBG("HOME", "New thumb ready; panel already gray — skip timed multipass");
   } else if (!coverGrayOnPanel) {
+    coverRendered = false;
     requestUpdate();
-  } else if (pathsUpdated) {
-    LOG_DBG("HOME", "Cover path templates updated; skip repaint (art unchanged)");
   }
-  (void)showingLoading;
-  (void)anyNeedWork;
 }
 
 void HomeActivity::onEnter() {
@@ -503,8 +536,13 @@ void HomeActivity::onEnter() {
   backPressSeen = false;
   backResumeArmed = false;
   minimalMenuIndex = 0;
-  // Cold/first Home: HALF scrub (boot logo residual / first shell).
-  UiGhostPolicy::requestHardScrub();
+  // Cold/first Home: FAST over splash. Boot already HALF-scrubbed the splash,
+  // so a delayed idle HALF was a 3s black flash on a plate that already looked
+  // fine. Clock AA still waits for idle (deferScrubAfterFirstPaint_).
+  UiGhostPolicy::clearHardScrub();
+  deferScrubAfterFirstPaint_ = true;
+  lastHomeInputMs_ = millis();
+  penumbraSideAwaitRelease_ = false;
   // Allow cover pass to run again after leaving reader / changing theme.
   // Clear settled multipass so a theme switch always redraws and re-multipasses.
   freeCoverBuffer();
@@ -557,6 +595,10 @@ void HomeActivity::onEnter() {
     if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
       recentsLoaded = true;
       LOG_DBG("HOME", "Hero thumbs ready — multipass on first paint (skip shell HALF)");
+      if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+        coverNeedsRetry = true;
+        coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+      }
     }
   }
 
@@ -567,6 +609,8 @@ void HomeActivity::onEnter() {
 void HomeActivity::onExit() {
   Activity::onExit();
   deferredHalfScrubOnly = false;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
 
   // Free the stored cover buffer if any
   freeCoverBuffer();
@@ -615,8 +659,10 @@ void HomeActivity::onResume() {
   // Cover themes may still defer greys after the BW shell.
   Activity::onResume();
 
+  bool justLoadedDeferredEnter = false;
   if (deferredEnterLoad_) {
     deferredEnterLoad_ = false;
+    justLoadedDeferredEnter = true;
     // Same data load as onEnter, without re-arming a second cold boot scrub race.
     hasOpdsServers = OPDS_STORE.hasServers();
     const auto& metrics = UITheme::getInstance().getMetrics();
@@ -642,9 +688,15 @@ void HomeActivity::onResume() {
     if (bindExistingHeroThumbsIfReady(recentBooks, heroH, shelfTheme, HomeCoverMetrics::homeShelfThumbHeight)) {
       recentsLoaded = true;
     }
-    homeUiReady = true;
+    homeUiReady = false;
   }
 
+  // Capture the snappy-return hint BEFORE clearing it. This flag was written in
+  // five places and never read — so every return to Home armed a hard scrub and
+  // paid a full HALF (~3.2s on X3), even coming back from a light chrome child
+  // like the book action sheet (device log: 2.2s stall + 3184ms HALF + 1108ms
+  // clock ≈ 6.5s back to Home).
+  const bool snappyReturnFromUiChild = leaveForUiChildSnappy;
   leaveForUiChildSnappy = false;
 
   freeCoverBufferRamOnly();
@@ -660,10 +712,14 @@ void HomeActivity::onResume() {
   coverGrayRetryAtMs = 0;
   deferredHalfScrubOnly = false;
   deferredHalfScrubAtMs = 0;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
+  lastHomeInputMs_ = millis();
+  penumbraSideAwaitRelease_ = false;
   deferredGreysOnly = false;
   softGrayscaleBase = false;
   recentsLoading = false;
-  homeUiReady = true;
+  homeUiReady = false;  // render() sets this after the shell is actually on glass
   coverNeedsRetry = false;
   coverGenAttempts = 0;
   coverRetryAtMs = 0;
@@ -675,7 +731,34 @@ void HomeActivity::onResume() {
   backResumeArmed = false;
   minimalSuppressInitialFrontRelease = usesMinimalHomeInteraction();
   penumbraHalfBaselineDone = false;
-  UiGhostPolicy::requestHardScrub();
+  // Reader → Home genuinely needs the HALF: a dense book page ghosts badly and a
+  // FAST pass settles that residual into the panel. On X3 a light UI child
+  // (settings / menus) can FAST-return because the mid-bank settle pulls residual.
+  // X4 has no mid bank — FAST after Settings left the previous plate ghosted on
+  // Home — so it always hard-scrubs like a reader return.
+  if (snappyReturnFromUiChild && gpio.deviceIsX3()) {
+    UiGhostPolicy::clearHardScrub();
+    // Device log (47e06f62): FAST first paint then a second full FAST+clockAA
+    // (~950ms). Defer the clock greys to the windowed digit path so Home is
+    // already on glass. cancelBackgroundPaint was left true from the child
+    // and skipped clock AA on the first paint anyway — clear it here.
+    deferScrubAfterFirstPaint_ = true;
+    cancelBackgroundPaint = false;
+    SystemLog::logTiming("HOME", "resume snappy (light UI child) — FAST paint");
+  } else {
+    UiGhostPolicy::requestHardScrub();
+    // ...but get content on glass sooner. Returning from the reader / settings /
+    // the book quick-menu used to wait ~2s of SD work plus a ~4s HALF+clockAA
+    // before anything appeared.
+    //
+    // The first attempt deferred the *scrub* (FAST now, HALF a tick later) and
+    // that ghosted: a FAST pass settles the previous frame's residual into the
+    // panel, and a later HALF cannot fully lift it. What is actually slow is the
+    // full-screen greyscale clock multipass, not the HALF — so the HALF stays as
+    // the single first paint and the clock's AA is what gets deferred.
+    deferScrubAfterFirstPaint_ = true;
+    cancelBackgroundPaint = false;
+  }
   suppressMenuBackUntilMs = millis() + 900UL;
   // Cover themes: multipass greys on the *first* home paint when thumbs exist
   // (one HALF greys-base). Deferred "shell HALF → wait → greys HALF" felt like
@@ -685,6 +768,43 @@ void HomeActivity::onResume() {
 
   // Portrait: reader may have left landscape.
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  // v36 X3 log: Back from the long-press book menu still logged
+  // `activity_slow 2226ms` then `penumbra_full FAST` — the snappy flag avoided
+  // HALF but onResume still re-stat'd every recent, re-warmed progress, and
+  // reloaded lifetime stats. None of that changed. Skip when RAM is fresh.
+  const bool skipSdReload = justLoadedDeferredEnter || skipResumeSdReload_;
+  skipResumeSdReload_ = false;
+  if (skipSdReload) {
+    // Skip SD stats / global reload (that was the 2s stall). Still copy the
+    // in-memory recents list: Library / Recents / reader mutate RECENT_BOOKS
+    // while Home is paused, and skipping the copy left Now Reading + bars stale.
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const std::string prevFront = recentBooks.empty() ? std::string() : recentBooks[0].path;
+    loadRecentBooks(metrics.homeRecentBooksCount);
+    if (recentBooks.empty() || recentBooks[0].path != prevFront) {
+      selectorIndex = 0;
+      penumbraRecentsFocus = 0;
+      if (!recentBooks.empty()) loadFocusedRecentStats();
+    }
+    if (isPenumbraTheme()) {
+      recentsLoaded = true;
+      if (!recentBooks.empty()) PenumbraThemeUi::warmRecentsProgressCache(recentBooks);
+    } else {
+      const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
+      if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
+                                        HomeCoverMetrics::homeShelfThumbHeight)) {
+        recentsLoaded = true;
+        if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+          coverNeedsRetry = true;
+          coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+        }
+      }
+    }
+    LOG_DBG("HOME", "onResume: skip SD stats reload (synced RAM recents n=%d loaded=%d)",
+            static_cast<int>(recentBooks.size()), recentsLoaded ? 1 : 0);
+    return;
+  }
 
   hasOpdsServers = OPDS_STORE.hasServers();
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -713,12 +833,22 @@ void HomeActivity::onResume() {
     globalStats = GlobalReadingStats{};
   }
 
+  // Penumbra paints no cover art, so probing hero thumbs is pure dead work — it
+  // constructs an Epub per recent book (SD open + parse each) on the return-to-home
+  // path, which is a large part of the 2s of "nothing happens" before the paint.
   const int heroH = homeHeroThumbHeight(renderer, metrics.homeCoverHeight);
-  if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
-                                    HomeCoverMetrics::homeShelfThumbHeight)) {
+  if (isPenumbraTheme()) {
+    recentsLoaded = true;
+    LOG_DBG("HOME", "onResume: penumbra text home — no thumb probe");
+  } else if (bindExistingHeroThumbsIfReady(recentBooks, heroH, isDashboardRecentsTheme(),
+                                           HomeCoverMetrics::homeShelfThumbHeight)) {
     recentsLoaded = true;
     LOG_DBG("HOME", "onResume: thumbs ready — HALF shell then multipass");
-  } else if (isPenumbraTheme() || !usesHomeCoverMultipass()) {
+    if (shouldArmIdleHeroUpgrade(recentBooks, heroH)) {
+      coverNeedsRetry = true;
+      coverRetryAtMs = millis() + coverrender::kRetryDelayMs;
+    }
+  } else if (!usesHomeCoverMultipass()) {
     recentsLoaded = true;
     // First paint honors hardScrubArmed → HALF (baseline set after that paint).
     LOG_DBG("HOME", "onResume: text home — HALF scrub on first paint");
@@ -807,6 +937,13 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
+  // Jacket greys use invert-wrapped BW base + cover-only grey planes. Clock AA
+  // still skips (skipUiGrayscale) because it is a full-plate light pass.
+  if (darkmode::skipCoverGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    displayBw(true, "bw_dark_mode");
+    return;
+  }
+
   if (coverRectW <= 0 || coverRectH <= 0 || recentBooks.empty()) {
     displayBw(true, "bw_no_cover");
     return;
@@ -818,23 +955,20 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   const int heroH = homeHeroThumbHeight(renderer, UITheme::getInstance().getMetrics().homeCoverHeight);
 
   auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
-    for (const std::string& path : candidates) {
-      if (!path.empty() && Storage.exists(path.c_str())) {
-        return path;
-      }
-    }
-    return {};
+    return coverthumb::firstValidBmp("HOME", candidates);
   };
 
   // Prefer the current theme's hero height (1:1). Bare may briefly open a
   // same-recipe fallback height while c30_560 regenerates after flash.
   std::string coverPath;
   if (FsHelpers::hasEpubExtension(book.path)) {
-    Epub epub(book.path, CasperPaths::kPackageCacheRoot);
+    Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
     if (isBareTheme()) {
       coverPath = firstExisting({
           epub.getThumbBmpPath(heroH),
           epub.getThumbBmpPath(HomeCoverMetrics::thumbHeight),
+          epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight),
+          epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
       });
     } else {
       coverPath = firstExisting({epub.getThumbBmpPath(heroH)});
@@ -847,13 +981,15 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     });
   }
   if (coverPath.empty()) {
-    displayBw(true, "bw_no_path");
+    const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
+    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_no_path");
     return;
   }
 
   HalFile file;
   if (!Storage.openFileForRead("HOME", coverPath, file)) {
-    displayBw(true, "bw_open_fail");
+    const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
+    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_open_fail");
     return;
   }
 
@@ -1006,12 +1142,14 @@ void HomeActivity::multipassHomeCoverGrayscale() {
     return;
   }
 
-  renderer.displayGrayBuffer();
+  renderer.displayGrayBufferWindow(artX, artY, drawnW, drawnH);
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();
   // Re-sync controller RAM from BW UI for the next menu / diff paint.
   renderer.cleanupGrayscaleWithFrameBuffer();
+  // Glass still holds the 2-bit cover; FB is BW. QR sleep must not FAST/HALF.
+  UiGhostPolicy::noteGreyscaleOnPanel();
   coverGrayOnPanel = true;
   paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
   coverGrayNeedsRetry = false;
@@ -1049,15 +1187,42 @@ void HomeActivity::markLeavingForUiChild() {
   // Penumbra is text-only (no cover greys). Other themes need settled multipass greys.
   const bool themeOk = paintedUiTheme == static_cast<int>(SETTINGS.uiTheme);
   leaveForUiChildSnappy = themeOk && (isPenumbraTheme() ? penumbraHalfBaselineDone : coverGrayOnPanel);
+  skipResumeSdReload_ = recentsLoaded;
   cancelHomeBackgroundPaint();
+  // Whole-UI Dark Mode: leftover cover greys are light-polarity. Settings/Library
+  // FAST against them looks like a light menu and flashes black on every move.
+  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.restoreBwBuffer();
+    renderer.cleanupGrayscaleWithFrameBuffer();
+    coverGrayOnPanel = false;
+    UiGhostPolicy::noteBwOnPanel();
+    leaveForUiChildSnappy = false;
+  }
 }
 
 void HomeActivity::cancelHomeBackgroundPaint() {
   // Drop deferred greys / deferred HALF so we do not flash after leaving Home.
   coverGrayNeedsRetry = false;
   deferredGreysOnly = false;
+  // A pending HALF means the panel is still holding a FAST-only paint over
+  // whatever was there before (a dense book page, typically). Cancelling it
+  // without re-arming left that residual on glass — the "huge amount of ghosting
+  // when exiting to menu". Hand the scrub back to whoever paints next.
+  if (deferredHalfScrubOnly) {
+    UiGhostPolicy::requestHardScrub();
+    penumbraHalfBaselineDone = false;
+  }
   deferredHalfScrubOnly = false;
   softGrayscaleBase = false;
+  // A queued minute-tick must not start clock AA after we leave — that pass
+  // displayGrayscaleBase + clearScreen(0x00) on the render task while Opening
+  // displayWindow runs on main, hangs UC8253 BUSY for 30s, and leaves the
+  // panel black (FAST first page then ghosts that black under the text).
+  forcePenumbraClockRepaint = false;
+  forcePenumbraClockBwOnly_ = false;
+  pendingClockAaAfterIdle_ = false;
+  forceStatsUnderBoxRepaint = false;
   // Abort multipass between stages (checked in multipassHomeCoverGrayscale).
   cancelBackgroundPaint = true;
 }
@@ -1079,10 +1244,71 @@ bool HomeActivity::handleForcedRefresh() {
   softGrayscaleBase = false;
   cancelBackgroundPaint = false;
   coverGrayNeedsRetry = false;
+  pendingClockAaAfterIdle_ = false;
+  forcePenumbraClockBwOnly_ = false;
   UiGhostPolicy::requestHardScrub();
   SystemLog::logTiming("HOME", "force_refresh (hard HALF scrub)");
   requestUpdateAndWait();
   return true;
+}
+
+// Index the most recently read book's page maps while Home is untouched.
+//
+// DISABLED (kBookIndexerEnabled = false). Kept, not deleted, because the pieces
+// that work are worth keeping and the remaining blocker is already scheduled
+// work.
+//
+// What was fixed and does work: the page-map walk is properly sliced, a device
+// capture shows `HIDX | spine=9 pages=12 ms=6779 bursts=3` — twelve pages
+// measured across three short bursts with input sampled between them. The maps
+// it writes are also valid now that the render key is shared with the reader.
+//
+// What still does not: loading the chapter is one indivisible step and it costs
+// 5-15 seconds, which is most of the total. From the same capture:
+//
+//   HIDX | spine=13 loaded cache=0 ms=12950
+//   LOOP | activity_slow 13936ms
+//   HIDX | spine=14 loaded cache=0 ms=14712
+//   LOOP | activity_slow 15710ms
+//
+// Home stops sampling input for that whole window, which reads as a freeze, and
+// free heap decays across passes (106K -> 59K) until the indexer starves below
+// its own floor and abandons chapters half-done. Slicing the load needs
+// HtmlToIr to convert incrementally, which is the streaming-converter work still
+// outstanding. Until then this costs the user a frozen home screen and buys
+// nothing they can perceive, so it stays off.
+void HomeActivity::tickBookIndexer() {
+  if constexpr (!kBookIndexerEnabled) return;
+  if (!homeUiReady || recentsLoading || minimalMenuOpen) return;
+  if (deferredHalfScrubOnly || deferredGreysOnly || coverGrayNeedsRetry || coverNeedsRetry) return;
+  if (activityManager.hasPendingActivityChange() || cancelBackgroundPaint) return;
+  if (recentBooks.empty()) return;
+
+  // Any control held → not idle. Reset the timer so a scroll never gets
+  // interrupted by a multi-second chapter convert starting underneath it.
+  if (isAnyFrontButtonPressed(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+      mappedInput.isPressed(MappedInputManager::Button::Left) ||
+      mappedInput.isPressed(MappedInputManager::Button::Right) ||
+      mappedInput.isPressed(MappedInputManager::Button::Up) ||
+      mappedInput.isPressed(MappedInputManager::Button::Down)) {
+    indexerIdleSinceMs_ = millis();
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (indexerIdleSinceMs_ == 0) {
+    indexerIdleSinceMs_ = now;
+    return;
+  }
+  if (now - indexerIdleSinceMs_ < kIndexIdleMs) return;
+  if (lastIndexStepMs_ != 0 && (now - lastIndexStepMs_) < kIndexGapMs) return;
+
+  // Last-read book: the one most likely to be continued.
+  bookIndexer_.begin(recentBooks[0].path);
+  lastIndexStepMs_ = millis();
+  (void)bookIndexer_.step(renderer);
+  lastIndexStepMs_ = millis();
 }
 
 void HomeActivity::loop() {
@@ -1092,6 +1318,8 @@ void HomeActivity::loop() {
   // home repainting behind the menu.)
   if (minimalMenuOpen) {
     forcePenumbraClockRepaint = false;
+    forcePenumbraClockBwOnly_ = false;
+    pendingClockAaAfterIdle_ = false;
     forceStatsUnderBoxRepaint = false;
     deferredHalfScrubOnly = false;
     // Leave coverNeedsRetry / coverGrayNeedsRetry armed for after menu dismiss.
@@ -1099,46 +1327,67 @@ void HomeActivity::loop() {
     // Penumbra text home: FB still holds the FAST shell — scrub residual with HALF
     // without a full redraw so first ink stayed snappy.
     if (deferredHalfScrubOnly && static_cast<long>(millis() - deferredHalfScrubAtMs) >= 0) {
-      deferredHalfScrubOnly = false;
-      if (!RenderLock::peek() && !activityManager.hasPendingActivityChange()) {
+      const bool inputBusy =
+          homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+      if (inputBusy) {
+        // Short side taps are often already released this frame. Returning here
+        // used to drop the edge; gpio.update() then cleared it, and the next
+        // tap's bounce skipped two under-panel pages.
+        lastHomeInputMs_ = millis();
+        deferredHalfScrubAtMs = millis() + 100UL;
+      } else if (!RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
+        deferredHalfScrubOnly = false;
         RenderLock lock;
         if (activityManager.isCurrentActivity(this) && !minimalMenuOpen) {
           UiGhostPolicy::displayHalf(renderer);
           penumbraHalfBaselineDone = true;
           LOG_DBG("HOME", "Deferred HALF scrub complete");
         }
+        return;
       } else {
-        // Retry next tick if render mutex busy or a child is about to launch.
-        deferredHalfScrubOnly = true;
         deferredHalfScrubAtMs = millis() + 100UL;
+        return;
       }
-      return;
     }
-    // Penumbra X3 hero clock: live minute tick while idle on home.
-    // Stacked activities never call this loop. Only the changing digits are
-    // dirtied in redrawClockBlock (tight windowed refresh).
-    if (isPenumbraTheme() && gpio.deviceIsX3() && !forcePenumbraClockRepaint && !deferredHalfScrubOnly) {
-      char now[8];
-      PenumbraThemeUi::formatHeroTimeNow(now, sizeof(now));
-      if (now[0] != '\0' && (penumbraLastDrawnTime[0] == '\0' || strcmp(now, penumbraLastDrawnTime) != 0)) {
+    // Full-frame clock AA after the shell is on glass — never while a button is
+    // held (Read cancels via cancelHomeBackgroundPaint) and never before HALF.
+    if (pendingClockAaAfterIdle_ && !deferredHalfScrubOnly) {
+      const bool inputBusy =
+          homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+      if (inputBusy) {
+        lastHomeInputMs_ = millis();
+      } else if (static_cast<long>(millis() - lastHomeInputMs_) >= static_cast<long>(kClockAaIdleMs) &&
+                 !RenderLock::peek() && !activityManager.hasPendingActivityChange() && !cancelBackgroundPaint) {
+        pendingClockAaAfterIdle_ = false;
         forcePenumbraClockRepaint = true;
         requestUpdate();
         return;
       }
     }
-    // Cover gen after first home paint so the Loading box floats over visible UI.
-    if (coverNeedsRetry && static_cast<long>(millis() - coverRetryAtMs) >= 0) {
-      coverNeedsRetry = false;
-      // Never schedule a gen/multipass retry once greys are already on the panel —
-      // that was a source of random black flashes ~seconds after home settled.
-      if (!coverGrayOnPanel) {
-        recentsLoaded = false;
+    // Penumbra X3 hero clock: live minute tick while idle on home.
+    // BW window only — greyscale AA here is a full-frame pass (~1s).
+    if (isPenumbraTheme() && gpio.deviceIsX3() && !forcePenumbraClockRepaint && !forcePenumbraClockBwOnly_ &&
+        !deferredHalfScrubOnly && !pendingClockAaAfterIdle_) {
+      char now[8];
+      PenumbraThemeUi::formatHeroTimeNow(now, sizeof(now));
+      if (now[0] != '\0' && (penumbraLastDrawnTime[0] == '\0' || strcmp(now, penumbraLastDrawnTime) != 0)) {
+        forcePenumbraClockBwOnly_ = true;
+        requestUpdate();
+        const bool inputBusy =
+            homeside::idleWorkYieldsToInput(homeControlsHeld(mappedInput), gpio.wasAnyPressed(), gpio.wasAnyReleased());
+        if (!inputBusy) return;
       }
     }
+    // Cover gen after first home paint so Rendering Cover floats over visible UI.
+    if (coverNeedsRetry && static_cast<long>(millis() - coverRetryAtMs) >= 0) {
+      coverNeedsRetry = false;
+      recentsLoaded = false;
+    }
     // Deferred greys after snappy resume, or multipass soft-fail retry.
-    if (coverGrayNeedsRetry && !coverGrayOnPanel && static_cast<long>(millis() - coverGrayRetryAtMs) >= 0) {
+    if (recentsLoaded && coverGrayNeedsRetry && !coverGrayOnPanel &&
+        static_cast<long>(millis() - coverGrayRetryAtMs) >= 0) {
       coverGrayNeedsRetry = false;
-      if (deferredGreysOnly && recentsLoaded && coverRectW > 0 && coverRectH > 0 && usesHomeCoverMultipass()) {
+      if (deferredGreysOnly && coverRectW > 0 && coverRectH > 0 && usesHomeCoverMultipass()) {
         // Panel already has the snappy BW home — multipass greys in place (no clearScreen).
         softGrayscaleBase = true;
         requestUpdate(true);
@@ -1157,29 +1406,21 @@ void HomeActivity::loop() {
         recentsLoaded = true;
         coverGrayOnPanel = true;
       } else {
-        // Field #3: cover gen + UI font decompress under pressure → FDC fail / reboot.
-        // Paint shell without covers first; arm retry when heap recovers.
-        constexpr uint32_t kCoverGenMinFree = 40U * 1024U;
-        constexpr uint32_t kCoverGenMinMaxAlloc = 20U * 1024U;
-        const uint32_t freeH = ESP.getFreeHeap();
-        const uint32_t maxA = ESP.getMaxAllocHeap();
-        if (freeH < kCoverGenMinFree || maxA < kCoverGenMinMaxAlloc) {
-          LOG_DBG("HOME", "defer cover gen free=%u maxAlloc=%u", static_cast<unsigned>(freeH),
-                  static_cast<unsigned>(maxA));
-          recentsLoaded = true;  // allow text shell paint this cycle
-          coverNeedsRetry = true;
-          coverRetryAtMs = millis() + 400UL;
-          requestUpdate();
-          // fall through to input + eventual shell paint
-        } else {
-          const auto& metrics = UITheme::getInstance().getMetrics();
-          recentsLoading = true;
-          loadRecentCovers(metrics.homeCoverHeight);
-          return;
-        }
+        // Loan the 48 KB framebuffer inside loadRecentCovers so fragmented
+        // maxAlloc after reading can still decode JPEG. Do not require 90/80 KB
+        // up front — that is why cache-delete covers sat blank for 60s+.
+        // Do not set recentsLoading before the call: that blocked render() so
+        // the cue FAST'd onto an empty framebuffer (white + "Rendering Cover").
+        const auto& metrics = UITheme::getInstance().getMetrics();
+        loadRecentCovers(metrics.homeCoverHeight);
+        return;
       }
     }
   }
+
+  // Idle background work. Runs before input handling so a step that decides to
+  // act still leaves this frame's edges to be sampled next loop.
+  tickBookIndexer();
 
   // All minimal homes: Menu · Library · Recents · Read.
   if (usesMinimalHomeInteraction()) {
@@ -1357,10 +1598,15 @@ void HomeActivity::loop() {
         }
         requestUpdate();
       };
-      if (sidePrevPressed()) {
-        runPenumbraSide(true);
-      } else if (sideNextPressed()) {
-        runPenumbraSide(false);
+      homeside::Request sideReq;
+      sideReq.prev = sidePrevPressed();
+      sideReq.next = sideNextPressed();
+      sideReq.held = gpio.isPressed(HalGPIO::BTN_UP) || gpio.isPressed(HalGPIO::BTN_DOWN);
+      sideReq.waitingRelease = penumbraSideAwaitRelease_;
+      const homeside::Result side = homeside::decide(sideReq);
+      penumbraSideAwaitRelease_ = side.waitingRelease;
+      if (side.accept) {
+        runPenumbraSide(side.prev);
       }
     }
 
@@ -1468,7 +1714,7 @@ void HomeActivity::loop() {
       if (isPenumbraTheme()) {
         const int pageH = renderer.getScreenHeight();
         const int contentTop = metrics.homeTopPadding;
-        const int contentBottom = pageH - metrics.buttonHintsHeight;
+        const int contentBottom = pageH - BaseTheme::frontButtonFooterLayoutH(renderer);
         // Center band of the content area (title / now-reading block).
         const int bandH = contentBottom - contentTop;
         const int tapTop = contentTop + bandH / 4;
@@ -1476,7 +1722,11 @@ void HomeActivity::loop() {
         if (mappedInput.wasTapInRect(0, tapTop, renderer.getScreenWidth(), tapH)) {
           onContinueReading();
         }
-      } else if (mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(),
+      } else if (coverRectW > 0 && coverRectH > 0 &&
+                 mappedInput.wasTapInRect(coverRectX, coverRectY, coverRectW, coverRectH)) {
+        onContinueReading();
+      } else if (coverRectW <= 0 &&
+                 mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(),
                                           metrics.homeCoverTileHeight)) {
         onContinueReading();
       }
@@ -1646,17 +1896,22 @@ void HomeActivity::render(RenderLock&& lock) {
     coverRectX = coverRectY = coverRectW = coverRectH = 0;
     freeCoverBufferRamOnly();
 
-    const int clockTheme = static_cast<int>(CasperSettings::UI_THEME::PENUMBRA);
+    const int clockTheme = static_cast<int>(CrossPointSettings::UI_THEME::PENUMBRA);
     PenumbraThemeUi::clampUnderModeToTracking();
 
     // Partial updates (side L/R / Recents Down) — never while menu owns the panel.
     if (minimalMenuOpen) {
       forcePenumbraClockRepaint = false;
+      forcePenumbraClockBwOnly_ = false;
+      pendingClockAaAfterIdle_ = false;
       forceStatsUnderBoxRepaint = false;
     }
-    const bool clockDirty = !minimalMenuOpen && forcePenumbraClockRepaint;
+    const bool clockAa = !minimalMenuOpen && forcePenumbraClockRepaint;
+    const bool clockBw = !minimalMenuOpen && forcePenumbraClockBwOnly_;
+    const bool clockDirty = clockAa || clockBw;
     const bool underDirty = !minimalMenuOpen && forceStatsUnderBoxRepaint;
     forcePenumbraClockRepaint = false;
+    forcePenumbraClockBwOnly_ = false;
     forceStatsUnderBoxRepaint = false;
 
     if ((clockDirty || underDirty) && paintedUiTheme == clockTheme && coverRendered) {
@@ -1688,7 +1943,10 @@ void HomeActivity::render(RenderLock&& lock) {
                             static_cast<unsigned long>(tDraw), static_cast<unsigned long>(millis() - t1),
                             gpio.deviceIsX3() ? 1 : 0);
         if (clockDirty) {
-          forcePenumbraClockRepaint = true;
+          if (clockAa)
+            forcePenumbraClockRepaint = true;
+          else
+            forcePenumbraClockBwOnly_ = true;
           requestUpdate();
         }
         homeUiReady = true;
@@ -1706,19 +1964,24 @@ void HomeActivity::render(RenderLock&& lock) {
         }
         if (dirty.width > 0 && dirty.height > 0) {
           const uint32_t tClock = millis();
-          // Skip greys multipass when user is leaving (long-press Settings etc.) —
-          // AA is multi-hundred ms and blocked waitForRenderIdle.
-          const bool leave =
-              cancelBackgroundPaint || activityManager.hasPendingActivityChange();
-          if (!leave &&
-              PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
-                                                      &dirty)) {
-            // AA ok
+          // Skip every panel write when leaving. Clock AA does a full-frame
+          // greyscale base then clearScreen(0x00); even a tiny displayWindow
+          // here races Opening's corner FAST and can wedge BUSY for 30s.
+          const bool leave = cancelBackgroundPaint || activityManager.hasPendingActivityChange();
+          if (leave) {
+            SystemLog::logTiming("HOME", "penumbra_clock_digits skip (leave)");
+          } else if (clockAa) {
+            if (!PenumbraThemeUi::displayClockAntiAliased(renderer, static_cast<int>(HalDisplay::FAST_REFRESH),
+                                                          &dirty)) {
+              renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+            }
+            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_aa x=%d y=%d w=%d h=%d fre=%u", dirty.x,
+                                dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
           } else {
             renderer.displayWindow(dirty.x, dirty.y, dirty.width, dirty.height);
+            SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_bw x=%d y=%d w=%d h=%d fre=%u", dirty.x,
+                                dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
           }
-          SystemLog::logTimed("HOME", millis() - tClock, "penumbra_clock_digits x=%d y=%d w=%d h=%d fre=%u", dirty.x,
-                              dirty.y, dirty.width, dirty.height, static_cast<unsigned>(ESP.getFreeHeap()));
         }
         homeUiReady = true;
         recentsLoaded = true;
@@ -1753,8 +2016,7 @@ void HomeActivity::render(RenderLock&& lock) {
 
     homeMenuShellOnPanel = false;
     renderer.clearScreen(0xFF);
-    const bool chromeOnly = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                            SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
+    const bool chromeOnly = homeNeedsSystemChrome();
     if (chromeOnly) {
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
@@ -1790,14 +2052,29 @@ void HomeActivity::render(RenderLock&& lock) {
     // Back→Home arms hard scrub in onResume → HALF cleans residual. Other full
     // paints stay FAST when scrub is not armed. X3: greyscale multipass on the
     // 72pt clock band so 2-bit AA fringes land (BW-only looked jagged).
+    // Resume: downgrade this paint to FAST and queue the HALF right behind it.
+    // The scrub still happens (same anti-ghosting), it just happens with Home
+    // already on glass rather than making the user wait ~4s for first pixels.
     const bool hard = UiGhostPolicy::hardScrubArmed();
-    const int baseMode =
-        hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
+    // Snappy return to Home used to defer the *scrub*: paint FAST now, HALF a
+    // tick later. That produced ghosted words. On e-ink a FAST pass is a weak
+    // differential update, so it settles the previous frame's residual into the
+    // panel; a HALF afterwards then has to clear both the book page and the FAST
+    // pass, and does not fully manage it. HALF applied directly does.
+    //
+    // So keep the HALF as the first and only paint, and defer the expensive part
+    // instead: the full-screen greyscale clock multipass, which is what made this
+    // ~4s (penumbra_full mode=HALF+clockAA took=4145ms). The clock re-renders
+    // anti-aliased on the next tick through the windowed clock path, which is
+    // both cheaper and invisible to someone waiting for Home to appear.
+    const bool deferClockAa = deferScrubAfterFirstPaint_;
+    deferScrubAfterFirstPaint_ = false;
+    const int baseMode = hard ? static_cast<int>(HalDisplay::HALF_REFRESH) : static_cast<int>(HalDisplay::FAST_REFRESH);
     SystemLog::logTiming("HOME", "penumbra_full pre_disp mode=%s theme=%u fre=%u", hard ? "HALF" : "FAST",
                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
     // Clock greys can take 400–900ms — skip if user already navigated away.
     const bool leave = cancelBackgroundPaint || activityManager.hasPendingActivityChange();
-    if (!leave && gpio.deviceIsX3() &&
+    if (!leave && gpio.deviceIsX3() && !deferClockAa &&
         PenumbraThemeUi::displayClockAntiAliased(renderer, baseMode, /*dirtyOverride=*/nullptr)) {
       if (hard) UiGhostPolicy::noteHalf();
       penumbraHalfBaselineDone = true;
@@ -1807,8 +2084,9 @@ void HomeActivity::render(RenderLock&& lock) {
     } else if (hard) {
       UiGhostPolicy::displayHalf(renderer);
       penumbraHalfBaselineDone = true;
-      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF theme=%u fre=%u",
-                          static_cast<unsigned>(SETTINGS.uiTheme), static_cast<unsigned>(ESP.getFreeHeap()));
+      SystemLog::logTimed("HOME", millis() - tPenumbra, "penumbra_full mode=HALF%s theme=%u fre=%u",
+                          deferClockAa ? "+deferAA" : "", static_cast<unsigned>(SETTINGS.uiTheme),
+                          static_cast<unsigned>(ESP.getFreeHeap()));
     } else {
       UiGhostPolicy::displayFastFull(renderer);
       penumbraHalfBaselineDone = true;
@@ -1819,8 +2097,16 @@ void HomeActivity::render(RenderLock&& lock) {
     paintedUiTheme = clockTheme;
     recentsLoaded = true;
     homeUiReady = true;
-    PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
-    forcePenumbraClockRepaint = false;
+    if (deferClockAa) {
+      // Home is already on glass. Keep lastDrawnTime so the minute-tick path
+      // does not fire every loop, and wait for idle before the full-frame AA.
+      PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
+      pendingClockAaAfterIdle_ = true;
+      lastHomeInputMs_ = millis();
+    } else {
+      PenumbraThemeUi::formatHeroTimeNow(penumbraLastDrawnTime, sizeof(penumbraLastDrawnTime));
+      forcePenumbraClockRepaint = false;
+    }
     return;
   }
 
@@ -1883,14 +2169,14 @@ void HomeActivity::render(RenderLock&& lock) {
       bufferRestored = restoreCoverBuffer();
     }
 
-    // Top chrome (battery icon+% / clock). Bare / Penumbra default chrome off;
-    // Stats always draws the status-bar band (same plate packing on X3 + X4).
+    // Top chrome (battery / clock / Battery Warning). Bare / Penumbra default
+    // is Hide / Warning / Hide — still paint when the warning is live.
     const bool textOnlyHome = isBareTheme() || isPenumbraTheme();
-    const bool chromeOnlyMinimal = textOnlyHome && (SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                                                    SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK));
-    // Bare / Penumbra: header only when the user has enabled battery/clock.
+    const bool chromeOnlyMinimal = textOnlyHome && homeNeedsSystemChrome();
+    // Bare / Penumbra: header when battery, clock, or a live Battery Warning.
     if (!textOnlyHome || chromeOnlyMinimal) {
-      const int headerTop = textOnlyHome ? 0 : metrics.topPadding;
+      // Penumbra keeps header y=0 so its 72pt hero clock layout is unchanged.
+      const int headerTop = isBareTheme() ? metrics.topPadding : (textOnlyHome ? 0 : metrics.topPadding);
       const int headerH =
           BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin);
       GUI.drawHeader(renderer, Rect{0, headerTop, pageWidth, headerH}, nullptr);
@@ -1977,6 +2263,30 @@ void HomeActivity::render(RenderLock&& lock) {
       return;
     }
     snappyResumeNoGreys = false;
+    // Bare: put the jacket on glass now. Greys run idle so Home is not an empty
+    // box for a minute. Same in Dark Mode — jackets are not 1-bit.
+    // Skip this path when there is no paintably valid thumb: FAST of the white
+    // placeholder plus deferred bw_no_path used to settle a blank plate.
+    const thumbcache::DiskThumb bareDisk =
+        recentBooks.empty() ? thumbcache::DiskThumb::Missing
+                            : classifyRecentCover(recentBooks[0],
+                                                  homeHeroThumbHeight(renderer, metrics.homeCoverHeight));
+    if (isBareTheme() && recentsLoaded && coverrender::deferBareCoverGreys(bareDisk) && !coverGrayOnPanel &&
+        !darkmode::skipCoverGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+      deferredGreysOnly = true;
+      softGrayscaleBase = true;
+      coverGrayNeedsRetry = true;
+      coverGrayRetryAtMs = millis() + 400UL;
+      coverRendered = true;
+      paintedUiTheme = static_cast<int>(SETTINGS.uiTheme);
+      if (UiGhostPolicy::hardScrubArmed()) {
+        UiGhostPolicy::displayHalf(renderer);
+      } else {
+        UiGhostPolicy::displayFastFull(renderer);
+      }
+      LOG_DBG("HOME", "Bare BW jacket first; greys deferred");
+      return;
+    }
     // Thumbs not ready yet: BW shell first so Loading can float over real chrome.
     // When bindExistingHeroThumbsIfReady already set recentsLoaded (A1), multipass now.
     if (!recentsLoaded) {
@@ -2050,7 +2360,7 @@ void HomeActivity::render(RenderLock&& lock) {
       renderer,
       Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
            pageHeight - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
-                         metrics.homeMenuTopOffset + metrics.buttonHintsHeight)},
+                         metrics.homeMenuTopOffset + BaseTheme::frontButtonFooterLayoutH(renderer))},
       static_cast<int>(menuItems.size()),
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size(),
       [&menuItems](int index) { return std::string(menuItems[index]); },
@@ -2080,6 +2390,8 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // resume can FAST-redraw (~0.45s) instead of HALF (~3.2s on X3 every Back).
   cancelHomeBackgroundPaint();
   leaveForUiChildSnappy = isPenumbraTheme();
+  // Reader updates progress / last-read — onResume must reload recents + stats.
+  skipResumeSdReload_ = false;
   snappyResumeNoGreys = false;
 
   // Bare/Dashboard multipass leaves greys in controller RAM. Opening a book with
@@ -2094,27 +2406,33 @@ void HomeActivity::onSelectBook(const std::string& path) {
     coverGrayOnPanel = false;
   }
 
-  // v0.1.5-style open: cached book.bin → FAST first ink, no home HALF, no
-  // "Opening" paint. Controller greys already torn down above when coverTheme.
-  // Cold index miss: short status only (reader builds book.bin).
+  // v0.1.5-style open: FAST first ink on a clean panel. book.bin missing is
+  // not a grey residual — treating it as one forced a 3.2s HALF after every
+  // cache delete (device: preferFast=0 bookIndex=0 refresh=3182ms).
   bool bookIndexReady = true;
   if (FsHelpers::hasEpubExtension(path)) {
-    const std::string cacheDir = Epub(path, CasperPaths::kPackageCacheRoot).getCachePath();
+    const std::string cacheDir = Epub(path, CrossPointPaths::kPackageCacheRoot).getCachePath();
     bookIndexReady = Storage.exists((cacheDir + "/book.bin").c_str());
   }
   // Only force a panel scrub when greys are still mid-flight (not settled) —
   // never HALF a clean home just because the theme multipasses covers.
   const bool greysDirty = coverTheme && !greysSettled;
-  const bool preferFast = bookIndexReady && !greysDirty;
-  if (!bookIndexReady && SETTINGS.readerDarkMode == 0) {
-    GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
-  }
-
+  const bool preferFast = !greysDirty;
+  // Wait out any in-flight Home paint BEFORE touching the panel. Opening's
+  // windowed FAST on the main task raced the render-task clock AA (log:
+  // opening_status then penumbra_clock_digits 30048ms = BUSY timeout) and
+  // left the plate black; FAST first page then ghosted that black under text.
   const uint32_t t0 = millis();
   activityManager.waitForRenderIdle();
   LOG_DBG("HOME", "Read open: waitIdle %lums greysSettled=%d bookIndex=%d preferFast=%d penumbra=%d coverTheme=%d",
           static_cast<unsigned long>(millis() - t0), greysSettled ? 1 : 0, bookIndexReady ? 1 : 0, preferFast ? 1 : 0,
           isPenumbraTheme() ? 1 : 0, coverTheme ? 1 : 0);
+
+  // Show "Opening" for EVERY book open. Do not gate on Dark Mode — the cue is the
+  // only feedback between Confirm and first ink, and windowed refresh keeps it
+  // visible through the activity swap.
+  GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_OPENING), /*refresh=*/true);
+  SystemLog::logTiming("HOME", "opening_status painted dark=%d", SETTINGS.readerDarkMode ? 1 : 0);
   cancelBackgroundPaint = false;
 
   // Defer AA only when we scrubbed or cold-opened; warm FAST open can AA next turn.
@@ -2151,7 +2469,8 @@ void HomeActivity::reloadHomeAfterBookAction() {
   // Book/cache actions may have deleted thumbs — allow a fresh gen pass.
   recentsLoaded = false;
   recentsLoading = false;
-  homeUiReady = true;  // UI already visible; gen may float Loading again
+  skipResumeSdReload_ = true;  // this method already reloaded; onResume must not
+  homeUiReady = false;         // paint shell first; gen may float Rendering Cover after
   coverNeedsRetry = false;
   coverGenAttempts = 0;
   coverRetryAtMs = 0;

@@ -9,7 +9,7 @@ from pathlib import Path
 
 Import("env")  # type: ignore  # PlatformIO
 
-MARKER = "Casper: provide symbol when controller-only stubs omit it"
+MARKER = "CrossPoint: provide symbol when controller-only stubs omit it"
 INJECT = (
     f'// {MARKER}\n'
     'extern "C" { bool _btLibraryInUse = true; }\n'

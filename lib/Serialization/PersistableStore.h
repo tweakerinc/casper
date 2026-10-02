@@ -29,7 +29,7 @@ class PersistableStoreBase {
   //
   // It is deliberately held across the SD write. That is safe only because the
   // read path does NOT take it — derived stores build their snapshots (e.g.
-  // CasperSettings::statusBarSpec) unlocked. If you ever lock this mutex on
+  // CrossPointSettings::statusBarSpec) unlocked. If you ever lock this mutex on
   // a read path, you put it on the render path and stall rendering behind SD
   // I/O, and you create a storeMutex/storageMutex ordering hazard. Don't.
   mutable std::mutex storeMutex;

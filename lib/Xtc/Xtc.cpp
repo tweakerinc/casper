@@ -2,7 +2,7 @@
  * Xtc.cpp
  *
  * Main XTC ebook class implementation
- * XTC ebook support for Casper Reader
+ * XTC ebook support for CrossPoint Reader
  */
 
 #include "Xtc.h"
@@ -10,6 +10,7 @@
 #include <Bitmap.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -31,8 +32,13 @@ Xtc::Xtc(std::string filepath, const std::string& cacheDir) : filepath(std::move
 bool Xtc::load() {
   LOG_DBG("XTC", "Loading XTC: %s", filepath.c_str());
 
-  // Initialize parser
-  parser.reset(new xtc::XtcParser());
+  // Initialize parser. nothrow: bare `new` abort()s under -fno-exceptions, and
+  // load() already reports failure by returning false.
+  parser = makeUniqueNoThrow<xtc::XtcParser>();
+  if (!parser) {
+    LOG_ERR("XTC", "OOM: XtcParser for %s", filepath.c_str());
+    return false;
+  }
 
   // Open XTC file
   xtc::XtcError err = parser->open(filepath.c_str());
@@ -285,22 +291,27 @@ std::string Xtc::getThumbBmpPath(int height) const {
 
 bool Xtc::generateThumbBmp(int height) const {
   // Already generated — only trust real BMPs (drop corrupt partial files).
+  // Open first: exists() false-negatives after the reader must not JPEG.
   const std::string existingPath = getThumbBmpPath(height);
-  if (Storage.exists(existingPath.c_str())) {
-    HalFile probe;
-    bool valid = false;
-    if (Storage.openFileForRead("XTC", existingPath, probe)) {
-      char sig[2] = {};
-      const size_t n = probe.read(sig, 2);
-      const size_t sz = probe.size();
-      probe.close();
-      valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
-    }
-    if (valid) {
-      return true;
-    }
+  HalFile probe;
+  bool opened = false;
+  bool valid = false;
+  if (Storage.openFileForRead("XTC", existingPath, probe)) {
+    opened = true;
+    char sig[2] = {};
+    const size_t n = probe.read(sig, 2);
+    const size_t sz = probe.size();
+    probe.close();
+    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024);
+  }
+  if (opened && valid) {
+    return true;
+  }
+  if (opened && !valid) {
     LOG_ERR("XTC", "Removing corrupt thumb: %s", existingPath.c_str());
     Storage.remove(existingPath.c_str());
+  } else if (!opened && Storage.exists(existingPath.c_str())) {
+    return true;
   }
 
   if (!loaded || !parser) {

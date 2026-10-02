@@ -10,7 +10,7 @@
 
 #include "ClockOffsetActivity.h"
 #include "ClockSyncActivity.h"
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -60,9 +60,9 @@ void ClockSettingsActivity::onEnter() {
   if (SETTINGS.clockFormat >= CLOCK_FORMAT_ITEMS) {
     SETTINGS.clockFormat = 0;
   }
-  if (SETTINGS.systemClock != CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE &&
-      SETTINGS.systemClock != CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW) {
-    SETTINGS.systemClock = CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW;
+  if (SETTINGS.systemClock != CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE &&
+      SETTINGS.systemClock != CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW) {
+    SETTINGS.systemClock = CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW;
     SETTINGS.saveToFile();
   }
   requestUpdate();
@@ -119,9 +119,9 @@ void ClockSettingsActivity::loop() {
 void ClockSettingsActivity::handleSelection() {
   switch (selectedIndex) {
     case ITEM_SHOW:
-      SETTINGS.systemClock = (SETTINGS.systemClock == CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE)
-                                 ? CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW
-                                 : CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
+      SETTINGS.systemClock = (SETTINGS.systemClock == CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE)
+                                 ? CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_SHOW
+                                 : CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
       SETTINGS.saveToFile();
       return;
     case ITEM_FORMAT:
@@ -158,7 +158,7 @@ void ClockSettingsActivity::render(RenderLock&&) {
       [](int index) -> std::string {
         switch (index) {
           case ITEM_SHOW:
-            return SETTINGS.systemClock == CasperSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE
+            return SETTINGS.systemClock == CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE
                        ? tr(STR_HIDE)
                        : tr(STR_SHOW);
           case ITEM_FORMAT: {

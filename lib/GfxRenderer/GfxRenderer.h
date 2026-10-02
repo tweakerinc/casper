@@ -29,6 +29,9 @@ class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
 
+  // How much of a 2-bit glyph the BW pass inks. See setBwGlyphWeight().
+  enum class BwGlyphWeight : uint8_t { Normal = 0, Mild = 1, Dense = 2 };
+
   // Logical screen orientation from the perspective of callers
   enum Orientation {
     Portrait,                  // 480x800 logical coordinates (current default)
@@ -42,11 +45,19 @@ class GfxRenderer {
 
   HalDisplay& display;
   RenderMode renderMode;
+  // See setBwGlyphWeight(). Default = Mild (X3 chrome / AA-off reading).
+  // ActivityManager sets Dense on X4 UI chrome (FAST, no grey pass).
+  // Reader AA-on sets Normal so the greyscale pass still has light fringe.
+  BwGlyphWeight bwGlyphWeight_ = BwGlyphWeight::Mild;
   Orientation orientation;
   bool fadingFix;
   // System-wide Dark Mode: invert FB → push panel → restore FB so paint stays light-space.
   // Sleep / intentional invert content should temporarily clear this (setInvertOnDisplay).
   bool invertOnDisplay;
+  // Polarity of the last bits actually driven to the panel. Reader-only dark
+  // inverts the FB around displayBuffer while invertOnDisplay is false — callers
+  // must notePanelInverted(true) after that push so the next light FAST can HALF.
+  mutable bool panelSentInverted_ = false;
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -90,6 +101,9 @@ class GfxRenderer {
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // Load advance metrics for one SD face (and the mapped fallback, if any).
+  void warmSdCardFont(int fontId, const char* utf8Text, uint8_t styleMask) const;
+  void warmSdCardFont(int fontId, const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
@@ -157,6 +171,11 @@ class GfxRenderer {
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
   void setInvertOnDisplay(const bool enabled) { invertOnDisplay = enabled; }
   bool getInvertOnDisplay() const { return invertOnDisplay; }
+  // Record that the last panel push was inverted even when invertOnDisplay is
+  // off (reader-only Dark Mode). Menu/Settings FAST against that glass flashes black.
+  void notePanelInverted(const bool inverted) const { panelSentInverted_ = inverted; }
+  bool panelIsInverted() const { return panelSentInverted_; }
+  bool panelPolarityMatchesInvertFlag() const { return panelSentInverted_ == invertOnDisplay; }
 
   // Screen ops
   int getScreenWidth() const;
@@ -179,7 +198,13 @@ class GfxRenderer {
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
   bool supportsAsyncRefresh() const;
   void invertScreen() const;
+  // XOR a logical rectangle (orientation-aware). Whole-UI Dark Mode inverts the
+  // FB at display time; pre-inverting a cover here restores original jacket polarity.
+  void invertRect(int x, int y, int width, int height) const;
   void clearScreen(uint8_t color = 0xFF) const;
+  // Re-arms drawPixel()'s rate-limited out-of-range logging. Called by
+  // clearScreen(); exposed for paths that start a frame without clearing.
+  static void resetOutOfRangeLogBudget();
   void getOrientedViewableTRBL(int* outTop, int* outRight, int* outBottom, int* outLeft) const;
 
   // Tiled grayscale strip target. While active, drawPixel() and clearScreen()
@@ -263,6 +288,8 @@ class GfxRenderer {
   /// dropCapNnScale: when style has DROP_CAP, 0 → 2× (legacy); 2–4 → that nearest-neighbor scale.
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, int dropCapNnScale = 0) const;
   int getFontAscenderSize(int fontId) const;
+  /// Signed extent below the baseline (typically ≤ 0). Matches EpdFontData::descender.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
@@ -281,6 +308,25 @@ class GfxRenderer {
   // Grayscale functions
   void setRenderMode(const RenderMode mode) { this->renderMode = mode; }
   RenderMode getRenderMode() const { return renderMode; }
+
+  // How much of a 2-bit glyph the BW pass inks.
+  //
+  //   Normal: black + dark fringe only. Safe under AA (light fringe stays for
+  //           the greyscale multipass to shade).
+  //   Mild:   also ink light-fringe pixels that sit against ≥2 already-dark
+  //           neighbors. Fills AA holes and softens stairsteps without growing
+  //           the outline — inking the whole light fringe (Dense) is what
+  //           fattened capitals by a pixel on every stem.
+  //   Dense:  ink every light-fringe pixel. Maximum weight; bolds H/I/L. Avoid
+  //           for body text; kept for UI that never runs a grayscale pass.
+  //
+  // With AA on, prefer Normal so the multipass has fringes left to shade. Mild
+  // is X3 chrome and AA-off reading. X4 menus use Dense (see GlyphWeightPolicy).
+  // setBwLightFringe(true) maps to Dense for the one historical call site.
+  void setBwGlyphWeight(const BwGlyphWeight w) { bwGlyphWeight_ = w; }
+  [[nodiscard]] BwGlyphWeight bwGlyphWeight() const { return bwGlyphWeight_; }
+  void setBwLightFringe(const bool on) { bwGlyphWeight_ = on ? BwGlyphWeight::Dense : BwGlyphWeight::Normal; }
+  [[nodiscard]] bool bwLightFringe() const { return bwGlyphWeight_ == BwGlyphWeight::Dense; }
   // Grayscale preconditioning settle pass (no-op on X4). The rect overload
   // takes the gray region in LOGICAL screen coordinates and rotates it to the
   // panel; the no-arg overload settles the full frame. Call after the BW base
@@ -305,6 +351,16 @@ class GfxRenderer {
   bool supportsStripGrayscale() const;
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
   void restoreBwBuffer();  // Restore and free the stored buffer
+
+  // Whether storeBwBuffer() can plausibly succeed right now, plus headroom for
+  // whatever the caller still has to paint.
+  //
+  // Callers used to gate greyscale passes on getMaxAllocHeap() >= ~56 KB, which
+  // is the wrong question: storeBwBuffer() splits the snapshot into
+  // BW_BUFFER_CHUNK_SIZE pieces exactly so it never needs a contiguous block.
+  // In-reader maxAlloc sits around 49-53 KB, so that gate rejected frames whose
+  // chunks would have fitted with ~30 KB to spare, and AA silently did nothing.
+  [[nodiscard]] bool canStoreBwBuffer(size_t headroomBytes = 0) const;
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Font helpers
@@ -325,9 +381,15 @@ class GfxRenderer {
   // error paths: restores on scope exit (or explicitly via end()). Display the
   // popup/screen the panel should hold BEFORE constructing one. Constructing
   // while the framebuffer is already lent yields an inert loan (nesting-safe).
+  //
+  // `enabled=false` yields an inert loan too. That is for callers that run while
+  // a screen the user is still looking at owns the framebuffer: the loan restores
+  // the buffer WHITE, so anything that repaints a window afterwards (a clock
+  // digit band, a footer) would blit blank pixels over live UI. Those callers
+  // trade the extra 48 KB of contiguous heap for not corrupting the screen.
   class FrameBufferLoan {
    public:
-    explicit FrameBufferLoan(GfxRenderer& renderer);
+    explicit FrameBufferLoan(GfxRenderer& renderer, bool enabled = true);
     ~FrameBufferLoan() { end(); }
     void end();
     FrameBufferLoan(const FrameBufferLoan&) = delete;

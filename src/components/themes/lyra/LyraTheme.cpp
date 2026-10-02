@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/bluetooth.h"
@@ -233,17 +233,17 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
 
 namespace {
 // Shared with Bare/Penumbra (they inherit LyraTheme::drawList).
-// Single-line row height for short titles/folders. Wrapped titles use a tighter
-// line step than full advanceY (body leading is too loose for list UI) and only
-// those rows grow taller so short names stay dense.
+// Single-line row height for short titles/folders. Wrapped titles keep full
+// leading (plus 4px) and only those rows grow taller so short names stay dense.
 constexpr int kLyraTitleSubtitleGap = 2;
 constexpr int kLyraRowPad = 10;
 
 int lyraTitleLineStep(const GfxRenderer& renderer, const int titleFont, const int nLines) {
   const int advanceY = renderer.getLineHeight(titleFont);
   if (nLines <= 1) return advanceY;
-  // Bring the second line up toward the first (~70% of body leading).
-  return std::max(18, (advanceY * 7) / 10);
+  // Same as Bare/Penumbra: full leading. 70% of advanceY made wrapped
+  // Settings titles collide on X4 (Text Wrapping, and any 2-line list row).
+  return advanceY + 4;
 }
 
 int lyraTitleBlockHeight(const GfxRenderer& renderer, const int titleFont, const int nLines) {
@@ -277,16 +277,16 @@ int LyraTheme::getListRowStep(bool hasSubtitle) const {
   int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
   // Match compute path: larger menu list fonts grow title line height.
   switch (SETTINGS.menuFontSize) {
-    case CasperSettings::MENU_FONT_XSMALL:
+    case CrossPointSettings::MENU_FONT_XSMALL:
       rowHeight = std::max(26, rowHeight - 4);
       break;
-    case CasperSettings::MENU_FONT_SMALL:
+    case CrossPointSettings::MENU_FONT_SMALL:
       rowHeight = std::max(28, rowHeight - 2);
       break;
-    case CasperSettings::MENU_FONT_MEDIUM:
+    case CrossPointSettings::MENU_FONT_MEDIUM:
       rowHeight += 8;  // ~14 pt Source Serif list titles
       break;
-    case CasperSettings::MENU_FONT_LARGE:
+    case CrossPointSettings::MENU_FONT_LARGE:
       rowHeight += 14;  // ~16 pt
       break;
     default:
@@ -307,7 +307,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          const std::function<bool(int index)>& rowDimmed,
-                         const std::function<bool(int index)>& rowApplied) const {
+                         const std::function<bool(int index)>& rowApplied,
+                         const std::function<bool(int index)>& rowCentered) const {
   // Icons no longer drawn — free horizontal space for long book titles.
   (void)rowIcon;
 
@@ -353,7 +354,8 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     int valueWidth = 0;
     std::string valueText;
-    if (rowValue != nullptr) {
+    const bool centered = rowCentered && rowCentered(i);
+    if (!centered && rowValue != nullptr) {
       valueText = rowValue(i);
       if (!valueText.empty()) {
         valueText = renderer.truncatedText(titleFont, valueText.c_str(), maxListValueWidth);
@@ -380,7 +382,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     std::string subtitleDrawn;
     int subtitleLineH = 0;
-    if (rowSubtitle != nullptr) {
+    if (!centered && rowSubtitle != nullptr) {
       const std::string subtitleRaw = rowSubtitle(i);
       if (!subtitleRaw.empty()) {
         subtitleDrawn = renderer.truncatedText(SMALL_FONT_ID, subtitleRaw.c_str(), rowTextWidth);
@@ -388,10 +390,18 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       }
     }
 
-    const int rowHeight = lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
+    const int rowHeight =
+        centered ? listSectionHeaderHeight(renderer)
+                 : lyraListRowHeightForLines(renderer, !subtitleDrawn.empty() || hasSubtitleCb, nTitleLines);
     // Stop if this taller row would leave the list area (keep at least one row).
     if (i > pageStartIndex && itemY + rowHeight > rect.y + rect.height) {
       break;
+    }
+
+    if (centered) {
+      drawListSectionHeader(renderer, rect.x, contentWidth, itemY, itemName.c_str());
+      itemY += rowHeight;
+      continue;
     }
 
     const int blockH = titleBlockH + (subtitleDrawn.empty() ? 0 : (kLyraTitleSubtitleGap + subtitleLineH));
@@ -404,7 +414,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       renderer.drawText(titleFont, textX, ly, titleLines[li].c_str(), /*black=*/true, focusStyle);
     }
 
-    if (rowDimmed && rowDimmed(i) && !isSelected) {
+    if (rowDimmed && rowDimmed(i) && !isSelected && !centered) {
       const int dimH = renderer.getLineHeight(titleFont);
       for (size_t li = 0; li < titleLines.size(); ++li) {
         const int ly = textDrawY + static_cast<int>(li) * lineStep;

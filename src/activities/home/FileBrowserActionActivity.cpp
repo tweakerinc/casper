@@ -1,17 +1,15 @@
 #include "FileBrowserActionActivity.h"
-#include "util/UiGhostPolicy.h"
 
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Xtc.h>
 
 #include <algorithm>
-
-#include <Epub.h>
-#include <FsHelpers.h>
-#include <Xtc.h>
 
 #include "BookActions.h"
 #include "BookDescriptionActivity.h"
@@ -22,7 +20,8 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/CasperPaths.h"
+#include "util/CrossPointPaths.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Match Bare footer / larger chrome: UI_12 reads better than UI_10 on the action list.
@@ -137,9 +136,9 @@ void FileBrowserActionActivity::activateSelected() {
     case FileBrowserAction::ReadingStats: {
       std::string cachePath = BookReadingStats::cachePathForBook(bookPath);
       if (cachePath.empty() && FsHelpers::hasEpubExtension(bookPath)) {
-        cachePath = Epub(bookPath, CasperPaths::kPackageCacheRoot).getCachePath();
+        cachePath = Epub(bookPath, CrossPointPaths::kPackageCacheRoot).getCachePath();
       } else if (cachePath.empty() && FsHelpers::hasXtcExtension(bookPath)) {
-        Xtc xtc(bookPath, CasperPaths::kPackageCacheRoot);
+        Xtc xtc(bookPath, CrossPointPaths::kPackageCacheRoot);
         if (xtc.load()) cachePath = xtc.getCachePath();
       }
       BookReadingStats stats = BookReadingStats::loadForBook(bookPath);
@@ -209,10 +208,13 @@ void FileBrowserActionActivity::activateSelected() {
 
     case FileBrowserAction::DeleteStats:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_BOOK_STATS), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
+              // Upper-left cue while SD work runs — the toast only appears after,
+              // so without this the device looked frozen (same fix as the reader).
+              GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
               if (BookActions::deleteBookStats(bookPath)) {
                 BookActions::drawToast(renderer, tr(STR_BOOK_STATS_DELETED));
                 delay(800);
@@ -223,15 +225,29 @@ void FileBrowserActionActivity::activateSelected() {
           });
       return;
 
+    case FileBrowserAction::RestoreStats:
+      if (BookActions::restoreBookStatsForBook(bookPath)) {
+        BookActions::drawToast(renderer, tr(STR_BOOK_STATS_RESTORED));
+      } else {
+        BookActions::drawToast(renderer, tr(STR_BOOK_STATS_RESTORE_FAILED));
+      }
+      delay(800);
+      selectedIndex = 0;
+      stayInMenu();
+      return;
+
     case FileBrowserAction::DeleteCache:
       startActivityForResult(
-          std::make_unique<ConfirmationActivity>(
-              renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput,
+                                                 BookActions::confirmationHeading(StrId::STR_DELETE_CACHE), title),
           [this](const ActivityResult& confirmation) {
             if (!confirmation.isCancelled) {
+              // Wiping IR + page maps for a large book is seconds of SD work.
+              // Show "Deleting" before it starts, not just a toast afterwards.
+              GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETING), /*refresh=*/true);
               if (BookActions::clearBookCache(bookPath)) {
-                BookActions::drawToast(renderer, tr(STR_DELETE_CACHE));
-                delay(800);
+                GUI.drawTopLeftStatus(renderer, tr(STR_STATUS_DELETED), /*refresh=*/true);
+                delay(400);
               }
               // Leave focus on a safe row so a stray Confirm cannot re-open this dialog.
               selectedIndex = 0;
@@ -275,7 +291,7 @@ void FileBrowserActionActivity::loop() {
   if (bookMode && !synopsisWarmAttempted) {
     synopsisWarmAttempted = true;
     if (FsHelpers::hasEpubExtension(bookPath)) {
-      Epub epub(bookPath, CasperPaths::kPackageCacheRoot);
+      Epub epub(bookPath, CrossPointPaths::kPackageCacheRoot);
       const std::string descPath = epub.getCachePath() + "/description.html";
       if (Storage.exists(descPath.c_str())) {
         const uint32_t t0 = millis();

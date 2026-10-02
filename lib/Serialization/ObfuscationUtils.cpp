@@ -75,7 +75,7 @@ std::string deobfuscateFromBase64(const char* encoded, bool* ok) {
 }
 
 namespace {
-// Shared with legacy / upstream Casper wifi.json on SD.
+// Shared with legacy / upstream CrossPoint wifi.json on SD.
 constexpr char kWifiMagic[] = "CPV1";
 constexpr size_t kWifiMagicLen = 4;
 constexpr size_t kWifiSaltLen = 4;
@@ -95,7 +95,7 @@ String obfuscateWifiPasswordToBase64(const std::string& plaintext) {
 }
 
 std::string unwrapWifiPassword(std::string deobfuscated) {
-  // Accept both envelope (legacy / Casper v0.1.5+) and bare password (older Casper).
+  // Accept both envelope (legacy / CrossPoint v0.1.5+) and bare password (older CrossPoint).
   if (deobfuscated.size() <= kWifiMagicLen || deobfuscated.compare(0, kWifiMagicLen, kWifiMagic) != 0) {
     return deobfuscated;
   }

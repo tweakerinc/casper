@@ -4,14 +4,14 @@
 #include <GfxRenderer.h>
 #include <Logging.h>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "fontIds.h"
 
 namespace {
 
 static uint8_t fontSizeEnumFromSettings() {
   uint8_t e = SETTINGS.fontSize;
-  if (e >= CasperSettings::FONT_SIZE_COUNT) e = CasperSettings::SIZE_14;
+  if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = CrossPointSettings::SIZE_14;
   return e;
 }
 
@@ -47,7 +47,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   registry_.discover();
 
   // Register this system as the SD font ID resolver in settings.
-  // Uses a static trampoline since CasperSettings stores a plain function pointer.
+  // Uses a static trampoline since CrossPointSettings stores a plain function pointer.
   SETTINGS.sdFontIdResolver = [](void* ctx, const char* familyName, uint8_t fontSizeEnum) -> int {
     return static_cast<SdCardFontSystem*>(ctx)->resolveFontId(familyName, fontSizeEnum);
   };
@@ -64,9 +64,8 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
         setupUiFallbacks(renderer);
         LOG_DBG("SDFS", "Loaded SD card font family: %s", SETTINGS.sdFontFamilyName);
       } else {
-        LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", SETTINGS.sdFontFamilyName);
-        SETTINGS.sdFontFamilyName[0] = '\0';
-        SETTINGS.saveToFile();
+        // Keep the selection so the next ensureLoaded retries (OOM / SD glitch).
+        LOG_ERR("SDFS", "Failed to load SD font family: %s (keeping selection)", SETTINGS.sdFontFamilyName);
       }
     } else {
       LOG_DBG("SDFS", "SD font family not found on card: %s (clearing)", SETTINGS.sdFontFamilyName);
@@ -144,9 +143,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       setupUiFallbacks(renderer);
       LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily);
     } else {
-      LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", wantedFamily);
-      SETTINGS.sdFontFamilyName[0] = '\0';
-      SETTINGS.saveToFile();
+      LOG_ERR("SDFS", "Failed to load SD font family: %s (keeping selection)", wantedFamily);
     }
   } else {
     LOG_DBG("SDFS", "SD font family not found: %s (clearing)", wantedFamily);

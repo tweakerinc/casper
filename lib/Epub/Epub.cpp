@@ -1,9 +1,11 @@
 #include "Epub.h"
 
+#include <CoverDecodePolicy.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <PngToBmpConverter.h>
 #include <Utf8.h>
 #include <ZipFile.h>
@@ -550,10 +552,22 @@ void Epub::parseCssFiles() const {
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
 
-  // Initialize spine/TOC cache
-  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+  // Initialize spine/TOC cache.
+  // nothrow throughout: bare `new` abort()s under -fno-exceptions, and book open
+  // runs with the home cover, font cache and framebuffer all still resident.
+  // Failing the load lets the caller show "could not open" instead of rebooting.
+  bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
+  if (!bookMetadataCache) {
+    LOG_ERR("EBP", "OOM: BookMetadataCache for %s", filepath.c_str());
+    return false;
+  }
   // Always create CssParser - needed for inline style parsing even without CSS files
-  cssParser.reset(new CssParser(cachePath));
+  cssParser = makeUniqueNoThrow<CssParser>(cachePath);
+  if (!cssParser) {
+    LOG_ERR("EBP", "OOM: CssParser for %s", filepath.c_str());
+    bookMetadataCache.reset();
+    return false;
+  }
 
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
@@ -572,7 +586,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         }
         bookMetadataCache.reset();
         parseCssFiles();
-        bookMetadataCache.reset(new BookMetadataCache(cachePath));
+        bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
+        if (!bookMetadataCache) {
+          LOG_ERR("EBP", "OOM: BookMetadataCache reload after CSS rebuild");
+          return false;
+        }
         if (!bookMetadataCache->load()) {
           LOG_ERR("EBP", "Failed to reload cache after CSS rebuild");
           return false;
@@ -684,7 +702,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   // Reload the cache from disk so it's in the correct state
-  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+  bookMetadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
+  if (!bookMetadataCache) {
+    LOG_ERR("EBP", "OOM: BookMetadataCache reload after writing");
+    return false;
+  }
   if (!bookMetadataCache->load()) {
     LOG_ERR("EBP", "Failed to reload cache after writing");
     return false;
@@ -778,14 +800,30 @@ std::string Epub::getDescription() {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
-  const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
+  const auto coverFileName = std::string("cover_c31") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
 
+namespace {
+bool bmpLooksValid(const std::string& path) {
+  HalFile probe;
+  if (!Storage.openFileForRead("EBP", path, probe)) return false;
+  char sig[2] = {};
+  const size_t n = probe.read(sig, 2);
+  const size_t sz = probe.size();
+  probe.close();
+  return n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024;
+}
+}  // namespace
+
 bool Epub::generateCoverBmp(bool cropped) const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
+  const std::string existingPath = getCoverBmpPath(cropped);
+  if (bmpLooksValid(existingPath)) {
     return true;
+  }
+  if (Storage.exists(existingPath.c_str())) {
+    LOG_ERR("EBP", "Removing corrupt sleep cover: %s", existingPath.c_str());
+    Storage.remove(existingPath.c_str());
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
@@ -899,12 +937,12 @@ bool Epub::generateCoverBmp(bool cropped) const {
   return false;
 }
 
-// c30: Casper v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
+// c30: CrossPoint v0.1.3 home cover recipe — 2-bit balanced Atkinson + mild lift.
 // Stats + Stats-Life share one height key (same thumb file). Bare 420×560 1:1.
 // c24 (480×640) forced Bare to scale down and looked griddy — do not reintroduce.
-std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c30_[HEIGHT].bmp"; }
+std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_c31_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const {
-  return cachePath + "/thumb_c30_" + std::to_string(height) + ".bmp";
+  return cachePath + "/thumb_c31_" + std::to_string(height) + ".bmp";
 }
 
 // Re-read OPF (full, including manifest) so cover href is current. book.bin can
@@ -939,23 +977,32 @@ bool Epub::resolveCoverItemHrefFromOpf(std::string& outHref) const {
 bool Epub::generateThumbBmp(int height) const {
   // Already generated — but only trust files that look like real BMPs.
   // A truncated/corrupt file (e.g. mid-write OOM) used to block regen forever.
+  // Probe by open first: exists() false-negatives after the reader used to
+  // fall through into a 10–30s JPEG decode on every Home return.
   const std::string existingPath = getThumbBmpPath(height);
-  if (Storage.exists(existingPath.c_str())) {
-    HalFile probe;
-    bool valid = false;
-    if (Storage.openFileForRead("EBP", existingPath, probe)) {
-      char sig[2] = {};
-      const size_t n = probe.read(sig, 2);
-      const size_t sz = probe.size();
-      probe.close();
-      // Minimal BMP: "BM" + enough bytes for a header/DIB.
-      valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz > 62);
-    }
-    if (valid) {
-      return true;
-    }
+  HalFile probe;
+  bool opened = false;
+  bool valid = false;
+  if (Storage.openFileForRead("EBP", existingPath, probe)) {
+    opened = true;
+    char sig[2] = {};
+    const size_t n = probe.read(sig, 2);
+    const size_t sz = probe.size();
+    probe.close();
+    // 1024: reject header-only leftovers (BM + 70 bytes) that locked Bare on a white plate.
+    valid = (n == 2 && sig[0] == 'B' && sig[1] == 'M' && sz >= 1024);
+  }
+  if (opened && valid) {
+    LOG_DBG("EBP", "thumb cache hit %s", existingPath.c_str());
+    return true;
+  }
+  if (opened && !valid) {
     LOG_ERR("EBP", "Removing corrupt thumb: %s", existingPath.c_str());
     Storage.remove(existingPath.c_str());
+  } else if (!opened && Storage.exists(existingPath.c_str())) {
+    // Open-fail after the reader is SD-busy, not a missing file.
+    LOG_DBG("EBP", "thumb cache hit %s opened=0", existingPath.c_str());
+    return true;
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
@@ -1066,7 +1113,8 @@ bool Epub::generateThumbBmp(int height) const {
   };
 
   // 1) Try path stored in book.bin (fast when still valid).
-  if (tryGenerateFromHref(bookMetadataCache->coreMetadata.coverItemHref)) {
+  const std::string cachedHref = bookMetadataCache->coreMetadata.coverItemHref;
+  if (tryGenerateFromHref(cachedHref)) {
     return true;
   }
 
@@ -1074,9 +1122,10 @@ bool Epub::generateThumbBmp(int height) const {
   //    EPUB was updated to cover.jpeg (e.g. Dungeon Crawler Carl, Gate of the Feral Gods).
   std::string freshHref;
   if (resolveCoverItemHrefFromOpf(freshHref)) {
-    LOG_DBG("EBP", "Cover href from OPF: %s (cached was: %s)", freshHref.c_str(),
-            bookMetadataCache->coreMetadata.coverItemHref.c_str());
-    if (tryGenerateFromHref(freshHref)) {
+    LOG_DBG("EBP", "Cover href from OPF: %s (cached was: %s)", freshHref.c_str(), cachedHref.c_str());
+    if (coverdecode::skipSameCoverHrefRetry(cachedHref.c_str(), freshHref.c_str())) {
+      LOG_DBG("EBP", "Cover href unchanged; not decoding the same JPEG twice");
+    } else if (tryGenerateFromHref(freshHref)) {
       // Keep session cache current so cover BMP / other heights skip OPF reparse.
       const_cast<BookMetadataCache&>(*bookMetadataCache).coreMetadata.coverItemHref = std::move(freshHref);
       return true;
@@ -1143,7 +1192,10 @@ int Epub::getSpineItemsCount() const {
   return bookMetadataCache->getSpineCount();
 }
 
-size_t Epub::getCumulativeSpineItemSize(const int spineIndex) const { return getSpineItem(spineIndex).cumulativeSize; }
+size_t Epub::getCumulativeSpineItemSize(const int spineIndex) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return 0;
+  return bookMetadataCache->getSpineCumulativeSize(spineIndex);
+}
 
 BookMetadataCache::SpineEntry Epub::getSpineItem(const int spineIndex) const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {

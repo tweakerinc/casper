@@ -1,5 +1,4 @@
 #include "RecentBooksActivity.h"
-#include "util/UiGhostPolicy.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -10,18 +9,18 @@
 #include <algorithm>
 #include <memory>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/FinishedBooks.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
-// Match HomeActivity Read long-press (was 1000 ΓåÆ 500 ΓåÆ 300).
-// Match Home long-press (Menu/Read): short hold, not sticky.
-constexpr unsigned long LONG_PRESS_MS = 200;
+// Match HomeActivity Read long-press (FileBrowser / reader GO_HOME_MS).
+constexpr unsigned long LONG_PRESS_MS = 500;
 
 // True while any button that can open this screen or activate a row is held.
 // Bare long-press Library uses physical Confirm; release must not open a book.
@@ -52,9 +51,7 @@ void RecentBooksActivity::loadRecentBooks() {
   }
 }
 
-void RecentBooksActivity::loadReadBooks() {
-  FinishedBooks::listFinishedBooks(readBooks);
-}
+void RecentBooksActivity::loadReadBooks() { FinishedBooks::listFinishedBooks(readBooks); }
 
 bool RecentBooksActivity::showReadBooksRow() const {
   // Only when user opted into move-to-read folder and that folder is non-empty.
@@ -133,7 +130,7 @@ void RecentBooksActivity::loop() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
-      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+      renderer.getScreenHeight() - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing;
 
   if (awaitOpenButtonRelease) {
     if (anyOpenOrNavButtonHeld(mappedInput)) {
@@ -154,9 +151,8 @@ void RecentBooksActivity::loop() {
   // Long-press Confirm: book action menu (not on "Show Read Books" row).
   {
     const int bi = bookIndexForSelector(selectorIndex);
-    const bool onBook = (viewMode == ViewMode::ReadBooks)
-                            ? (selectorIndex < readBooks.size())
-                            : (bi >= 0 && bi < static_cast<int>(recentBooks.size()));
+    const bool onBook = (viewMode == ViewMode::ReadBooks) ? (selectorIndex < readBooks.size())
+                                                          : (bi >= 0 && bi < static_cast<int>(recentBooks.size()));
     if (onBook && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
         mappedInput.getHeldTime() >= LONG_PRESS_MS) {
       longPressFired = true;
@@ -263,37 +259,36 @@ void RecentBooksActivity::showBookActionMenu(const size_t bookIndex, const bool 
     path = recentBooks[bookIndex].path;
   }
 
-  startActivityForResult(
-      std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, title, path,
-                                                  /*includeRemoveFromRecents=*/viewMode == ViewMode::Recents,
-                                                  ignoreInitialConfirmRelease),
-      [this, path](const ActivityResult& result) {
-        if (result.isCancelled) {
-          requestUpdate();
-          return;
-        }
+  startActivityForResult(std::make_unique<FileBrowserActionActivity>(
+                             renderer, mappedInput, title, path,
+                             /*includeRemoveFromRecents=*/viewMode == ViewMode::Recents, ignoreInitialConfirmRelease),
+                         [this, path](const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
 
-        const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
-        if (!actionResult) {
-          LOG_ERR("RBA", "Book action result missing");
-          requestUpdate();
-          return;
-        }
+                           const auto* actionResult = std::get_if<FileBrowserActionResult>(&result.data);
+                           if (!actionResult) {
+                             LOG_ERR("RBA", "Book action result missing");
+                             requestUpdate();
+                             return;
+                           }
 
-        switch (static_cast<FileBrowserAction>(actionResult->action)) {
-          case FileBrowserAction::Open:
-            onSelectBook(path);
-            return;
-          case FileBrowserAction::Delete:
-          case FileBrowserAction::RemoveFromRecents:
-            reloadAfterBookAction();
-            return;
-          default:
-            // Mark finished / unfinished may have moved the file.
-            reloadAfterBookAction();
-            return;
-        }
-      });
+                           switch (static_cast<FileBrowserAction>(actionResult->action)) {
+                             case FileBrowserAction::Open:
+                               onSelectBook(path);
+                               return;
+                             case FileBrowserAction::Delete:
+                             case FileBrowserAction::RemoveFromRecents:
+                               reloadAfterBookAction();
+                               return;
+                             default:
+                               // Mark finished / unfinished may have moved the file.
+                               reloadAfterBookAction();
+                               return;
+                           }
+                         });
 }
 
 void RecentBooksActivity::render(RenderLock&&) {
@@ -307,16 +302,18 @@ void RecentBooksActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, header);
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int contentHeight =
+      pageHeight - contentTop - BaseTheme::frontButtonFooterLayoutH(renderer) - metrics.verticalSpacing;
 
   const int rows = listRowCount();
   if (rows == 0) {
     const char* empty = (viewMode == ViewMode::ReadBooks) ? tr(STR_NO_READ_BOOKS) : tr(STR_NO_RECENT_BOOKS);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, empty);
   } else if (viewMode == ViewMode::ReadBooks) {
-    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, readBooks.size(), selectorIndex,
-                 [this](int index) { return readBooks[static_cast<size_t>(index)].title; },
-                 [](int) { return std::string{}; }, nullptr);
+    GUI.drawList(
+        renderer, Rect{0, contentTop, pageWidth, contentHeight}, readBooks.size(), selectorIndex,
+        [this](int index) { return readBooks[static_cast<size_t>(index)].title; }, [](int) { return std::string{}; },
+        nullptr);
   } else {
     // Optional row 0 = Show Read Books; following rows = recent titles.
     const bool showRead = showReadBooksRow();

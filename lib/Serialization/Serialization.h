@@ -1,5 +1,6 @@
 #pragma once
 #include <HalStorage.h>
+#include <SerializedStringBound.h>
 
 #include <iostream>
 #include <limits>
@@ -59,23 +60,39 @@ inline void readString(std::istream& is, std::string& s) {
   is.read(&s[0], len);
 }
 
-inline void readString(HalFile& file, std::string& s) {
-  uint32_t len;
-  readPod(file, len);
-  s.resize(len);
-  file.read(&s[0], len);
-}
-
-inline bool tryReadString(HalFile& file, std::string& s) {
+// Reads a length-prefixed string, refusing any length the file cannot actually
+// contain and any length above kMaxSerializedStringBytes.
+//
+// The old bound was `s.max_size()`, which on a 32-bit target is on the order of
+// a gigabyte — so a corrupt or truncated file could still hand back a length of
+// e.g. 0x40000000, sail past the check, and reach std::string::resize(). Under
+// -fno-exceptions that throw becomes abort(), i.e. the device reboots because a
+// cache file on the SD card went bad. A torn concurrent seek on a large book.bin
+// has the same shape: the length still "fits in the file" but resize() aborts.
+inline bool tryReadString(HalFile& file, std::string& s, const uint32_t maxBytes = kMaxSerializedStringBytes) {
   uint32_t len = 0;
   if (!tryReadPod(file, len)) {
     return false;
   }
+  const size_t pos = file.position();
+  const size_t total = file.size();
+  const size_t remaining = (total > pos) ? (total - pos) : 0;
+  if (len > maxBytes || !serializedStringFits(len, remaining)) {
+    s.clear();
+    return false;
+  }
   if (static_cast<size_t>(len) > s.max_size() || len > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+    s.clear();
     return false;
   }
   s.resize(len);
   const int readLen = static_cast<int>(len);
   return len == 0 || file.read(&s[0], readLen) == readLen;
+}
+
+inline void readString(HalFile& file, std::string& s) {
+  if (!tryReadString(file, s)) {
+    s.clear();
+  }
 }
 }  // namespace serialization

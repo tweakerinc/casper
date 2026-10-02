@@ -4,7 +4,7 @@
 
 #include "components/themes/lyra/LyraTheme.h"
 
-// Thin Minimal theme for Casper 1.5: metrics + text-only bottom labels.
+// Thin Minimal theme for CrossPoint 1.5: metrics + text-only bottom labels.
 // Dashboard (Stats) and Bare both use this footer style; Bare only reorders labels.
 namespace MinimalMetrics {
 constexpr int coverWidthForHeight(const int coverHeight) {
@@ -19,8 +19,11 @@ constexpr ThemeMetrics makeValues() {
   v.homeRecentBooksCount = 1;
   v.homeContinueReadingInMenu = false;
   v.homeMenuTopOffset = 0;
-  // Room for UI_12 text-only footer (no rounded chrome), same as Bare.
-  v.buttonHintsHeight = 48;
+  // Text-only footer (no rounded chrome): one UI_10 line centred in the band.
+  // 48 left ~31px of empty padding, which the reader had to reserve on every
+  // page so Dictionary/Clip could never cover text. 34 still clears the label
+  // with air above and below, and hands the difference back to body text.
+  v.buttonHintsHeight = 34;
   return v;
 }
 

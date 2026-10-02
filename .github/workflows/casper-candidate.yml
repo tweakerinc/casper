@@ -9,8 +9,7 @@ concurrency:
   group: casper-candidate-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  inspect:
-    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+  host-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -18,27 +17,20 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
-      - name: Capture source and dependency identity
+      - name: Run host regressions
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p candidate-results
-          git rev-parse HEAD > candidate-results/commit.txt
-          git submodule status --recursive > candidate-results/submodules.txt
-          tar --exclude='.git' --exclude='*.ttf' --exclude='*.otf' --exclude='*.woff*' --exclude='*.bin' --exclude='*.epub' --exclude='*.png' --exclude='*.jpg' --exclude='*.pdf' -czf candidate-results/source.tar.gz src lib test scripts freeink-sdk platformio.ini partitions.csv .gitmodules
-      - name: Run candidate regression suite when present
-        shell: bash
-        run: |
-          set -euo pipefail
-          if test -f tools/casper_stability/run_tests.py; then
-            python3 tools/casper_stability/run_tests.py 2>&1 | tee candidate-results/regression.txt
-          fi
+          mkdir -p candidate-tests
+          cmake -S test -B /tmp/casper-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/casper-tests -j2
+          ctest --test-dir /tmp/casper-tests --output-on-failure 2>&1 | tee candidate-tests/ctest.log
+          if test -f tools/casper_stability/run_tests.py; then python3 tools/casper_stability/run_tests.py 2>&1 | tee candidate-tests/stability.log; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: casper-candidate-source-and-tests
-          path: candidate-results/
-          retention-days: 7
+          name: casper-candidate-tests
+          path: candidate-tests/
   build:
     if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
     runs-on: ubuntu-24.04
@@ -48,9 +40,14 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: casper-c3-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_wolfssl.py') }}
+          restore-keys: casper-c3-pio-${{ runner.os }}-
       - name: Install build tools
         run: python3 -m pip install platformio==6.1.18
-      - name: Compile combined X3 and original X4 candidate
+      - name: Compile combined X3 and X4 candidate
         shell: bash
         run: |
           set -euo pipefail

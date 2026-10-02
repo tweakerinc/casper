@@ -33,7 +33,7 @@ uint32_t fnv1a(const uint8_t* data, size_t len, uint32_t hash = FNV_OFFSET) {
 // .cpfont magic bytes
 constexpr char CPFONT_MAGIC[8] = {'C', 'P', 'F', 'O', 'N', 'T', '\0', '\0'};
 // CPFONT_VERSION is defined as a #define in SdCardFont.h so it can be
-// stringified into FONT_MANIFEST_URL.
+// stringified into wifitransfer::fontManifestUrl.
 constexpr uint32_t HEADER_SIZE = 32;
 constexpr uint32_t STYLE_TOC_ENTRY_SIZE = 32;
 
@@ -1400,7 +1400,21 @@ uint8_t SdCardFont::resolveStyle(uint8_t style) const {
 
   const uint8_t styleBits = style & (MAX_STYLES - 1);
   for (uint8_t candidate : kFallbacks[styleBits]) {
-    if (styles_[candidate].present) return candidate;
+    if (styles_[candidate].present) {
+      // One-shot per face: if the book asked for Bold/Italic and we only have
+      // Regular, styles look like they "stopped working". Log so it is diagnosable
+      // (missing .cpfont faces, not an HTML parse bug).
+      if (candidate != styleBits && (styleBits == EpdFontFamily::BOLD || styleBits == EpdFontFamily::ITALIC ||
+                                     styleBits == EpdFontFamily::BOLD_ITALIC)) {
+        static uint8_t s_logged = 0;
+        if ((s_logged & (1u << styleBits)) == 0) {
+          s_logged |= static_cast<uint8_t>(1u << styleBits);
+          LOG_DBG("SDCF", "style %u not in font — falling back to %u (bold/italic may look plain)", styleBits,
+                  candidate);
+        }
+      }
+      return candidate;
+    }
   }
   return EpdFontFamily::REGULAR;
 }

@@ -47,15 +47,14 @@ void initStyleResolveContext(StyleResolveContext& ctx, int baseFontId, float use
 // Drop-cap face picker: same-family ladder fonts at body size and larger (not just sizeStep ±2).
 // Writes unique fontIds into outIds[0..return-1], small→large. maxOut is the array capacity.
 // Falls back to {baseFontId} when the family is single-size / unknown.
-[[nodiscard]] int collectDropCapFontCandidates(const StyleResolveContext& ctx, int bodyFontId, int* outIds,
-                                               int maxOut);
+[[nodiscard]] int collectDropCapFontCandidates(const StyleResolveContext& ctx, int bodyFontId, int* outIds, int maxOut);
 
 // True when step should use 2× DROP_CAP paint/measure on a single-size face.
 [[nodiscard]] inline bool sizeStepNeedsSyntheticScale(const StyleResolveContext& ctx, uint8_t step) {
   return ctx.singleSizeFamily && step > SIZE_STEP_BASE;
 }
 
-// Casper em unit = font ascender (existing firmware convention).
+// CrossPoint em unit = font ascender (existing firmware convention).
 [[nodiscard]] float casperEmPx(const GfxRenderer& renderer, int fontId);
 
 // Map CSS font-size length (already keyword→em in parser) to a sizeStep relative to baseEmPx.

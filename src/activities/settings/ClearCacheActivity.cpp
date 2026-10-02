@@ -2,7 +2,6 @@
 
 #include <GfxRenderer.h>
 #include <HalStorage.h>
-#include "util/CasperPaths.h"
 #include <I18n.h>
 #include <Logging.h>
 
@@ -10,6 +9,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/CrossPointPaths.h"
 #include "util/UiGhostPolicy.h"
 
 void ClearCacheActivity::onEnter() {
@@ -98,8 +98,8 @@ void ClearCacheActivity::beginClear() {
 void ClearCacheActivity::clearCache() {
   LOG_DBG("CLEAR_CACHE", "Clearing cache...");
 
-  // Open /.casper package cache root
-  auto root = Storage.open(CasperPaths::kPackageCacheRoot);
+  // Open /.crosspoint package cache root
+  auto root = Storage.open(CrossPointPaths::kPackageCacheRoot);
   if (!root || !root.isDirectory()) {
     LOG_DBG("CLEAR_CACHE", "Failed to open cache directory");
     if (root) root.close();
@@ -119,7 +119,7 @@ void ClearCacheActivity::clearCache() {
 
     // Only delete directories matching known book cache names.
     if (file.isDirectory() && isBookCacheDirectoryName(itemName.c_str())) {
-      String fullPath = String(CasperPaths::kPackageCacheRoot) + "/" + itemName;
+      String fullPath = String(CrossPointPaths::kPackageCacheRoot) + "/" + itemName;
       LOG_DBG("CLEAR_CACHE", "Removing cache: %s", fullPath.c_str());
 
       file.close();  // Close before attempting to delete

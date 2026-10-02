@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -162,7 +162,7 @@ void BmpViewerActivity::doSetSleepCover() {
   }
 
   if (success) {
-    SETTINGS.sleepScreen = CasperSettings::SLEEP_SCREEN_MODE::CUSTOM;
+    SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
     SETTINGS.saveToFile();
     GUI.drawPopup(renderer, tr(STR_DONE));
   } else {

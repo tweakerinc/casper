@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "MusicNoteFallback.h"
+
 void EpdFont::getTextBounds(const char* string, const int startX, const int startY, int* minX, int* minY, int* maxX,
                             int* maxY) const {
   *minX = startX;
@@ -157,7 +159,9 @@ uint32_t EpdFont::applyLigatures(uint32_t cp, const char*& text) const {
 
 const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
   const int count = data->intervalCount;
-  if (count == 0 && !data->glyphMissHandler) return nullptr;
+  if (count == 0 && !data->glyphMissHandler) {
+    return musicNoteFallback::glyph(cp);
+  }
 
   if (count > 0) {
     const EpdUnicodeInterval* intervals = data->intervals;
@@ -183,6 +187,13 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
     if (loaded) return loaded;
   }
 
+  // Builtin faces omit U+2669–U+266C (and U+FFFD), so a miss here used to
+  // collapse music-note dialogue to zero width. Synthetic flash bitmaps keep
+  // measure and paint in agreement without rebuilding every .h font.
+  if (const EpdGlyph* note = musicNoteFallback::glyph(cp)) {
+    return note;
+  }
+
   if (cp != REPLACEMENT_GLYPH) {
     return getGlyph(REPLACEMENT_GLYPH);
   }
@@ -201,8 +212,8 @@ bool EpdFont::hasCodepoint(const uint32_t cp) const {
 
   // Interval table miss. SD card fonts only keep the current page's glyphs in
   // their interval table — ask their full RAM-resident coverage index instead.
-  if (data->coverageHandler) {
-    return data->coverageHandler(data->glyphMissCtx, cp);
+  if (data->coverageHandler && data->coverageHandler(data->glyphMissCtx, cp)) {
+    return true;
   }
-  return false;
+  return musicNoteFallback::covers(cp);
 }

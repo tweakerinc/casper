@@ -4,6 +4,7 @@
 #include <string>
 
 #include "Arduino.h"
+#include "CrashReportPolicy.h"
 #include "HalClock.h"
 #include "HalStorage.h"
 #include "Logging.h"
@@ -11,6 +12,7 @@
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
+#include "esp_system.h"
 
 #define MAX_PANIC_STACK_DEPTH 32
 
@@ -101,15 +103,15 @@ void checkPanic() {
     // Remove first so create always goes through FsDateTime callback (some hosts
     // keep a stale 12/31/2025 create time across O_TRUNC rewrites).
     // Hidden diagnostics folder (same home as system/QR logs).
-    Storage.ensureDirectoryExists("/.casper-logs");  // CasperLogPaths::kDir — keep literal for lib isolation
-    Storage.remove("/.casper-logs/crash_report.txt");
-    auto file = Storage.open("/.casper-logs/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
+    Storage.ensureDirectoryExists("/.crosspoint-logs");  // CrossPointLogPaths::kDir — keep literal for lib isolation
+    Storage.remove("/.crosspoint-logs/crash_report.txt");
+    auto file = Storage.open("/.crosspoint-logs/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
       file.write(panicInfo.c_str(), panicInfo.size());
       file.close();
-      LOG_INF("SYS", "Dumped panic info to /.casper-logs/crash_report.txt");
+      LOG_INF("SYS", "Dumped panic info to /.crosspoint-logs/crash_report.txt");
     } else {
-      LOG_ERR("SYS", "Failed to open /.casper-logs/crash_report.txt for writing");
+      LOG_ERR("SYS", "Failed to open /.crosspoint-logs/crash_report.txt for writing");
     }
   }
 }
@@ -128,23 +130,33 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "Casper version: " CASPER_VERSION;
-    // Wall-clock stamp (RTC when available) so the report itself carries time even if
-    // FAT metadata is wrong. Written after boot re-inits the clock; not panic-time.
+    info += "CrossPoint version: " CROSSPOINT_VERSION;
+    // Wall-clock stamp so the report itself carries time even if FAT metadata
+    // is wrong. Never "unavailable" — rtc / last-good / firmware compile date.
     {
       uint16_t year = 0;
       uint8_t month = 0, day = 0, hour = 0, minute = 0;
-      if (halClock.isAvailable() && halClock.getDateTime(year, month, day, hour, minute)) {
-        char ts[48];
-        snprintf(ts, sizeof(ts), "\nReport written (RTC): %04u-%02u-%02u %02u:%02u", static_cast<unsigned>(year),
-                 static_cast<unsigned>(month), static_cast<unsigned>(day), static_cast<unsigned>(hour),
-                 static_cast<unsigned>(minute));
-        info += ts;
-      } else {
-        info += "\nReport written (RTC): unavailable";
-      }
+      const char* source = "firmware";
+      halClock.getDateTimeOrFallback(year, month, day, hour, minute, &source);
+      char ts[80];
+      snprintf(ts, sizeof(ts), "\nReport written: %04u-%02u-%02u %02u:%02u (%s)", static_cast<unsigned>(year),
+               static_cast<unsigned>(month), static_cast<unsigned>(day), static_cast<unsigned>(hour),
+               static_cast<unsigned>(minute), source ? source : "firmware");
+      info += ts;
     }
-    info += "\n\nPanic reason: " + std::string(panicMessage);
+    {
+      char extra[80];
+      const int rst = static_cast<int>(esp_reset_reason());
+      snprintf(extra, sizeof(extra), "\nUptime ms: %lu\nReset reason: %d (%s)", static_cast<unsigned long>(millis()),
+               rst, crashreport::resetReasonName(rst));
+      info += extra;
+    }
+    info += "\n\nPanic reason: ";
+    if (panicMessage[0]) {
+      info += panicMessage;
+    } else {
+      info += "(none recorded)";
+    }
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";
 
@@ -170,7 +182,7 @@ std::string getPanicInfo(bool full) {
 
 bool isRebootFromPanic() {
   const auto resetReason = esp_reset_reason();
-  return resetReason == ESP_RST_PANIC || resetReason == ESP_RST_CPU_LOCKUP;
+  return crashreport::dumpOnReset(static_cast<int>(resetReason));
 }
 
 }  // namespace HalSystem

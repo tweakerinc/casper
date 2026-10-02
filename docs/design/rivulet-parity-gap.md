@@ -1,6 +1,6 @@
 # Rivulet vs classic EpubReader — parity gap
 
-**Status:** Audit after premature `CASPER_RIVULET_READER=1` swap  
+**Status:** Audit after premature `CROSSPOINT_RIVULET_READER=1` swap  
 **Classic size:** ~4k lines `EpubReaderActivity` + Section/TextBlock/CSS pipeline  
 **Rivulet shell:** ~700 lines `RivuletReaderActivity` + ~60KB `lib/Rivulet` engine  
 
@@ -101,7 +101,7 @@ Rivulet should **not** reimplement KOSync/bookmarks/stats formats. It should exp
 ## Recommended ship tiers
 
 ### P0 — Product usable for daily reading (must before default-on)
-- Classic **default** again (`CASPER_RIVULET_READER` off)
+- Classic **default** again (`CROSSPOINT_RIVULET_READER` off)
 - Chrome insets verified (no text under status bar)
 - progress.bin load/save + home ring % (`persistHomeProgressPercent` / stats_v6 minimal)
 - Menu: Go home, chapter, %, text settings, orientation, delete cache, screenshot, force refresh
@@ -149,9 +149,9 @@ Ownership work is for content-stable identity and cleaner file layout **after** 
 
 ## Immediate code state (this branch)
 
-- `CASPER_RIVULET_READER` should be **0 / unset** for daily builds.
+- `CROSSPOINT_RIVULET_READER` should be **0 / unset** for daily builds.
 - Keep `RivuletReaderActivity` + `lib/Rivulet` for development.
-- Resume eval with `-DCASPER_RIVULET_READER=1` only for focused tests.
+- Resume eval with `-DCROSSPOINT_RIVULET_READER=1` only for focused tests.
 
 ## Acceptance for “Rivulet is the reader”
 

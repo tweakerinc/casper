@@ -3,11 +3,13 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Serialization.h>
 #include <uzlib.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 
@@ -149,8 +151,18 @@ ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, c
   copyBounded(clipping.chapterTitle, sizeof(clipping.chapterTitle), chapterTitle);
   clipping.textLength = static_cast<uint16_t>(std::min(text.size(), CLIPPING_TEXT_MAX));
 
+  const uint16_t storedLen = clipping.textLength;
   clippings.push_back(std::move(clipping));
-  textCache.push_back(text.substr(0, clipping.textLength));
+  if (textCache.size() != clippings.size() - 1) {
+    textCache.resize(clippings.size() - 1);
+  }
+  if (ESP.getMaxAllocHeap() >= static_cast<size_t>(storedLen) + 48) {
+    textCache.push_back(text.substr(0, storedLen));
+  } else {
+    textCache.emplace_back();
+    LOG_ERR("CLIP", "Skip text cache on add (maxA=%u need=%u)", static_cast<unsigned>(ESP.getMaxAllocHeap()),
+            static_cast<unsigned>(storedLen + 48));
+  }
   dirty = true;
   if (!writeToFile(&text, clippings.size() - 1)) {
     clippings.pop_back();
@@ -166,6 +178,10 @@ bool ClippingStore::removeClippingAt(const size_t index) {
   if (index >= clippings.size()) return false;
   Clipping clipping = std::move(clippings[index]);
   clippings.erase(clippings.begin() + index);
+  if (index < textCache.size()) {
+    textCache.erase(textCache.begin() + index);
+  }
+  textCacheWarmed = false;
   dirty = true;
   if (!saveToFile()) {
     clippings.insert(clippings.begin() + index, std::move(clipping));
@@ -218,25 +234,73 @@ bool ClippingStore::readClippingTextFromDisk(const Clipping& clipping, std::stri
   out.clear();
   if (clipping.textLength == 0) return true;
   if (storeFilePath.empty()) return false;
+  if (clipping.textLength > CLIPPING_TEXT_MAX) {
+    LOG_ERR("CLIP", "textLength %u exceeds max", clipping.textLength);
+    return false;
+  }
+  // std::string::resize aborts under -fno-exceptions. Refuse rather than crash.
+  if (ESP.getMaxAllocHeap() < static_cast<size_t>(clipping.textLength) + 48 || ESP.getFreeHeap() < 12 * 1024) {
+    LOG_ERR("CLIP", "OOM read text len=%u free=%u maxA=%u", clipping.textLength,
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return false;
+  }
+
+  auto buf = makeUniqueNoThrow<char[]>(static_cast<size_t>(clipping.textLength) + 1);
+  if (!buf) {
+    LOG_ERR("CLIP", "OOM clipping body %u bytes", clipping.textLength);
+    return false;
+  }
 
   HalFile f;
   if (!Storage.openFileForRead("CLIP", storeFilePath, f)) {
     return false;
   }
   if (!f.seek(clipping.textOffset)) {
-    f.close();
     LOG_ERR("CLIP", "Failed to seek clipping text at %u: %s", clipping.textOffset, storeFilePath.c_str());
     return false;
   }
-  out.resize(clipping.textLength);
   const int expected = static_cast<int>(clipping.textLength);
-  const bool ok = f.read(&out[0], clipping.textLength) == expected;
-  f.close();
+  const bool ok = f.read(reinterpret_cast<uint8_t*>(buf.get()), clipping.textLength) == expected;
   if (!ok) {
-    out.clear();
     LOG_ERR("CLIP", "Failed to read clipping text at %u: %s", clipping.textOffset, storeFilePath.c_str());
+    return false;
   }
-  return ok;
+  buf[clipping.textLength] = '\0';
+  if (ESP.getMaxAllocHeap() < static_cast<size_t>(clipping.textLength) + 48) {
+    LOG_ERR("CLIP", "OOM assign clipping text after read");
+    return false;
+  }
+  out.assign(buf.get(), clipping.textLength);
+  return true;
+}
+
+bool ClippingStore::readClippingTextPrefix(const size_t index, char* dst, const size_t dstSize) const {
+  if (!dst || dstSize == 0) return false;
+  dst[0] = '\0';
+  const Clipping* clipping = clippingAt(index);
+  if (!clipping) return false;
+  if (index < textCache.size() && !textCache[index].empty()) {
+    snprintf(dst, dstSize, "%s", textCache[index].c_str());
+    return true;
+  }
+  if (clipping->textLength == 0) return true;
+  if (storeFilePath.empty()) return false;
+
+  const size_t n = std::min(dstSize - 1, static_cast<size_t>(clipping->textLength));
+  HalFile f;
+  if (!Storage.openFileForRead("CLIP", storeFilePath, f)) {
+    return false;
+  }
+  if (!f.seek(clipping->textOffset)) {
+    return false;
+  }
+  const int got = f.read(reinterpret_cast<uint8_t*>(dst), n);
+  if (got < 0) {
+    dst[0] = '\0';
+    return false;
+  }
+  dst[static_cast<size_t>(got)] = '\0';
+  return true;
 }
 
 void ClippingStore::warmTextCache() const {
@@ -245,7 +309,13 @@ void ClippingStore::warmTextCache() const {
     return;
   }
   // Cap total cached bytes so a huge annotation set cannot exhaust heap.
-  constexpr size_t kMaxWarmBytes = 48 * 1024;
+  constexpr size_t kMaxWarmBytes = 12 * 1024;
+  if (ESP.getMaxAllocHeap() < 16 * 1024 || ESP.getFreeHeap() < 20 * 1024) {
+    LOG_ERR("CLIP", "Skip text warm free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    textCacheWarmed = true;
+    return;
+  }
   size_t used = 0;
   textCache.assign(clippings.size(), {});
   for (size_t i = 0; i < clippings.size(); ++i) {

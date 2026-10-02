@@ -11,7 +11,9 @@ HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_R
 HalDisplay::~HalDisplay() {}
 
 void HalDisplay::begin(bool seamless) {
-  // Set X3-specific panel mode before initializing.
+  // Set X3-specific panel mode before initializing. setDisplayX3() keeps the
+  // UC8279d sibling profile (XteinkX3Uc8279) selected in gpio.begin(); without
+  // that, this call would drop a new-batch X3 back onto the UC8253 driver.
   if (gpio.deviceIsX3()) {
     einkDisplay.setDisplayX3();
   }
@@ -60,11 +62,11 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
 }
 
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
-  // Casper / stock: X3 HALF must requestResync so the driver takes the full
+  // CrossPoint / stock: X3 HALF must requestResync so the driver takes the full
   // quality image-write path (white DTM1 baseline + _full bank), not the weak
   // half-LUT soft pull. Without this, Force Refresh and UI maintenance look
   // like a gentle grey wash and leave salt-and-pepper / SUNDAY-ghost residual
-  // on white plates (see user photos vs legacy/Casper clean whites).
+  // on white plates (see user photos vs legacy/CrossPoint clean whites).
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }

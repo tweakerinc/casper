@@ -38,18 +38,28 @@ struct BookReadingStats {
   static std::string cachePathForBook(const std::string& bookPath);
 
   // Load stats for a book from the primary cache path.
-  // Prefer CasperStats::loadBook for new product code.
+  // Prefer CrossPointStats::loadBook for new product code.
   static BookReadingStats loadForBook(const std::string& bookPath);
 
   // Saves stats to cachePath/stats_vN.bin (current format).
   void save(const std::string& cachePath) const;
 
-  // Deletes all stats*.bin under cachePath (all known versions + directory scan).
-  // Missing files are treated as success.
+  // Deletes all live stats*.bin under cachePath (all known versions + directory scan).
+  // Also wipes cachePath/.trash/. Missing files are treated as success.
   static bool remove(const std::string& cachePath);
 
-  // Deletes stats under every known cache path for this book (Casper + legacy).
+  // Deletes stats under every known cache path for this book (CrossPoint + legacy).
   static bool removeForBook(const std::string& bookPath);
+
+  // Rename live stats*.bin into cachePath/.trash/ so Delete Book Stats is undoable.
+  // Does not unlink the payload. Returns true if at least one file moved.
+  static bool stashToTrash(const std::string& cachePath);
+
+  // Rename cachePath/.trash/stats*.bin back to cachePath/. Returns true if a file moved.
+  static bool restoreFromTrash(const std::string& cachePath);
+
+  // True when cachePath/.trash/ holds a stats*.bin.
+  static bool hasTrash(const std::string& cachePath);
 
   // Updates the running reading pace with one forward page dwell sample.
   void recordForwardPageRead(uint32_t seconds);
@@ -60,4 +70,7 @@ struct BookReadingStats {
   // Formats a duration in seconds into a human-readable string.
   // Output examples: "< 1 min", "45 min", "2h 30 min"
   static void formatDuration(uint32_t seconds, char* buf, size_t len);
+
+  // True when every persisted field matches — used to skip no-op SD writes.
+  bool samePayloadAs(const BookReadingStats& o) const;
 };

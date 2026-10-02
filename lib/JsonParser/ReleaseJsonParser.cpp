@@ -11,7 +11,24 @@ void safeCopy(char* dst, size_t dstSize, const char* src, size_t srcLen) {
   dst[n] = '\0';
 }
 
-// Casper release assets are named Casper-v0.1.0 or Casper-v0.1.0.bin.
+bool hasPrefixI(const char* name, const char* prefix, size_t prefixLen) {
+  for (size_t i = 0; i < prefixLen; ++i) {
+    const char a = name[i];
+    if (a == '\0') {
+      return false;
+    }
+    const char b = prefix[i];
+    const char al = static_cast<char>(a >= 'A' && a <= 'Z' ? a - 'A' + 'a' : a);
+    const char bl = static_cast<char>(b >= 'A' && b <= 'Z' ? b - 'A' + 'a' : b);
+    if (al != bl) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// CrossPoint release assets are named CrossPoint-v0.1.0 or CrossPoint-v0.1.0.bin.
+// Casper-v* names from already-published GitHub releases still match.
 // Also accept plain firmware.bin (SD / upstream tooling).
 bool isFirmwareAssetName(const char* name) {
   if (name == nullptr || name[0] == '\0') {
@@ -21,30 +38,25 @@ bool isFirmwareAssetName(const char* name) {
     return true;
   }
 
-  // Case-insensitive "Casper-" prefix (7 chars).
-  static constexpr char kPrefix[] = "Casper-";
-  static constexpr size_t kPrefixLen = 7;
-  for (size_t i = 0; i < kPrefixLen; ++i) {
-    const char a = name[i];
-    const char b = kPrefix[i];
-    if (a == '\0') {
-      return false;
-    }
-    const char al = static_cast<char>(a >= 'A' && a <= 'Z' ? a - 'A' + 'a' : a);
-    const char bl = static_cast<char>(b >= 'A' && b <= 'Z' ? b - 'A' + 'a' : b);
-    if (al != bl) {
-      return false;
-    }
+  // Case-insensitive product prefix. CrossPoint- is current; Casper- is still
+  // accepted so existing GitHub release assets keep matching OTA.
+  static constexpr char kCrossPointPrefix[] = "CrossPoint-";
+  static constexpr char kCasperPrefix[] = "Casper-";
+  const char* rest = nullptr;
+  if (hasPrefixI(name, kCrossPointPrefix, sizeof(kCrossPointPrefix) - 1)) {
+    rest = name + (sizeof(kCrossPointPrefix) - 1);
+  } else if (hasPrefixI(name, kCasperPrefix, sizeof(kCasperPrefix) - 1)) {
+    rest = name + (sizeof(kCasperPrefix) - 1);
+  } else {
+    return false;
   }
-
-  const char* rest = name + kPrefixLen;
   // Require a version-looking rest: v0.1.0… or 0.1.0…
   if (!(rest[0] == 'v' || rest[0] == 'V' || (rest[0] >= '0' && rest[0] <= '9'))) {
     return false;
   }
 
   // Allow no extension or .bin only (reject .zip / .md / source tarballs).
-  // Note: names like Casper-v0.1.0 contain dots that are part of the version,
+  // Note: names like CrossPoint-v0.1.0 contain dots that are part of the version,
   // not a file extension — only treat a trailing .ext as an extension when the
   // suffix is not purely numeric.
   const char* dot = strrchr(name, '.');

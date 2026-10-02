@@ -1,7 +1,7 @@
 # Rivulet Engine — Content Architecture Charter
 
 **Status:** Implementation started (`lib/Rivulet/`)  
-**Product:** Casper e-reader (ESP32-C3)  
+**Product:** CrossPoint e-reader (ESP32-C3)  
 **Priorities:** Speed → RAM → Stability → Performance  
 **Script focus:** Latin first; RTL / auto page-turn / full BiDi out of v1 scope  
 
@@ -57,7 +57,7 @@ EPUB XHTML bytes
 ## Integration
 
 `lib/Rivulet` is standalone from `lib/Epub` Section/TextBlock.  
-Casper reader activities will switch over behind a flag after the engine proves open/page/drop-cap on device.
+CrossPoint reader activities will switch over behind a flag after the engine proves open/page/drop-cap on device.
 
 ## Version
 

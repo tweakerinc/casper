@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <string>
 
-#include "CasperPaths.h"
+#include "CrossPointPaths.h"
 
-std::string BookmarkUtil::getBookmarksDir() { return CasperPaths::kBookmarksDir; }
+std::string BookmarkUtil::getBookmarksDir() { return CrossPointPaths::kBookmarksDir; }
 
 std::string BookmarkUtil::getBookmarkPath(const std::string& bookPath) {
   // remove leading slash and replace internal slashes to create a flat filename

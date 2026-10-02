@@ -108,6 +108,8 @@ const char* displayControllerName(BoardConfig::DisplayController c) {
       return "UC8279";
     case BoardConfig::DisplayController::UC8179:
       return "UC8179";
+    case BoardConfig::DisplayController::UC8279C:
+      return "UC8279C";
     case BoardConfig::DisplayController::ED2208:
       return "ED2208";
     case BoardConfig::DisplayController::LgfxEpd:
@@ -120,31 +122,41 @@ const char* displayControllerName(BoardConfig::DisplayController c) {
 }
 
 // Pick board profile + UltraChip sibling when the bus probe confirms it.
-// freeink-sdk (CP 1.5+): live bus probe is ground truth — never trust NVS
-// hw_calib/screenType alone (full-flash of another unit can write the wrong
-// panel type and soft-brick / drain battery with the wrong driver).
-// Field: new X3 UC8279d often returns VER=FF FF FF FF FF FLG=13; older Casper
-// freeink treated that as classic UC8253. Current freeink confirms via RMTP 0xA5.
+// freeink-sdk (CrossPoint 1.6.0 + stock X3 V6.3.15 probe): live bus probe is
+// ground truth — never trust NVS hw_calib/screenType alone (a full-flash of
+// another unit can write the wrong panel type and soft-brick / drain battery
+// with the wrong driver).
+//
+// New-batch X3 UC8279d: stock OEM identification (RESET 10/50/50 ms, three-byte
+// VER 0x70, SDA sampled on SCLK high). Third byte 0x66 = UC8279, 0xFF =
+// classic UC8253. FLG/MTP are not required. Older Casper probed 5-byte VER/FLG
+// and treated all-0xFF as UC8253, so the new panel stayed blank.
+//
+// Probe once via applyXteinkDisplayController(). A separate detect() call would
+// pulse RESET again and can leave the panel in a state the driver then misses.
 void selectBoardAndPanelController(bool isX3) {
   BoardConfig::selectDevice(isX3 ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
 
-  uint8_t ver[5] = {};
-  uint8_t flg = 0;
-  const freeink::DisplayControllerVerdict v = freeink::detectXteinkDisplayController(ver, &flg);
-  LOG_INF("HW", "%s panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", isX3 ? "X3" : "X4", ver[0], ver[1],
-          ver[2], ver[3], ver[4], flg, static_cast<unsigned>(v));
-
-  // applyXteinkDisplayController re-probes and promotes ACTIVE.displayController
+  // applyXteinkDisplayController probes and promotes ACTIVE.displayController
   // (UC8253→UC8279, SSD1677→UC8179 or UC8279 800x480 by LUT_VER).
   const bool promoted = freeink::applyXteinkDisplayController();
+  const auto& diag = freeink::getXteinkDisplayProbeDiag();
+  if (diag.valid && diag.verBytesRead == 3) {
+    LOG_INF("HW", "X3 stock probe VER=%02X %02X %02X BUSY-timeout=%u verdict=%u", diag.ver[0], diag.ver[1], diag.ver[2],
+            diag.busyTimedOut ? 1u : 0u, static_cast<unsigned>(diag.verdict));
+  } else {
+    LOG_INF("HW", "%s panel probe VER=%02X %02X %02X %02X %02X FLG=%02X verdict=%u", isX3 ? "X3" : "X4", diag.ver[0],
+            diag.ver[1], diag.ver[2], diag.ver[3], diag.ver[4], diag.flg, static_cast<unsigned>(diag.verdict));
+  }
 
-  // X3 facade keys the UC8279d driver off the sibling board profile.
+  // X3 facade keys the UC8279d driver off the sibling board profile. setDisplayX3()
+  // keeps XteinkX3Uc8279; any other X3 profile is reset back to classic UC8253.
   if (isX3 && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279) {
     BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
     LOG_INF("HW", "promoted UC8253 -> UC8279 (new-batch X3 panel)");
   } else if (!isX3 && promoted) {
     LOG_INF("HW", "promoted SSD1677 -> %s (new-batch X4 panel, LUT_VER=%02X)",
-            displayControllerName(BoardConfig::ACTIVE.displayController), ver[2]);
+            displayControllerName(BoardConfig::ACTIVE.displayController), diag.ver[2]);
   } else if (!promoted) {
     LOG_INF("HW", "panel controller %s (classic / probe not UltraChip)",
             displayControllerName(BoardConfig::ACTIVE.displayController));
@@ -186,6 +198,10 @@ void HalGPIO::update() {
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
+
+bool HalGPIO::peekRawHeld() { return inputMgr.getState() != 0; }
+
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
 
@@ -305,8 +321,12 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   // X4 on battery: GPIO13 power latch cuts MCU power in sleep, so wake is a
   // cold ESP_RST_POWERON (not DEEPSLEEP). Without USB that is still a power-
   // button wake and must QuickResume like v0.1.3 — not Splash/"reboot".
-  // Flash/USB paths below keep sticky lastSleepFromReader from auto-opening a book.
-  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) {
+  //
+  // X3 sleep is always DEEPSLEEP+GPIO. CHIP_PU/EN on the C3 reports POWERON
+  // (ESP_RST_EXT is not the EN pin here). Treating X3 POWERON as PowerButton
+  // QuickResumed into the frozen book: moon→dots on the stuck page, no logo,
+  // no Home.
+  if (!deviceIsX3() && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) {
     return WakeupReason::PowerButton;
   }
 #ifdef ESP_RST_USB
@@ -319,9 +339,11 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
       (resetReason == ESP_RST_UNKNOWN || resetReason == ESP_RST_SW)) {
     return WakeupReason::AfterFlash;
   }
-  if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
+  // X4: USB VBUS while the latch is off. X3 POWERON+USB is EN reset while
+  // charging — must cold-boot Home, not sleep immediately (stuck glass).
+  if (!deviceIsX3() && wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && usbConnected) {
     return WakeupReason::AfterUSBPower;
   }
-  // Brownout recovery, unknown, etc. → cold boot (not sleep wake).
+  // X3 EN/CHIP_PU (POWERON or EXT), watchdog, brownout → cold Home.
   return WakeupReason::Other;
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Host migration: SD backup → Casper v0.1.9 layout under /.crosspoint
+Host migration: SD backup → CrossPoint v0.1.9 layout under /.crosspoint
 
 Contract matches lib/FsHelpers/BookPathId.{h,cpp}:
   normalizePath + FNV-1a 64 → book_<hex16>/
@@ -539,7 +539,7 @@ def pick_epub_source(sd_root: Path, epub_name: str) -> Optional[Path]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Migrate SD backup to Casper v0.1.9 /.crosspoint layout")
+    ap = argparse.ArgumentParser(description="Migrate SD backup to CrossPoint v0.1.9 /.crosspoint layout")
     ap.add_argument("sd_root", type=Path, help="Path to SD backup root (contains books + .casper/.crosspoint)")
     ap.add_argument("--keep-casper", action="store_true", help="Do not delete .casper after migration")
     ap.add_argument("--keep-legacy-epub", action="store_true", help="Do not remove epub_* dirs after rekey")

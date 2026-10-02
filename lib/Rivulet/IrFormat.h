@@ -6,14 +6,36 @@
 namespace rivulet {
 
 inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
-// v19: force reconvert of v18 chapter IR that predates reliable Image blocks
-// (Fourth Wing .orn ornaments, Alice floats). Same on-disk layout as v18.
-// v18: HTML lists/nav (ol/ul/li) each li = paragraph — Contents pages no longer
-// collapse into one run-on paragraph (Isako TOC). Also v17 document-alt text.
-inline constexpr uint16_t kIrFormatVersion = 19;
-// Accept this version on load (inclusive range).
+// v22: keep a leading space after style runs (</i> / </b> / </span>) so
+// "Vampire"+" skill" is not glued when HTML whitespace was the only separator.
+// v21 IR may already have glued runs; reconvert to pick this up.
+// Layout used to synthesize a gap between adjacent word-char runs as a backstop
+// for stripped spaces. That gap became justify glue, so ordinal suffixes
+// ("6" + superscript "th") stretched to the right margin. Adjacent word-char
+// runs are now left glued; v23 IR already stores the real leading space when
+// HTML had one.
+// v21: table/tr/td/th are parsed — each cell becomes its own block. v20 IR was
+// produced by a parser that did not know these tags, so its cell text is already
+// merged into run-on paragraphs and cannot be recovered without reconverting.
+// v20: RunStyle carries text decorations (underline / strikethrough / sup / sub).
+// v23: real typography preserved. v22 and earlier flattened curly quotes to ' ",
+// en/em dashes to -, and the ellipsis to "..." while building the IR, so cached
+// chapters hold the flattened text and must be reconverted to get it back.
+// v24: HTML align="center|left|right" on p/h*/td/img (classic ChapterHtmlSlimParser
+// parity). v23 IR left-aligned chapter titles that only used the align= attribute.
+// v25: first-letter spans that wrap only "[" of DCC "Chapter [1]" no longer
+// emit a lone Bold/Plus2 run. v24 IR still has that split and must reconvert.
+// v26: chapter-title images with readable alt become heading text (no hollow
+// box); first body para after a real chapter heading / span.dropcap is armed
+// for a drop-cap. DCC "[ 70 ]" headings still do not arm.
+//
+// Write v26 on save. LOAD v19–v26: the on-disk layout (blocks / runs / text blob)
+// has been stable since v19. Parser-only bumps used to set Min==Max, which marked
+// CrossPoint/CrossInk caches "corrupt", deleted them, and forced HTML convert
+// under ~11 KB maxAlloc → PTX OOM → abort() → "Chapter not readable".
+inline constexpr uint16_t kIrFormatVersion = 26;
 inline constexpr uint16_t kIrFormatVersionMin = 19;
-inline constexpr uint16_t kIrFormatVersionMax = 19;
+inline constexpr uint16_t kIrFormatVersionMax = 26;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {
@@ -43,13 +65,41 @@ struct RenderKey {
   bool operator!=(const RenderKey& o) const { return !(*this == o); }
 };
 
-// Per-run face bits (Latin v1 — no BiDi/RTL).
+// Per-run face + decoration bits.
+//
+// These values deliberately mirror EpdFontFamily::Style one-for-one, so
+// FontLadder::epdStyleBits() is a straight cast and the two can never drift
+// (a static_assert in FontLadder.cpp enforces it). Treat this as a BITMASK:
+// decorations compose freely with bold/italic, e.g. Bold|Underline.
+//
+// Before v20 only the low two bits existed and the parser threw away every
+// <sup>/<sub>/<u>/<s>/<del>/<ins>, so footnote markers rendered full-size on the
+// baseline and struck-out text lost its meaning.
 enum class RunStyle : uint8_t {
   Regular = 0,
   Bold = 1,
   Italic = 2,
   BoldItalic = 3,
+  Underline = 4,
+  Strikethrough = 8,
+  Superscript = 16,
+  Subscript = 32,
 };
+
+inline constexpr uint8_t kRunStyleFaceMask = 0x03;        // bold | italic
+inline constexpr uint8_t kRunStyleDecorationMask = 0x0C;  // underline | strikethrough
+inline constexpr uint8_t kRunStyleScriptMask = 0x30;      // sup | sub
+
+inline constexpr RunStyle operator|(RunStyle a, RunStyle b) {
+  return static_cast<RunStyle>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
+}
+inline constexpr RunStyle& operator|=(RunStyle& a, RunStyle b) {
+  a = a | b;
+  return a;
+}
+inline constexpr bool hasStyleBit(RunStyle s, RunStyle bit) {
+  return (static_cast<uint8_t>(s) & static_cast<uint8_t>(bit)) != 0;
+}
 
 // Relative size vs user base face. 0 = two steps smaller … 4 = two steps larger.
 // 2 = body (SIZE_STEP_BASE).
@@ -82,15 +132,19 @@ enum class BlockKind : uint8_t {
 };
 
 // Block flags.
-inline constexpr uint16_t kBlockDropCap = 1u << 0;       // first letter floats as drop cap
-inline constexpr uint16_t kBlockNoIndent = 1u << 1;      // suppress auto first-line indent
+inline constexpr uint16_t kBlockDropCap = 1u << 0;         // first letter floats as drop cap
+inline constexpr uint16_t kBlockNoIndent = 1u << 1;        // suppress auto first-line indent
 inline constexpr uint16_t kBlockForcePageBreak = 1u << 2;  // start on new page if possible
-inline constexpr uint16_t kBlockFloatLeft = 1u << 3;     // image: left float + wrap (figleft / letter)
-inline constexpr uint16_t kBlockFloatRight = 1u << 4;    // image: right float + wrap
-inline constexpr uint16_t kBlockOrnament = 1u << 5;      // small chapter ornament (e.g. .orn img ~12% width)
+inline constexpr uint16_t kBlockFloatLeft = 1u << 3;       // image: left float + wrap (figleft / letter)
+inline constexpr uint16_t kBlockFloatRight = 1u << 4;      // image: right float + wrap
+inline constexpr uint16_t kBlockOrnament = 1u << 5;        // small chapter ornament (e.g. .orn img ~12% width)
 
 // Page map magic
 inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};
-inline constexpr uint16_t kMapFormatVersion = 1;
+// v2: drop-cap after a chapter heading stays on the same page (not a title plate).
+// Load still accepts v1 so a format bump does not force a full map rebuild (and
+// a heap-starved convert) before the chapter can be shown.
+inline constexpr uint16_t kMapFormatVersion = 2;
+inline constexpr uint16_t kMapFormatVersionMin = 1;
 
 }  // namespace rivulet

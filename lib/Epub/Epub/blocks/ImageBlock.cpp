@@ -426,6 +426,9 @@ void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
+  // Large failed plates (chapter-title JPEGs) used to paint a hollow white box
+  // where CrossInk shows the heading. Skip the frame; convert already prefers alt.
+  if (width >= 80 && height >= 80) return;
   renderer.fillRect(x, y, width, height, true);
   if (width > 2 && height > 2) {
     renderer.fillRect(x + 1, y + 1, width - 2, height - 2, false);

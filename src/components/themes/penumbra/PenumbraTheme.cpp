@@ -14,14 +14,18 @@
 #include <cstring>
 #include <string>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/reader/ReadingStatsUtils.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/DarkModePolicy.h"
+#include "util/PenumbraNowReadingPolicy.h"
 #include "util/StringUtils.h"
+#include "util/SystemChromeLive.h"
+#include "util/UiGhostPolicy.h"
 
 namespace {
 // Real 72 pt 2-bit Source Serif Bold (digits + colon only) — smooth AA, no pixel scale.
@@ -29,14 +33,15 @@ constexpr int kClockFontId = SOURCESERIF4_72_CLOCK_FONT_ID;
 constexpr int kDayFontId = SOURCESERIF4_12_FONT_ID;
 // All Penumbra home text is Source Serif 4.
 // X3 under-panel title stack: caption 14 / title 18 / author 14.
-// X4 upper "Now Reading": caption 14 / title 18 / author 12 (list fonts only on Recents).
+// X4 Now Reading: caption 12 / title 16 / author 14. Author used to be 12pt
+// with a 5px pair gap (v0.1.8 hairline dodge); that looked smaller and glued
+// the name to the title. Hairline air is equal-gap G, not the pair gap.
 constexpr int kLabelFontId = SOURCESERIF4_14_FONT_ID;
-constexpr int kLabelFontIdX4 = SOURCESERIF4_14_FONT_ID;
+constexpr int kLabelFontIdX4 = SOURCESERIF4_12_FONT_ID;
 constexpr int kTitleFontId = SOURCESERIF4_18_FONT_ID;
 constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
-// X4 Now Reading title: match X3 book title weight (Source Serif 18 UI face).
-constexpr int kTitleFontIdX4 = SOURCESERIF4_18_FONT_ID;
-constexpr int kAuthorFontIdX4 = SOURCESERIF4_12_FONT_ID;
+constexpr int kTitleFontIdX4 = SOURCESERIF4_16_FONT_ID;
+constexpr int kAuthorFontIdX4 = SOURCESERIF4_14_FONT_ID;
 // Recents list only: 10 pt title (bold when focused), 8 pt author.
 // (Must stay on SOURCESERIF4_10 / _8 — not UI_10 which aliases 12 pt.)
 constexpr int kRecentsTitleFontId = SOURCESERIF4_10_FONT_ID;
@@ -54,10 +59,8 @@ constexpr int kStatsBookTitleFontId = SOURCESERIF4_14_FONT_ID;
 // Title/author wrap inset — same band as Recents list so widths stay uniform.
 constexpr int kSideInset = 24;
 constexpr int kStatsSideInset = 8;
-// Title→author gap after the *last* title line (same for 1- or 2-line titles).
-constexpr int kPairGap = 10;
-constexpr int kPairGapX4 = 5;
-// Clock ink bottom → weekday — more air than title/author (was crowded).
+// Clock ink bottom → weekday. Title→author uses penumbra::kTitleToAuthorGap
+// (same 18px on X3 and X4) so the pair is not glued together on X4.
 constexpr int kClockToDayGap = 18;
 // NOW READING → book title.
 constexpr int kLabelToTitleGap = 14;
@@ -73,6 +76,10 @@ constexpr int kStatRowGap = 12;
 constexpr int kStatRowGapX4 = 10;
 // Title ↔ grid and grid ↔ "STATS" / "LIFETIME" caption share the same air.
 constexpr int kStatsStackGap = 16;
+// X3 under-panel: keep the stats chrome clear of page dots, and top-pin tightly so
+// Book Stats + Lifetime share the same title/grid/footer Y when side-swiping.
+constexpr int kStatsTopInsetX3 = 2;
+constexpr int kStatsFooterDotsClearance = 14;  // caption bottom → dots strip
 // X4: grid slightly higher, caption slightly lower (more air under the grid).
 constexpr int kStatsStackGapX4Top = 8;
 constexpr int kStatsStackGapX4Footer = 22;
@@ -81,9 +88,8 @@ constexpr int kX4TitleTopPad = 12;
 // Extra air below mid-hairline before the RECENTS caption (non-pinned layouts).
 constexpr int kRecentsTopInset = 28;
 constexpr int kRecentsTopInsetX4 = 12;
-// Air between "RECENTS" caption and the first book row.
+// Air between "RECENTS" caption and the first book row (X3). X4 uses equal-gap G.
 constexpr int kRecentsCaptionToListGap = 22;
-constexpr int kRecentsCaptionToListGapX4 = 12;
 // Gap between last book row and "View All" (X3 only; X4 has no View All).
 // listFocusIndex == bookCount means View All is focused.
 constexpr int kRecentsViewAllGap = 12;
@@ -214,6 +220,14 @@ int measureWrappedHeight(const GfxRenderer& renderer, const int fontId, const in
   return static_cast<int>(lines.size()) * renderer.getLineHeight(fontId);
 }
 
+int measureWrappedInkHeight(const GfxRenderer& renderer, const int fontId, const int maxWidth, const char* text,
+                            const int maxLines, const EpdFontFamily::Style style) {
+  if (!text || !*text) return 0;
+  const auto lines = renderer.wrappedText(fontId, text, maxWidth, maxLines, style);
+  return penumbra::wrappedInkHeight(static_cast<int>(lines.size()), renderer.getLineHeight(fontId),
+                                    renderer.getFontAscenderSize(fontId));
+}
+
 // Always re-read the RTC (HalClock::formatTime can serve a 10s cache).
 bool formatHeroTime(char* buf, size_t bufSize) {
   if (!buf || bufSize < 6) return false;
@@ -319,6 +333,7 @@ struct ContentBand {
   // X4: pin upper/lower blocks so the hairline is centered between author and RECENTS.
   int upperTop = 0;
   int lowerTop = 0;
+  int pinGap = 0;  // X4 equal-gap G (Recents caption → first book uses this too).
   bool pinBlocks = false;
 };
 
@@ -327,10 +342,9 @@ ContentBand layoutContentBand(const GfxRenderer& renderer) {
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
   const auto& metrics = PenumbraMetrics::values;
-  const int footerH = metrics.buttonHintsHeight;
+  const int footerH = BaseTheme::frontButtonFooterLayoutH(renderer);
   b.centerX = pageW / 2;
-  const bool hasChrome = SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY) ||
-                         SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK);
+  const bool hasChrome = homeNeedsSystemChrome();
   b.contentTop =
       hasChrome
           ? (BaseTheme::kTopChromeBatteryY + std::max(metrics.batteryHeight + 8, metrics.statusBarVerticalMargin) + 8)
@@ -378,7 +392,7 @@ void drawStatCell(const GfxRenderer& renderer, const int x, const int w, const i
 }
 
 // Section label (NOW READING / RECENTS / STATS / LIFETIME).
-// Always REGULAR Source Serif — never bold. fontId defaults to 12pt; X4 hero uses 14pt.
+// Always REGULAR Source Serif — never bold. Default is the X3 14pt caption.
 void drawSectionLabel(const GfxRenderer& renderer, const int centerX, const int y, const char* label,
                       const int fontId = kLabelFontId) {
   if (!label || !*label) return;
@@ -457,8 +471,8 @@ void drawTitleAuthorInZone(const GfxRenderer& renderer, const ContentBand& band,
       author ? measureWrappedHeight(renderer, authorFont, textMaxW, author, kAuthorMaxLines, EpdFontFamily::REGULAR)
              : 0;
   // Plain gap after the wrapped title block (not ink-pull) so 2-line titles don't
-  // crowd the author.
-  const int authorGap = x4 ? kPairGapX4 : kClockToDayGap;
+  // crowd the author. Same air on X3 and X4 (X4 used to use 5px).
+  const int authorGap = penumbra::titleToAuthorGap();
   const int textBlockH = labelH + labelGap + titleH + (author ? (authorGap + authorH) : 0);
 
   int y = (x4 && band.pinBlocks) ? zoneTopAdj : (zoneTopAdj + std::max(4, (zoneH - textBlockH) / 2));
@@ -500,9 +514,9 @@ int measureNowReadingBlockH(const GfxRenderer& renderer, const ContentBand& band
       measureWrappedHeight(renderer, titleFont, band.textMaxW, title, kTitleMaxLinesX4, EpdFontFamily::BOLD);
   const int authorH = authorDisplay.empty()
                           ? 0
-                          : measureWrappedHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
-                                                 kAuthorMaxLines, EpdFontFamily::REGULAR);
-  return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (kPairGapX4 + authorH) : 0);
+                          : measureWrappedInkHeight(renderer, authorFont, band.textMaxW, authorDisplay.c_str(),
+                                                    kAuthorMaxLines, EpdFontFamily::REGULAR);
+  return labelH + kLabelToTitleGapX4 + titleH + (authorH > 0 ? (penumbra::titleToAuthorGap() + authorH) : 0);
 }
 
 // Row: title (full width) · author+% on one line · gap · bar.
@@ -523,11 +537,12 @@ int measureRecentsBlockH(const GfxRenderer& renderer, const ContentBand& band, c
                          const bool includeViewAll = false) {
   (void)band;
   const bool x4 = isX4Penumbra();
-  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int captionH = x4 ? renderer.getFontAscenderSize(kLabelFontIdX4) : renderer.getLineHeight(kLabelFontId);
   const int titleLineH = renderer.getLineHeight(kRecentsTitleFontId);
   const int rowH = recentsRowHeight(renderer);
   const int rowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
-  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  // X4 caption→list air is equal-gap G (applyX4HairlineLayout), not this constant.
+  const int capToList = x4 ? 0 : kRecentsCaptionToListGap;
   const int viewAllGap = kRecentsViewAllGap;
   const int maxN = penumbraRecentsListCap();
   // Empty books: still reserve full list height so clock-minute re-layout does not jump midY.
@@ -567,21 +582,20 @@ int measureX3TitleAuthorBlockH(const GfxRenderer& renderer, const ContentBand& b
                           ? 0
                           : measureWrappedHeight(renderer, kAuthorFontId, band.textMaxW, authorDisplay.c_str(),
                                                  kAuthorMaxLines, EpdFontFamily::REGULAR);
-  // drawTitleAuthorInZone uses kClockToDayGap for the non-X4 author gap.
-  return labelH + kLabelToTitleGap + titleH + (authorH > 0 ? (kClockToDayGap + authorH) : 0);
+  return labelH + kLabelToTitleGap + titleH + (authorH > 0 ? (penumbra::titleToAuthorGap() + authorH) : 0);
 }
 
 int measureX3StatsStyleBlockH(const GfxRenderer& renderer) {
   const int captionH = renderer.getLineHeight(kLabelFontId);
   const int pairH = statPairHeight(renderer);
   // Book stats on X3 is 3 rows when RTC tracking is on (Started + Est. Finish),
-  // matching BookStatsView / Dashboard. Lifetime stays 2 rows but shares this max.
+  // matching BookStatsView / Dashboard. Lifetime stays 2 rows but shares this max
+  // so equal-gap layout (and footer Y) stay mode-independent.
   const int gridH = pairH * 3 + kStatRowGap * 2;
-  // X3 stats: book title + grid + footer caption. Reserve generous title/footer air so
-  // equal-gap layout (G ≈ hairline→title) still fits when stats is the tallest page.
   const int titleH = renderer.getLineHeight(kStatsBookTitleFontId);
-  constexpr int kReserveAir = 28;
-  return titleH + kReserveAir + gridH + kReserveAir + kReserveAir / 2 + captionH;
+  // Compact stack: title → gap → grid → gap → caption → dots clearance.
+  // Must match layoutX3StatsChrome() so G / lowerTop stay stable across pages.
+  return kStatsTopInsetX3 + titleH + kStatsStackGap + gridH + kStatsStackGap + captionH + kStatsFooterDotsClearance;
 }
 
 // Stable lower-block height for X3 equal-gap layout. MUST be mode-independent:
@@ -617,26 +631,28 @@ void applyX3EqualSpacingLayout(const GfxRenderer& renderer, ContentBand& band, c
   band.pinBlocks = true;
 }
 
-// X4 equal vertical rhythm (four matching air gaps G):
+// X4 equal vertical rhythm (five matching air gaps G):
 //   status bar → NOW READING
 //   author     → hairline
 //   hairline   → RECENTS
+//   RECENTS    → first book
 //   last book  → menu
 // List is up to 5 books; no View All (sides scroll; mid button opens full Recents).
 void applyX4HairlineLayout(const GfxRenderer& renderer, ContentBand& band, const std::vector<RecentBook>& books) {
   PenumbraThemeUi::clampUnderModeToTracking();  // X4 → Recents only
 
   const int Uh = measureNowReadingBlockH(renderer, band, books);
-  const int Lh = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
+  const int recentsH = measureRecentsBlockH(renderer, band, books, /*includeViewAll=*/false);
+  const int captionH = renderer.getFontAscenderSize(kLabelFontIdX4);
+  const int listH = std::max(0, recentsH - captionH);
   const int contentH = std::max(1, band.contentBottom - band.contentTop);
-  int free = contentH - Uh - Lh - kRuleThickness;
-  if (free < 0) free = 0;
-  const int G = free / 4;
+  const auto g = penumbra::x4HomeGaps(band.contentTop, contentH, Uh, captionH, listH, kRuleThickness);
 
-  band.upperTop = band.contentTop + G;
-  band.midY = band.upperTop + Uh + G;
+  band.upperTop = g.upperTop;
+  band.midY = g.midY;
   band.halfH = std::max(1, band.midY - band.contentTop);
-  band.lowerTop = band.midY + kRuleThickness + G;
+  band.lowerTop = g.recentsTop;
+  band.pinGap = g.G;
   band.pinBlocks = true;
 }
 
@@ -782,7 +798,7 @@ void ensureRecentsProgressCache(const std::vector<RecentBook>& books, const int 
       }
     }
     if (pct < -900.0f) {
-      // Prefer progress embedded in recent.json (CasperStats); one book-dir load only if unknown.
+      // Prefer progress embedded in recent.json (CrossPointStats); one book-dir load only if unknown.
       pct = books[static_cast<size_t>(i)].progressPercentMilli == 0xFFFF
                 ? BookReadingStats::loadForBook(path).getProgressPercent()
                 : static_cast<float>(books[static_cast<size_t>(i)].progressPercentMilli) / 100.0f;
@@ -820,7 +836,8 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
   const int listLeft = centerX - band.textMaxW / 2;
   const int listW = band.textMaxW;
 
-  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int captionFont = x4 ? kLabelFontIdX4 : kLabelFontId;
+  const int captionH = renderer.getLineHeight(captionFont);
   const int titleFont = kRecentsTitleFontId;
   const int authorFont = kRecentsAuthorFontId;
   const int titleLineH = renderer.getLineHeight(titleFont);
@@ -828,7 +845,7 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
   constexpr int kMicroBarH = 5;
   constexpr int kAuthorToBarGap = 4;
   const int kRowGap = x4 ? kRecentsRowGapX4 : kRecentsRowGap;
-  const int capToList = x4 ? kRecentsCaptionToListGapX4 : kRecentsCaptionToListGap;
+  const int capToList = (x4 && band.pinBlocks && band.pinGap > 0) ? band.pinGap : kRecentsCaptionToListGap;
   const int viewAllGap = kRecentsViewAllGap;
   const int rowH = titleLineH + authorInkH + kAuthorToBarGap + kMicroBarH;
 
@@ -861,8 +878,9 @@ void drawRecentsListPanel(const GfxRenderer& renderer, const ContentBand& band, 
     }
   }
 
-  drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS));
-  y += captionH + capToList;
+  drawSectionLabel(renderer, centerX, y, tr(STR_RECENTS), captionFont);
+  const int captionAdvance = (x4 && band.pinBlocks) ? renderer.getFontAscenderSize(captionFont) : captionH;
+  y += captionAdvance + capToList;
 
   if (n == 0) {
     const char* empty = tr(STR_NO_OPEN_BOOK);
@@ -941,9 +959,52 @@ const char* lastReadBookTitle(const std::vector<RecentBook>& books) {
   return book.title.empty() ? book.path.c_str() : book.title.c_str();
 }
 
+// Shared X3 Book-Stats / Lifetime chrome. Both pages must use the same titleY /
+// gridY / footerY so side-swiping does not jump. Footer is locked to the tall
+// (3-row) stack so Lifetime's shorter grid still lands the caption in sync, and
+// clearance keeps "STATS" / "LIFETIME" above the page-dot strip.
+struct X3StatsChrome {
+  int titleY = 0;
+  int gridY = 0;
+  int footerY = 0;
+  int gridAvailH = 0;  // space reserved for the tallest (3-row) grid
+  int zoneTop = 0;
+  int zoneBottom = 0;
+};
+
+X3StatsChrome layoutX3StatsChrome(const GfxRenderer& renderer, const ContentBand& band, const bool showBookTitle,
+                                  const int titleH) {
+  X3StatsChrome out;
+  out.zoneTop = band.pinBlocks ? band.lowerTop : (band.midY + kRuleThickness);
+  out.zoneBottom = band.contentBottom - penumbraPageDotsStripH();
+  const int captionH = renderer.getLineHeight(kLabelFontId);
+  const int pairH = statPairHeight(renderer);
+  const int maxGridH = pairH * 3 + kStatRowGap * 2;
+
+  const int th = showBookTitle ? titleH : 0;
+  const int titleGap = showBookTitle ? kStatsStackGap : 0;
+
+  // Prefer a compact top-aligned stack (raises the whole section vs the old
+  // bottom-parked caption that collided with the dots).
+  int y = out.zoneTop + kStatsTopInsetX3;
+  out.titleY = y;
+  y += th + titleGap;
+  out.gridY = y;
+
+  const int maxFooterY = out.zoneBottom - captionH - kStatsFooterDotsClearance;
+  int footerY = out.gridY + maxGridH + kStatsStackGap;
+  if (footerY > maxFooterY) footerY = maxFooterY;
+  // Never let the caption sit under the grid with less than a stack gap, and
+  // never let it invade the dots strip.
+  if (footerY < out.gridY + kStatsStackGap) footerY = out.gridY + kStatsStackGap;
+  if (footerY > maxFooterY) footerY = maxFooterY;
+  out.footerY = footerY;
+  out.gridAvailH = std::max(1, footerY - kStatsStackGap - out.gridY);
+  return out;
+}
+
 // Layout:
-//   X3: book title — grid — STATS/LIFETIME footer caption.
-//       Title→grid air matches hairline→title (equal-gap G). Footer sits lower to fill residual space.
+//   X3: book title — grid — STATS/LIFETIME footer caption (shared Ys via layoutX3StatsChrome).
 //   X4: same shell as Recents — section caption on top, grid below (no book title;
 //       last-read lives in the upper Now Reading panel). Unified vertical placement.
 void drawStatsStylePanel(const GfxRenderer& renderer, const ContentBand& band, const char* bookTitle,
@@ -961,7 +1022,6 @@ void drawStatsStylePanel(const GfxRenderer& renderer, const ContentBand& band, c
   // Zone: mid rule → menu (minus page-dot strip when multi-page under-panel is on).
   const int zoneTop = band.pinBlocks ? band.lowerTop : (band.midY + kRuleThickness);
   const int zoneBottom = band.contentBottom - penumbraPageDotsStripH();
-  const int zoneH = std::max(1, zoneBottom - zoneTop);
 
   const int pageW = renderer.getScreenWidth();
   const int gridW = std::max(40, pageW - kStatsSideInset * 2);
@@ -989,38 +1049,19 @@ void drawStatsStylePanel(const GfxRenderer& renderer, const ContentBand& band, c
     return;
   }
 
-  // X3: hairline→title air is G (lowerTop − midY − rule). Match that for title→grid,
-  // then drop the STATS/LIFETIME caption further to use leftover under-panel space.
-  const int hairlineAir =
-      band.pinBlocks ? std::max(kStatsStackGap, band.lowerTop - band.midY - kRuleThickness) : kStatsStackGap;
-  const int titleGap = showBookTitle ? hairlineAir : 0;
-  // Footer sits a bit lower than the title gap so the page doesn't look top-heavy.
-  const int footerMinGap = hairlineAir + hairlineAir / 2;
-
-  const int footerH = sectionCaption ? captionH : 0;
-  const int blockH = titleH + titleGap + gridH + (footerH > 0 ? footerMinGap + footerH : 0);
-  int y = band.pinBlocks ? zoneTop : (zoneTop + std::max(0, (zoneH - blockH) / 2));
-  if (y < zoneTop + 2) y = zoneTop + 2;
-
+  // X3: shared chrome with Book Stats so Lifetime stays vertically in sync.
+  const X3StatsChrome chrome = layoutX3StatsChrome(renderer, band, showBookTitle, titleH);
+  int y = chrome.titleY;
   if (showBookTitle) {
     y = drawCenteredWrapped(renderer, kStatsBookTitleFontId, band.centerX, y, band.textMaxW, bookTitle,
                             kStatsTitleMaxLines, EpdFontFamily::BOLD);
-    y += titleGap;
+    (void)y;
   }
-
-  drawStatGrid(renderer, band.centerX, y, gridW, gridH, /*cols=*/3, /*rows=*/2, values, labels);
-  y += gridH;
-
+  // Lifetime is 2 rows; keep natural pair height (do not stretch into the 3-row
+  // reserve — empty air under the grid is what keeps the footer Y matched).
+  drawStatGrid(renderer, band.centerX, chrome.gridY, gridW, gridH, /*cols=*/3, /*rows=*/2, values, labels);
   if (sectionCaption) {
-    // Prefer near the page-dot strip; never closer than footerMinGap under the grid.
-    int footerY = zoneBottom - captionH - 2;
-    if (footerY < y + footerMinGap) {
-      footerY = y + footerMinGap;
-    }
-    if (footerY + captionH > zoneBottom) {
-      footerY = std::max(y + kStatsStackGap, zoneBottom - captionH);
-    }
-    drawSectionLabel(renderer, band.centerX, footerY, sectionCaption);
+    drawSectionLabel(renderer, band.centerX, chrome.footerY, sectionCaption);
   }
 }
 
@@ -1080,9 +1121,8 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
   // RTC date row — same fields as BookStatsView drawPerBookStatsCard row 3.
   ReadingStatsDateTime today;
   const bool hasToday = getCurrentLocalReadingStatsDateTime(today);
-  const ReadingStatsDate endDate = s.isCompleted && s.finishedDate.isValid()
-                                       ? s.finishedDate
-                                       : (hasToday ? today.date : ReadingStatsDate{});
+  const ReadingStatsDate endDate =
+      s.isCompleted && s.finishedDate.isValid() ? s.finishedDate : (hasToday ? today.date : ReadingStatsDate{});
   const bool hasDaySpan = s.startDate.isValid() && endDate.isValid();
   const uint16_t daysReading = hasDaySpan ? readingSpanDaysElapsed(s.startDate, endDate) : 0;
   if (hasDaySpan) {
@@ -1116,55 +1156,44 @@ void drawBookStatsPanel(const GfxRenderer& renderer, const ContentBand& band, co
   const int titleH = showBookTitle ? measureWrappedHeight(renderer, kStatsBookTitleFontId, band.textMaxW, bookTitle,
                                                           kStatsTitleMaxLines, EpdFontFamily::BOLD)
                                    : 0;
-  const int captionH = renderer.getLineHeight(kLabelFontId);
   const int pairH = statPairHeight(renderer);
-  const int gridH = pairH * 3 + rowGap * 2;
+  const int twoRowH = pairH * 2 + rowGap;
+  const int thirdRowH = pairH;
+  const int gridH = twoRowH + rowGap + thirdRowH;
 
-  const int zoneTop = band.pinBlocks ? band.lowerTop : (band.midY + kRuleThickness);
-  const int zoneBottom = band.contentBottom - penumbraPageDotsStripH();
-  const int zoneH = std::max(1, zoneBottom - zoneTop);
   const int pageW = renderer.getScreenWidth();
   const int gridW = std::max(40, pageW - kStatsSideInset * 2);
 
-  const int hairlineAir =
-      band.pinBlocks ? std::max(kStatsStackGap, band.lowerTop - band.midY - kRuleThickness) : kStatsStackGap;
-  const int titleGap = showBookTitle ? hairlineAir : 0;
-  const int footerMinGap = hairlineAir + hairlineAir / 2;
-  const int footerH = captionH;
-  const int blockH = titleH + titleGap + gridH + footerMinGap + footerH;
-  int y = band.pinBlocks ? zoneTop : (zoneTop + std::max(0, (zoneH - blockH) / 2));
-  if (y < zoneTop + 2) y = zoneTop + 2;
-
+  // Same title / grid / footer Y as Lifetime (drawStatsStylePanel) so side-swipe stays synced.
+  const X3StatsChrome chrome = layoutX3StatsChrome(renderer, band, showBookTitle, titleH);
+  int y = chrome.titleY;
   if (showBookTitle) {
     y = drawCenteredWrapped(renderer, kStatsBookTitleFontId, band.centerX, y, band.textMaxW, bookTitle,
                             kStatsTitleMaxLines, EpdFontFamily::BOLD);
-    y += titleGap;
+    (void)y;
   }
+
+  // Prefer natural 3-row height; if the shared chrome compressed gridAvailH, shrink
+  // row air rather than letting the date row collide with the STATS caption.
+  const int drawnGridH = std::min(gridH, chrome.gridAvailH);
+  const int drawnTwoRowH = (drawnGridH >= gridH) ? twoRowH : std::max(pairH, (drawnGridH * twoRowH) / gridH);
+  const int drawnThirdH = std::max(pairH / 2, drawnGridH - drawnTwoRowH - rowGap);
 
   // Row 0–1: 3 columns (BookStatsView card layout).
   const char* topValues[6] = {vSessions, vTime, vProgress, vAvg, vLeft, vPace};
-  const char* topLabels[6] = {tr(STR_STATS_SESSIONS_LBL), tr(STR_STATS_TIME_LBL),        tr(STR_STATS_PROGRESS_LBL),
-                              tr(STR_STATS_AVG_SESSION_LBL), tr(STR_TIME_LEFT),          tr(STR_STATS_PAGES_PER_MIN)};
-  const int twoRowH = pairH * 2 + rowGap;
-  drawStatGrid(renderer, band.centerX, y, gridW, twoRowH, /*cols=*/3, /*rows=*/2, topValues, topLabels);
-  y += twoRowH + rowGap;
+  const char* topLabels[6] = {tr(STR_STATS_SESSIONS_LBL),    tr(STR_STATS_TIME_LBL), tr(STR_STATS_PROGRESS_LBL),
+                              tr(STR_STATS_AVG_SESSION_LBL), tr(STR_TIME_LEFT),      tr(STR_STATS_PAGES_PER_MIN)};
+  drawStatGrid(renderer, band.centerX, chrome.gridY, gridW, drawnTwoRowH, /*cols=*/3, /*rows=*/2, topValues, topLabels);
+  y = chrome.gridY + drawnTwoRowH + ((drawnGridH >= gridH) ? rowGap : std::max(2, rowGap / 2));
 
   // Row 2: half-width Started | Est. Finish
   const int halfW = gridW / 2;
   const int usedW = halfW * 2;
   const int left = band.centerX - usedW / 2;
-  drawStatCell(renderer, left, halfW, y, pairH, vDays, startedLabel);
-  drawStatCell(renderer, left + halfW, halfW, y, pairH, vFinish, finishLabel);
-  y += pairH;
+  drawStatCell(renderer, left, halfW, y, drawnThirdH, vDays, startedLabel);
+  drawStatCell(renderer, left + halfW, halfW, y, drawnThirdH, vFinish, finishLabel);
 
-  int footerY = zoneBottom - captionH - 2;
-  if (footerY < y + footerMinGap) {
-    footerY = y + footerMinGap;
-  }
-  if (footerY + captionH > zoneBottom) {
-    footerY = std::max(y + kStatsStackGap, zoneBottom - captionH);
-  }
-  drawSectionLabel(renderer, band.centerX, footerY, tr(STR_STATS));
+  drawSectionLabel(renderer, band.centerX, chrome.footerY, tr(STR_STATS));
 }
 
 // Lifetime — 3×2:
@@ -1395,8 +1424,7 @@ Rect clockDigitBandRect(const GfxRenderer& renderer) {
   const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
   const int dayH = renderer.getLineHeight(kDayFontId);
   const int clockBlockH = clockInkH + kClockToDayGap + dayH;
-  const int groupTop =
-      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
   constexpr int kPadY = 4;
   const int top = std::max(0, groupTop - kPadY);
   const int h = clockInkH + kPadY * 2;
@@ -1411,8 +1439,7 @@ void paintHeroClockOnly(const GfxRenderer& renderer) {
   const int clockInkH = renderer.getFontAscenderSize(kClockFontId);
   const int dayH = renderer.getLineHeight(kDayFontId);
   const int clockBlockH = clockInkH + kClockToDayGap + dayH;
-  const int groupTop =
-      band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
+  const int groupTop = band.pinBlocks ? band.upperTop : (band.contentTop + std::max(0, (band.halfH - clockBlockH) / 2));
   drawHeroClockCentered(renderer, band.centerX, groupTop, timeBuf);
 }
 
@@ -1421,6 +1448,9 @@ void paintHeroClockOnly(const GfxRenderer& renderer) {
 bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int baseRefreshMode,
                                               const Rect* dirtyOverride) {
   if (!gpio.deviceIsX3()) return false;
+  if (darkmode::skipUiGrayscale(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    return false;
+  }
   if (!renderer.storeBwBuffer()) {
     LOG_DBG("HOME", "penumbra clock AA: storeBw failed — BW only");
     return false;
@@ -1433,9 +1463,8 @@ bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int b
   // glyphs are not cut when only minutes change.
   const Rect grayRect{0, band.y, renderer.getScreenWidth(), band.height};
 
-  const auto baseMode =
-      (baseRefreshMode == static_cast<int>(HalDisplay::HALF_REFRESH)) ? HalDisplay::HALF_REFRESH
-                                                                      : HalDisplay::FAST_REFRESH;
+  const auto baseMode = (baseRefreshMode == static_cast<int>(HalDisplay::HALF_REFRESH)) ? HalDisplay::HALF_REFRESH
+                                                                                        : HalDisplay::FAST_REFRESH;
   renderer.displayGrayscaleBase(baseMode);
 
   renderer.clearScreen(0x00);
@@ -1449,6 +1478,7 @@ bool PenumbraThemeUi::displayClockAntiAliased(GfxRenderer& renderer, const int b
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBufferWindow(grayRect.x, grayRect.y, grayRect.width, grayRect.height);
+  UiGhostPolicy::noteGreyscaleOnPanel();
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.restoreBwBuffer();
   renderer.cleanupGrayscaleWithFrameBuffer();

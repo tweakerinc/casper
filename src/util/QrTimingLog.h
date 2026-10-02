@@ -8,10 +8,10 @@
 #include <cstdarg>
 #include <cstdio>
 
-#include "CasperSettings.h"
-#include "util/CasperLogPaths.h"
+#include "CrossPointSettings.h"
+#include "util/CrossPointLogPaths.h"
 
-// Append-only Quick Resume timing log: /.casper-logs/qr_timing.log only.
+// Append-only Quick Resume timing log under the system log folder.
 // Gated by Settings → Enable Logging (same as SystemLog). Crash reports are separate.
 
 namespace QrTimingLog {
@@ -20,30 +20,38 @@ inline bool gActive = false;
 inline uint32_t gT0 = 0;
 inline bool gMigratedRoot = false;
 
-// Ensure /.casper-logs is a directory. Never write logs to the volume root.
+// Ensure a log directory exists. Prefer the hidden folder; fall back to /casper-logs.
 inline bool ensureLogDir() {
-  if (!Storage.ensureDirectoryExists(CasperLogPaths::kDir)) {
-    return false;
+  if (!Storage.exists(CrossPointLogPaths::kDir) && Storage.exists(CrossPointLogPaths::kLegacyCasperDir)) {
+    Storage.rename(CrossPointLogPaths::kLegacyCasperDir, CrossPointLogPaths::kDir);
   }
-  // One-shot: move a mistaken root /qr_timing.log into the log folder.
   if (!gMigratedRoot) {
     gMigratedRoot = true;
-    if (Storage.exists(CasperLogPaths::kLegacyRootQrTiming)) {
-      // Prefer keep existing nested log; just delete root junk if nested already exists.
-      if (Storage.exists(CasperLogPaths::kQrTiming)) {
-        Storage.remove(CasperLogPaths::kLegacyRootQrTiming);
-      } else if (!Storage.rename(CasperLogPaths::kLegacyRootQrTiming, CasperLogPaths::kQrTiming)) {
-        Storage.remove(CasperLogPaths::kLegacyRootQrTiming);
+    if (Storage.exists(CrossPointLogPaths::kLegacyRootQrTiming)) {
+      if (Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
+        if (Storage.exists(CrossPointLogPaths::kQrTiming)) {
+          Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+        } else if (!Storage.rename(CrossPointLogPaths::kLegacyRootQrTiming, CrossPointLogPaths::kQrTiming)) {
+          Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
+        }
       }
     }
   }
-  return true;
+  if (Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) return true;
+  return Storage.ensureDirectoryExists(CrossPointLogPaths::kVisibleDir);
+}
+
+inline const char* qrTimingPath() {
+  if (Storage.exists(CrossPointLogPaths::kDir) || Storage.exists(CrossPointLogPaths::kQrTiming)) {
+    return CrossPointLogPaths::kQrTiming;
+  }
+  return CrossPointLogPaths::kVisibleQrTiming;
 }
 
 inline void appendRaw(const char* text) {
   if (!text || !text[0]) return;
   if (!ensureLogDir()) return;
-  HalFile f = Storage.open(CasperLogPaths::kQrTiming, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(qrTimingPath(), static_cast<oflag_t>(O_RDWR | O_CREAT | O_APPEND));
   if (!f) return;
   f.print(text);
   f.close();
@@ -52,7 +60,7 @@ inline void appendRaw(const char* text) {
 inline void begin(const char* reason) {
   // Gated with System → Enable Logging (same switch as SystemLog). Crash reports
   // are independent and always write.
-  if (SETTINGS.systemLogLevel == CasperSettings::SYSTEM_LOG_OFF) {
+  if (SETTINGS.systemLogLevel == CrossPointSettings::SYSTEM_LOG_OFF) {
     gActive = false;
     return;
   }
@@ -61,11 +69,17 @@ inline void begin(const char* reason) {
   char header[256];
   snprintf(header, sizeof(header),
            "\n==== QR timing session ====\n"
-           "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s\n",
+           "t0_millis=%lu reason=%s device=%s aa=%u anti_ghost_pages=%d ver=%s build=%s\n",
            static_cast<unsigned long>(gT0), reason ? reason : "?", gpio.deviceIsX3() ? "X3" : "X4",
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
-#ifdef CASPER_VERSION
-           CASPER_VERSION
+#ifdef CROSSPOINT_VERSION
+           CROSSPOINT_VERSION,
+#else
+           "?",
+#endif
+  // See SystemLog: ver= repeats across builds, build= pins the commit.
+#ifdef CROSSPOINT_BUILD_ID
+           CROSSPOINT_BUILD_ID
 #else
            "?"
 #endif

@@ -10,6 +10,8 @@
 #include <new>
 #include <string>
 
+#include "PunctEmphasisPolicy.h"
+
 namespace rivulet {
 namespace {
 
@@ -84,28 +86,21 @@ bool safeAppendLit(std::string& dst, const char* lit) {
   return true;
 }
 
-// Map fancy punctuation to glyphs every builtin face has (avoids tofu / "missing glyphs").
+// Normalize only what we must; keep real book typography.
+//
+// This used to flatten curly quotes to ' and ", en/em dashes to -, and the
+// ellipsis to "...", on the grounds of avoiding tofu. The builtin faces carry
+// all of those (see builtinFonts/literata_*: U+2014, U+2018/19, U+201C/D/E),
+// so the mapping bought nothing and cost the thing that makes a page look
+// typeset rather than like a plain-text dump — which is precisely the "feels
+// cheap, not book-like" complaint. Zero-width and formatting characters are
+// still dropped, and no-break spaces still become spaces, because those DO
+// break layout rather than merely look different.
 bool appendNormalizedUtf8(std::string& dst, uint32_t cp) {
   switch (cp) {
     case 0x00A0:  // nbsp
     case 0x202F:  // narrow nbsp
       return safePushChar(dst, ' ');
-    case 0x2018:
-    case 0x2019:
-    case 0x201A:
-    case 0x2032:
-      return safePushChar(dst, '\'');
-    case 0x201C:
-    case 0x201D:
-    case 0x201E:
-    case 0x2033:
-      return safePushChar(dst, '"');
-    case 0x2013:
-    case 0x2014:
-    case 0x2212:
-      return safePushChar(dst, '-');
-    case 0x2026:
-      return safeAppendLit(dst, "...");
     case 0x00AD:  // soft hyphen
     case 0x200B:  // zwsp
     case 0x200C:
@@ -305,9 +300,8 @@ bool attrHasClass(const Tag& tag, const char* needle) {
 bool isHiddenHost(const Tag& tag) {
   // CSS classes that mean "do not show" in many EPUBs (e.g. h1.oculto).
   if (attrHasClass(tag, "oculto") || attrHasClass(tag, "hidden") || attrHasClass(tag, "sr-only") ||
-      attrHasClass(tag, "screenreader") || attrHasClass(tag, "screen-reader") ||
-      attrHasClass(tag, "visually-hidden") || attrHasClass(tag, "hide") || attrHasClass(tag, "displaynone") ||
-      attrHasClass(tag, "display-none")) {
+      attrHasClass(tag, "screenreader") || attrHasClass(tag, "screen-reader") || attrHasClass(tag, "visually-hidden") ||
+      attrHasClass(tag, "hide") || attrHasClass(tag, "displaynone") || attrHasClass(tag, "display-none")) {
     return true;
   }
   // HTML5 hidden= / hidden="hidden" (EPUB nav landmarks & page-list).
@@ -340,16 +334,15 @@ bool looksLikeTitleHost(const Tag& tag) {
     if (!v || n == 0) return false;
     // Layout shells — never promote to a text block.
     if (containsI(v, n, "title-page") || containsI(v, n, "titlepage") || containsI(v, n, "contributor") ||
-        containsI(v, n, "heading-content") || containsI(v, n, "element-number") ||
-        containsI(v, n, "heading1") || containsI(v, n, "heading2") || containsI(v, n, "heading3") ||
-        containsI(v, n, "heading4") || containsI(v, n, "heading5") || containsI(v, n, "heading6")) {
+        containsI(v, n, "heading-content") || containsI(v, n, "element-number") || containsI(v, n, "heading1") ||
+        containsI(v, n, "heading2") || containsI(v, n, "heading3") || containsI(v, n, "heading4") ||
+        containsI(v, n, "heading5") || containsI(v, n, "heading6")) {
       return false;
     }
     return containsI(v, n, "chapter-title") || containsI(v, n, "chaptitle") || containsI(v, n, "book-title") ||
            containsI(v, n, "subtitle") || containsI(v, n, "caption") || containsI(v, n, "epigraph") ||
            // bare "chapter" / "title" only when not a compound layout name
-           (containsI(v, n, "chapter") && !containsI(v, n, "chapter-body")) ||
-           (containsI(v, n, "title") && n < 24);
+           (containsI(v, n, "chapter") && !containsI(v, n, "chapter-body")) || (containsI(v, n, "title") && n < 24);
   };
   return hit(c, clen) || hit(id, ilen);
 }
@@ -407,12 +400,82 @@ bool looksLikeDocumentAlt(const char* alt, size_t altLen) {
   if (altLen < 48) return false;
   return containsI(alt, altLen, "Briefing note") || containsI(alt, altLen, "briefing note") ||
          containsI(alt, altLen, "document title") || containsI(alt, altLen, "AFTER ACTION") ||
-         containsI(alt, altLen, "Intercepted Personal Message") ||
-         containsI(alt, altLen, "Surveillance footage") ||
+         containsI(alt, altLen, "Intercepted Personal Message") || containsI(alt, altLen, "Surveillance footage") ||
          (containsI(alt, altLen, "Briefing") && containsI(alt, altLen, "paperclip")) ||
          (containsI(alt, altLen, "background insignia") && altLen >= 80) ||
          (containsI(alt, altLen, "stamped text") && altLen >= 40) ||
          (containsI(alt, altLen, "paperclip icon") && altLen >= 60);
+}
+
+// Tradepub chapter plates: alt is "Chapter 1" / "1" / "CHAPTER ONE", painted as
+// a JPEG that often fails to decode → hollow box, no title ink (Hail Mary ch1).
+bool looksLikeChapterHeadingAlt(const char* alt, size_t altLen) {
+  if (!alt || altLen == 0 || altLen > 48) return false;
+  if (containsI(alt, altLen, "chapter") || containsI(alt, altLen, "chapitre") || containsI(alt, altLen, "capitulo") ||
+      containsI(alt, altLen, "capítulo") || containsI(alt, altLen, "kapitel")) {
+    return true;
+  }
+  bool any = false;
+  for (size_t i = 0; i < altLen; ++i) {
+    const unsigned char c = static_cast<unsigned char>(alt[i]);
+    if (c == ' ' || c == '\t' || c == '.' || c == '-') continue;
+    if ((c >= '0' && c <= '9') || c == 'I' || c == 'V' || c == 'X' || c == 'i' || c == 'v' || c == 'x') {
+      any = true;
+      continue;
+    }
+    return false;
+  }
+  return any;
+}
+
+bool classSaysDropCap(const Tag& tag) {
+  return attrHasClass(tag, "ct1") || attrHasClass(tag, "dropcap") || attrHasClass(tag, "drop-cap") ||
+         attrHasClass(tag, "drop_cap") || attrHasClass(tag, "dropcaps") || attrHasClass(tag, "drop-caps") ||
+         attrHasClass(tag, "firstletter") || attrHasClass(tag, "first-letter") || attrHasClass(tag, "first_letter") ||
+         attrHasClass(tag, "dropcharacter") || attrHasClass(tag, "drop-character") || attrHasClass(tag, "firstchar") ||
+         attrHasClass(tag, "first-char") || attrHasClass(tag, "lettrine");
+}
+
+// DCC chapter markers are real h1s ("[ 70 ]" / "Chapter [1]") but the book does
+// not drop-cap the following paragraph. Hail Mary "Chapter 1" has no brackets.
+bool headingLooksLikeBracketMarker(const char* s, const size_t n) {
+  if (!s || n == 0) return false;
+  size_t i = 0;
+  auto skipWs = [&]() {
+    while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) ++i;
+  };
+  skipWs();
+  if (i + 7 <= n && (s[i] == 'C' || s[i] == 'c') && ieq(s + i, 7, "chapter")) i += 7;
+  skipWs();
+  if (i >= n || s[i] != '[') return false;
+  ++i;
+  skipWs();
+  bool digit = false;
+  while (i < n && s[i] >= '0' && s[i] <= '9') {
+    digit = true;
+    ++i;
+  }
+  skipWs();
+  if (!digit || i >= n || s[i] != ']') return false;
+  ++i;
+  skipWs();
+  return i >= n;
+}
+
+bool lastClosedHeadingIsDccMarker(const ChapterIr& ir) {
+  if (ir.blocks().empty()) return false;
+  const Block& b = ir.blocks().back();
+  if (b.kind < BlockKind::Heading1 || b.kind > BlockKind::Heading6) return false;
+  char buf[72];
+  size_t n = 0;
+  const uint16_t runEnd = static_cast<uint16_t>(b.runBegin + b.runCount);
+  for (uint16_t ri = b.runBegin; ri < runEnd && ri < ir.runs().size(); ++ri) {
+    const Run& r = ir.runs()[ri];
+    const char* t = ir.runText(r);
+    if (!t) continue;
+    for (uint16_t k = 0; k < r.textLen && n + 1 < sizeof(buf); ++k) buf[n++] = t[k];
+  }
+  return headingLooksLikeBracketMarker(buf, n);
 }
 
 // Collapse whitespace; prefer "Briefing note:" / document-title body when present.
@@ -535,31 +598,37 @@ void applyInlineStyle(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOut,
   if (containsI(v, vlen, "font-weight:bold") || containsI(v, vlen, "font-weight: bold") ||
       containsI(v, vlen, "font-weight:700") || containsI(v, vlen, "font-weight: 700") ||
       containsI(v, vlen, "font-weight:600") || containsI(v, vlen, "font-weight:800")) {
-    if (styleInOut == RunStyle::Italic)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Bold;
+    // Bit-set, not value-replace: RunStyle is a bitmask, so the old value tests
+    // dropped any decoration already carried on the run.
+    styleInOut |= RunStyle::Bold;
   }
   if (containsI(v, vlen, "font-style:italic") || containsI(v, vlen, "font-style: italic") ||
       containsI(v, vlen, "font-style:oblique")) {
-    if (styleInOut == RunStyle::Bold)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Italic;
+    styleInOut |= RunStyle::Italic;
   }
+  // DCC / Butcher ordinals:
+  //   6<span style="font-size:0.75em; margin-left:0.05em; vertical-align:super">th</span>
+  // Paint already scales SUP/SUB to ~50% and raises the baseline; sizeStep on
+  // the same span would shrink twice. Classic ChapterHtmlSlimParser glues these
+  // the same way.
+  const bool isSuper = containsI(v, vlen, "vertical-align:super") || containsI(v, vlen, "vertical-align: super");
+  const bool isSub = containsI(v, vlen, "vertical-align:sub") || containsI(v, vlen, "vertical-align: sub");
+  if (isSuper) styleInOut |= RunStyle::Superscript;
+  if (isSub) styleInOut |= RunStyle::Subscript;
   // Size bumps never shrink an already-larger step (h1 Plus2 must stick).
-  if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") ||
-      containsI(v, vlen, "xx-large") || containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") ||
-      containsI(v, vlen, "font-size:1.5")) {
-    if (sizeInOut < SizeStep::Plus2) sizeInOut = SizeStep::Plus2;
-  } else if (containsI(v, vlen, "font-size:1.4") || containsI(v, vlen, "font-size:1.3") ||
-             containsI(v, vlen, "font-size:1.2") || containsI(v, vlen, "x-large") ||
-             containsI(v, vlen, "font-size:large")) {
-    if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
-  }
-  if (containsI(v, vlen, "font-size:small") || containsI(v, vlen, "font-size:0.8") ||
-      containsI(v, vlen, "font-size:0.9") || containsI(v, vlen, "font-size:0.85")) {
-    sizeInOut = SizeStep::Minus1;
+  if (!isSuper && !isSub) {
+    if (containsI(v, vlen, "font-size:2em") || containsI(v, vlen, "font-size: 2em") || containsI(v, vlen, "xx-large") ||
+        containsI(v, vlen, "2.0em") || containsI(v, vlen, "font-size:1.6") || containsI(v, vlen, "font-size:1.5")) {
+      if (sizeInOut < SizeStep::Plus2) sizeInOut = SizeStep::Plus2;
+    } else if (containsI(v, vlen, "font-size:1.4") || containsI(v, vlen, "font-size:1.3") ||
+               containsI(v, vlen, "font-size:1.2") || containsI(v, vlen, "x-large") ||
+               containsI(v, vlen, "font-size:large")) {
+      if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
+    }
+    if (containsI(v, vlen, "font-size:small") || containsI(v, vlen, "font-size:0.8") ||
+        containsI(v, vlen, "font-size:0.9") || containsI(v, vlen, "font-size:0.85")) {
+      sizeInOut = SizeStep::Minus1;
+    }
   }
   if (alignOut) {
     if (containsI(v, vlen, "text-align:center") || containsI(v, vlen, "text-align: center")) {
@@ -578,26 +647,75 @@ void applyClassEmphasis(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOu
   const char* v = attrValue(tag, "class", &vlen);
   if (!v || vlen == 0) return;
   if (containsI(v, vlen, "bold") || containsI(v, vlen, "strong") || containsI(v, vlen, "bolder")) {
-    if (styleInOut == RunStyle::Italic)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Bold;
+    styleInOut |= RunStyle::Bold;
   }
   if (containsI(v, vlen, "italic") || containsI(v, vlen, "oblique") || containsI(v, vlen, "emphasis") ||
       containsI(v, vlen, "emph") || containsI(v, vlen, "cite")) {
-    if (styleInOut == RunStyle::Bold)
-      styleInOut = RunStyle::BoldItalic;
-    else if (styleInOut == RunStyle::Regular)
-      styleInOut = RunStyle::Italic;
+    styleInOut |= RunStyle::Italic;
   }
   // Alice .chapter is larger regular, not bold — skip bold promotion.
   if (looksLikeTitleHost(tag) && !classIsChapterLeftTitle(tag)) {
     if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
-    if (styleInOut == RunStyle::Regular) styleInOut = RunStyle::Bold;
-    if (styleInOut == RunStyle::Italic) styleInOut = RunStyle::BoldItalic;
+    styleInOut |= RunStyle::Bold;
   } else if (classIsChapterLeftTitle(tag)) {
     if (sizeInOut < SizeStep::Plus1) sizeInOut = SizeStep::Plus1;
   }
+}
+
+// Peek the inner text of an open inline tag. First-letter polyfills wrap only
+// "[" of DCC "Chapter [1]" / "[ 1 ]"; applying bold/size there leaves one
+// heavy bracket. Abort quickly on a letter/digit so this is cheap per span.
+bool innerIsOnlyOpeningPunct(const char* p, const char* end, const char* closeName, const size_t closeNameLen) {
+  if (!p || !closeName || closeNameLen == 0 || closeNameLen >= 8) return false;
+  char close[8];
+  std::memcpy(close, closeName, closeNameLen);
+  close[closeNameLen] = '\0';
+  int depth = 1;
+  bool sawPunct = false;
+  int walked = 0;
+  constexpr int kPeekLimit = 64;
+  while (p < end && depth > 0 && walked < kPeekLimit) {
+    if (*p == '<') {
+      Tag tag;
+      const size_t used = parseTag(p, end, tag);
+      if (used == 0) return false;
+      if (tag.closing) {
+        // The matching close must be this tag's name; a stray </p> is not the end.
+        if (depth == 1 && !ieq(tag.name, tag.nameLen, close)) return false;
+        --depth;
+      } else if (!tag.selfClose) {
+        ++depth;
+      }
+      p += used;
+      walked += static_cast<int>(used);
+      continue;
+    }
+    if (*p == '&') {
+      std::string tmp;
+      tmp.reserve(8);
+      bool oom = false;
+      const size_t n = decodeEntity(p, end, tmp, &oom);
+      if (!n || oom || tmp.empty()) return false;
+      if (!punctemph::textIsOnlyOpeningPunctuation(tmp.data(), tmp.size())) return false;
+      sawPunct = true;
+      p += n;
+      walked += static_cast<int>(n);
+      continue;
+    }
+    if (punctemph::isAsciiWs(*p)) {
+      ++p;
+      ++walked;
+      continue;
+    }
+    const unsigned char* up = reinterpret_cast<const unsigned char*>(p);
+    const uint32_t cp = utf8NextCodepoint(&up);
+    if (cp == 0 || reinterpret_cast<const char*>(up) <= p) return false;
+    if (!punctemph::isOpeningPunctuation(cp)) return false;
+    sawPunct = true;
+    walked += static_cast<int>(reinterpret_cast<const char*>(up) - p);
+    p = reinterpret_cast<const char*>(up);
+  }
+  return sawPunct && depth == 0;
 }
 
 SizeStep sizeForHeading(const int level) {
@@ -623,6 +741,32 @@ bool styleSaysCenter(const Tag& tag) {
   return containsI(c, clen, "center") || containsI(c, clen, "centred") || containsI(c, clen, "centered") ||
          containsI(c, clen, "alignment-block") || containsI(c, clen, "aligncenter") ||
          containsI(c, clen, "text-center") || containsI(c, clen, "text_center") || containsI(c, clen, "toc");
+}
+
+// Legacy HTML align="center|left|right|justify" on p/h1/div/td/img.
+// Classic ChapterHtmlSlimParser always honors this (even with stylesheets off) —
+// many EPUBs center chapter titles that way without a class or inline CSS.
+bool htmlAlignAttr(const Tag& tag, Align& out) {
+  size_t vlen = 0;
+  const char* v = attrValue(tag, "align", &vlen);
+  if (!v || vlen == 0) return false;
+  if (ieq(v, vlen, "center") || ieq(v, vlen, "middle")) {
+    out = Align::Center;
+    return true;
+  }
+  if (ieq(v, vlen, "right")) {
+    out = Align::Right;
+    return true;
+  }
+  if (ieq(v, vlen, "left")) {
+    out = Align::Left;
+    return true;
+  }
+  if (ieq(v, vlen, "justify")) {
+    out = Align::Justify;
+    return true;
+  }
+  return false;
 }
 
 bool classSaysNoIndent(const Tag& tag) {
@@ -668,9 +812,7 @@ bool classIsImplicitBreak(const Tag& tag, int& outTopEmQ4, int& outBottomEmQ4) {
   return false;
 }
 
-bool classIsAlignmentBlockContent(const Tag& tag) {
-  return attrHasClass(tag, "alignment-block-content");
-}
+bool classIsAlignmentBlockContent(const Tag& tag) { return attrHasClass(tag, "alignment-block-content"); }
 
 bool classIsBodyFirst(const Tag& tag) {
   // first2/first3: no indent, body size, margin 0 (Bedlam system + narrative open)
@@ -698,9 +840,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   // contiguous heap is tiny (crash was abort at maxA≈15KB with unchecked strings;
   // growth is now heap-checked — soft fail, not device abort).
   if (ESP.getMaxAllocHeap() < 10 * 1024 || ESP.getFreeHeap() < 12 * 1024) {
-    LOG_ERR("RVIR", "convert refuse: free=%u maxA=%u html=%u",
-            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()),
-            static_cast<unsigned>(len));
+    LOG_ERR("RVIR", "convert refuse: free=%u maxA=%u html=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(len));
     return false;
   }
   // Pre-size text/runs/blocks once (malloc/realloc, heap-checked) so convert does
@@ -735,6 +876,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   int alignmentBlockDepth = 0;
   // Open heading level 1–6 (0 = none). Soft <br> keeps the same heading block style.
   int headingLevelOpen = 0;
+  Align headingAlignOpen = Align::Center;
   // Fourth Wing: .orn span/div wraps a small chapter ornament image (~12% width).
   int ornamentDepth = 0;
   // Epigraph / citaini blockquote — center + slightly smaller body.
@@ -744,27 +886,41 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
   // Book Style CSS approximation: h2+p, hgroup+p, hr+p, p:first-child → text-indent: 0.
   // Armed when a heading/hgroup/hr ends; consumed by the next body <p>.
   bool noIndentNextParagraph = false;
+  // >0 inside a <table>; >1 means a nested table whose content is discarded.
+  int tableDepth = 0;
 
   // Style stack is block-scoped. Unclosed <span>/<b>/<i> used to leak frames;
-  // after 16 silent push failures the stuck face (often Bold from an <h1>) painted
+  // after silent push failures the stuck face (often Bold from an <h1>) painted
   // the rest of the chapter bold — classic "OH, MAN," normal then everything bold.
-  StyleFrame stack[16];
+  // 32 frames is cheap (2 bytes each) and covers deeply nested EPUB emphasis
+  // without dropping styles. On overflow we OR the new face onto the top rather
+  // than replacing it, so bold/italic cannot silently vanish mid-chapter.
+  StyleFrame stack[32];
   int stackTop = 0;
   int styleFloor = 0;  // never pop below this (current block's base face)
+  bool styleOverflowLogged = false;
   stack[0] = {};
 
   auto curStyle = [&]() -> StyleFrame& { return stack[stackTop]; };
 
   auto pushStyle = [&](const RunStyle st, const SizeStep sz) {
-    if (stackTop + 1 < 16) {
+    if (stackTop + 1 < 32) {
       ++stackTop;
       stack[stackTop].style = st;
       stack[stackTop].size = sz;
       return;
     }
-    // Stack full: replace top rather than silently keep a leaked Bold/Italic.
-    stack[stackTop].style = st;
-    stack[stackTop].size = sz;
+    // Stack full: merge onto the top. Replacing used to drop the accumulated
+    // face when a deep nest pushed Bold over Italic (or vice versa) and later
+    // pops could not unwind — styles looked like they "stopped working".
+    stack[stackTop].style = stack[stackTop].style | st;
+    if (static_cast<int>(sz) > static_cast<int>(stack[stackTop].size)) {
+      stack[stackTop].size = sz;
+    }
+    if (!styleOverflowLogged) {
+      styleOverflowLogged = true;
+      LOG_DBG("RVIR", "style stack full — merging faces (chapter has deep nesting)");
+    }
   };
   auto popStyle = [&]() {
     // Never pop through the current block's base face (orphan </span> after
@@ -802,8 +958,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     // Only strip leading spaces on the first run of a block. After a style change
     // (</i> skill, </em> next) the inter-word space is often the first char of the
     // next run — stripping it glued "Vampire"+"skill" / italic+roman words.
-    const bool firstRun =
-        out.blocks().empty() || out.blocks().back().runCount == 0;
+    const bool firstRun = out.blocks().empty() || out.blocks().back().runCount == 0;
     size_t i = 0;
     if (firstRun) {
       while (i < textAcc.size() && textAcc[i] == ' ') ++i;
@@ -839,16 +994,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     }
   };
 
-  auto mergeBold = [&](RunStyle base) {
-    if (base == RunStyle::Italic) return RunStyle::BoldItalic;
-    if (base == RunStyle::BoldItalic) return RunStyle::BoldItalic;
-    return RunStyle::Bold;
-  };
-  auto mergeItalic = [&](RunStyle base) {
-    if (base == RunStyle::Bold) return RunStyle::BoldItalic;
-    if (base == RunStyle::BoldItalic) return RunStyle::BoldItalic;
-    return RunStyle::Italic;
-  };
+  // Bit operations, not value comparisons: RunStyle is a bitmask now, so the old
+  // `base == RunStyle::Italic` style tests would have silently dropped any
+  // decoration already on the frame (bold inside underline lost the underline).
+  auto mergeBold = [&](RunStyle base) { return base | RunStyle::Bold; };
+  auto mergeItalic = [&](RunStyle base) { return base | RunStyle::Italic; };
+  auto mergeDecoration = [&](RunStyle base, RunStyle bit) { return base | bit; };
 
   while (p < end && !out.failed()) {
     if (*p == '<') {
@@ -903,14 +1054,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       // <nav><ol><li>…</li></ol></nav>). Without this, all chapter titles run into
       // one paragraph because we only broke on <p>/<h*>.
       if (!tag.closing && !tag.selfClose &&
-          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") ||
-           ieq(tag.name, tag.nameLen, "ul"))) {
+          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") || ieq(tag.name, tag.nameLen, "ul"))) {
         closeBlock();
         continue;
       }
       if (tag.closing &&
-          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") ||
-           ieq(tag.name, tag.nameLen, "ul"))) {
+          (ieq(tag.name, tag.nameLen, "nav") || ieq(tag.name, tag.nameLen, "ol") || ieq(tag.name, tag.nameLen, "ul"))) {
         closeBlock();
         continue;
       }
@@ -926,10 +1075,47 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
 
-      // Drop-cap host open (explicit only — not every blockquote/epigraph).
+      // Tables. Rivulet has no table block kind and building real column layout
+      // on a 480px panel is not worth it, so mirror exactly what the classic
+      // engine did: stream each cell as its own block, no "Row N Cell M" chrome,
+      // and discard nested tables. Without this, table/tr/td/th were simply
+      // unknown tags and every cell ran together into one unreadable paragraph -
+      // many EPUBs use tables purely as layout vehicles for caption/image pairs.
+      if (ieq(tag.name, tag.nameLen, "table")) {
+        if (!tag.closing && !tag.selfClose) {
+          closeBlock();
+          ++tableDepth;
+        } else if (tag.closing && tableDepth > 0) {
+          closeBlock();
+          --tableDepth;
+        }
+        continue;
+      }
+      if (tableDepth > 1) {
+        // Inside a nested table: drop its markup and text entirely (classic parity).
+        continue;
+      }
+      if (tableDepth == 1 &&
+          (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th") || ieq(tag.name, tag.nameLen, "tr"))) {
+        closeBlock();
+        if (!tag.closing && !tag.selfClose && (ieq(tag.name, tag.nameLen, "td") || ieq(tag.name, tag.nameLen, "th"))) {
+          // One cell = one block. Tight stack, no first-line indent, same as <li>.
+          Align cellAlign = Align::Left;
+          if (styleSaysCenter(tag)) cellAlign = Align::Center;
+          Align htmlA = Align::Left;
+          if (htmlAlignAttr(tag, htmlA)) cellAlign = htmlA;
+          RunStyle dummySt = RunStyle::Regular;
+          SizeStep dummySz = SizeStep::Body;
+          applyInlineStyle(tag, dummySt, dummySz, &cellAlign);
+          openBlock(BlockKind::Paragraph, cellAlign, kBlockNoIndent);
+          out.setCurrentMarginsEmQ4(0, 2);
+        }
+        continue;
+      }
+
+      // Drop-cap host open (explicit class — not every blockquote/epigraph).
       if (!tag.closing && (ieq(tag.name, tag.nameLen, "blockquote") || ieq(tag.name, tag.nameLen, "div"))) {
-        if (attrHasClass(tag, "ct1") || attrHasClass(tag, "dropcap") || attrHasClass(tag, "drop-cap") ||
-            attrHasClass(tag, "firstletter") || attrHasClass(tag, "first-letter")) {
+        if (classSaysDropCap(tag)) {
           dropCapHost = true;
         }
       }
@@ -954,8 +1140,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       }
 
       // .orn wrapper (chapter ornament image, often inside h1).
-      if (!tag.closing && !tag.selfClose &&
-          (ieq(tag.name, tag.nameLen, "span") || ieq(tag.name, tag.nameLen, "div"))) {
+      if (!tag.closing && !tag.selfClose && (ieq(tag.name, tag.nameLen, "span") || ieq(tag.name, tag.nameLen, "div"))) {
         if (attrHasClass(tag, "orn") || attrHasClass(tag, "ornament") || attrHasClass(tag, "chapter-orn")) {
           ornamentDepth = 1;
         } else if (ornamentDepth > 0) {
@@ -1012,6 +1197,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         closeBlock();
         // CSS: hgroup + p { text-indent: 0 }
         noIndentNextParagraph = true;
+        dropCapArmed = true;
         continue;
       }
 
@@ -1021,7 +1207,13 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         const int level = tag.name[1] - '0';
         closeBlock();
         const BlockKind bk = static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (level - 1));
-        openBlock(bk, Align::Center, kBlockNoIndent);
+        Align headingAlign = Align::Center;
+        Align htmlA = Align::Center;
+        if (htmlAlignAttr(tag, htmlA)) headingAlign = htmlA;
+        RunStyle st = RunStyle::Bold;
+        SizeStep sz = sizeForHeading(level);
+        applyInlineStyle(tag, st, sz, &headingAlign);
+        openBlock(bk, headingAlign, kBlockNoIndent);
         if (hgroupDepth > 0) {
           // SE: hgroup > * { margin: 0 } — air comes from hgroup close spacer only.
           out.setCurrentMarginsEmQ4(0, 0);
@@ -1029,23 +1221,30 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           // Standalone heading: modest top, real bottom gap before body (scaled ~1.5–2em).
           out.setCurrentMarginsEmQ4(level <= 1 ? 6 : 4, static_cast<int8_t>(scaleBookVSpaceQ4(32)));
         }
-        RunStyle st = RunStyle::Bold;
-        SizeStep sz = sizeForHeading(level);
-        applyInlineStyle(tag, st, sz, nullptr);
         // element-title 1.29em etc. may bump size; keep within ladder (±2).
         if (sz > SizeStep::Plus2) sz = SizeStep::Plus2;
         beginBlockStyle(st, sz);
         headingLevelOpen = level;
+        headingAlignOpen = headingAlign;
         continue;
       }
       if (tag.closing && tag.nameLen == 2 && (tag.name[0] == 'h' || tag.name[0] == 'H') && tag.name[1] >= '1' &&
           tag.name[1] <= '6') {
-        endBlockStyle();
+        // Flush while the heading face is still on the stack. endBlockStyle first
+        // used to dump the trailing run as Regular, so a first-letter span around
+        // "[" of "[ 1 ]" stayed Bold and "1]" went Regular.
         closeBlock();
+        endBlockStyle();
         headingLevelOpen = 0;
         // CSS: h2 + p, h3 + p, … { text-indent: 0 } — only when not inside hgroup
         // (hgroup's own close arms the flush for the first body para after the group).
-        if (hgroupDepth == 0) noIndentNextParagraph = true;
+        if (hgroupDepth == 0) {
+          noIndentNextParagraph = true;
+          // CrossInk/classic first-letter feel: first body para after a chapter
+          // heading. Skip DCC "[ 70 ]" markers (those books have no drop-cap).
+          const int closedLevel = tag.name[1] - '0';
+          if (closedLevel <= 2 && !lastClosedHeadingIsDccMarker(out)) dropCapArmed = true;
+        }
         continue;
       }
 
@@ -1053,9 +1252,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       // Style frame stays on the stack from the original <hN> open (no extra push).
       auto reopenHeadingIfNeeded = [&]() {
         if (headingLevelOpen < 1 || headingLevelOpen > 6) return;
-        const BlockKind bk =
-            static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (headingLevelOpen - 1));
-        openBlock(bk, Align::Center, kBlockNoIndent);
+        const BlockKind bk = static_cast<BlockKind>(static_cast<uint8_t>(BlockKind::Heading1) + (headingLevelOpen - 1));
+        openBlock(bk, headingAlignOpen, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(2, 12);  // tight top after ornament / soft break
       };
 
@@ -1067,7 +1265,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         if (classIsImplicitBreak(tag, spTop, spBot)) {
           openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
           out.setCurrentMarginsEmQ4(static_cast<int8_t>(std::min(127, spTop)),
-                                   static_cast<int8_t>(std::min(127, spBot)));
+                                    static_cast<int8_t>(std::min(127, spBot)));
           closeBlock();
           continue;
         }
@@ -1115,14 +1313,21 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           if (align == Align::Justify) align = Align::Center;
         }
         // Explicit SE/calibre flush classes.
-        if (attrHasClass(tag, "continued") || attrHasClass(tag, "first-child") ||
-            attrHasClass(tag, "firstchild") || attrHasClass(tag, "noindent") ||
-            attrHasClass(tag, "no-indent")) {
+        if (attrHasClass(tag, "continued") || attrHasClass(tag, "first-child") || attrHasClass(tag, "firstchild") ||
+            attrHasClass(tag, "noindent") || attrHasClass(tag, "no-indent")) {
           flags |= kBlockNoIndent;
         }
         if (dropCapArmed && kind == BlockKind::Paragraph) {
           flags |= kBlockDropCap | kBlockNoIndent;
           dropCapArmed = false;
+        }
+        if (kind == BlockKind::Paragraph && classSaysDropCap(tag)) {
+          flags |= kBlockDropCap | kBlockNoIndent;
+        }
+        Align htmlA = Align::Left;
+        if (htmlAlignAttr(tag, htmlA)) {
+          align = htmlA;
+          if (align == Align::Center || align == Align::Right) flags |= kBlockNoIndent;
         }
         applyInlineStyle(tag, st, sz, &align);
         applyClassEmphasis(tag, st, sz);
@@ -1141,10 +1346,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           // .citaini { margin: 2rem 1.5em 0 }; .firma { margin: 0.5rem 0 1rem }
           if (attrHasClass(tag, "firma")) {
             out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(8)),
-                                     static_cast<int8_t>(scaleBookVSpaceQ4(16)));
+                                      static_cast<int8_t>(scaleBookVSpaceQ4(16)));
           } else {
             out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(16)),
-                                     static_cast<int8_t>(scaleBookVSpaceQ4(4)));
+                                      static_cast<int8_t>(scaleBookVSpaceQ4(4)));
           }
           out.setCurrentIndentEmQ4(0);
         } else if (classIsAlignmentBlockContent(tag)) {
@@ -1154,9 +1359,8 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
                    align == Align::Center) {
           // Body / flush-first / center: no extra block gap (indent alone distinguishes).
           out.setCurrentMarginsEmQ4(0, 0);
-          out.setCurrentIndentEmQ4((flags & kBlockNoIndent) != 0 || align == Align::Center
-                                       ? 0
-                                       : static_cast<uint8_t>(16));
+          out.setCurrentIndentEmQ4((flags & kBlockNoIndent) != 0 || align == Align::Center ? 0
+                                                                                           : static_cast<uint8_t>(16));
         } else {
           out.setCurrentMarginsEmQ4(0, 0);
           out.setCurrentIndentEmQ4(16);  // p { text-indent: 1em }
@@ -1167,15 +1371,14 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "p")) {
-        endBlockStyle();
         closeBlock();
+        endBlockStyle();
         continue;
       }
 
       // .alignment-block { margin-top/bottom: 1.4em } — group air around Views/Bounty.
       // Scaled like other book-style spacers; collapses with neighboring breaks in layouter.
-      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") &&
-          attrHasClass(tag, "alignment-block")) {
+      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") && attrHasClass(tag, "alignment-block")) {
         closeBlock();
         openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(22)), 0);
@@ -1203,8 +1406,12 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
           (looksLikeTitleHost(tag) || classIsChapterLeftTitle(tag)) && !tag.selfClose) {
         closeBlock();
         // Alice .chapter is left + larger; other title hosts default center.
-        const Align divAlign =
-            classIsChapterLeftTitle(tag) ? Align::Left : (styleSaysCenter(tag) ? Align::Center : Align::Left);
+        const Align divAlign = [&]() {
+          Align a = classIsChapterLeftTitle(tag) ? Align::Left : (styleSaysCenter(tag) ? Align::Center : Align::Left);
+          Align htmlA = Align::Left;
+          if (htmlAlignAttr(tag, htmlA)) a = htmlA;
+          return a;
+        }();
         openBlock(BlockKind::Paragraph, divAlign, kBlockNoIndent);
         out.setCurrentMarginsEmQ4(4, 8);
         RunStyle st = RunStyle::Regular;
@@ -1223,9 +1430,11 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "div") && titleDivDepth > 0) {
+        closeBlock();
         endBlockStyle();
-        if (inBlock) closeBlock();
         --titleDivDepth;
+        noIndentNextParagraph = true;
+        dropCapArmed = true;
         continue;
       }
 
@@ -1280,7 +1489,17 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         }
         size_t altLen = 0;
         const char* alt = attrValue(tag, "alt", &altLen);
-        const int side = classSaysFloatRight(tag) ? 2 : (classSaysFloatLeft(tag) ? 1 : floatInherit);
+        int side = classSaysFloatRight(tag) ? 2 : (classSaysFloatLeft(tag) ? 1 : floatInherit);
+        Align imgHtml = Align::Left;
+        if (htmlAlignAttr(tag, imgHtml)) {
+          if (imgHtml == Align::Left) {
+            side = 1;
+          } else if (imgHtml == Align::Right) {
+            side = 2;
+          } else if (imgHtml == Align::Center) {
+            side = 0;
+          }
+        }
 
         // Placeholder mode: classic "[Image: alt]" text only (no decode / no plate).
         if (imageRendering == 1) {
@@ -1321,6 +1540,28 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
             continue;
           }
         }
+        // Chapter-number plates (Hail Mary / CrossInk): alt is the title. The
+        // JPEG often fails to decode and used to reserve a hollow full-width box.
+        if (alt && side == 0 && looksLikeChapterHeadingAlt(alt, altLen)) {
+          std::string readable;
+          if (buildReadableAltText(alt, altLen, readable, 1) && !readable.empty()) {
+            if (headingLevelOpen > 0 || titleDivDepth > 0) {
+              flushText();
+              (void)out.appendRun(curStyle().style, curStyle().size, readable.data(), readable.size());
+              continue;
+            }
+            closeBlock();
+            openBlock(BlockKind::Heading1, Align::Center, kBlockNoIndent);
+            out.setCurrentMarginsEmQ4(6, static_cast<int8_t>(scaleBookVSpaceQ4(32)));
+            beginBlockStyle(RunStyle::Bold, SizeStep::Plus2);
+            (void)out.appendRun(RunStyle::Bold, SizeStep::Plus2, readable.data(), readable.size());
+            closeBlock();
+            endBlockStyle();
+            noIndentNextParagraph = true;
+            dropCapArmed = true;
+            continue;
+          }
+        }
         // Close current text block (heading may reopen after ornament).
         closeBlock();
         if (src && vlen > 0 && vlen < 400) {
@@ -1338,8 +1579,7 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
               const Block& last = out.blocks().back();
               if (last.kind == BlockKind::Image && last.runCount > 0 && last.runBegin < out.runs().size()) {
                 const Run& lr = out.runs()[last.runBegin];
-                if (lr.textLen == use && out.textData() &&
-                    std::memcmp(out.textData() + lr.textOff, src, use) == 0) {
+                if (lr.textLen == use && out.textData() && std::memcmp(out.textData() + lr.textOff, src, use) == 0) {
                   if (headingLevelOpen > 0) reopenHeadingIfNeeded();
                   continue;
                 }
@@ -1348,15 +1588,24 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
             uint16_t imgFlags = kBlockNoIndent;
             // Parent .figleft / self float class → left letter float (Alice ornate C).
             // Illuminae: wrapper .figure_float_right_briefing → floatInherit right.
+            // HTML align="left|right" on <img> is the same contract as classic.
             if (side == 1) imgFlags = static_cast<uint16_t>(imgFlags | kBlockFloatLeft);
             if (side == 2) imgFlags = static_cast<uint16_t>(imgFlags | kBlockFloatRight);
             // Fourth Wing: .orn img { width: 12% } — small centered chapter ornament.
             // Only class / wrapper / explicit orn.png basename — do not match any
             // path containing "/orn" (false-positive on "ornate", "morning", folders).
-            const bool isOrnament = ornamentDepth > 0 || attrHasClass(tag, "orn") ||
-                                    (use >= 7 && containsI(src, use, "orn.png"));
+            const bool lastWasHeading = !out.blocks().empty() && out.blocks().back().kind >= BlockKind::Heading1 &&
+                                        out.blocks().back().kind <= BlockKind::Heading6;
+            const bool isOrnament = ornamentDepth > 0 || attrHasClass(tag, "orn") || attrHasClass(tag, "ornament") ||
+                                    (use >= 7 && containsI(src, use, "orn.png")) || containsI(src, use, "ornament") ||
+                                    containsI(src, use, "flourish") || containsI(src, use, "fleuron") ||
+                                    containsI(src, use, "headpiece");
             if (isOrnament) imgFlags = static_cast<uint16_t>(imgFlags | kBlockOrnament);
             openBlock(BlockKind::Image, Align::Center, imgFlags);
+            // Chapter-open decoration: air between title and flourish (v0.1.8 look).
+            if (side == 0 && (lastWasHeading || headingLevelOpen > 0 || isOrnament)) {
+              out.setCurrentMarginsEmQ4(6, 10);
+            }
             int cssW = parseStyleWidthPx(tag);
             if (cssW <= 0) cssW = floatWidthPx;
             // Side floats without rich alt (email chrome icons, etc.).
@@ -1390,10 +1639,14 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
 
-      if (!tag.closing &&
-          (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
+      if (!tag.closing && (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
         flushText();
-        pushStyle(mergeBold(curStyle().style), curStyle().size);
+        if (!tag.selfClose && innerIsOnlyOpeningPunct(p, end, tag.name, tag.nameLen)) {
+          // Keep a frame so the matching </b> pop is balanced, but do not bold "[".
+          pushStyle(curStyle().style, curStyle().size);
+        } else {
+          pushStyle(mergeBold(curStyle().style), curStyle().size);
+        }
         continue;
       }
       if (tag.closing && (ieq(tag.name, tag.nameLen, "b") || ieq(tag.name, tag.nameLen, "strong"))) {
@@ -1414,14 +1667,48 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
         continue;
       }
 
+      // Text decorations and scripts. These were dropped entirely before v20:
+      // <sup> footnote markers rendered full-size on the baseline, and <u>/<s>/
+      // <del>/<ins> passages lost the very thing that gave them meaning.
+      // GfxRenderer::drawText already understands the SUP/SUB bits (it scales the
+      // glyph and halves the advance); underline/strikethrough are painted as
+      // lines by RivuletEngine::paint, matching the classic TextBlock::render.
+      {
+        RunStyle decoration = RunStyle::Regular;
+        if (ieq(tag.name, tag.nameLen, "sup")) {
+          decoration = RunStyle::Superscript;
+        } else if (ieq(tag.name, tag.nameLen, "sub")) {
+          decoration = RunStyle::Subscript;
+        } else if (ieq(tag.name, tag.nameLen, "u") || ieq(tag.name, tag.nameLen, "ins")) {
+          decoration = RunStyle::Underline;
+        } else if (ieq(tag.name, tag.nameLen, "s") || ieq(tag.name, tag.nameLen, "strike") ||
+                   ieq(tag.name, tag.nameLen, "del")) {
+          decoration = RunStyle::Strikethrough;
+        }
+        if (decoration != RunStyle::Regular) {
+          flushText();
+          if (tag.closing) {
+            popStyle();
+          } else if (!tag.selfClose) {
+            pushStyle(mergeDecoration(curStyle().style, decoration), curStyle().size);
+          }
+          continue;
+        }
+      }
+
       // span / font: inherit + class/style emphasis
       if (!tag.closing && (ieq(tag.name, tag.nameLen, "span") || ieq(tag.name, tag.nameLen, "font")) &&
           !tag.selfClose) {
         flushText();
         RunStyle st = curStyle().style;
         SizeStep sz = curStyle().size;
-        applyInlineStyle(tag, st, sz);
-        applyClassEmphasis(tag, st, sz);
+        if (!innerIsOnlyOpeningPunct(p, end, tag.name, tag.nameLen)) {
+          applyInlineStyle(tag, st, sz);
+          applyClassEmphasis(tag, st, sz);
+        }
+        if (classSaysDropCap(tag) && inBlock) {
+          out.markDropCapOnCurrent();
+        }
         pushStyle(st, sz);
         continue;
       }
@@ -1434,7 +1721,10 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
       continue;
     }
 
-    if (inSkip || inHidden) {
+    // tableDepth > 1 = inside a nested table, whose content the classic engine
+    // discarded too. Suppressing only its tags would still let its text leak into
+    // the surrounding block.
+    if (inSkip || inHidden || tableDepth > 1) {
       ++p;
       continue;
     }
@@ -1466,6 +1756,19 @@ bool HtmlToIr::convert(const char* html, const size_t len, ChapterIr& out, const
     // Chunk long text runs; flush before textAcc needs a large reallocation.
     size_t remain = static_cast<size_t>(p - t0);
     const char* chunk = t0;
+    // After </i>/</b>/<span>, HTML whitespace is often the ONLY separator before
+    // the next word. appendCollapsedText drops leading spaces when dst is empty,
+    // which glued "Vampire"+"skill". If this block already has runs, keep one
+    // leading space when the chunk starts with whitespace.
+    if (remain > 0 && textAcc.empty() && inBlock && !out.blocks().empty() && out.blocks().back().runCount > 0) {
+      const char c0 = *chunk;
+      if (c0 == ' ' || c0 == '\n' || c0 == '\t' || c0 == '\r') {
+        if (!safePushChar(textAcc, ' ')) {
+          out.markFailed();
+          break;
+        }
+      }
+    }
     while (remain > 0 && !out.failed()) {
       if (textAcc.size() > 1536) flushText();
       const size_t take = std::min(remain, size_t(400));

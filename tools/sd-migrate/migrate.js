@@ -1,4 +1,4 @@
-/* Casper Data Migration Tool — same BookPathId contract as firmware (lib/FsHelpers/BookPathId.*) */
+/* CrossPoint Data Migration Tool — same BookPathId contract as firmware (lib/FsHelpers/BookPathId.*) */
 (function () {
   "use strict";
 
@@ -455,7 +455,7 @@
       const res = $("result");
       res.style.display = "block";
       res.className = "callout " + (errors ? "warn" : "ok");
-      res.innerHTML = `<strong>Done.</strong> books=${plan.books.length}, copied≈${copied}, errors=${errors}. Eject SD and boot Casper.`;
+      res.innerHTML = `<strong>Done.</strong> books=${plan.books.length}, copied≈${copied}, errors=${errors}. Eject SD and boot CrossPoint.`;
       log("Finished", errors ? "warn" : "ok");
     } catch (e) {
       log(String(e.message || e), "err");

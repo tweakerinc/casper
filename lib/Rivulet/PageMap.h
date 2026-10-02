@@ -20,6 +20,32 @@ struct IrCursor {
   bool operator!=(const IrCursor& o) const { return !(*this == o); }
 };
 
+inline bool operator<(const IrCursor& a, const IrCursor& b) {
+  if (a.blockIndex != b.blockIndex) return a.blockIndex < b.blockIndex;
+  if (a.runIndex != b.runIndex) return a.runIndex < b.runIndex;
+  return a.byteInRun < b.byteInRun;
+}
+
+// Last page whose start <= cursor. starts[i] must be in IR order.
+// Device eb84fe08: scaling 23/46 into a ~81 heuristic landed at 41/53; looking
+// up the live IR cursor in the new map (or walking until it) keeps the place.
+inline int pageIndexForCursor(const IrCursor* starts, const int n, const IrCursor& cursor) {
+  if (!starts || n <= 0) return -1;
+  int ans = 0;
+  int lo = 0;
+  int hi = n - 1;
+  while (lo <= hi) {
+    const int mid = lo + (hi - lo) / 2;
+    if (!(cursor < starts[mid])) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 // Thin page map: page i begins at cursors[i]. Built by full layout pass or progressive fill.
 class PageMap {
  public:
@@ -64,6 +90,11 @@ class PageMap {
   [[nodiscard]] IrCursor pageStart(int pageIndex) const;
   [[nodiscard]] bool hasPage(int pageIndex) const {
     return pageIndex >= 0 && pageIndex < static_cast<int>(starts_.size());
+  }
+  // Last known page that begins at or before cursor. -1 if the map is empty.
+  [[nodiscard]] int pageContaining(const IrCursor& cursor) const {
+    if (starts_.empty()) return -1;
+    return pageIndexForCursor(starts_.data(), knownPages(), cursor);
   }
 
   bool saveToFile(const char* path) const;

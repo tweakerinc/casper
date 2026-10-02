@@ -1,4 +1,4 @@
-# Nova — Casper greenfield firmware
+# Nova — CrossPoint greenfield firmware
 
 **Nova** is a from-scratch application firmware for Xteink X3/X4. It does **not** use CrossPoint or CrossInk product code.
 
@@ -34,7 +34,7 @@ From this directory:
 
 Output: `.pio/build/default/firmware.bin`
 
-Legacy Casper (CrossPoint-lineage app) still builds from the **repo root** (`pio run -e default`). Nova is intentionally separate so we can ship a clean binary without gutting the old tree until feature parity.
+Legacy CrossPoint (CrossPoint-lineage app) still builds from the **repo root** (`pio run -e default`). Nova is intentionally separate so we can ship a clean binary without gutting the old tree until feature parity.
 
 ## Layout
 

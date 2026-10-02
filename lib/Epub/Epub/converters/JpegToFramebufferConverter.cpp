@@ -51,7 +51,14 @@ struct JpegContext {
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
 // avoiding the need for global file state.
 void* jpegOpen(const char* filename, int32_t* size) {
-  HalFile* f = new HalFile();
+  // nothrow: a bare `new` calls abort() on failure under -fno-exceptions, and
+  // this runs during image decode — precisely when the heap is at its worst.
+  // JPEGDEC already treats a null handle as "could not open".
+  HalFile* f = new (std::nothrow) HalFile();
+  if (!f) {
+    LOG_ERR("JPG", "OOM: HalFile handle for %s", filename ? filename : "(null)");
+    return nullptr;
+  }
   if (!Storage.openFileForRead("JPG", std::string(filename), *f)) {
     delete f;
     return nullptr;

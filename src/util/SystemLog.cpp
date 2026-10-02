@@ -3,14 +3,15 @@
 #include <Arduino.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
+#include <Logging.h>
 #include <common/FsApiConstants.h>
 
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
-#include "CasperSettings.h"
-#include "util/CasperLogPaths.h"
+#include "CrossPointSettings.h"
+#include "util/CrossPointLogPaths.h"
 
 namespace SystemLog {
 namespace {
@@ -36,53 +37,68 @@ size_t gFileBytes = 0;
 bool gOpen = false;
 bool gEnabled = false;
 uint8_t gLevel = 0;
-char gPath[48] = "/.casper-logs/log_00001.log";
+char gPath[48] = "/.crosspoint-logs/log_00001.log";
+bool gVisible = false;
+uint8_t gFlushFails = 0;
+
+constexpr oflag_t kAppendFlags = static_cast<oflag_t>(O_RDWR | O_CREAT | O_APPEND);
+
+void appendLine(const char* line);
+
+const char* activeDir() { return gVisible ? CrossPointLogPaths::kVisibleDir : CrossPointLogPaths::kDir; }
+const char* activeIndex() { return gVisible ? CrossPointLogPaths::kVisibleIndex : CrossPointLogPaths::kIndex; }
+const char* activePattern() {
+  return gVisible ? CrossPointLogPaths::kVisibleSystemLogPattern : CrossPointLogPaths::kSystemLogPattern;
+}
+
+void mirrorSerialLine(const char* line) {
+  if (!gEnabled || !line || !line[0]) return;
+  appendLine(line);
+}
 
 // Compact name for field logs (id still logged for exact SETTINGS.uiTheme).
 const char* themeNameForId(const uint8_t id) {
-  switch (static_cast<CasperSettings::UI_THEME>(id)) {
-    case CasperSettings::UI_THEME::CLASSIC:
+  switch (static_cast<CrossPointSettings::UI_THEME>(id)) {
+    case CrossPointSettings::UI_THEME::CLASSIC:
       return "classic";
-    case CasperSettings::UI_THEME::LYRA:
+    case CrossPointSettings::UI_THEME::LYRA:
       return "lyra";
-    case CasperSettings::UI_THEME::LYRA_3_COVERS:
+    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
       return "lyra3";
-    case CasperSettings::UI_THEME::ROUNDEDRAFF:
+    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
       return "roundedraff";
-    case CasperSettings::UI_THEME::MINIMAL:
+    case CrossPointSettings::UI_THEME::MINIMAL:
       return "minimal";
-    case CasperSettings::UI_THEME::STATS_LIFE:
+    case CrossPointSettings::UI_THEME::STATS_LIFE:
       return "stats_life";
-    case CasperSettings::UI_THEME::LYRA_CAROUSEL:
+    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
       return "lyra_carousel";
-    case CasperSettings::UI_THEME::DASHBOARD_MAGAZINE:
+    case CrossPointSettings::UI_THEME::DASHBOARD_MAGAZINE:
       return "dash_magazine";
-    case CasperSettings::UI_THEME::DASHBOARD_CARD:
+    case CrossPointSettings::UI_THEME::DASHBOARD_CARD:
       return "dash_card";
-    case CasperSettings::UI_THEME::BARE:
+    case CrossPointSettings::UI_THEME::BARE:
       return "bare";
-    case CasperSettings::UI_THEME::DASHBOARD_RECENTS:
+    case CrossPointSettings::UI_THEME::DASHBOARD_RECENTS:
       return "dash_recents";
-    case CasperSettings::UI_THEME::DASHBOARD_SCROLL:
+    case CrossPointSettings::UI_THEME::DASHBOARD_SCROLL:
       return "dash_scroll";
-    case CasperSettings::UI_THEME::STATS:
+    case CrossPointSettings::UI_THEME::STATS:
       return "stats";
-    case CasperSettings::UI_THEME::PENUMBRA:
+    case CrossPointSettings::UI_THEME::PENUMBRA:
       return "penumbra";
-    case CasperSettings::UI_THEME::GHOST:
+    case CrossPointSettings::UI_THEME::GHOST:
       return "ghost";
     default:
       return "other";
   }
 }
 
-void buildPath(const uint16_t index) {
-  snprintf(gPath, sizeof(gPath), CasperLogPaths::kSystemLogPattern, static_cast<unsigned>(index));
-}
+void buildPath(const uint16_t index) { snprintf(gPath, sizeof(gPath), activePattern(), static_cast<unsigned>(index)); }
 
 bool readIndexFile() {
   HalFile f;
-  if (!Storage.openFileForRead("SLOG", CasperLogPaths::kIndex, f)) return false;
+  if (!Storage.openFileForRead("SLOG", activeIndex(), f)) return false;
   char buf[16] = {};
   const int n = f.read(buf, sizeof(buf) - 1);
   f.close();
@@ -96,7 +112,7 @@ bool readIndexFile() {
 void writeIndexFile() {
   char buf[16];
   snprintf(buf, sizeof(buf), "%u\n", static_cast<unsigned>(gFileIndex));
-  Storage.writeFile(CasperLogPaths::kIndex, String(buf));
+  Storage.writeFile(activeIndex(), String(buf));
 }
 
 size_t fileSizeIfExists(const char* path) {
@@ -118,7 +134,7 @@ void rotateIfNeeded(const size_t upcoming) {
   if (gFileBytes + gBufLen + upcoming < kMaxFileBytes) return;
   // Flush current buffer into the old file first, then start a new one.
   if (gBufLen > 0 && gOpen) {
-    HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+    HalFile f = Storage.open(gPath, kAppendFlags);
     if (f) {
       f.write(gBuf, gBufLen);
       f.close();
@@ -131,8 +147,9 @@ void rotateIfNeeded(const size_t upcoming) {
   openForAppend();
   // Tiny header on the new file.
   char hdr[96];
-  snprintf(hdr, sizeof(hdr), "==== casper system log file %05u (continued) ====\n", static_cast<unsigned>(gFileIndex));
-  HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  snprintf(hdr, sizeof(hdr), "==== crosspoint system log file %05u (continued) ====\n",
+           static_cast<unsigned>(gFileIndex));
+  HalFile f = Storage.open(gPath, kAppendFlags);
   if (f) {
     f.print(hdr);
     gFileBytes += strlen(hdr);
@@ -146,12 +163,13 @@ void flushUnlocked() {
     return;
   }
   rotateIfNeeded(0);
-  HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+  HalFile f = Storage.open(gPath, kAppendFlags);
   if (!f) {
-    // Drop buffer rather than blocking forever — logging must not brick sleep/wake.
-    gBufLen = 0;
+    if (gFlushFails < 8) ++gFlushFails;
+    if (gFlushFails >= 8) gBufLen = 0;
     return;
   }
+  gFlushFails = 0;
   f.write(reinterpret_cast<const uint8_t*>(gBuf), gBufLen);
   f.close();
   gFileBytes += gBufLen;
@@ -168,7 +186,7 @@ void appendLine(const char* line) {
   if (n + 1 >= kBufCapacity) {
     flushUnlocked();
     rotateIfNeeded(n + 1);
-    HalFile f = Storage.open(gPath, static_cast<oflag_t>(O_WRONLY | O_CREAT | O_APPEND));
+    HalFile f = Storage.open(gPath, kAppendFlags);
     if (f) {
       f.print(line);
       if (line[n - 1] != '\n') f.print("\n");
@@ -198,15 +216,18 @@ void appendLine(const char* line) {
 
 void begin() {
   gLevel = SETTINGS.systemLogLevel;
-  if (gLevel >= CasperSettings::SYSTEM_LOG_LEVEL_COUNT) {
-    gLevel = CasperSettings::SYSTEM_LOG_OFF;
+  if (gLevel >= CrossPointSettings::SYSTEM_LOG_LEVEL_COUNT) {
+    gLevel = CrossPointSettings::SYSTEM_LOG_OFF;
   }
-  gEnabled = (gLevel != CasperSettings::SYSTEM_LOG_OFF);
+  gEnabled = (gLevel != CrossPointSettings::SYSTEM_LOG_OFF);
   gBufLen = 0;
   gSessionT0 = millis();
   gLastFlushMs = gSessionT0;
   gLastHeapSampleMs = gSessionT0;
   gOpen = false;
+  gVisible = false;
+  gFlushFails = 0;
+  setLogMirror(nullptr);
 
   if (!gEnabled) return;
   if (!Storage.ready()) {
@@ -214,16 +235,22 @@ void begin() {
     return;
   }
 
-  if (!Storage.ensureDirectoryExists(CasperLogPaths::kDir)) {
-    gEnabled = false;
-    return;
+  if (!Storage.exists(CrossPointLogPaths::kDir) && Storage.exists(CrossPointLogPaths::kLegacyCasperDir)) {
+    Storage.rename(CrossPointLogPaths::kLegacyCasperDir, CrossPointLogPaths::kDir);
+  }
+  if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kDir)) {
+    gVisible = true;
+    if (!Storage.ensureDirectoryExists(CrossPointLogPaths::kVisibleDir)) {
+      gEnabled = false;
+      return;
+    }
   }
   // Sweep a mistaken root qr_timing.log if an older build left one.
-  if (Storage.exists(CasperLogPaths::kLegacyRootQrTiming)) {
-    if (Storage.exists(CasperLogPaths::kQrTiming)) {
-      Storage.remove(CasperLogPaths::kLegacyRootQrTiming);
+  if (Storage.exists(CrossPointLogPaths::kLegacyRootQrTiming)) {
+    if (Storage.exists(CrossPointLogPaths::kQrTiming)) {
+      Storage.remove(CrossPointLogPaths::kLegacyRootQrTiming);
     } else {
-      Storage.rename(CasperLogPaths::kLegacyRootQrTiming, CasperLogPaths::kQrTiming);
+      Storage.rename(CrossPointLogPaths::kLegacyRootQrTiming, CrossPointLogPaths::kQrTiming);
     }
   }
   if (!readIndexFile()) {
@@ -243,25 +270,50 @@ void begin() {
   char hdr[256];
   snprintf(hdr, sizeof(hdr),
            "\n==== SYSTEM LOG SESSION ====\n"
-           "t0=%lu device=%s level=%u aa=%u anti_ghost=%d theme=%u(%s) ver=%s file=%s\n",
+           "t0=%lu device=%s level=%u aa=%u anti_ghost=%d theme=%u(%s) ver=%s build=%s file=%s\n",
            static_cast<unsigned long>(gSessionT0), gpio.deviceIsX3() ? "X3" : "X4", static_cast<unsigned>(gLevel),
            static_cast<unsigned>(SETTINGS.textAntiAliasing), SETTINGS.getRefreshFrequency(),
            static_cast<unsigned>(SETTINGS.uiTheme), themeNameForId(SETTINGS.uiTheme),
-#ifdef CASPER_VERSION
-           CASPER_VERSION,
+#ifdef CROSSPOINT_VERSION
+           CROSSPOINT_VERSION,
+#else
+           "?",
+#endif
+  // ver= is the product version and repeats across builds; build= is the
+  // commit that produced this firmware. Without it a capture cannot be
+  // matched to a build, which cost several rounds of guesswork.
+#ifdef CROSSPOINT_BUILD_ID
+           CROSSPOINT_BUILD_ID,
 #else
            "?",
 #endif
            gPath);
   appendLine(hdr);
   flushUnlocked();
+  if (!Storage.exists(gPath)) {
+    // Hidden-dir append failed — retry in the visible /casper-logs folder.
+    gVisible = true;
+    if (Storage.ensureDirectoryExists(activeDir())) {
+      gFileIndex = 1;
+      writeIndexFile();
+      openForAppend();
+      appendLine(hdr);
+      flushUnlocked();
+    }
+  }
+  if (!Storage.exists(gPath)) {
+    gEnabled = false;
+    gOpen = false;
+    return;
+  }
+  setLogMirror(&mirrorSerialLine);
 }
 
 void reloadLevel() {
   const uint8_t prev = gLevel;
   gLevel = SETTINGS.systemLogLevel;
-  if (gLevel >= CasperSettings::SYSTEM_LOG_LEVEL_COUNT) gLevel = CasperSettings::SYSTEM_LOG_OFF;
-  const bool want = (gLevel != CasperSettings::SYSTEM_LOG_OFF);
+  if (gLevel >= CrossPointSettings::SYSTEM_LOG_LEVEL_COUNT) gLevel = CrossPointSettings::SYSTEM_LOG_OFF;
+  const bool want = (gLevel != CrossPointSettings::SYSTEM_LOG_OFF);
   if (want && !gEnabled) {
     begin();
     return;
@@ -329,15 +381,19 @@ void end() {
   if (!gEnabled) return;
   log("SYS", "LOG_END");
   flushUnlocked();
+  setLogMirror(nullptr);
   gEnabled = false;
   gOpen = false;
 }
 
 bool enabled() { return gEnabled; }
-bool timingEnabled() { return gEnabled && gLevel >= CasperSettings::SYSTEM_LOG_TIMING; }
-bool verboseEnabled() { return gEnabled && gLevel >= CasperSettings::SYSTEM_LOG_VERBOSE; }
+bool timingEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_LOG_TIMING; }
+bool verboseEnabled() { return gEnabled && gLevel >= CrossPointSettings::SYSTEM_LOG_VERBOSE; }
 
 void maybeSampleHeap() {
+  if (!gEnabled && SETTINGS.systemLogLevel != CrossPointSettings::SYSTEM_LOG_OFF && Storage.ready()) {
+    begin();
+  }
   if (!timingEnabled()) return;
   const uint32_t now = millis();
   const bool hangWatch = (gHangWatchUntilMs != 0 && now < gHangWatchUntilMs);
@@ -371,6 +427,12 @@ void armHangWatch(const char* reason) {
   log("ALIVE", "arm watch=%s for=%lums fre=%u", gHangWatchReason, static_cast<unsigned long>(kHangWatchDurationMs),
       static_cast<unsigned>(ESP.getFreeHeap()));
   flush();
+}
+
+void disarmHangWatch() {
+  if (gHangWatchUntilMs == 0 && gHangWatchReason[0] == '\0') return;
+  gHangWatchUntilMs = 0;
+  gHangWatchReason[0] = '\0';
 }
 
 void logCritical(const char* tag, const char* fmt, ...) {

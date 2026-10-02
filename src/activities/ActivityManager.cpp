@@ -1,27 +1,32 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <HalGPIO.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
 
-#include "CasperState.h"
-
+#include "CrossPointState.h"
+#include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
-
-#include "OpdsServerStore.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
-#include "network/CasperWebServerActivity.h"
+#include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/GlyphWeightPolicy.h"
 #include "util/SystemLog.h"
+
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Normal) ==
+              static_cast<uint8_t>(glyphweight::Bw::Normal));
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Mild) == static_cast<uint8_t>(glyphweight::Bw::Mild));
+static_assert(static_cast<uint8_t>(GfxRenderer::BwGlyphWeight::Dense) == static_cast<uint8_t>(glyphweight::Bw::Dense));
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -70,6 +75,11 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      // X4 UI is FAST with no grey pass — Dense inks the light fringe so Source
+      // Serif chrome is not whispy. Reader overrides per AA in its own paint.
+      if (!currentActivity->isReaderActivity()) {
+        renderer.setBwGlyphWeight(glyphweight::as<GfxRenderer::BwGlyphWeight>(glyphweight::chrome(!gpio.deviceIsX3())));
+      }
       const uint32_t tRender = millis();
       currentActivity->render(std::move(lock));
       const uint32_t renderMs = millis() - tRender;
@@ -277,7 +287,7 @@ void ActivityManager::swapActivity(std::unique_ptr<Activity>&& newActivity) {
 }
 
 void ActivityManager::goToFileTransfer() {
-  replaceActivity(std::make_unique<CasperWebServerActivity>(renderer, mappedInput));
+  replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToSettings() {
@@ -373,11 +383,11 @@ void ActivityManager::goToReader(std::string path) {
   currentActivity->onEnter();
 }
 
-void ActivityManager::goToSleep(bool fromTimeout, bool useQuickResume) {
+void ActivityManager::goToSleep(bool fromTimeout) {
   // Flag while reader (etc.) onExit runs so leave chrome ("Saving...") is not painted
-  // over the page before Quick Resume / wallpaper sleep art.
+  // over the page before wallpaper sleep art.
   sleepTransition_ = true;
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout, useQuickResume));
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
   sleepTransition_ = false;
 }
@@ -409,7 +419,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::RECENTS;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
-    } else if (activityName == "CasperWebServer") {
+    } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     }
     // Do not map Settings → SETTINGS_MENU: that selected the classic bottom-row
@@ -472,15 +482,15 @@ void ActivityManager::persistForSleep() {
 
 uint8_t ActivityManager::classifySleepResumeTarget() const {
   if (isReaderMenuActivity() && isReaderActivity()) {
-    return CasperState::RESUME_READER_MENU;
+    return CrossPointState::RESUME_READER_MENU;
   }
   if (isReaderActivity()) {
-    return CasperState::RESUME_READER;
+    return CrossPointState::RESUME_READER;
   }
   if (isSettingsActivity()) {
-    return CasperState::RESUME_SETTINGS;
+    return CrossPointState::RESUME_SETTINGS;
   }
-  return CasperState::RESUME_HOME;
+  return CrossPointState::RESUME_HOME;
 }
 
 bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }

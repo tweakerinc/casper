@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "BackupStatsActivity.h"
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
 #include "activities/util/IntervalSelectionActivity.h"
@@ -146,8 +146,8 @@ void StatsSettingsActivity::handleSelection() {
       startActivityForResult(std::make_unique<IntervalSelectionActivity>(
                                  renderer, mappedInput, "SessionTimeInterval", StrId::STR_SESSION_TIME,
                                  static_cast<int>(SETTINGS.readingSessionIdleMinutes),
-                                 static_cast<int>(CasperSettings::MIN_SESSION_IDLE_MINUTES),
-                                 static_cast<int>(CasperSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
+                                 static_cast<int>(CrossPointSettings::MIN_SESSION_IDLE_MINUTES),
+                                 static_cast<int>(CrossPointSettings::MAX_SESSION_IDLE_MINUTES), 1, 5,
                                  StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, true),
                              [this](const ActivityResult& result) {
                                if (!result.isCancelled) {

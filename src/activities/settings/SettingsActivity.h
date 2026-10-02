@@ -5,12 +5,12 @@
 #include <string>
 #include <vector>
 
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
-enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
+enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING, HEADER };
 
 enum class SettingAction {
   None,
@@ -36,7 +36,7 @@ enum class SettingAction {
 struct SettingInfo {
   StrId nameId;
   SettingType type;
-  uint8_t CasperSettings::* valuePtr = nullptr;
+  uint8_t CrossPointSettings::* valuePtr = nullptr;
   std::vector<StrId> enumValues;
   std::vector<std::string> enumStringValues;
   SettingAction action = SettingAction::None;
@@ -77,7 +77,7 @@ struct SettingInfo {
     return *this;
   }
 
-  static SettingInfo Toggle(StrId nameId, uint8_t CasperSettings::* ptr, const char* key = nullptr,
+  static SettingInfo Toggle(StrId nameId, uint8_t CrossPointSettings::* ptr, const char* key = nullptr,
                             StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -88,7 +88,7 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo Enum(StrId nameId, uint8_t CasperSettings::* ptr, std::vector<StrId> values,
+  static SettingInfo Enum(StrId nameId, uint8_t CrossPointSettings::* ptr, std::vector<StrId> values,
                           const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -108,7 +108,17 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo Value(StrId nameId, uint8_t CasperSettings::* ptr, const ValueRange valueRange,
+  // Non-interactive section title (skipped by Up/Down). Painted as a Settings
+  // chrome replica: UI_12 bold between two rules, then verticalSpacing.
+  static SettingInfo Header(StrId nameId, StrId category) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::HEADER;
+    s.category = category;
+    return s;
+  }
+
+  static SettingInfo Value(StrId nameId, uint8_t CrossPointSettings::* ptr, const ValueRange valueRange,
                            const char* key = nullptr, StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;
@@ -174,9 +184,7 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> systemSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
-  bool preserveQuickResumeTimeoutOn = false;
-  bool quickResumeTimeoutAutoEnabled = false;
-  // First paint only: soft reinforce pulls (home residual); list nav stays FAST.
+  // First paint (and X4 resume from a child): SoftOpen. List nav stays FAST.
   bool softOpenPending_ = true;
 
   OptionPopup optionPopup;
@@ -195,7 +203,6 @@ class SettingsActivity final : public Activity {
   void openSleepTimeoutPicker();
   void openSessionTimePicker();
   void rebuildSettingsLists();
-  void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
   void applyCategorySelection();
 
  public:

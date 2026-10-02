@@ -21,7 +21,9 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "network/WifiPowerSaveGuard.h"
 #include "util/UiGhostPolicy.h"
+#include "util/WifiTransferPolicy.h"
 
 namespace {
 // Names match legacy fonts.json for families compiled into firmware (main.cpp).
@@ -30,8 +32,7 @@ bool isFirmwareBuiltinFamily(const char* name) {
   if (name == nullptr || name[0] == '\0') return false;
   return strcasecmp(name, "Literata") == 0 || strcasecmp(name, "SourceSerif4") == 0 ||
          strcasecmp(name, "Source Serif 4") == 0 || strcasecmp(name, "Sourcerer") == 0 ||
-         strcasecmp(name, "Bitter") == 0 ||
-         strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
+         strcasecmp(name, "Bitter") == 0 || strcasecmp(name, "LexendDeca") == 0 || strcasecmp(name, "Lexend Deca") == 0;
 }
 
 // --- Minimal fonts.json (schema v1) scanner ---------------------------------
@@ -161,7 +162,7 @@ FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputMan
 // --- Lifecycle ---
 
 void FontDownloadActivity::prepareHeapForNetwork() {
-  // legacy: drop SD faces + catalog before Wi‑Fi. Casper also clears the
+  // legacy: drop SD faces + catalog before Wi‑Fi. CrossPoint also clears the
   // glyph cache — it fragments maxAlloc and competes with HTTP buffers.
   sdFontSystem.releaseForNetwork(renderer);
   if (FontCacheManager* fcm = renderer.getFontCacheManager()) {
@@ -432,22 +433,27 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // Extra headroom right before HTTP (Wi‑Fi may have allocated scan tables).
   prepareHeapForNetwork();
 
-  LOG_INF("FONT", "Fetching font manifest: %s", FONT_MANIFEST_URL);
+  const std::string manifestUrl = wifitransfer::fontManifestUrl(FONTS_MANIFEST_VERSION, CPFONT_VERSION);
+  LOG_INF("FONT", "Fetching font manifest: %s", manifestUrl.c_str());
   Storage.remove(MANIFEST_TMP);
   HttpDownloader::DownloadError result = HttpDownloader::HTTP_ERROR;
-  for (int attempt = 1; attempt <= kManifestMaxAttempts; ++attempt) {
-    if (attempt > 1) {
-      LOG_INF("FONT", "Retrying font manifest download (%d/%d)", attempt, kManifestMaxAttempts);
-      delay(kRetryDelayMs);
+  {
+    GfxRenderer::FrameBufferLoan tlsLoan(renderer, wifitransfer::loanFramebufferForTls());
+    WifiPowerSaveGuard wifiPowerSaveGuard;
+    for (int attempt = 1; attempt <= kManifestMaxAttempts; ++attempt) {
+      if (attempt > 1) {
+        LOG_INF("FONT", "Retrying font manifest download (%d/%d)", attempt, kManifestMaxAttempts);
+        delay(kRetryDelayMs);
+      }
+      result = HttpDownloader::downloadToFile(manifestUrl, MANIFEST_TMP, nullptr);
+      if (result == HttpDownloader::OK) break;
+      LOG_ERR("FONT", "Font manifest download attempt failed (%d/%d, error=%d) free=%u maxAlloc=%u", attempt,
+              kManifestMaxAttempts, static_cast<int>(result), static_cast<unsigned>(ESP.getFreeHeap()),
+              static_cast<unsigned>(ESP.getMaxAllocHeap()));
     }
-    result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
-    if (result == HttpDownloader::OK) break;
-    LOG_ERR("FONT", "Font manifest download attempt failed (%d/%d, error=%d) free=%u maxAlloc=%u", attempt,
-            kManifestMaxAttempts, static_cast<int>(result), static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
   if (result != HttpDownloader::OK) {
-    LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
+    LOG_ERR("FONT", "Failed to fetch manifest from %s", manifestUrl.c_str());
     errorMessage_ = "Failed to fetch font list";
     Storage.remove(MANIFEST_TMP);
     return false;
@@ -661,26 +667,36 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     std::string url = baseUrl_ + file.name;
 
-    // Throttle UI refresh during download: full-screen e-ink redraws each tick
-    // thrash the heap with TLS + framebuffers and have caused device crashes.
-    unsigned long lastProgressUiMs = 0;
-    auto result = HttpDownloader::downloadToFile(
-        url, destPath,
-        [this, &lastProgressUiMs](size_t downloaded, size_t total) {
-          fileProgress_ = downloaded;
-          fileTotal_ = total;
-          mappedInput.update();
-          if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
-              mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-            cancelRequested_ = true;
-          }
-          const unsigned long now = millis();
-          if (now - lastProgressUiMs >= 750) {
-            lastProgressUiMs = now;
-            requestUpdate(true);
-          }
-        },
-        &cancelRequested_);
+    // Do not paint the e-ink panel during TLS/HTTP. Full-screen redraws each
+    // tick thrashed heap with wolfSSL and stalled the 60 s socket timeout.
+    auto result = HttpDownloader::HTTP_ERROR;
+    {
+      GfxRenderer::FrameBufferLoan tlsLoan(renderer, wifitransfer::loanFramebufferForTls());
+      WifiPowerSaveGuard wifiPowerSaveGuard;
+      for (int attempt = 1; attempt <= wifitransfer::kFontFileAttempts; ++attempt) {
+        if (attempt > 1) {
+          LOG_INF("FONT", "Retrying %s (%d/%d)", file.name.c_str(), attempt, wifitransfer::kFontFileAttempts);
+          delay(wifitransfer::kRetryDelayMs);
+        }
+        result = HttpDownloader::downloadToFile(
+            url, destPath,
+            [this](size_t downloaded, size_t total) {
+              fileProgress_ = downloaded;
+              fileTotal_ = total;
+              mappedInput.update();
+              if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+                  mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+                cancelRequested_ = true;
+              }
+              if (wifitransfer::paintDuringTlsTransfer()) {
+                requestUpdate(true);
+              }
+            },
+            &cancelRequested_);
+        if (result == HttpDownloader::OK || result == HttpDownloader::ABORTED) break;
+        LOG_ERR("FONT", "Download attempt failed: %s (%d)", file.name.c_str(), static_cast<int>(result));
+      }
+    }
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(family.name.c_str());

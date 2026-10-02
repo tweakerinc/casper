@@ -1,6 +1,6 @@
 #pragma once
 
-#include <CasperSettings.h>
+#include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalTiltSensor.h>
@@ -8,7 +8,9 @@
 #include <components/bars/tap-zones.h>
 
 #include "MappedInputManager.h"
+#include "PageTurnPolicy.h"
 #include "activities/ActivityManager.h"
+#include "util/UiGhostPolicy.h"
 
 namespace ReaderUtils {
 
@@ -36,13 +38,18 @@ inline void applyReaderDarkModeIfEnabled(const GfxRenderer& /*renderer*/) {}
 // Push the current framebuffer to the panel with Dark Mode polarity.
 // - System-wide: invertOnDisplay is armed by loop(); displayBuffer inverts there.
 // - Reader-only: temporary invert around the refresh so home/menus stay light.
-// Use for reader pages and reader-context chrome (not home).
+// Use for reader pages and reader-context chrome that must replace the whole
+// plate. Corner cues (Opening / Saving / Loading) must use drawTopLeftStatus
+// with refresh=true (windowed). A full FAST of a white FB is the blank
+// "Saving" / "Opening" screen.
 inline void displayWithDarkMode(const GfxRenderer& renderer,
                                 const HalDisplay::RefreshMode mode = HalDisplay::FAST_REFRESH) {
   if (readerOnlyDarkPaint() && !renderer.getInvertOnDisplay()) {
     renderer.invertScreen();
     renderer.displayBuffer(mode);
     renderer.invertScreen();
+    // displayBuffer saw invertOnDisplay=false; glass is still inverted.
+    renderer.notePanelInverted(true);
     return;
   }
   renderer.displayBuffer(mode);
@@ -60,22 +67,24 @@ constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
 // Was 400ms; shave it so single-tap menu still feels snappy without killing double-tap.
 constexpr unsigned long DOUBLE_PRESS_MENU_MS = 220;
 
-// Extra air under top chrome (battery/clock) and matching reserve above bottom
-// chrome so page text never sits under the status bar or dictionary button strip.
-// Bumps slightly when Manage Reader UI → Font Size is larger than 8 pt.
+// Extra air under top chrome (battery/clock) so page text never sits under it.
+// NOTE: reader viewport geometry now lives in ReaderRenderKey::compute, which
+// derives clearance from the body line height (half paragraph) and takes the
+// max of the status band and the drawn hint strip. These remain for non-Rivulet
+// readers (Txt/Xtc) that still use fixed chrome padding.
 inline int readerTopChromeExtra() {
   switch (SETTINGS.statusBarFontSize) {
-    case CasperSettings::STATUS_BAR_FONT_10:
+    case CrossPointSettings::STATUS_BAR_FONT_10:
       return 28;
-    case CasperSettings::STATUS_BAR_FONT_12:
+    case CrossPointSettings::STATUS_BAR_FONT_12:
       return 32;
     default:
       return 24;
   }
 }
 inline int readerBottomChromeExtra() { return readerTopChromeExtra(); }
-constexpr int kReaderTopChromeExtra = 24;     // legacy default; prefer readerTopChromeExtra()
-constexpr int kReaderBottomChromeExtra = 24;  // mirror top air
+constexpr int kReaderTopChromeExtra = 24;
+constexpr int kReaderBottomChromeExtra = 24;
 constexpr int kReaderBottomChromePad = 4;
 
 enum ReaderTouchAction : freeink::ui::ActionId {
@@ -85,16 +94,16 @@ enum ReaderTouchAction : freeink::ui::ActionId {
 
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
-    case CasperSettings::ORIENTATION::PORTRAIT:
+    case CrossPointSettings::ORIENTATION::PORTRAIT:
       renderer.setOrientation(GfxRenderer::Orientation::Portrait);
       break;
-    case CasperSettings::ORIENTATION::LANDSCAPE_CW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
       break;
-    case CasperSettings::ORIENTATION::INVERTED:
+    case CrossPointSettings::ORIENTATION::INVERTED:
       renderer.setOrientation(GfxRenderer::Orientation::PortraitInverted);
       break;
-    case CasperSettings::ORIENTATION::LANDSCAPE_CCW:
+    case CrossPointSettings::ORIENTATION::LANDSCAPE_CCW:
       renderer.setOrientation(GfxRenderer::Orientation::LandscapeCounterClockwise);
       break;
     default:
@@ -108,8 +117,26 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
+inline void drainPageTurnEdges(const MappedInputManager& input) {
+  (void)input.wasPressed(MappedInputManager::Button::PageBack);
+  (void)input.wasReleased(MappedInputManager::Button::PageBack);
+  (void)input.wasPressed(MappedInputManager::Button::PageForward);
+  (void)input.wasReleased(MappedInputManager::Button::PageForward);
+}
+
+// Back is held or just pressed. Page-turn uses press; Back-to-home uses release,
+// so the same physical tap otherwise turns then leaves.
+inline bool backExitActive(const MappedInputManager& input) {
+  return input.isPressed(MappedInputManager::Button::Back) || input.wasPressed(MappedInputManager::Button::Back);
+}
+
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
+  if (backExitActive(input)) {
+    drainPageTurnEdges(input);
+    return {false, false, false};
+  }
+  const bool usePress =
+      SETTINGS.longPressSideA == SETTINGS.LP_MENU_DISABLED && SETTINGS.longPressSideB == SETTINGS.LP_MENU_DISABLED;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
   // PageBack/PageForward already include Up/Down/Left/Right + Side Layout + Orient Front Buttons.
@@ -117,9 +144,9 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
                                           : input.wasReleased(MappedInputManager::Button::PageBack));
   const bool powerReleased = input.wasReleased(MappedInputManager::Button::Power);
   const unsigned long held = input.getHeldTime();
-  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool shortPowerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                               held < SETTINGS.getPowerButtonLongPressDuration();
-  const bool longPowerTurn = SETTINGS.longPwrBtn == CasperSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
+  const bool longPowerTurn = SETTINGS.longPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && powerReleased &&
                              held >= SETTINGS.getPowerButtonLongPressDuration();
   const bool powerTurn = shortPowerTurn || longPowerTurn;
   const bool next = tiltNext || powerTurn ||
@@ -142,15 +169,22 @@ inline bool anyPageTurnControlHeld(const MappedInputManager& input) {
 // Xteink ladders can emit several wasPressed/wasReleased edges per press; without
 // a latch the reader advances once per edge before e-ink paints.
 //
-// Policy:
+// Policy lives in PageTurnPolicy.h (host-tested):
 //  - Accept a turn edge only when not waiting for release and min interval elapsed.
 //  - After accept, ignore further edges until all page-turn controls are released.
+//  - Same-frame prev+next is ambiguous (ADC sweep) — drop both.
+//  - Opposite direction inside kOppositeLockMs is a ladder ghost — drop it.
+//  - After a long idle block, swallow edges until swallowUntilMs.
 //  - Pure tilt events are rate-limited only (sensor has its own re-arm).
 struct PageTurnLatch {
   bool waitingRelease = false;
   unsigned long lastAcceptedMs = 0;
-  // Long enough to cover typical membrane bounce; short enough for deliberate rapid turns.
-  static constexpr unsigned long kMinIntervalMs = 180;
+  unsigned long swallowUntilMs = 0;
+  pageturn::Dir lastDir = pageturn::Dir::None;
+  pageturn::Why lastWhy = pageturn::Why::Idle;
+  static constexpr unsigned long kMinIntervalMs = pageturn::Limits::kMinIntervalMs;
+
+  void armSwallow(const unsigned long nowMs) { swallowUntilMs = nowMs + pageturn::Limits::kSwallowMs; }
 
   // Call every loop when there is no turn edge so we re-arm after release.
   void pollIdle(const MappedInputManager& input) {
@@ -161,43 +195,26 @@ struct PageTurnLatch {
 
   // Returns true if prev/next should be acted on. Clears both when rejected.
   bool accept(bool& prev, bool& next, const bool fromTilt, const bool fromTouch, const MappedInputManager& input) {
-    if (!prev && !next) {
-      pollIdle(input);
-      return false;
-    }
-
-    const unsigned long now = millis();
-
-    // Pure tilt: sensor already re-arms; only rate-limit.
-    if (fromTilt && !fromTouch && !anyPageTurnControlHeld(input)) {
-      if (now - lastAcceptedMs < kMinIntervalMs) {
-        prev = false;
-        next = false;
-        return false;
-      }
-      lastAcceptedMs = now;
-      return true;
-    }
-
-    if (waitingRelease) {
-      if (!anyPageTurnControlHeld(input)) {
-        waitingRelease = false;
-      }
-      // Never accept the same-frame residual edge that coincided with release.
-      prev = false;
-      next = false;
-      return false;
-    }
-
-    if (now - lastAcceptedMs < kMinIntervalMs) {
-      prev = false;
-      next = false;
-      return false;
-    }
-
-    waitingRelease = true;
-    lastAcceptedMs = now;
-    return true;
+    pageturn::Request req;
+    req.prev = prev;
+    req.next = next;
+    req.fromTilt = fromTilt;
+    req.fromTouch = fromTouch;
+    req.backActive = backExitActive(input);
+    req.held = anyPageTurnControlHeld(input);
+    req.waitingRelease = waitingRelease;
+    req.swallowUntilMs = swallowUntilMs;
+    req.lastDir = lastDir;
+    req.lastAcceptedMs = lastAcceptedMs;
+    req.nowMs = millis();
+    const pageturn::Result r = pageturn::decide(req);
+    waitingRelease = r.waitingRelease;
+    lastDir = r.lastDir;
+    lastAcceptedMs = r.lastAcceptedMs;
+    lastWhy = r.why;
+    prev = r.prev;
+    next = r.next;
+    return r.accept;
   }
 };
 
@@ -209,7 +226,7 @@ struct TouchPageTurn {
 
 inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input) {
   TouchPageTurn result{false, false, 0};
-  if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
+  if (backExitActive(input) || !SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
   }
 
@@ -257,8 +274,8 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 // Caller must not touch FB until waitRefreshComplete after async FAST/HALF.
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
   const int freq = SETTINGS.getRefreshFrequency();  // -1 = Never
-  const bool disabled = (freq == CasperSettings::REFRESH_COUNTDOWN_DISABLED);
-  const bool forceScrub = (pagesUntilFullRefresh == CasperSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
+  const bool disabled = (freq == CrossPointSettings::REFRESH_COUNTDOWN_DISABLED);
+  const bool forceScrub = (pagesUntilFullRefresh == CrossPointSettings::REFRESH_COUNTDOWN_FORCE_SCRUB);
   // Countdown hits 1 on the page that should maintain; also treat 0 as due.
   const bool maintenanceDue = !disabled && pagesUntilFullRefresh <= 1 && pagesUntilFullRefresh >= 0;
 
@@ -270,15 +287,19 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   if (maintenanceDue || forceScrub) {
     // Soft interval on X3 only when not a forced hard scrub. Long-press power /
     // FORCE_SCRUB always HALF so the user sees a real flash clean.
-    const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub;
+    const bool useX3SoftReinforce = gpio.deviceIsX3() && !forceScrub && !renderer.getInvertOnDisplay() && !tempInvert;
     if (useX3SoftReinforce) {
       renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+      UiGhostPolicy::noteBwOnPanel();
     } else if (async) {
       renderer.displayBufferAsync(HalDisplay::HALF_REFRESH);
+      UiGhostPolicy::noteHalf();
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      UiGhostPolicy::noteHalf();
     }
-    pagesUntilFullRefresh = disabled ? CasperSettings::REFRESH_COUNTDOWN_DISABLED : freq;
+    UiGhostPolicy::noteHalf();
+    pagesUntilFullRefresh = disabled ? CrossPointSettings::REFRESH_COUNTDOWN_DISABLED : freq;
     if (pagesUntilFullRefresh < 1 && !disabled) pagesUntilFullRefresh = 1;
   } else {
     if (async) {
@@ -286,24 +307,48 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     } else {
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
+    UiGhostPolicy::noteBwOnPanel();
     if (!disabled && pagesUntilFullRefresh > 1) {
       pagesUntilFullRefresh--;
     }
   }
 
-  if (tempInvert) renderer.invertScreen();
+  if (tempInvert) {
+    renderer.invertScreen();
+    renderer.notePanelInverted(true);
+  }
 }
 
-// Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
-// the grayscale buffer. Only the content callback is re-rendered — status bars
-// and other overlays should be drawn before calling this.
-// Kept as a template to avoid std::function overhead; instantiated once per reader type.
+// Push the BW page already painted into the framebuffer, then enhance it with
+// the 2-bit greyscale multipass.
+//
+// On X3, displayGray() is the OEM 4-level *nudge* bank. It does not replace
+// the panel contents — it expects the new BW frame to already be on glass
+// (and the controller RAM to be in the state displayGrayscaleBase leaves).
+// Without that base step, the nudge runs against the *previous* page and the
+// turn looks like nothing happened until a HALF scrub. That is exactly the
+// "I have to hold power to load the next page" report, and the PAGE lines that
+// said ran=1 refresh=408ms while the panel still showed the prior page.
+//
+// Penumbra's clock AA has always done base → greys → cleanup. This helper did
+// not, and every AA-on reader path (Rivulet, Txt) went through it.
+//
+// Returns false when the pass could not run (storeBwBuffer needs ~48 KB in 8 KB
+// chunks and fails under heap pressure). On false NOTHING has been pushed to the
+// panel and the BW framebuffer is left untouched, so the caller MUST fall back to
+// an ordinary refresh — otherwise the page the caller already painted never
+// reaches the glass and the turn looks like it did nothing.
 template <typename RenderFn>
-void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
+[[nodiscard]] bool renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn,
+                                     const HalDisplay::RefreshMode baseMode = HalDisplay::FAST_REFRESH) {
   if (!renderer.storeBwBuffer()) {
-    LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing");
-    return;
+    LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing; falling back to BW refresh");
+    return false;
   }
+
+  // Page appears here. OEM AA-pre-BW mid settle leaves particles receptive to
+  // the gray nudge that follows.
+  renderer.displayGrayscaleBase(baseMode);
 
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
@@ -316,9 +361,14 @@ void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
   renderer.copyGrayscaleMsbBuffers();
 
   renderer.displayGrayBuffer();
+  UiGhostPolicy::noteGreyscaleOnPanel();
   renderer.setRenderMode(GfxRenderer::BW);
 
   renderer.restoreBwBuffer();
+  // Rebase DTM planes from the restored BW frame and clear _inGrayscaleMode so
+  // the next turn's differential BW/AA path is not fighting leftover gray RAM.
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  return true;
 }
 
 struct BackNavCallback {
@@ -342,9 +392,11 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
     return false;
   }
   // Drain residual Back edges so the resumed Home does not treat this release
-  // as Menu (minimal front-button map: short Back = Menu).
+  // as Menu (minimal front-button map: short Back = Menu). Drain page-turn
+  // edges too: PageBack is press-edge, Back is release-edge, same tap.
   (void)mappedInput.wasPressed(MappedInputManager::Button::Back);
   (void)mappedInput.wasReleased(MappedInputManager::Button::Back);
+  drainPageTurnEdges(mappedInput);
   goHome.fn(goHome.ctx);
   return true;
 }

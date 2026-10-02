@@ -10,6 +10,7 @@
 
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReaderChromePolicy.h"
 
 namespace {
 
@@ -132,9 +133,13 @@ void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, cons
     return;
   }
 
-  const int barY = inverted ? 0 : (pageH - barH);
+  const int edgePad = readerchrome::portraitFooterEdgePad(!gpio.deviceIsX3());
+  const int barY = readerchrome::portraitFooterBarY(pageH, barH, edgePad, inverted);
   if (barH > 0) {
-    renderer.fillRect(0, barY, pageW, barH, false);
+    // Wipe through the X4 edge pad so the gap below the labels stays empty.
+    const int wipeY = inverted ? 0 : barY;
+    const int wipeH = inverted ? (barY + barH) : (pageH - barY);
+    renderer.fillRect(0, wipeY, pageW, wipeH, false);
   }
 
   constexpr int kFooterFontId = UI_10_FONT_ID;

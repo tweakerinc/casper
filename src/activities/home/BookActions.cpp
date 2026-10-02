@@ -9,13 +9,14 @@
 #include <Xtc.h>
 
 #include "ClippingStore.h"
-#include "CasperSettings.h"
-#include "util/CasperPaths.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
+#include "activities/reader/StatsBackup.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/CrossPointPaths.h"
 #include "util/FinishedBooks.h"
 #include "util/UiGhostPolicy.h"
 
@@ -35,7 +36,7 @@ std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std:
   // Long-press: Read, Synopsis (EPUB), Reset Pace, …
   // (Per-book Reading Stats entry was Stats-theme only; use Menu → Reading Stats.)
   std::vector<FileBrowserActionActivity::MenuItem> items;
-  items.reserve(9);
+  items.reserve(10);
   items.push_back({FileBrowserAction::Open, StrId::STR_READ});
   if (FsHelpers::hasEpubExtension(fullPath)) {
     items.push_back({FileBrowserAction::Description, StrId::STR_SYNOPSIS});
@@ -55,6 +56,9 @@ std::vector<FileBrowserActionActivity::MenuItem> buildBookActionItems(const std:
   items.push_back({FileBrowserAction::Delete, StrId::STR_DELETE});
   if (statsOk && hasReadingStats(fullPath)) {
     items.push_back({FileBrowserAction::DeleteStats, StrId::STR_DELETE_BOOK_STATS});
+    if (hasRestorableBookStats(fullPath.c_str())) {
+      items.push_back({FileBrowserAction::RestoreStats, StrId::STR_RESTORE_BOOK_STATS});
+    }
   }
   if (hasClearableBookCache(fullPath)) {
     items.push_back({FileBrowserAction::DeleteCache, StrId::STR_DELETE_CACHE});
@@ -69,7 +73,7 @@ bool hasClearableBookCache(const std::string& path) {
 void clearFileMetadata(const std::string& fullPath) {
   // Drop reading cache + stats when deleting a book from SD.
   ::clearBookCache(fullPath);
-  // Wipe stats under Casper and legacy cache hashes (if both exist).
+  // Wipe stats under CrossPoint and legacy cache hashes (if both exist).
   BookReadingStats::removeForBook(fullPath);
   if (FsHelpers::hasEpubExtension(fullPath)) {
     ClippingStore::deleteForFilePath(fullPath, "epub");
@@ -90,7 +94,12 @@ bool deleteBookStats(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  return BookReadingStats::removeForBook(fullPath);
+  return stashDeletedBookStats(fullPath.c_str());
+}
+
+bool restoreBookStatsForBook(const std::string& fullPath) {
+  if (fullPath.empty()) return false;
+  return restoreBookStats(fullPath.c_str());
 }
 
 bool resetReadingPace(const std::string& fullPath) {
@@ -98,7 +107,7 @@ bool resetReadingPace(const std::string& fullPath) {
   if (cachePath.empty()) {
     return false;
   }
-  // loadForBook picks up legacy FNV stats if present, then we rewrite Casper path.
+  // loadForBook picks up legacy FNV stats if present, then we rewrite CrossPoint path.
   BookReadingStats stats = BookReadingStats::loadForBook(fullPath);
   stats.avgSecondsPerForwardPage = 0;
   stats.paceSampleCount = 0;
@@ -124,8 +133,8 @@ bool toggleBookCompleted(const std::string& fullPath, const std::string& display
     return false;
   }
 
-  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
-  Xtc xtc(fullPath, CasperPaths::kPackageCacheRoot);
+  Epub epub(fullPath, CrossPointPaths::kPackageCacheRoot);
+  Xtc xtc(fullPath, CrossPointPaths::kPackageCacheRoot);
   std::string cachePath;
   std::string title = displayName;
   std::string author;
@@ -221,7 +230,7 @@ std::string loadBookDescription(const std::string& fullPath) {
   if (!FsHelpers::hasEpubExtension(fullPath)) {
     return {};
   }
-  Epub epub(fullPath, CasperPaths::kPackageCacheRoot);
+  Epub epub(fullPath, CrossPointPaths::kPackageCacheRoot);
   return epub.getDescription();
 }
 

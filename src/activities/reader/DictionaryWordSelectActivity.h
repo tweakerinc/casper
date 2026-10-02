@@ -94,7 +94,7 @@ class DictionaryWordSelectActivity final : public Activity {
   void handleSelectAction();
   bool drawHighlightWithSnapshot();
   void drawSelectionHighlights();
-  // Highlight box: full line cell (must cover all white redraw ink).
+  // Highlight box: ink-centered (must cover all white redraw ink).
   void highlightBoxFor(const WordBox& word, int& hx, int& hy, int& hw, int& hh) const;
   // Solid black fill + white text (cheapest BW e-ink path).
   void paintWordHighlight(const WordBox& word) const;

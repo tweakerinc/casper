@@ -13,7 +13,7 @@ int KOReaderSyncClient::lastHttpCode = 0;
 
 namespace {
 // Device identifier shown on the sync server / conflict UI ("uploaded from …").
-constexpr char DEVICE_NAME[] = "Casper";
+constexpr char DEVICE_NAME[] = "CrossPoint";
 constexpr char DEVICE_ID[] = "casper-reader";
 
 // KOSync's TLS-1.3 servers can't be reached through the precompiled system
@@ -179,7 +179,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     outProgress.deviceId = doc["device_id"].as<std::string>();
     outProgress.timestamp = doc["timestamp"].as<int64_t>();
 
-    // Extended Casper-sync field; absent on plain kosync servers.
+    // Extended CrossPoint-sync field; absent on plain kosync servers.
     outProgress.position.reset();
     const JsonObjectConst pos = doc["position"].as<JsonObjectConst>();
     if (!pos.isNull()) {
@@ -232,7 +232,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   doc["device"] = DEVICE_NAME;
   doc["device_id"] = DEVICE_ID;
   if (progress.position.has_value()) {
-    // Extended Casper-sync field; kosync servers ignore unknown keys.
+    // Extended CrossPoint-sync field; kosync servers ignore unknown keys.
     const auto& p = *progress.position;
     auto pos = doc["position"].to<JsonObject>();
     pos["pctQ"] = p.pctQ;

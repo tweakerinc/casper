@@ -1,9 +1,9 @@
-# Casper
+# CrossPoint
 
 Personal firmware for **Xteink X3/X4**, based on
 **[CrossPoint Reader 1.5.0](https://github.com/crosspoint-reader/crosspoint-reader/tree/release/1.5.0)** & **[CrossInk](https://github.com/uxjulia/CrossInk)**. Huge thanks to everyone for all their hard work!
 
-Casper keeps CrossPoint's stable reader core and CrossInk's excellent stat tracking, then adds a redesigned UI, a new layout engine (**Rivulet**), thoughtful long-press menus, fully customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary** with multi-word selection and bilingual packs.
+CrossPoint keeps CrossPoint's stable reader core and CrossInk's excellent stat tracking, then adds a redesigned UI, a new layout engine (**Rivulet**), thoughtful long-press menus, fully customizable **Reader UI**, **Synopsis Viewer**, and **StarDict Dictionary** with multi-word selection and bilingual packs.
 
 Home themes: **Penumbra** (X3 clock / X4 title) and **Bare**.
 
@@ -48,7 +48,7 @@ Home themes: **Penumbra** (X3 clock / X4 title) and **Bare**.
 
 ## Features
 
-Casper is a personal firmware for the **Xteink X3 and X4** (one binary for both devices). It keeps CrossPoint’s solid reader core and CrossInk’s excellent stats system, then adds a redesigned UI, a new layout engine, and a bunch of quality-of-life improvements.
+CrossPoint is a personal firmware for the **Xteink X3 and X4** (one binary for both devices). It keeps CrossPoint’s solid reader core and CrossInk’s excellent stats system, then adds a redesigned UI, a new layout engine, and a bunch of quality-of-life improvements.
 
 ### Rivulet Layout Engine
 Brand-new EPUB layout engine built for e-ink and real books.
@@ -105,7 +105,7 @@ Minimal cover-focused theme. Same clean layout on both X3 and X4 — just you an
 - Much snappier return to Home after reading
 - Cleaner Home refresh (less residual ghosting)
 - PNG wallpaper support (in addition to BMP)
-- Sleep screen options (Casper Dark / Casper Light)
+- Sleep screen options (CrossPoint Dark / CrossPoint Light)
 
 ### System
 - One binary for X3 and X4
@@ -120,14 +120,14 @@ Minimal cover-focused theme. Same clean layout on both X3 and X4 — just you an
 
 | Doc | Contents |
 |-----|----------|
-| [docs/casper.md](./docs/casper.md) | Visual showcase of Casper changes (photos) |
+| [docs/casper.md](./docs/casper.md) | Visual showcase of CrossPoint changes (photos) |
 | [CASPER.md](./CASPER.md) | Scope, APIs, defaults, implementation notes |
 | [docs/dictionary.md](./docs/dictionary.md) | StarDict install and lookup behavior |
 | [dist/dictionaries/README.txt](./dist/dictionaries/README.txt) | Shipping dictionary packs |
 
 ## Credits & Acknowledgements
 
-Casper is personal firmware for the **Xteink X3/X4**. It stands on the shoulders of these projects:
+CrossPoint is personal firmware for the **Xteink X3/X4**. It stands on the shoulders of these projects:
 
 ### Required lineage
 
@@ -138,7 +138,7 @@ Casper is personal firmware for the **Xteink X3/X4**. It stands on the shoulders
 ### Hardware / display ancestry (via FreeInk)
 
 - **[Open X4 E-Paper Community SDK](https://github.com/open-x4-epaper/community-sdk)** and community device ports — e-paper driver sequences and related work; FreeInk’s `NOTICE` retains the upstream MIT terms.
-- **[CidVonHighwind](https://github.com/CidVonHighwind)** — original e-ink display work in that lineage (also author of [MicroReader](https://github.com/CidVonHighwind/microreader), which Casper does **not** ship as source).
+- **[CidVonHighwind](https://github.com/CidVonHighwind)** — original e-ink display work in that lineage (also author of [MicroReader](https://github.com/CidVonHighwind/microreader), which CrossPoint does **not** ship as source).
 
 ### License
 
@@ -146,4 +146,4 @@ See [LICENSE](./LICENSE) (MIT; upstream CrossPoint copyright retained) and FreeI
 
 ---
 
-*Casper’s UI, home themes (Penumbra / Bare), and **Rivulet** layout engine are original work on top of the stack above.*
+*CrossPoint’s UI, home themes (Penumbra / Bare), and **Rivulet** layout engine are original work on top of the stack above.*

@@ -105,8 +105,7 @@ class ActivityManager {
   void goToRecentBooks();
   void goToBrowser();
   void goToReader(std::string path);
-  // useQuickResume: last-frame sleep (power QR action or timeout QR). Wallpaper otherwise.
-  void goToSleep(bool fromTimeout = false, bool useQuickResume = false);
+  void goToSleep(bool fromTimeout = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();

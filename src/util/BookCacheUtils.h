@@ -7,8 +7,15 @@
 // per-book stats, reader settings, and dictionary history.
 void clearBookCache(const std::string& path);
 
+// Recursively delete a directory after closing every handle. FAT cannot rmdir
+// an open folder; Storage.removeDir() can delete book.bin and leave rivulet/
+// (so the next open reuses a finished .rvpm and looks like "cache was not
+// deleted"). Safe no-op if path is empty or missing.
+bool wipeCacheDirectory(const std::string& path);
+
 // Clears a known book cache directory while preserving user state:
-// progress.bin(+.bak), reader_settings.bin, stats*.bin, dictionary_history.txt.
+// progress.bin(+.bak), reader_settings.bin, stats*.bin, dictionary_history.txt,
+// and <cache>/.trash/stats*.bin (Recover Stats after Delete Book Stats).
 // Used by Settings → Clear Cache and per-book clear actions.
 //
 // Accepts either:
@@ -18,5 +25,5 @@ void clearBookCache(const std::string& path);
 bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath);
 
 // Returns true if the directory name matches a book cache entry under /.crosspoint
-// (or legacy /.casper): book_*, epub_*, txt_*, xtc_*.
+// (or leftover /.casper): book_*, epub_*, txt_*, xtc_*.
 bool isBookCacheDirectoryName(const char* name);

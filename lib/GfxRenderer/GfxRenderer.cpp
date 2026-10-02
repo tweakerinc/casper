@@ -2,9 +2,11 @@
 
 #include <BidiUtils.h>
 #include <BuildScratch.h>
+#include <Esp.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <MusicNoteFallback.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
@@ -21,6 +23,34 @@ namespace {
  */
 uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style style) {
   return font.resolveStyle(static_cast<uint8_t>(style));
+}
+
+// 2-bit glyph sample: returns draw-pipeline value (0 black … 3 white).
+inline uint8_t sample2BitBmpVal(const uint8_t* bitmap, const int width, const int height, const int x, const int y) {
+  if (x < 0 || y < 0 || x >= width || y >= height) return 3;
+  const int pos = y * width + x;
+  const uint8_t byte = bitmap[pos >> 2];
+  const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+  return static_cast<uint8_t>(3 - raw);
+}
+
+// Whether a 2-bit pixel should be inked in the BW pass for the given weight.
+// Mild inks light fringe (bmpVal==2) only when ≥2 orthogonal neighbors are
+// already dark/black — fills AA holes without expanding flat stem edges (the
+// thing that made capitals read bold under Dense).
+inline bool inkBw2Bit(const uint8_t bmpVal, const GfxRenderer::BwGlyphWeight weight, const uint8_t* bitmap,
+                      const int width, const int height, const int x, const int y) {
+  if (bmpVal >= 3) return false;  // white
+  if (bmpVal < 2) return true;    // solid + dark fringe — all weights
+  // bmpVal == 2: light fringe
+  if (weight == GfxRenderer::BwGlyphWeight::Normal) return false;
+  if (weight == GfxRenderer::BwGlyphWeight::Dense) return true;
+  int darkN = 0;
+  if (sample2BitBmpVal(bitmap, width, height, x - 1, y) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x + 1, y) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x, y - 1) < 2) ++darkN;
+  if (sample2BitBmpVal(bitmap, width, height, x, y + 1) < 2) ++darkN;
+  return darkN >= 2;
 }
 }  // namespace
 
@@ -65,6 +95,10 @@ void GfxRenderer::clearFontAccumulation() const {
 }
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
+  // Synthetic music notes are not in fontData->glyph; skip decompression.
+  if (const uint8_t* bits = musicNoteFallback::bitmapIfSynthetic(glyph, fontData->is2Bit)) {
+    return bits;
+  }
   if (fontData->groups != nullptr) {
     auto* fd = fontCacheManager_ ? fontCacheManager_->getDecompressor() : nullptr;
     if (!fd) {
@@ -92,34 +126,51 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
   return &fontData->bitmap[glyph->dataOffset];
 }
 
-void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+void GfxRenderer::warmSdCardFont(int fontId, const char* utf8Text, uint8_t styleMask) const {
   auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
-    std::string shaped;
-    appendShapedRtlTokens(utf8Text, shaped);
-    int missed = it->second->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
-    if (missed > 0) {
-      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
-    }
+  if (it == sdCardFonts_.end()) return;
+  std::string shaped;
+  appendShapedRtlTokens(utf8Text, shaped);
+  const int missed = it->second->buildAdvanceTable(utf8Text, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+  if (missed > 0) {
+    LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+  }
+}
+
+void GfxRenderer::warmSdCardFont(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+                                 uint8_t styleMask) const {
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return;
+  // Augment the persistent advance-only table for layout measurement.
+  // The table survives across paragraphs/sections (capped per font), so
+  // repeated indexing of the same SD font amortizes glyph-metric SD reads.
+  std::string shaped;
+  for (const auto& w : words) {
+    appendShapedRtlTokens(w.c_str(), shaped);
+  }
+  const int missed =
+      it->second->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
+  if (missed > 0) {
+    LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+  }
+}
+
+void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
+  warmSdCardFont(fontId, utf8Text, styleMask);
+  // resolveTextFontId already routes CJK to the mapped fallback. Warm that
+  // face so layout measures the same advances paint will use.
+  const auto fb = fallbackFontMap_.find(fontId);
+  if (fb != fallbackFontMap_.end() && fb->second != fontId) {
+    warmSdCardFont(fb->second, utf8Text, styleMask);
   }
 }
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
                                         uint8_t styleMask) const {
-  auto it = sdCardFonts_.find(fontId);
-  if (it != sdCardFonts_.end()) {
-    // Augment the persistent advance-only table for layout measurement.
-    // The table survives across paragraphs/sections (capped per font), so
-    // repeated indexing of the same SD font amortizes glyph-metric SD reads.
-    std::string shaped;
-    for (const auto& w : words) {
-      appendShapedRtlTokens(w.c_str(), shaped);
-    }
-    int missed =
-        it->second->buildAdvanceTable(words, includeHyphen, styleMask, shaped.empty() ? nullptr : shaped.c_str());
-    if (missed > 0) {
-      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
-    }
+  warmSdCardFont(fontId, words, includeHyphen, styleMask);
+  const auto fb = fallbackFontMap_.find(fontId);
+  if (fb != fallbackFontMap_.end() && fb->second != fontId) {
+    warmSdCardFont(fb->second, words, includeHyphen, styleMask);
   }
 }
 
@@ -158,7 +209,8 @@ bool GfxRenderer::restoreFrameBufferAfterBuild() {
   return frameBuffer != nullptr;
 }
 
-GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer) : renderer_(renderer) {
+GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer, bool enabled) : renderer_(renderer) {
+  if (!enabled) return;  // caller's screen still owns the pixels
   // Nesting guard: if the framebuffer is already lent out (an outer loan),
   // stay inert so this end() cannot return storage the outer loan still owns.
   if (!renderer_.hasFrameBuffer()) return;
@@ -334,9 +386,10 @@ static void renderCharScaledNx(const GfxRenderer& renderer, GfxRenderer::RenderM
         const uint8_t byte = bitmap[pos >> 2];
         const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
         const uint8_t bmpVal = static_cast<uint8_t>(3 - raw);
-        // BW: only solid + dark fringe (skip light AA = grainy speckles without greys).
-        // Greys multipass recovers light fringe when Text AA is on.
-        if (renderMode == GfxRenderer::BW && bmpVal >= 2) continue;
+        if (renderMode == GfxRenderer::BW &&
+            !inkBw2Bit(bmpVal, renderer.bwGlyphWeight(), bitmap, srcW, srcH, srcX, srcY)) {
+          continue;
+        }
         if (renderMode == GfxRenderer::GRAYSCALE_MSB && bmpVal != 1 && bmpVal != 2) continue;
         if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal != 1) continue;
         const bool state = (renderMode == GfxRenderer::BW) ? pixelState : false;
@@ -510,8 +563,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 black / 1 dark grey / 2 light grey / 3 white.
           const uint8_t bmpVal = static_cast<uint8_t>(3 - ((byte >> bit_index) & 0x3));
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 2) {
-            // Solid + dark fringe only — light AA fringe as black looked grainy on BW-only.
+          if (renderMode == GfxRenderer::BW &&
+              inkBw2Bit(bmpVal, renderer.bwGlyphWeight(), bitmap, width, height, glyphX, glyphY)) {
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
             // Both AA fringes on MSB (historical default "Dark" look).
@@ -548,6 +601,16 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   }
 }
 
+namespace {
+// Per-frame budget for drawPixel's out-of-range complaint. Reset by clearScreen()
+// rather than by drawPixel itself: re-arming on every valid pixel would put a
+// store on the hottest path in the renderer.
+constexpr uint16_t kMaxOutOfRangeLogsPerFrame = 8;
+uint16_t g_outOfRangeLogs = 0;
+}  // namespace
+
+void GfxRenderer::resetOutOfRangeLogBudget() { g_outOfRangeLogs = 0; }
+
 // IMPORTANT: This function is in critical rendering path and is called for every pixel. Please keep it as simple and
 // efficient as possible.
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
@@ -559,7 +622,19 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
 
   // Bounds checking against runtime panel dimensions
   if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) {
-    LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)", x, y, phyX, phyY);
+    // Rate-limited per frame: this is per-pixel. A single off-by-one in any
+    // drawing routine (a glyph one column past the margin, an oversized bitmap)
+    // used to emit one serial line PER OUT-OF-RANGE PIXEL — tens of thousands of
+    // lines for one bad frame, which at 115200 baud stalls the render task for
+    // seconds and turns a cosmetic clipping bug into a device-wide freeze.
+    // The budget is re-armed by clearScreen() (once per frame), so every frame
+    // still reports its own defect but no frame can flood the link.
+    if (g_outOfRangeLogs < kMaxOutOfRangeLogsPerFrame) {
+      ++g_outOfRangeLogs;
+      LOG_ERR(
+          "GFX", "!! Outside range (%d, %d) -> (%d, %d)%s", x, y, phyX, phyY,
+          g_outOfRangeLogs == kMaxOutOfRangeLogsPerFrame ? " (further out-of-range pixels this frame suppressed)" : "");
+    }
     return;
   }
 
@@ -1683,6 +1758,7 @@ static unsigned long start_ms = 0;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  resetOutOfRangeLogBudget();  // new frame: let it report its own clipping defects
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
@@ -1730,6 +1806,54 @@ void GfxRenderer::invertScreen() const {
   }
 }
 
+void GfxRenderer::invertRect(const int x, const int y, const int width, const int height) const {
+  if (width <= 0 || height <= 0 || !frameBuffer) return;
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+
+  const int screenW = getScreenWidth();
+  const int screenH = getScreenHeight();
+  const int lx0 = std::max(0, x);
+  const int ly0 = std::max(0, y);
+  const int lx1 = std::min(screenW, x + width);
+  const int ly1 = std::min(screenH, y + height);
+  if (lx0 >= lx1 || ly0 >= ly1) return;
+
+  int paX, paY, pbX, pbY;
+  rotateCoordinates(orientation, lx0, ly0, &paX, &paY, panelWidth, panelHeight);
+  rotateCoordinates(orientation, lx1 - 1, ly1 - 1, &pbX, &pbY, panelWidth, panelHeight);
+
+  const int phyX0 = std::min(paX, pbX);
+  const int phyX1 = std::max(paX, pbX);
+  int phyY0 = std::min(paY, pbY);
+  int phyY1 = std::max(paY, pbY);
+
+  uint8_t* target = getWriteTarget();
+  const int originY = getWriteOriginY();
+  const int writeRows = getWriteRows();
+  phyY0 = std::max(phyY0, originY);
+  phyY1 = std::min(phyY1, originY + writeRows - 1);
+  if (phyY0 > phyY1) return;
+
+  const int byteStart = phyX0 >> 3;
+  const int byteEnd = phyX1 >> 3;
+  const uint8_t headMask = static_cast<uint8_t>(0xFFu >> (phyX0 & 7));
+  const uint8_t tailMask = static_cast<uint8_t>(0xFFu << (7 - (phyX1 & 7)));
+  const int32_t panelStride = static_cast<int32_t>(panelWidthBytes);
+
+  for (int py = phyY0; py <= phyY1; ++py) {
+    uint8_t* row = target + static_cast<int32_t>(py - originY) * panelStride;
+    if (byteStart == byteEnd) {
+      row[byteStart] ^= static_cast<uint8_t>(headMask & tailMask);
+    } else {
+      row[byteStart] ^= headMask;
+      for (int b = byteStart + 1; b < byteEnd; ++b) {
+        row[b] = static_cast<uint8_t>(~row[b]);
+      }
+      row[byteEnd] ^= tailMask;
+    }
+  }
+}
+
 // Invert → panel → restore so all paint code stays black-on-white.
 // Restore is required for partial updates (cursor bands) and the next paint.
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
@@ -1742,6 +1866,7 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   if (invertOnDisplay) {
     invertScreen();
   }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
@@ -1757,6 +1882,7 @@ void GfxRenderer::displayWindow(const int x, const int y, const int width, const
   if (invertOnDisplay) {
     invertScreen();
   }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) const {
@@ -1767,6 +1893,7 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
     return;
   }
   display.displayBufferAsync(refreshMode);
+  panelSentInverted_ = false;
 }
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
@@ -2247,6 +2374,16 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
+int GfxRenderer::getFontDescenderSize(const int fontId) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+
+  return fontIt->second.getData(EpdFontFamily::REGULAR)->descender;
+}
+
 int GfxRenderer::getLineHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -2258,7 +2395,7 @@ int GfxRenderer::getLineHeight(const int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  // Pitch = advanceY × family scale (see CasperSettings::getReaderLineCompression).
+  // Pitch = advanceY × family scale (see CrossPointSettings::getReaderLineCompression).
   // Soft floor (~88% of max ink) only blocks pathological crush; denser faces
   // (Literata → Bookerly) must be allowed under full ascender+|descender|.
   const auto fontIt = fontMap.find(fontId);
@@ -2358,7 +2495,16 @@ size_t GfxRenderer::getBufferSize() const { return frameBufferSize; }
 // void GfxRenderer::grayscaleRevert() const { display.grayscaleRevert(); }
 
 void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
+  // Same invert-around-push as displayBuffer. Cover/clock/AA greys-base used to
+  // ignore invertOnDisplay and paint a white plate over Dark Mode.
+  if (invertOnDisplay) {
+    invertScreen();
+  }
   display.displayGrayscaleBase(fallback, fadingFix);
+  if (invertOnDisplay) {
+    invertScreen();
+  }
+  panelSentInverted_ = invertOnDisplay;
 }
 
 void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }
@@ -2419,6 +2565,14 @@ void GfxRenderer::freeBwBufferChunks() {
  * Uses chunked allocation to avoid needing 48KB of contiguous memory.
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
+bool GfxRenderer::canStoreBwBuffer(const size_t headroomBytes) const {
+  if (!frameBuffer) return false;
+  // Total free heap must cover the whole snapshot plus the caller's headroom...
+  if (ESP.getFreeHeap() < static_cast<size_t>(frameBufferSize) + headroomBytes) return false;
+  // ...but contiguity is only ever needed one chunk at a time.
+  return ESP.getMaxAllocHeap() >= BW_BUFFER_CHUNK_SIZE;
+}
+
 bool GfxRenderer::storeBwBuffer() {
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {

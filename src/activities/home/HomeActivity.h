@@ -7,6 +7,7 @@
 #include "activities/reader/BookReadingStats.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "util/ButtonNavigator.h"
+#include "util/HomeBookIndexer.h"
 
 struct RecentBook;
 struct Rect;
@@ -16,14 +17,15 @@ class HomeActivity final : public Activity {
   int selectorIndex = 0;
   bool recentsLoading = false;
   bool recentsLoaded = false;
-  // First home paint finished — cover gen waits so Loading can float over real UI.
+  // First home paint finished — cover gen waits so Rendering Cover floats over UI.
+  // Must be set by render(), never by onResume, or JPEG gen FAST-blits the cue
+  // onto an empty framebuffer (white plate + the word in the corner).
   bool homeUiReady = false;
   // Transient thumb-gen failures (heap/decode) schedule a deferred retry so we do
   // not burn the render path every frame, but also do not give up forever.
   bool coverNeedsRetry = false;
   uint8_t coverGenAttempts = 0;
   unsigned long coverRetryAtMs = 0;
-  static constexpr uint8_t kMaxCoverGenAttempts = 3;
   bool hasOpdsServers = false;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
@@ -51,6 +53,15 @@ class HomeActivity final : public Activity {
   // so Back→Home is ~0.4s not ~2s of multipass. Timer armed after FAST paints.
   bool deferredHalfScrubOnly = false;
   unsigned long deferredHalfScrubAtMs = 0;
+  // Clock AA is a full-frame greyscale pass (HalDisplay windowed grey is a no-op).
+  // Run it only after this idle window so Read can cancel it first.
+  static constexpr unsigned long kClockAaIdleMs = 400;
+  bool pendingClockAaAfterIdle_ = false;
+  unsigned long lastHomeInputMs_ = 0;
+  // Side Up/Down: ignore bounce until both physical sides are released.
+  bool penumbraSideAwaitRelease_ = false;
+  // Minute tick: BW window only. Unchanged digits keep the last AA raster.
+  bool forcePenumbraClockBwOnly_ = false;
   // Soft FAST grayscale base (panel already shows matching BW shell).
   bool softGrayscaleBase = false;
   // Abort in-flight multipass between stages (Recents/Settings must not freeze
@@ -76,6 +87,25 @@ class HomeActivity final : public Activity {
   bool menuLongPressFired = false;
   // Stats: side Left/Right toggled under-box title ↔ lifetime.
   bool forceStatsUnderBoxRepaint = false;
+  // First Home/resume paint: skip the full-screen clock greys so the shell
+  // lands FAST. Idle loop runs clock AA after that.
+  bool deferScrubAfterFirstPaint_ = false;
+
+  // Whole-book page-map indexing, run only while Home sits idle. See
+  // HomeBookIndexer: Home is the one place no chapter is resident, so indexing
+  // costs nothing to evict and never disturbs a page turn or reading-pace stats.
+  HomeBookIndexer bookIndexer_;
+  unsigned long indexerIdleSinceMs_ = 0;
+  unsigned long lastIndexStepMs_ = 0;
+  // Home must be untouched this long before indexing may take the bus, and this
+  // long between chapters so input is always sampled in between.
+  // Background whole-book indexing. Off until HtmlToIr can convert a chapter
+  // incrementally — see tickBookIndexer for the measurements that closed it.
+  static constexpr bool kBookIndexerEnabled = false;
+  static constexpr unsigned long kIndexIdleMs = 8000;
+  static constexpr unsigned long kIndexGapMs = 600;
+  void tickBookIndexer();
+
   // Penumbra (X3): windowed digit-only (or clock-block) refresh — no full-frame flash.
   bool forcePenumbraClockRepaint = false;
   // Last hero time string drawn on panel ("H:MM"); used for minute-change detect.
@@ -100,6 +130,11 @@ class HomeActivity final : public Activity {
   bool forceHomeShellRepaint = false;
   // seedUnderReader: defer loadRecentBooks / stats until first onResume.
   bool deferredEnterLoad_ = false;
+  // Light UI child (book action sheet / Settings / Library) did not change
+  // recents. onResume skips the SD cluster that showed up as activity_slow
+  // 2226ms before first ink on X3 v36 (47e06f62). Cleared when opening a book
+  // or after a mutating book action (those already reloaded).
+  bool skipResumeSdReload_ = false;
   int minimalMenuIndex = 0;
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   size_t coverBufferSize = 0;      // Bytes allocated to coverBuffer

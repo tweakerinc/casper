@@ -2,7 +2,7 @@
 """Rebuild Casper built-in Literata headers (stock FreeType, no stem-cal / gap-fill).
 
 Nominal ppem @150 DPI only — same density as pre-cpfont-editor Casper/CrossPoint.
-Line spacing Tight/Normal/Wide stays in CasperSettings::getReaderLineCompression().
+Line spacing Tight/Normal/Wide stays in CrossPointSettings::getReaderLineCompression().
 
 Requires: freetype-py, fonttools (same as fontconvert.py)
 """

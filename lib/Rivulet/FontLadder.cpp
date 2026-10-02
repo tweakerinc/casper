@@ -50,18 +50,16 @@ int FontLadder::resolve(const int baseFontId, const SizeStep step) {
   return ladder[idx];
 }
 
-uint8_t FontLadder::epdStyleBits(const RunStyle style) {
-  switch (style) {
-    case RunStyle::Bold:
-      return static_cast<uint8_t>(EpdFontFamily::BOLD);
-    case RunStyle::Italic:
-      return static_cast<uint8_t>(EpdFontFamily::ITALIC);
-    case RunStyle::BoldItalic:
-      return static_cast<uint8_t>(EpdFontFamily::BOLD | EpdFontFamily::ITALIC);
-    case RunStyle::Regular:
-    default:
-      return static_cast<uint8_t>(EpdFontFamily::REGULAR);
-  }
-}
+// RunStyle mirrors EpdFontFamily::Style bit-for-bit so this stays a cast and the
+// two definitions cannot drift apart as decorations are added.
+static_assert(static_cast<uint8_t>(RunStyle::Bold) == static_cast<uint8_t>(EpdFontFamily::BOLD));
+static_assert(static_cast<uint8_t>(RunStyle::Italic) == static_cast<uint8_t>(EpdFontFamily::ITALIC));
+static_assert(static_cast<uint8_t>(RunStyle::BoldItalic) == static_cast<uint8_t>(EpdFontFamily::BOLD_ITALIC));
+static_assert(static_cast<uint8_t>(RunStyle::Underline) == static_cast<uint8_t>(EpdFontFamily::UNDERLINE));
+static_assert(static_cast<uint8_t>(RunStyle::Strikethrough) == static_cast<uint8_t>(EpdFontFamily::STRIKETHROUGH));
+static_assert(static_cast<uint8_t>(RunStyle::Superscript) == static_cast<uint8_t>(EpdFontFamily::SUP));
+static_assert(static_cast<uint8_t>(RunStyle::Subscript) == static_cast<uint8_t>(EpdFontFamily::SUB));
+
+uint8_t FontLadder::epdStyleBits(const RunStyle style) { return static_cast<uint8_t>(style); }
 
 }  // namespace rivulet

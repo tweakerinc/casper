@@ -236,6 +236,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   }
 
   // flush the buffer
+  if (!currentTextBlock) return;
   partWordBuffer[partWordBufferIndex] = '\0';
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
   partWordBufferIndex = 0;
@@ -293,8 +294,16 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(
-      new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled, blockStyle));
+  auto* nextText = new (std::nothrow)
+      ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled, blockStyle);
+  if (!nextText) {
+    // -fno-exceptions: bare new abort()s. After PTX word-vector skip, the next
+    // paragraph allocation was the field abort() (need=16, maxAlloc≈11KB).
+    LOG_ERR("RLC", "OOM: ParsedText");
+    currentTextBlock.reset();
+    return;
+  }
+  currentTextBlock.reset(nextText);
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
   if (armDropCapOnNextTextBlock_) {
@@ -433,7 +442,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   //
   // Full stylesheets load only when embeddedStyle is on. Inline style="" and
   // HTML align= still apply always — many EPUBs center chapter titles that way
-  // without a class rule, and Casper defaults embedded style off for speed.
+  // without a class rule, and CrossPoint defaults embedded style off for speed.
   CssStyle cssStyle;
   if (self->cssParser) {
     cssStyle = self->cssParser->resolveStyle(name, classAttr);
@@ -1430,8 +1439,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // "21\nst edition" (field: content-1.jpeg). Paint already scales SUP/SUB to
       // ~50%; block sizeStep is the wrong tool for glued ordinals.
       const bool isSuperSubOrdinal =
-          cssStyle.hasVerticalAlign() && (cssStyle.verticalAlign == CssVerticalAlign::Super ||
-                                          cssStyle.verticalAlign == CssVerticalAlign::Sub);
+          cssStyle.hasVerticalAlign() &&
+          (cssStyle.verticalAlign == CssVerticalAlign::Super || cssStyle.verticalAlign == CssVerticalAlign::Sub);
       if (!isSuperSubOrdinal) {
         BlockStyle lineStyle = self->currentTextBlock->getBlockStyle();
         const uint8_t prevStep = lineStyle.sizeStep;
@@ -2296,7 +2305,7 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
     const int paintH = gH * scale;
     if (paintH <= 0 || paintH > maxH) return;
     const auto styleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(faceStyle) |
-                                                            static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
+                                                             static_cast<uint8_t>(EpdFontFamily::DROP_CAP));
     const int w = renderer.getTextAdvanceX(fontId, letter.c_str(), styleBits, scale);
     if (w < 8) return;
     if (found && w > maxW) return;
@@ -2396,7 +2405,12 @@ void ChapterHtmlSlimParser::emitDropCapIfPending() {
   capStyle.syntheticScale = false;
   capStyle.smallCaps = false;
 
-  auto capText = std::make_unique<ParsedText>(false, false, false, false, capStyle);
+  auto capText = std::unique_ptr<ParsedText>(new (std::nothrow) ParsedText(false, false, false, false, capStyle));
+  if (!capText) {
+    LOG_ERR("RLC", "OOM: drop-cap ParsedText");
+    if (currentTextBlock) currentTextBlock->addWord(letter, EpdFontFamily::BOLD);
+    return;
+  }
   capText->addWord(letter, capStyleBits);
   const int leftInset = bs.leftInset();
   std::shared_ptr<TextBlock> capLine;

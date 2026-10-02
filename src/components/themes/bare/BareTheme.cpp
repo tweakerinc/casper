@@ -10,15 +10,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <string>
 
-#include "CasperSettings.h"
-#include "util/CasperPaths.h"
+#include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "util/CoverThumbFiles.h"
+#include "util/CrossPointPaths.h"
+#include "util/DarkModePolicy.h"
 #include "util/StringUtils.h"
+#include "util/SystemChromeLive.h"
 
 namespace {
 // Mockup book title/author: Source Serif 4. Footer chrome via MinimalTheme.
@@ -28,7 +33,7 @@ constexpr int kAuthorFontId = SOURCESERIF4_14_FONT_ID;
 constexpr int kCoverCornerRadius = 4;
 // Narrow side margin so the cover can use almost the full screen width.
 constexpr int kSideInset = 12;
-constexpr int kTopPadNoChrome = 16;    // air above cover when battery + clock are hidden
+constexpr int kTopPadNoChrome = 16;    // air above cover when top chrome is hidden
 constexpr int kTopPadWithChrome = 10;  // gap under battery/clock row before cover zone
 // Tight title→author so the pair reads as one unit.
 constexpr int kTitleAuthorGap = 3;
@@ -37,17 +42,13 @@ constexpr int kMinGapCoverToText = 10;
 constexpr int kTitleMaxLines = 3;  // full-width wrap; long titles must not ellipsize early
 constexpr int kAuthorMaxLines = 2;
 
-bool bareShowsBattery() { return SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_BATTERY); }
-
-bool bareShowsClock() { return SETTINGS.systemStatusBarHas(CasperSettings::SYS_SLOT_CLOCK); }
-
-// Y where content may begin: under optional battery/clock chrome.
+// Y where content may begin: under optional battery/clock/warning chrome.
 int bareContentTopY() {
-  if (!bareShowsBattery() && !bareShowsClock()) {
+  if (!homeNeedsSystemChrome()) {
     return kTopPadNoChrome;
   }
   // Match HomeActivity bare header height (battery row).
-  return BaseTheme::kTopChromeBatteryY +
+  return BareMetrics::values.topPadding + BaseTheme::kTopChromeBatteryY +
          std::max(BareMetrics::values.batteryHeight + 8, BareMetrics::values.statusBarVerticalMargin) +
          kTopPadWithChrome;
 }
@@ -75,30 +76,26 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const 
   }
 }
 
-// Prefer Bare-native 420×560 1:1. Fall back to other heights so a just-flashed
-// device still shows something while c30_560 regenerates.
+// Prefer Bare-native 420×560 1:1. Fall back to leftover 280/168 — do not wait
+// on JPEG just because the hero-size file is missing. exists() alone is not a
+// hit: a header-only leftover must not become a white jacket plate.
 std::string coverPathForBook(const RecentBook& book) {
-  auto firstExisting = [](std::initializer_list<std::string> candidates) -> std::string {
-    for (const std::string& path : candidates) {
-      if (!path.empty() && Storage.exists(path.c_str())) {
-        return path;
-      }
-    }
-    return {};
-  };
-
   if (FsHelpers::hasEpubExtension(book.path)) {
-    Epub epub(book.path, CasperPaths::kPackageCacheRoot);
-    const std::string found = firstExisting({
+    Epub epub(book.path, CrossPointPaths::kPackageCacheRoot);
+    const std::string found = coverthumb::firstValidBmp("HOME", {
         epub.getThumbBmpPath(BareMetrics::homeCoverThumbHeight),
         epub.getThumbBmpPath(BareMetrics::homeCoverImageHeight),
+        epub.getThumbBmpPath(HomeCoverMetrics::homeShelfThumbHeight),
+        epub.getThumbBmpPath(HomeCoverMetrics::previewThumbHeight),
     });
     if (!found.empty()) return found;
   }
 
-  return firstExisting({
+  return coverthumb::firstValidBmp("HOME", {
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverThumbHeight),
       UITheme::getCoverThumbPath(book.coverBmpPath, BareMetrics::homeCoverImageHeight),
+      UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::homeShelfThumbHeight),
+      UITheme::getCoverThumbPath(book.coverBmpPath, HomeCoverMetrics::previewThumbHeight),
       book.coverBmpPath.find("[HEIGHT]") == std::string::npos ? book.coverBmpPath : std::string{},
   });
 }
@@ -106,7 +103,7 @@ std::string coverPathForBook(const RecentBook& book) {
 // Contain-fit full jacket; prefer 1:1 native blit. Returns art rect for multipass snapshot.
 Rect drawCoverImage(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book) {
   const std::string coverBmpPath = coverPathForBook(book);
-  if (coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) {
+  if (coverBmpPath.empty()) {
     drawMissingCover(renderer, coverRect, book);
     return coverRect;
   }
@@ -150,6 +147,11 @@ Rect drawCoverImage(const GfxRenderer& renderer, const Rect& coverRect, const Re
   renderer.maskRoundedRectOutsideCorners(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, artRadius,
                                          Color::White);
   renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1, artRadius, true);
+  // Whole-UI Dark Mode inverts the FB at display. Pre-invert the jacket so the
+  // photograph comes out original polarity (not a negative).
+  if (darkmode::preserveCoverPolarity(SETTINGS.readerDarkMode != 0, SETTINGS.darkModeReaderOnly != 0)) {
+    renderer.invertRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height);
+  }
   file.close();
   return bitmapRect;
 }
@@ -187,12 +189,11 @@ void BareTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
-  const auto& metrics = BareMetrics::values;
 
   // Leave room for battery/clock when the user has them enabled; otherwise a
   // small top pad so the cover sits high but not under the bezel.
   const int contentTop = bareContentTopY();
-  const int footerH = metrics.buttonHintsHeight;
+  const int footerH = BaseTheme::frontButtonFooterLayoutH(renderer);
 
   if (recentBooks.empty()) {
     const char* msg = tr(STR_NO_OPEN_BOOK);

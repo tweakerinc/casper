@@ -1,6 +1,6 @@
 # Rivulet Engine
 
-Clean-room **EPUB content engine** for Casper: book-class styling with a RAM-first architecture.
+Clean-room **EPUB content engine** for CrossPoint: book-class styling with a RAM-first architecture.
 
 ## Priorities
 
@@ -69,7 +69,7 @@ eng.savePageMap("/.crosspoint/book/ch5.rvpm");
 
 ## Integration (live test path)
 
-`CASPER_RIVULET_READER=1` in `platformio.ini` routes EPUB opens to
+`CROSSPOINT_RIVULET_READER=1` in `platformio.ini` routes EPUB opens to
 `RivuletReaderActivity` (minimal chrome: page turns, chapter advance, IR on SD).
 
 - **1** = Rivulet engine paints pages (for second-device eval)  

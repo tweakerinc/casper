@@ -8,6 +8,10 @@
 #define MAX_ENTRY_LEN 256
 #define MAX_LOG_LINES 16
 
+static void (*gLogMirror)(const char*) = nullptr;
+
+void setLogMirror(void (*fn)(const char* line)) { gLogMirror = fn; }
+
 // Simple ring buffer log, useful for error reporting when we encounter a crash
 RTC_NOINIT_ATTR char logMessages[MAX_LOG_LINES][MAX_ENTRY_LEN];
 RTC_NOINIT_ATTR size_t logHead = 0;
@@ -73,6 +77,7 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
   }
 #endif
   addToLogRingBuffer(buf);
+  if (gLogMirror) gLogMirror(buf);
 }
 
 std::string getLastLogs() {

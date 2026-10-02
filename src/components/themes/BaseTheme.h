@@ -198,7 +198,7 @@ class BaseTheme {
 
   // Component drawing methods
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
-  // displayMode: CasperSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
+  // displayMode: CrossPointSettings::BATTERY_DISPLAY_MODE (Icon / Percent / Icon + Percent).
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
                        uint8_t displayMode = 2) const;  // Left aligned (reader mode)
   void drawBatteryRight(const GfxRenderer& renderer, Rect rect,
@@ -213,6 +213,8 @@ class BaseTheme {
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   // Portrait footer height, or thinner landscape side strip for front-key chrome.
   static int frontButtonHintReserve(const GfxRenderer& renderer);
+  // Home/settings layout: hint strip plus X4 edge pad (reader overlay stays on reserve).
+  static int frontButtonFooterLayoutH(const GfxRenderer& renderer);
   virtual int getListRowStep(bool hasSubtitle) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
   // rowApplied: when true, draws a filled radio circle on the right (current
@@ -224,7 +226,14 @@ class BaseTheme {
                         const std::function<UIIcon(int index)>& rowIcon = nullptr,
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr,
-                        const std::function<bool(int index)>& rowApplied = nullptr) const;
+                        const std::function<bool(int index)>& rowApplied = nullptr,
+                        const std::function<bool(int index)>& rowCentered = nullptr) const;
+  // In-list section title (Settings → Reader → "Reader Controls"):
+  // UI_10 bold (same face as the Display/Reader/Controls/System tabs when
+  // four labels force the step-down), two 1px rules, centered in the slot
+  // so Anti-Ghosting↔top rule matches bottom rule↔first item.
+  static int listSectionHeaderHeight(const GfxRenderer& renderer);
+  static void drawListSectionHeader(const GfxRenderer& renderer, int x, int width, int y, const char* title);
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                           const char* subtitle = nullptr) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
@@ -292,6 +301,9 @@ class BaseTheme {
   // Shared top chrome geometry — MUST match reader status bar and home/dashboard headers.
   static constexpr int kTopChromeInsetX = 12;
   static constexpr int kTopChromeBatteryY = 5;
+  // Reader status-bar clock/text Y. Bare's small status clock must use this
+  // (not vertical-centering in the chrome band, and not Penumbra's 72pt hero).
+  static int chromeClockY(const ThemeMetrics& metrics) { return metrics.topPadding + kTopChromeBatteryY; }
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight);
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
 };

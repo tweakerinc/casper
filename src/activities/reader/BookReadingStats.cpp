@@ -6,11 +6,14 @@
 #include <I18n.h>
 #include <Logging.h>
 
-#include "util/CasperBookStore.h"
-#include "util/CasperPaths.h"
-
 #include <cstring>
 #include <functional>
+#include <string>
+#include <vector>
+
+#include "StatsBackupLayout.h"
+#include "util/CrossPointBookStore.h"
+#include "util/CrossPointPaths.h"
 
 namespace {
 // Binary layout v1 (11 bytes):
@@ -86,7 +89,7 @@ std::string statsFileNameForVersion(const uint8_t version) {
 }
 
 // legacy EPUB cache dirs use FNV-1a 64-bit of the full book path (ZipFile::fnvHash64).
-// Casper / Casper 1.5 use std::hash → different epub_<n> folder names on the same SD.
+// CrossPoint / CrossPoint 1.5 use std::hash → different epub_<n> folder names on the same SD.
 uint64_t fnv1a64Path(const std::string& path) {
   uint64_t hash = 14695981039346656037ull;
   for (size_t i = 0; i < path.size(); ++i) {
@@ -96,11 +99,11 @@ uint64_t fnv1a64Path(const std::string& path) {
   return hash;
 }
 
-std::string stdHashEpubCachePath(const std::string& bookPath, const char* root = CasperPaths::kPackageCacheRoot) {
+std::string stdHashEpubCachePath(const std::string& bookPath, const char* root = CrossPointPaths::kPackageCacheRoot) {
   return std::string(root) + "/epub_" + std::to_string(std::hash<std::string>{}(bookPath));
 }
 
-std::string legacyFnvEpubCachePath(const std::string& bookPath, const char* root = CasperPaths::kPackageCacheRoot) {
+std::string legacyFnvEpubCachePath(const std::string& bookPath, const char* root = CrossPointPaths::kPackageCacheRoot) {
   return std::string(root) + "/epub_" + std::to_string(fnv1a64Path(bookPath));
 }
 
@@ -292,7 +295,7 @@ bool looksLikeEmptyShell(const BookReadingStats& s) {
   return s.sessionCount == 0 && s.totalReadingSeconds < 60 && s.totalPagesTurned <= 1 && !s.isCompleted;
 }
 
-// Lifetime still looks like a fresh Casper shell (progress-only or near-empty).
+// Lifetime still looks like a fresh CrossPoint shell (progress-only or near-empty).
 // Thin shell: prefer richer lifetime totals if another candidate has them.
 bool isLifetimeThin(const BookReadingStats& s) {
   return s.totalReadingSeconds < 60 && s.sessionCount <= 1 && s.totalPagesTurned <= 2 && !s.isCompleted;
@@ -371,7 +374,7 @@ BookReadingStats loadBestInCacheDir(const std::string& cachePath) {
     return best;
   }
 
-  // Prefer current filename first (Casper writes stats_vN.bin on every save/migrate).
+  // Prefer current filename first (CrossPoint writes stats_vN.bin on every save/migrate).
   const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
   considerNamedStatsFile(cachePath, currentName, best, have);
   if (have && hasAnyStatsPayload(best) && !looksLikeEmptyShell(best)) {
@@ -409,9 +412,9 @@ void collectBookCacheCandidates(const std::string& bookPath, std::string* paths,
   // v0.1.8 primary: epub_/xtc_/txt_<std::hash> (same as package cache).
   pushUnique(BookReadingStats::cachePathForBook(bookPath));
   if (FsHelpers::hasEpubExtension(bookPath)) {
-    pushUnique(stdHashEpubCachePath(bookPath, CasperPaths::kPackageCacheRoot));
+    pushUnique(stdHashEpubCachePath(bookPath, CrossPointPaths::kPackageCacheRoot));
     // CrossInk FNV leftover only (read if present).
-    pushUnique(legacyFnvEpubCachePath(bookPath, CasperPaths::kPackageCacheRoot));
+    pushUnique(legacyFnvEpubCachePath(bookPath, CrossPointPaths::kPackageCacheRoot));
   }
 }
 
@@ -422,12 +425,12 @@ std::string BookReadingStats::cachePathForBook(const std::string& bookPath) {
     return {};
   }
   // v0.1.8: stats live under /.crosspoint/epub_<std::hash>/ (with package).
-  return CasperBook::bookDirForPath(bookPath);
+  return CrossPointBook::bookDirForPath(bookPath);
 }
 
 // Session memo for loadForBook — Home/recents used to re-scan the same 4–5 books
 // several times per paint (each scan was multi-version SD probes).
-// cachePath is the Casper primary folder so save() can update one slot without
+// cachePath is the CrossPoint primary folder so save() can update one slot without
 // wiping the whole memo (or re-hashing every path).
 struct LoadForBookMemo {
   static constexpr size_t kCap = 8;
@@ -467,6 +470,17 @@ void memoUpdateByCachePath(const std::string& cachePath, const BookReadingStats&
   }
 }
 
+bool memoLookupByCachePath(const std::string& cachePath, BookReadingStats& out) {
+  if (cachePath.empty()) return false;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.cachePath[i] == cachePath) {
+      out = g_loadForBookMemo.stats[i];
+      return true;
+    }
+  }
+  return false;
+}
+
 bool memoLookup(const std::string& bookPath, BookReadingStats& out) {
   for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
     if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.path[i] == bookPath) {
@@ -489,7 +503,16 @@ void memoInvalidate(const std::string& bookPath) {
   }
 }
 
-// One-time legacy / legacy scan marker under the Casper cache folder.
+void memoInvalidateByCachePath(const std::string& cachePath) {
+  if (cachePath.empty()) return;
+  for (size_t i = 0; i < LoadForBookMemo::kCap; ++i) {
+    if (g_loadForBookMemo.valid[i] && g_loadForBookMemo.cachePath[i] == cachePath) {
+      g_loadForBookMemo.valid[i] = false;
+    }
+  }
+}
+
+// One-time legacy / legacy scan marker under the CrossPoint cache folder.
 // Present ⇒ we already looked for alternate cache dirs once; do not thrash SD
 // again until the user clears cache (which deletes this folder/marker).
 static constexpr const char* kLegacyScanMarker = "stats_legacy_scanned";
@@ -549,7 +572,7 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
   }
 
   // Promote the richest found blob to the current versioned filename when the
-  // primary file is missing or a thin reopen shell (legacy v5 <-> Casper v6).
+  // primary file is missing or a thin reopen shell (legacy v5 <-> CrossPoint v6).
   const std::string currentName = statsFileNameForVersion(STATS_FILE_VERSION);
   BookReadingStats currentOnly;
   const bool haveCurrent = loadStatsFileNamed(cachePath, currentName, currentOnly);
@@ -567,7 +590,20 @@ BookReadingStats BookReadingStats::load(const std::string& cachePath) {
     }
   }
 
+  memoUpdateByCachePath(cachePath, stats);
   return stats;
+}
+
+bool BookReadingStats::samePayloadAs(const BookReadingStats& o) const {
+  return sessionCount == o.sessionCount && totalReadingSeconds == o.totalReadingSeconds &&
+         totalPagesTurned == o.totalPagesTurned && isCompleted == o.isCompleted &&
+         avgSecondsPerForwardPage == o.avgSecondsPerForwardPage && paceSampleCount == o.paceSampleCount &&
+         estimatedTimeLeftSeconds == o.estimatedTimeLeftSeconds && progressPercentMilli == o.progressPercentMilli &&
+         startDateManual == o.startDateManual && finishedDateManual == o.finishedDateManual &&
+         startDate.year == o.startDate.year && startDate.month == o.startDate.month &&
+         startDate.day == o.startDate.day && finishedDate.year == o.finishedDate.year &&
+         finishedDate.month == o.finishedDate.month && finishedDate.day == o.finishedDate.day &&
+         timeOfDaySeconds == o.timeOfDaySeconds && dayOfWeekSeconds == o.dayOfWeekSeconds;
 }
 
 float BookReadingStats::getProgressPercent() const {
@@ -612,6 +648,9 @@ void BookReadingStats::recordForwardPageRead(uint32_t seconds) {
   }
 
   const uint16_t sample = static_cast<uint16_t>(seconds);
+  if (totalPagesTurned < UINT32_MAX) {
+    totalPagesTurned++;
+  }
   if (paceSampleCount == 0 || avgSecondsPerForwardPage == 0) {
     avgSecondsPerForwardPage = sample;
     paceSampleCount = 1;
@@ -649,6 +688,15 @@ void BookReadingStats::save(const std::string& cachePath) const {
   if (cachePath.empty()) {
     LOG_ERR("STATS", "save: empty cache path");
     return;
+  }
+  // Skip the FAT write when the on-disk / memo payload already matches. Reader
+  // exit, Home progress stamps, and menu leaves used to rewrite the same
+  // stats_vN.bin repeatedly — several SD ops for zero change.
+  {
+    BookReadingStats memoed;
+    if (memoLookupByCachePath(cachePath, memoed) && samePayloadAs(memoed)) {
+      return;
+    }
   }
   ensureCacheDir(cachePath);
   const std::string statsFileName = statsFileNameForVersion(STATS_FILE_VERSION);
@@ -731,7 +779,147 @@ bool BookReadingStats::remove(const std::string& cachePath) {
   }
   if (dir) dir.close();
 
+  // Book-file delete also drops Recover Stats — the epub is gone.
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (Storage.exists(trashDir.c_str())) {
+    std::vector<std::string> trashNames;
+    trashNames.reserve(8);
+    auto trash = Storage.open(trashDir.c_str());
+    if (trash && trash.isDirectory()) {
+      char name[96];
+      for (auto file = trash.openNextFile(); file; file = trash.openNextFile()) {
+        const bool isDir = file.isDirectory();
+        file.getName(name, sizeof(name));
+        file.close();
+        if (isDir || !isStatsFileName(name)) continue;
+        if (trashNames.size() < 8) trashNames.emplace_back(name);
+      }
+    }
+    if (trash) trash.close();
+    for (const auto& name : trashNames) {
+      const std::string path = trashDir + "/" + name;
+      if (Storage.exists(path.c_str()) && !Storage.remove(path.c_str())) {
+        LOG_ERR("STATS", "Could not delete trash %s", name.c_str());
+        ok = false;
+      }
+    }
+    if (Storage.exists(trashDir.c_str()) && !Storage.rmdir(trashDir.c_str())) {
+      LOG_ERR("STATS", "Could not rmdir %s", trashDir.c_str());
+      ok = false;
+    }
+  }
+
   return ok;
+}
+
+bool BookReadingStats::stashToTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (!Storage.ensureDirectoryExists(trashDir.c_str())) {
+    LOG_ERR("STATS", "Could not create %s", trashDir.c_str());
+    return false;
+  }
+
+  std::vector<std::string> names;
+  names.reserve(8);
+  auto dir = Storage.open(cachePath.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (names.size() < 8) names.emplace_back(name);
+  }
+  dir.close();
+
+  int moved = 0;
+  for (const auto& fileName : names) {
+    const std::string src = cachePath + "/" + fileName;
+    const std::string dest = trashDir + "/" + fileName;
+    if (!Storage.exists(src.c_str())) continue;
+    if (Storage.exists(dest.c_str()) && !Storage.remove(dest.c_str())) {
+      LOG_ERR("STATS", "Could not replace trash %s", dest.c_str());
+      continue;
+    }
+    if (!Storage.rename(src.c_str(), dest.c_str())) {
+      LOG_ERR("STATS", "Could not stash %s", src.c_str());
+      continue;
+    }
+    ++moved;
+  }
+  LOG_INF("STATS", "stashed %d stats file(s) into %s", moved, trashDir.c_str());
+  if (moved > 0) memoInvalidateByCachePath(cachePath);
+  return moved > 0;
+}
+
+bool BookReadingStats::restoreFromTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  if (!Storage.exists(trashDir.c_str())) return false;
+
+  std::vector<std::string> names;
+  names.reserve(8);
+  auto dir = Storage.open(trashDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    if (names.size() < 8) names.emplace_back(name);
+  }
+  dir.close();
+
+  if (!Storage.ensureDirectoryExists(cachePath.c_str())) return false;
+  int moved = 0;
+  for (const auto& fileName : names) {
+    const std::string src = trashDir + "/" + fileName;
+    const std::string dest = cachePath + "/" + fileName;
+    if (!Storage.exists(src.c_str())) continue;
+    if (Storage.exists(dest.c_str()) && !Storage.remove(dest.c_str())) {
+      LOG_ERR("STATS", "Could not replace live %s", dest.c_str());
+      continue;
+    }
+    if (!Storage.rename(src.c_str(), dest.c_str())) {
+      LOG_ERR("STATS", "Could not restore %s", src.c_str());
+      continue;
+    }
+    ++moved;
+  }
+  LOG_INF("STATS", "restored %d stats file(s) from %s", moved, trashDir.c_str());
+  if (moved > 0) memoInvalidateByCachePath(cachePath);
+  return moved > 0;
+}
+
+bool BookReadingStats::hasTrash(const std::string& cachePath) {
+  if (cachePath.empty()) return false;
+  const std::string trashDir = cachePath + "/" + statsbackup::kTrashFolder;
+  auto dir = Storage.open(trashDir.c_str());
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return false;
+  }
+  char name[96];
+  bool found = false;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    const bool isDir = file.isDirectory();
+    file.getName(name, sizeof(name));
+    file.close();
+    if (isDir || !isStatsFileName(name)) continue;
+    found = true;
+    break;
+  }
+  dir.close();
+  return found;
 }
 
 bool BookReadingStats::removeForBook(const std::string& bookPath) {

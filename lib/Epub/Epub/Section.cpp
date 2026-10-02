@@ -843,20 +843,32 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
   const uint32_t fileSize = f.size();
   f.seek(HEADER_SIZE - sizeof(uint32_t) * 3);
-  uint32_t anchorMapOffset;
-  serialization::readPod(f, anchorMapOffset);
+  uint32_t anchorMapOffset = 0;
+  if (!serialization::tryReadPod(f, anchorMapOffset)) {
+    return std::nullopt;
+  }
   if (anchorMapOffset == 0 || anchorMapOffset >= fileSize) {
     return std::nullopt;
   }
 
   f.seek(anchorMapOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
+  uint16_t count = 0;
+  if (!serialization::tryReadPod(f, count)) {
+    return std::nullopt;
+  }
+  // Anchor keys are read with the length-validating helper: readString() resizes
+  // a std::string to a length taken straight off the card with no bounds check,
+  // so one corrupt or truncated section.bin turns into resize(garbage) →
+  // length_error/bad_alloc → abort() → reboot, because the firmware is built
+  // with -fno-exceptions. A bad cache file must degrade to "anchor not found"
+  // and let the section rebuild, never take the device down.
+  std::string key;
   for (uint16_t i = 0; i < count; i++) {
-    std::string key;
-    uint16_t page;
-    serialization::readString(f, key);
-    serialization::readPod(f, page);
+    uint16_t page = 0;
+    if (!serialization::tryReadString(f, key) || !serialization::tryReadPod(f, page)) {
+      LOG_ERR("SCT", "Corrupt anchor map in %s (entry %u/%u)", filePath.c_str(), i, count);
+      return std::nullopt;
+    }
     if (key == anchor) {
       return page;
     }

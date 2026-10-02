@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <Memory.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -13,15 +14,14 @@
 #include <cstring>
 #include <string>
 
-#include <HalDisplay.h>
-
-#include "CasperSettings.h"
+#include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DictLookupLayout.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
 #include "util/UiGhostPolicy.h"
@@ -577,39 +577,23 @@ void DictionaryWordSelectActivity::loop() {
 }
 
 void DictionaryWordSelectActivity::highlightBoxFor(const WordBox& word, int& hx, int& hy, int& hw, int& hh) const {
-  // Horizontal pad only. Fill must cover every white drawText pixel or ink
-  // outside the black rect is painted white (vanishes — bad in dark mode).
-  const int padX = std::max(1, std::min(2, lineHeight / 16));
-  hx = word.x - padX;
-  hw = word.width + padX * 2;
-
-  // One layout line: compressed pitch, or exact gap to the next row.
-  int cellH = lineHeight;
-  int nextRowY = INT_MAX;
+  // Fill must cover every white drawText pixel or ink outside the black rect
+  // is painted white (vanishes — bad in dark mode). Size the bar to the ink
+  // span (ascender + |descender|), not the row pitch — stretching to the next
+  // line hung the highlight below the letters.
+  int nextRowY = word.y;
   for (const auto& w : words) {
-    if (w.row == static_cast<uint16_t>(word.row + 1) && w.y < nextRowY) {
+    if (w.row == static_cast<uint16_t>(word.row + 1) && w.y > word.y && (nextRowY == word.y || w.y < nextRowY)) {
       nextRowY = w.y;
     }
   }
-  if (nextRowY != INT_MAX && nextRowY > word.y) {
-    cellH = nextRowY - word.y;
-  }
-
-  // drawText: baseline = word.y + ascender. Bottom of the band needs to clear
-  // descenders (g/y/p). Top of the line box is usually empty above Latin caps
-  // (ascender covers accents / max extent) — pull the top down so the bar looks
-  // centered on the word (still enough black above caps / accents).
-  const int asc = std::max(1, renderer.getFontAscenderSize(fontId));
-  const int minInk = asc + std::max(2, asc / 6);
-  const int bottom = word.y + std::max(cellH, minInk);
-  // ~30% of ascender is typical empty headroom above body caps.
-  const int topInset = std::max(2, (asc * 3) / 10);
-  hy = word.y + topInset;
-  hh = bottom - hy;
-  if (hh < 6) {
-    hy = word.y;
-    hh = bottom - hy;
-  }
+  const auto box =
+      dictlookup::wordHighlightRect(word.x, word.y, word.width, lineHeight, renderer.getFontAscenderSize(fontId),
+                                    renderer.getFontDescenderSize(fontId), nextRowY);
+  hx = box.x;
+  hy = box.y;
+  hw = box.w;
+  hh = box.h;
 
   // Landscape: front-button chrome sits on a logical side. Clamp so the black
   // bar does not run under the hint strip (looked like the menu overlapping).
@@ -692,8 +676,7 @@ void DictionaryWordSelectActivity::drawHints() const {
   // still get hardcoded Left/Right from mapLabels (word-step actions).
   // Passing Left/Right here made remapped Up/Down buttons read "Left"/"Right".
   // Clip mode mirrors classic: Select (mark start) then Done (confirm end).
-  const char* confirmLabel =
-      (mode_ == Mode::Clip && startMarkIdx >= 0) ? tr(STR_DONE) : tr(STR_SELECT);
+  const char* confirmLabel = (mode_ == Mode::Clip && startMarkIdx >= 0) ? tr(STR_DONE) : tr(STR_SELECT);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
@@ -707,13 +690,16 @@ void DictionaryWordSelectActivity::drawModeTitle() const {
   } else {
     title = (startMarkIdx >= 0) ? tr(STR_MULTI_WORD_SELECTION) : tr(STR_DICTIONARY_LOOKUP);
   }
-  // UI_10 bold: a step up from SMALL_FONT so the mode label is easy to spot
-  // without colliding with body text (page still has top chrome headroom).
+  // UI_10 bold: sit in the viewable band (bezel + air), not y=2 inside it.
   constexpr int kTitleFont = UI_10_FONT_ID;
   const int lineH = renderer.getLineHeight(kTitleFont);
-  const int titleY = std::max(2, (marginTop - lineH) / 2);
-  // Light wipe so page ink under the title band does not show through.
-  renderer.fillRect(0, 0, renderer.getScreenWidth(), std::max(lineH + titleY + 2, marginTop - 2), false);
+  int oTop = 0, oRight = 0, oBottom = 0, oLeft = 0;
+  renderer.getOrientedViewableTRBL(&oTop, &oRight, &oBottom, &oLeft);
+  (void)oRight;
+  (void)oBottom;
+  (void)oLeft;
+  const int titleY = dictlookup::modeTitleY(oTop);
+  renderer.fillRect(0, 0, renderer.getScreenWidth(), dictlookup::modeTitleWipeH(titleY, lineH, marginTop), false);
   renderer.drawCenteredText(kTitleFont, titleY, title, true, EpdFontFamily::BOLD);
 }
 

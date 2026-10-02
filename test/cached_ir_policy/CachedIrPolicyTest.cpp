@@ -13,7 +13,6 @@ bool oldShortVsHtml(const size_t htmlSz, const size_t textSz) {
 }  // namespace
 
 TEST(CachedIrPolicy, TypicalEpubChapterHtmlIsNotTruncation) {
-  // ~3× markup overhead: a chapter the user just finished reading.
   constexpr size_t kHtml = 50000;
   constexpr size_t kText = 15000;
   EXPECT_TRUE(oldShortVsHtml(kHtml, kText));
@@ -21,7 +20,6 @@ TEST(CachedIrPolicy, TypicalEpubChapterHtmlIsNotTruncation) {
 }
 
 TEST(CachedIrPolicy, ShortProseWithFatXhtmlIsNotTruncation) {
-  // Cover/front-matter: lots of CSS, little body text.
   constexpr size_t kHtml = 24000;
   constexpr size_t kText = 4000;
   EXPECT_TRUE(oldShortVsHtml(kHtml, kText));
@@ -33,7 +31,9 @@ TEST(CachedIrPolicy, EqualSizesStayAccepted) {
   EXPECT_FALSE(oldShortVsHtml(8000, 8000));
 }
 
-TEST(CachedIrPolicy, OomDoesNotDeleteTheFile) { EXPECT_FALSE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::Oom)); }
+TEST(CachedIrPolicy, OomDoesNotDeleteTheFile) {
+  EXPECT_FALSE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::Oom));
+}
 
 TEST(CachedIrPolicy, CorruptHeaderMayDelete) {
   EXPECT_TRUE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::Corrupt));
@@ -43,13 +43,22 @@ TEST(CachedIrPolicy, StaleVersionDoesNotDeleteTheFile) {
   EXPECT_FALSE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::StaleVersion));
 }
 
-TEST(CachedIrPolicy, CrossPointIrVersionsStayLoadable) {
-  // Parser-only bumps must not force a reconvert of v19–v25 caches.
-  EXPECT_EQ(rivulet::kIrFormatVersionMin, 19);
+TEST(CachedIrPolicy, LegacyPrefixWithoutCompletionProofMustReconvert) {
+  // v19-v26 may contain a successful-looking IR made from only a prefix of
+  // the chapter. A wire-layout match alone cannot prove source completion.
+  // Rebuild derived IR once; do not remove the source or user progress.
+  EXPECT_EQ(rivulet::kIrFormatVersionMin, 27);
   EXPECT_EQ(rivulet::kIrFormatVersionMax, rivulet::kIrFormatVersion);
-  EXPECT_TRUE(cachedir::irVersionLoadable(19, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
-  EXPECT_TRUE(cachedir::irVersionLoadable(25, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
-  EXPECT_TRUE(cachedir::irVersionLoadable(26, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
-  EXPECT_FALSE(cachedir::irVersionLoadable(18, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
-  EXPECT_FALSE(cachedir::irVersionLoadable(27, rivulet::kIrFormatVersionMin, rivulet::kIrFormatVersionMax));
+  for (uint16_t v = 19; v <= 26; ++v) {
+    EXPECT_FALSE(cachedir::irVersionLoadable(v, rivulet::kIrFormatVersionMin,
+                                            rivulet::kIrFormatVersionMax));
+  }
+  EXPECT_TRUE(cachedir::irVersionLoadable(27, rivulet::kIrFormatVersionMin,
+                                         rivulet::kIrFormatVersionMax));
+  EXPECT_FALSE(cachedir::irVersionLoadable(18, rivulet::kIrFormatVersionMin,
+                                          rivulet::kIrFormatVersionMax));
+  EXPECT_FALSE(cachedir::irVersionLoadable(rivulet::kIrFormatVersionMax + 1,
+                                          rivulet::kIrFormatVersionMin,
+                                          rivulet::kIrFormatVersionMax));
+  EXPECT_FALSE(cachedir::deleteFileOnLoadMiss(cachedir::LoadMiss::StaleVersion));
 }

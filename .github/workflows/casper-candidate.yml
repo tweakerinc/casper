@@ -39,3 +39,32 @@ jobs:
           name: casper-candidate-source-and-tests
           path: candidate-results/
           retention-days: 7
+  build:
+    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install build tools
+        run: python3 -m pip install platformio==6.1.18
+      - name: Compile combined X3 and original X4 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-build
+          touch platformio.local.ini
+          pio run -e default 2>&1 | tee candidate-build/build.log
+          cp .pio/build/default/firmware.bin candidate-build/Casper-candidate.bin
+          cp .pio/build/default/firmware.elf candidate-build/Casper-candidate.elf
+          git rev-parse HEAD > candidate-build/commit.txt
+          git submodule status --recursive > candidate-build/submodules.txt
+          sha256sum candidate-build/Casper-candidate.bin > candidate-build/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: casper-candidate-build
+          path: candidate-build/
+          retention-days: 14

@@ -1,0 +1,25 @@
+name: Rivulet source snapshot
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/rivulet-source.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Snapshot source and tests
+        run: |
+          mkdir -p /tmp/rivulet-source
+          git rev-parse HEAD > /tmp/rivulet-source/commit.txt
+          tar --exclude='.git' --exclude='*.ttf' --exclude='*.otf' --exclude='*.woff*' --exclude='*.bin' --exclude='*.epub' --exclude='*.png' --exclude='*.jpg' --exclude='*.pdf' -czf /tmp/rivulet-source/source.tar.gz src lib test tools scripts platformio.ini partitions.csv .gitmodules .github/workflows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rivulet-rc2-source
+          path: /tmp/rivulet-source/
+          retention-days: 7

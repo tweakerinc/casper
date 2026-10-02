@@ -1,0 +1,33 @@
+name: Casper source reconciliation
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-reconcile.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture pinned source references
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reconciliation
+          git for-each-ref --sort=-committerdate --format='%(objectname) %(committerdate:iso8601) %(refname:short) %(subject)' refs/remotes/origin > reconciliation/branches.txt
+          for sha in e158c6ad8974252edad14437a6bc1d7abcdc3675 e26f39dd42e6952ea36ea4983a5f90dead7b853a; do
+            git log --oneline fc6d41d75b3d76558000726777f0ae5a4e659591..$sha > reconciliation/$sha-log.txt
+            git diff --stat fc6d41d75b3d76558000726777f0ae5a4e659591 $sha > reconciliation/$sha-stat.txt
+            git archive $sha src lib/Rivulet lib/GfxRenderer lib/Memory test/CMakeLists.txt platformio.ini | gzip > reconciliation/$sha-source.tar.gz
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: casper-source-reconciliation
+          path: reconciliation/
+          retention-days: 7

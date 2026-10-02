@@ -1,0 +1,78 @@
+name: Apply reviewed Casper RC2 source
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-apply-rc2.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fix/casper-stability-v0.2.0-candidate
+          fetch-depth: 0
+      - name: Verify source identities and apply reviewed delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import base64, hashlib, json, lzma, subprocess
+          encoded = ''.join(Path(f'.github/candidate-patches/rc2.{i:02d}.b64').read_text().strip() for i in range(1,7))
+          data = base64.b64decode(encoded, validate=True)
+          assert len(data) == 38640
+          assert hashlib.sha256(data).hexdigest() == '3b1a3845c600dd5351cdf727d3a4863b04fda39fc986450f1878f17e3e498248'
+          decoded = lzma.decompress(data)
+          assert len(decoded) == 150235
+          manifest = json.loads(decoded)
+          assert manifest['base_commit'] == 'e1d13d614b27e894fecae4023f1a5e46e7e57281'
+          subprocess.run(['git','merge-base','--is-ancestor',manifest['base_commit'],'HEAD'], check=True)
+          assert len(manifest['files']) == 38
+          outputs = []
+          seen = set()
+          root = Path.cwd().resolve()
+          for entry in manifest['files']:
+              rel = entry['path']
+              assert rel not in seen
+              seen.add(rel)
+              pp = PurePosixPath(rel)
+              assert not pp.is_absolute() and '..' not in pp.parts
+              assert rel == 'platformio.ini' or rel.startswith(('src/', 'lib/', 'test/', 'tools/casper_stability/', 'docs/releases/'))
+              path = Path(rel)
+              assert path.resolve().is_relative_to(root) and not path.is_symlink()
+              if entry['base'] is None:
+                  assert not path.exists(), f'New path already exists: {rel}'
+                  old = b''
+              else:
+                  old = path.read_bytes()
+                  assert hashlib.sha256(old).hexdigest() == entry['base'], f'Source changed: {rel}'
+              lines = old.decode('utf-8').splitlines(keepends=True)
+              prior = 0
+              for start, end, text in entry['ops']:
+                  assert 0 <= prior <= start <= end <= len(lines)
+                  assert isinstance(text, str)
+                  prior = end
+              for start, end, text in reversed(entry['ops']):
+                  lines[start:end] = text.splitlines(keepends=True)
+              new = ''.join(lines).encode('utf-8')
+              assert hashlib.sha256(new).hexdigest() == entry['target'], f'Target checksum mismatch: {rel}'
+              outputs.append((path, new))
+          # Validate ALL files before mutating ANY of them.
+          for path, new in outputs:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(new)
+          Path('/tmp/rc2-paths').write_text('\n'.join(str(p) for p, _ in outputs)+'\n')
+          print('Verified and applied', len(outputs), 'source files')
+          PY
+          git diff --check
+          python3 tools/casper_stability/run_tests.py
+          git rm .github/candidate-patches/rc2.*.b64
+          git add --pathspec-from-file=/tmp/rc2-paths
+          git -c user.name='Casper candidate builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'feat(rivulet): SD-backed streaming chapters and independent bidirectional readiness' -m 'RC2: bounded text and metadata windows, resumable parsing and cache publication, independent foreground/background worker, checkpointed exact chapter-end navigation, book-wide count ledger, source identity, and dual-slot content anchors. Preserve the active page on preparation failure and preserve UI layout. Actual-source host sanitizer suite passed; full device build and physical testing remain separate gates.'
+          git push origin HEAD:refs/heads/fix/casper-stability-v0.2.0-candidate
+          git rev-parse HEAD

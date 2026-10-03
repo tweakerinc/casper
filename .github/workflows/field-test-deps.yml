@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Fetch exact public decoder dependency
+      - name: Fetch pinned public test dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -19,11 +19,13 @@ jobs:
           git -C JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
           git -C JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
           git -C JPEGDEC checkout --detach FETCH_HEAD
+          git clone --depth=1 --branch v1.17.0 https://github.com/google/googletest.git googletest
           mkdir result
           git -C JPEGDEC rev-parse HEAD > result/decoder-commit.txt
-          tar --exclude='.git' -czf result/jpegdec-source.tar.gz JPEGDEC/src JPEGDEC/LICENSE JPEGDEC/library.properties
+          git -C googletest rev-parse HEAD > result/gtest-commit.txt
+          tar --exclude='.git' -czf result/test-dependencies.tar.gz JPEGDEC/src JPEGDEC/LICENSE JPEGDEC/library.properties googletest
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: field-decoder-dependency
+          name: field-test-dependencies
           path: result/
           retention-days: 7

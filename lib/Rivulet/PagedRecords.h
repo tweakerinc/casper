@@ -136,6 +136,10 @@ template <class T, size_t Window = 64, size_t Max = 65534> class PagedRecords {
     dirty_ = true;
     return page_[i - pageStart_];
   }
+  // As with back(), callers must establish that the store is not empty.
+  // A returned reference follows the same window-lifetime rule as operator[].
+  const T& front() const { return (*this)[0]; }
+  T& front() { return (*this)[0]; }
   const T& back() const { return (*this)[size() - 1]; }
   T& back() { return (*this)[size() - 1]; }
   template <bool Const> struct Iter {

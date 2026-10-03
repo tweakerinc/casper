@@ -26,6 +26,7 @@ jobs:
           cmake --build /tmp/casper-tests -j2
           ctest --test-dir /tmp/casper-tests --output-on-failure 2>&1 | tee candidate-tests/ctest.log
           if test -f tools/casper_stability/run_tests.py; then python3 tools/casper_stability/run_tests.py 2>&1 | tee candidate-tests/stability.log; fi
+          if test -f tools/rc2_hotfix_tests/run_tests.py; then python3 tools/rc2_hotfix_tests/run_tests.py 2>&1 | tee candidate-tests/rc2-hotfix.log; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

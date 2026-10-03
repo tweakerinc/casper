@@ -1,0 +1,124 @@
+name: Casper RC3 field repair validation
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-rc3-field.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sources:
+    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.apply.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fix/casper-stability-v0.2.0-candidate
+          fetch-depth: 0
+      - name: Verify source identities and apply reviewed patch
+        id: apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, json, lzma, subprocess
+          data=base64.b64decode(''.join(Path(f'.github/candidate-patches/rc3.{i:02d}.b64').read_text().strip() for i in range(1,4)),validate=True)
+          assert len(data)==33212
+          assert hashlib.sha256(data).hexdigest()=='8b70a4b4f9cfd7274592011248f868f0f02a2b790013eb41bc3fea7723e2a9a9','Payload checksum mismatch'
+          payload=json.loads(lzma.decompress(data))
+          errors=[]
+          for name,(before,after) in payload['files'].items():
+            p=Path(name)
+            assert not p.is_absolute() and '..' not in p.parts and not name.startswith('.github/')
+            actual=hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+            if actual!=before: errors.append(f'{name}: expected {before}, found {actual}')
+          assert not errors,'Baseline mismatch; no source changed:\n'+'\n'.join(errors)
+          patch=Path('/tmp/rc3.patch');patch.write_text(payload['patch'])
+          subprocess.run(['git','apply','--check','--unidiff-zero',str(patch)],check=True)
+          subprocess.run(['git','apply','--unidiff-zero',str(patch)],check=True)
+          for name,(_,after) in payload['files'].items():
+            assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==after,'Patched file mismatch: '+name
+          print('Verified all',len(payload['files']),'source identities before and after patch')
+          PY
+          git diff --check
+          python3 tools/rc2_hotfix_tests/run_tests.py
+          git rm .github/candidate-patches/rc3.*.b64
+          git add lib src scripts test tools docs platformio.ini
+          git -c user.name='Casper candidate builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(candidate): RC3 preserve publisher structure and repair progressive cover storage' -m 'Field-driven repair: linked stylesheets and div boundaries, source-scoped chapter labels, FAT-safe JPEG spill storage, decoder arithmetic checks, deferred ready-page persistence, guarded background admission and end-to-end host component fixtures. UI geometry and statistics policy unchanged. Private EPUB and cover are not included. Hardware validation pending.'
+          git push origin HEAD:refs/heads/fix/casper-stability-v0.2.0-candidate
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  host-tests:
+    needs: sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.sources.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Run regular, lifecycle and field regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-tests
+          git rev-parse HEAD > candidate-tests/commit.txt
+          cmake -S test -B /tmp/casper-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/casper-tests -j2
+          ctest --test-dir /tmp/casper-tests --output-on-failure 2>&1 | tee candidate-tests/ctest.log
+          python3 tools/casper_stability/run_tests.py 2>&1 | tee candidate-tests/stability.log
+          python3 tools/rc2_hotfix_tests/run_tests.py 2>&1 | tee candidate-tests/hal-lifecycle.log
+          git init /tmp/JPEGDEC
+          git -C /tmp/JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
+          git -C /tmp/JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
+          git -C /tmp/JPEGDEC checkout --detach FETCH_HEAD
+          git -C /tmp/JPEGDEC rev-parse HEAD > candidate-tests/decoder-commit.txt
+          for patch in "$PWD"/scripts/jpegdec_patches/*.patch; do git -C /tmp/JPEGDEC apply --check "$patch"; git -C /tmp/JPEGDEC apply "$patch"; done
+          python3 tools/field_regression/run_tests.py --jpegdec /tmp/JPEGDEC 2>&1 | tee candidate-tests/field-regression.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: casper-rc3-tests
+          path: candidate-tests/
+          retention-days: 14
+  build:
+    needs: sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.sources.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: casper-c3-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_wolfssl.py') }}
+          restore-keys: casper-c3-pio-${{ runner.os }}-
+      - name: Install build tools
+        run: python3 -m pip install platformio==6.1.18
+      - name: Compile exact X3/X4 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate-build
+          git rev-parse HEAD > candidate-build/commit.txt
+          git submodule status --recursive > candidate-build/submodules.txt
+          touch platformio.local.ini
+          pio run -e default 2>&1 | tee candidate-build/build.log
+          cp .pio/build/default/firmware.bin candidate-build/Casper-v0.2.0-rc3.bin
+          cp .pio/build/default/firmware.elf candidate-build/Casper-v0.2.0-rc3.elf
+          sha256sum candidate-build/Casper-v0.2.0-rc3.bin > candidate-build/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: casper-rc3-build
+          path: candidate-build/
+          retention-days: 14

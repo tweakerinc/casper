@@ -1,0 +1,29 @@
+name: Field regression dependency snapshot
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/field-test-deps.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch exact public decoder dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init JPEGDEC
+          git -C JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
+          git -C JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
+          git -C JPEGDEC checkout --detach FETCH_HEAD
+          mkdir result
+          git -C JPEGDEC rev-parse HEAD > result/decoder-commit.txt
+          tar --exclude='.git' -czf result/jpegdec-source.tar.gz JPEGDEC/src JPEGDEC/LICENSE JPEGDEC/library.properties
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: field-decoder-dependency
+          path: result/
+          retention-days: 7

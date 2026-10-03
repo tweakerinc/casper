@@ -1,0 +1,37 @@
+name: Casper RC3 component evidence
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-rc3-evidence.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: e5acda0f9dbfcbd8264687ae77f7963f77ec0c48
+          persist-credentials: false
+      - name: Capture exact components without private fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rc3-components
+          git rev-parse HEAD > /tmp/rc3-components/commit.txt
+          tar --exclude='.git' --exclude='*.ttf' --exclude='*.otf' --exclude='*.woff*' --exclude='*.cpfont' --exclude='*.bin' --exclude='*.epub' --exclude='*.pdf' -czf /tmp/rc3-components/casper-source.tar.gz src lib tools test scripts platformio.ini partitions.csv .gitmodules docs/releases
+          git init /tmp/JPEGDEC
+          git -C /tmp/JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
+          git -C /tmp/JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
+          git -C /tmp/JPEGDEC checkout --detach FETCH_HEAD
+          git -C /tmp/JPEGDEC rev-parse HEAD > /tmp/rc3-components/decoder-commit.txt
+          for patch in "$PWD"/scripts/jpegdec_patches/*.patch; do git -C /tmp/JPEGDEC apply --check "$patch"; git -C /tmp/JPEGDEC apply "$patch"; done
+          tar -C /tmp/JPEGDEC --exclude='.git' -czf /tmp/rc3-components/jpegdec-patched.tar.gz src LICENSE
+          sha256sum /tmp/rc3-components/*.tar.gz > /tmp/rc3-components/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: casper-rc3-pinned-components
+          path: /tmp/rc3-components/
+          retention-days: 7

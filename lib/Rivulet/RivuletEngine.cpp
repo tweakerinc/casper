@@ -18,6 +18,7 @@
 namespace rivulet {
 
 void RivuletEngine::clear() {
+  pageCacheDirty_=false;
   chapter_.clear();
   mapWorkPath_.clear();
   map_.clear();
@@ -86,9 +87,14 @@ void RivuletEngine::setPageCacheSpine(const int spineIndex) {
 }
 
 uint32_t RivuletEngine::pageCacheKeyFp() const {
-  return static_cast<uint32_t>(key_.fontId) ^ (static_cast<uint32_t>(key_.viewportW) << 16) ^
-         (static_cast<uint32_t>(key_.viewportH) << 8) ^ key_.flags ^ key_.pad ^
-         (static_cast<uint32_t>(key_.lineCompressionQ8) << 4);
+  // Fingerprint every layout field and the source-IR generation. Old page
+  // images must not survive a parser/style repair just because font is equal.
+  uint32_t hash = 2166136261u;
+  auto mix = [&hash](uint32_t n) {for (unsigned i=0;i<4;++i){hash^=uint8_t(n>>(i*8));hash*=16777619u;}};
+  mix(kIrFormatVersion);mix(static_cast<uint32_t>(key_.fontId));
+  mix(key_.viewportW);mix(key_.viewportH);mix(key_.marginL);mix(key_.marginR);
+  mix(key_.marginT);mix(key_.marginB);mix(key_.lineCompressionQ8);mix(key_.flags);mix(key_.pad);
+  return hash;
 }
 
 bool RivuletEngine::fillPageCachePath(const int spineIndex, const int pageIndex, char* out, const size_t outSz) const {
@@ -154,16 +160,22 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
   return true;
 }
 
-void RivuletEngine::savePageCache(const int pageIndex) const {
-  if (chapter_.failed()) return;
-  if (!laidOutValid_ || pageIndex < 0 || pageCacheDir_.empty()) return;
-  if (ESP.getMaxAllocHeap() < 12 * 1024 || ESP.getFreeHeap() < 20 * 1024) return;
-  ensurePageCacheDir();
-  char path[220];
-  if (!pageCachePath(pageIndex, path, sizeof(path))) return;
-  if (laidOut_.saveToFile(path, key_, pageIndex)) {
-    LOG_DBG("RVEN", "page cache SAVE p=%d spans=%u", pageIndex, static_cast<unsigned>(laidOut_.spans.size()));
-  }
+bool RivuletEngine::savePageCache(const int pageIndex) const {
+  if(chapter_.failed()||!laidOutValid_||pageIndex<0||pageCacheDir_.empty())return false;
+  pageCacheDirty_=true;
+  if(deferPageCacheWrites_)return false;
+  if(ESP.getMaxAllocHeap()<12*1024||ESP.getFreeHeap()<20*1024)return false;
+  ensurePageCacheDir();char path[220];
+  if(!pageCachePath(pageIndex,path,sizeof(path)))return false;
+  if(!laidOut_.saveToFile(path,key_,pageIndex))return false;
+  pageCacheDirty_=false;
+  LOG_DBG("RVEN","page cache SAVE p=%d spans=%u",pageIndex,unsigned(laidOut_.spans.size()));
+  return true;
+}
+bool RivuletEngine::flushPageCache() {
+  if(!pageCacheDirty_||!laidOutValid_)return false;
+  const bool old=deferPageCacheWrites_;deferPageCacheWrites_=false;
+  const bool saved=savePageCache(currentPage_);deferPageCacheWrites_=old;return saved;
 }
 
 bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int maxForward) {
@@ -666,7 +678,7 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer,const int pageIndex,con
   laidOut_=std::move(candidate);laidOutValid_=true;currentPage_=pageIndex;
   ahead_.clear();behind_.clear();aheadValid_=behindValid_=false;
   if(laidOut_.atChapterEnd)(void)sealMapAtChapterEnd();
-  savePageCache(pageIndex);
+  if(!cached)savePageCache(pageIndex);else pageCacheDirty_=false;
   return true;
 }
 

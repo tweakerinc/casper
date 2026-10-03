@@ -1,4 +1,5 @@
 #include "ReadinessCoordinator.h"
+#include "NavigationSections.h"
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <new>
@@ -28,13 +29,15 @@ void ReadinessCoordinator::requestFraction(int spine,uint16_t fraction10000){
 void ReadinessCoordinator::cancelNavigation(){pending_=navigationReady_=false;requestedSpine_=-1;}
 void ReadinessCoordinator::checkpoint(){
   if(!worker_||!loaded_||workerSpine_<0||!worker_->hasChapter()||worker_->chapter().failed()||worker_->mapKnownPages()==0)return;
+  (void)sectionlabel::save(dir_.c_str(),workerSpine_,worker_->chapter());
+  if(worker_->mapKnownPages()==lastSavedKnown_ && worker_->mapComplete()==lastSavedComplete_)return;
   char path[256];
   if(std::snprintf(path,sizeof(path),"%s/s%d_m%u.rvpm%s",dir_.c_str(),workerSpine_,unsigned(key_.pad&15),worker_->mapComplete()?"":".part")>=int(sizeof(path)))return;
-  if(worker_->savePageMap(path))lastSavedKnown_=worker_->mapKnownPages();
+  if(worker_->savePageMap(path)){lastSavedKnown_=worker_->mapKnownPages();lastSavedComplete_=worker_->mapComplete();}
 }
-void ReadinessCoordinator::dropWorker(){checkpoint();preparation_.reset();loaded_=false;worker_.reset();workerSpine_=-1;firstPrepared_=lastPrepared_=false;lastSavedKnown_=0;}
-void ReadinessCoordinator::release(){dropWorker();index_.close();dir_.clear();spines_=0;lastActiveSpine_=lastActiveCount_=-1;cancelNavigation();}
-void ReadinessCoordinator::consumed(){preparation_.reset();loaded_=false;worker_.reset();workerSpine_=-1;firstPrepared_=lastPrepared_=false;lastSavedKnown_=0;cancelNavigation();}
+void ReadinessCoordinator::dropWorker(){checkpoint();preparation_.reset();loaded_=false;worker_.reset();workerSpine_=-1;firstPrepared_=lastPrepared_=false;lastSavedKnown_=0;lastSavedComplete_=false;}
+void ReadinessCoordinator::release(){dropWorker();index_.close();dir_.clear();spines_=0;lastTitleSpine_=-1;lastActiveSpine_=lastActiveCount_=-1;cancelNavigation();}
+void ReadinessCoordinator::consumed(){preparation_.reset();loaded_=false;worker_.reset();workerSpine_=-1;firstPrepared_=lastPrepared_=false;lastSavedKnown_=0;lastSavedComplete_=false;cancelNavigation();}
 bool ReadinessCoordinator::deferred(int s,uint32_t now)const{for(const auto&f:failures_)if(f.spine==s&&static_cast<int32_t>(now-f.until)<0)return true;return false;}
 void ReadinessCoordinator::failLater(int s,uint32_t now){failures_[failureSlot_++%8]={s,now+10000U};}
 int ReadinessCoordinator::choose(int current,uint32_t now){
@@ -49,6 +52,9 @@ int ReadinessCoordinator::choose(int current,uint32_t now){
   }return -1;
 }
 bool ReadinessCoordinator::recordCurrent(int spine,const RivuletEngine& engine){
+  if(spine!=lastTitleSpine_&&engine.hasChapter()&&!engine.chapter().failed()){
+    (void)sectionlabel::save(dir_.c_str(),spine,engine.chapter());lastTitleSpine_=spine;
+  }
   if(!engine.mapComplete()||engine.chapter().failed())return false;
   if(lastActiveSpine_==spine&&lastActiveCount_==engine.mapKnownPages())return true;
   if(!index_.record(spine,engine.mapKnownPages()))return false;
@@ -68,7 +74,7 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
     if(!casper_memory::allowAllocation()){failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
     worker_.reset(new(std::nothrow) RivuletEngine());
     if(!worker_){failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
-    workerSpine_=target;worker_->setRenderKey(key_);worker_->setLineCompression(lineCompression_);
+    workerSpine_=target;worker_->deferPageCacheWrites(true);worker_->setRenderKey(key_);worker_->setLineCompression(lineCompression_);
     loaded_=false;
     if(factory)preparation_=factory(ctx,*worker_,target);
   }
@@ -105,7 +111,12 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
     goal_=Goal::Page;
   }
   if(!firstPrepared_){
-    if(worker_->goToStart(renderer)){firstPrepared_=true;checkpoint();}
+    if(worker_->goToStart(renderer)){
+      firstPrepared_=true;
+      // User navigation must paint before optional cache publication. A
+      // background first page is stored once, then its strings are released.
+      if(!pending_){(void)worker_->flushPageCache();checkpoint();worker_->releasePaintPage();}
+    }
     else layoutFailed=!(abort&&abort());
   }else if(pending_&&goal_==Goal::Anchor&&worker_->mapCoversCursor(resolvedAnchor_)){
     if(worker_->resumeAtCursor(renderer,resolvedAnchor_,0)){navigationReady_=true;return Tick::NavigationReady;}
@@ -121,7 +132,8 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
   }else if(!lastPrepared_){
     // Only one paint-layout at the verified tail. No reverse-pagination guess.
     if(worker_->goToLastPage(renderer,1,false)&&worker_->page().atChapterEnd){
-      lastPrepared_=true;checkpoint();(void)index_.record(workerSpine_,worker_->mapKnownPages());
+      lastPrepared_=true;
+      if(!pending_){(void)worker_->flushPageCache();checkpoint();(void)index_.record(workerSpine_,worker_->mapKnownPages());worker_->releasePaintPage();}
       if(pending_&&requestedPage_<0){navigationReady_=true;return Tick::NavigationReady;}
       if(pending_&&requestedPage_>=worker_->mapKnownPages())layoutFailed=true; // never silently reset to page zero
     }else layoutFailed=!(abort&&abort());

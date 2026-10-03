@@ -1385,9 +1385,9 @@ namespace jpgd {
 				p = m_pMCU_coefficients + 64 * mcu_block;
 
 				jpgd_block_coeff_t* pAC = coeff_buf_getp(m_ac_coeffs[component_id], block_x_mcu[component_id] + block_x_mcu_ofs, m_block_y_mcu[component_id] + block_y_mcu_ofs);
+				memcpy(&p[1], &pAC[1], 63 * sizeof(jpgd_block_coeff_t));
 				jpgd_block_coeff_t* pDC = coeff_buf_getp(m_dc_coeffs[component_id], block_x_mcu[component_id] + block_x_mcu_ofs, m_block_y_mcu[component_id] + block_y_mcu_ofs);
 				p[0] = pDC[0];
-				memcpy(&p[1], &pAC[1], 63 * sizeof(jpgd_block_coeff_t));
 
 				for (i = 63; i > 0; i--)
 					if (p[g_ZAG[i]])
@@ -2671,7 +2671,7 @@ namespace jpgd {
 	// thing in RAM.
 	jpeg_decoder::coeff_buf* jpeg_decoder::coeff_buf_open(int block_num_x, int block_num_y, int block_len_x, int block_len_y)
 	{
-		coeff_buf* cb = (coeff_buf*)alloc(sizeof(coeff_buf));
+		coeff_buf* cb = (coeff_buf*)alloc_aligned(sizeof(coeff_buf), alignof(coeff_buf), false);
 
 		cb->block_num_x = block_num_x;
 		cb->block_num_y = block_num_y;
@@ -2723,7 +2723,7 @@ namespace jpgd {
 
 		pD->m_last_dc_val[component_id] = (s += pD->m_last_dc_val[component_id]);
 
-		p[0] = static_cast<jpgd_block_coeff_t>(s << pD->m_successive_low);
+		p[0] = static_cast<jpgd_block_coeff_t>(static_cast<int64_t>(s) * (int64_t(1) << pD->m_successive_low));
 	}
 
 	void jpeg_decoder::decode_block_dc_refine(jpeg_decoder* pD, int component_id, int block_x, int block_y)
@@ -2767,7 +2767,7 @@ namespace jpgd {
 				r = pD->get_bits_no_markers(s);
 				s = JPGD_HUFF_EXTEND(r, s);
 
-				p[g_ZAG[k]] = static_cast<jpgd_block_coeff_t>(s << pD->m_successive_low);
+				p[g_ZAG[k]] = static_cast<jpgd_block_coeff_t>(static_cast<int64_t>(s) * (int64_t(1) << pD->m_successive_low));
 			}
 			else
 			{
@@ -2908,7 +2908,7 @@ namespace jpgd {
 		int block_x_mcu[JPGD_MAX_COMPONENTS], block_y_mcu[JPGD_MAX_COMPONENTS];
 
 		memset(block_y_mcu, 0, sizeof(block_y_mcu));
-		jpgd_spill_flush();
+		if (!jpgd_spill_flush()) stop_decoding(JPGD_STREAM_READ);
 
 		for (mcu_col = 0; mcu_col < m_mcus_per_col; mcu_col++)
 		{
@@ -3043,7 +3043,7 @@ namespace jpgd {
 		if (!calc_mcu_block_order())
 			stop_decoding(JPGD_DECODE_ERROR);
 
-		jpgd_spill_flush();
+		if (!jpgd_spill_flush()) stop_decoding(JPGD_STREAM_READ);
 	}
 
 	void jpeg_decoder::init_sequential()
@@ -3115,10 +3115,10 @@ namespace jpgd {
 			return 0;
 
 		jpgd_block_coeff_t* pAC = coeff_buf_getp(m_ac_coeffs[0], block_x, block_y, false);
-		jpgd_block_coeff_t* pDC = coeff_buf_getp(m_dc_coeffs[0], block_x, block_y, false);
 		jpgd_block_coeff_t block[64];
-		block[0] = pDC[0];
 		memcpy(&block[1], &pAC[1], 63 * sizeof(jpgd_block_coeff_t));
+		jpgd_block_coeff_t* pDC = coeff_buf_getp(m_dc_coeffs[0], block_x, block_y, false);
+		block[0] = pDC[0];
 
 		jpgd_quant_t* q = m_quant[m_comp_quant[0]];
 		int i;

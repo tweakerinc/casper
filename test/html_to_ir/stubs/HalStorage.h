@@ -44,6 +44,7 @@ class HalFile {
 
   size_t size() { return buf_ ? buf_->size() : 0; }
   size_t position() const { return pos_; }
+  int available() const { return buf_ ? int(buf_->size()-pos_) : 0; }
 
   bool seek(const size_t p) {
     if (storagefault::fail(storagefault::seeks) || !buf_ || p > buf_->size()) return false;
@@ -60,6 +61,7 @@ class HalFile {
     return static_cast<int>(take);
   }
 
+  size_t write(uint8_t b) { return write(&b,1); }
   size_t write(const void* src, const size_t n) {
     if (storagefault::fail(storagefault::writes) || !buf_) return 0;
     if (pos_ + n > buf_->size()) buf_->resize(pos_ + n);

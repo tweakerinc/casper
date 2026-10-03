@@ -30,7 +30,10 @@ int g_clock = 0;
 
 bool io_read(uint64_t offset, void* buf, int n) {
   if (!g_io.pread || n <= 0) return n == 0;
-  return g_io.pread(g_io.ctx, offset, buf, n) == n;
+  // New/partially materialized regions are initialized to zero by getp().
+  // Do not turn a failed SD read into an apparently valid all-zero block.
+  const int got = g_io.pread(g_io.ctx, offset, buf, n);
+  return got >= 0 && got <= n;
 }
 
 bool io_write(uint64_t offset, const void* buf, int n) {
@@ -98,8 +101,10 @@ bool jpgd_spill_begin(const jpeg_decoder_spill_io* io) {
 
 bool jpgd_spill_active() { return g_active; }
 
-void jpgd_spill_flush() {
-  for (int i = 0; i < kSlots; ++i) flush_slot(g_slots[i]);
+bool jpgd_spill_flush() {
+  bool ok = true;
+  for (int i = 0; i < kSlots; ++i) if (!flush_slot(g_slots[i])) ok = false;
+  return ok;
 }
 
 void jpgd_spill_end() {
@@ -142,7 +147,11 @@ jpgd_block_coeff_t* jpgd_spill_getp(int64_t region_ofs, int block_size, int nx, 
     s->dirty = false;
     memset(s->data.get(), 0, static_cast<size_t>(row_bytes));
     const uint64_t off = static_cast<uint64_t>(region_ofs) + static_cast<uint64_t>(by) * static_cast<uint64_t>(row_bytes);
-    io_read(off, s->data.get(), row_bytes);
+    if (!io_read(off, s->data.get(), row_bytes)) {
+      s->region_ofs = -1;
+      s->block_y = -1;
+      return nullptr;
+    }
   }
 
   if (writable) s->dirty = true;

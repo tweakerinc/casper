@@ -7,6 +7,7 @@
 #include "../../../lib/Memory/BoundedUtf8.h"
 class GfxRenderer {
  public:
+  struct FrameBufferLoan {FrameBufferLoan(GfxRenderer&,bool) {}};
   GfxRenderer() {
     for (int id : {-1128177077,2090520927,-847079762,-209681255,1470095001,-324599973,876380291,426921930,1484141743,652444703,1}) fonts[id] = EpdFontFamily{};
   }

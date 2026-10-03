@@ -4,6 +4,9 @@
 #include <HalStorage.h>
 #include <InflateStream.h>
 #include <Logging.h>
+#include <esp_task_wdt.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 
@@ -15,6 +18,10 @@ struct ZipInflateCtx {
 };
 
 namespace {
+void serviceStreamingTask() {
+  if(esp_task_wdt_status(nullptr)==ESP_OK)esp_task_wdt_reset();
+  vTaskDelay(1); // let the idle task run too; yield() alone need not do so
+}
 constexpr uint16_t ZIP_METHOD_STORED = 0;
 constexpr uint16_t ZIP_METHOD_DEFLATED = 8;
 
@@ -439,6 +446,7 @@ uint8_t* ZipFile::readFileToMemory(const char* filename, size_t* size, const boo
 }
 
 bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t chunkSize, const bool allowEarlyStop) {
+  if(chunkSize==0||chunkSize>64U*1024U)return false;
   const ScopedOpenClose zip{*this};
   if (!zip) return false;
 
@@ -476,6 +484,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
         return false;
       }
       remaining -= dataRead;
+      serviceStreamingTask();
     }
 
     free(buffer);
@@ -521,6 +530,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       size_t produced;
       const InflateStream::Status status = inflate.readAtMost(outputBuffer, chunkSize, &produced);
 
+      serviceStreamingTask();
       totalProduced += produced;
       if (totalProduced > static_cast<size_t>(inflatedDataSize)) {
         LOG_ERR("ZIP", "Decompressed size exceeds expected (%zu > %zu)", totalProduced,

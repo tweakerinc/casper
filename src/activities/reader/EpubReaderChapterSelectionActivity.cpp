@@ -2,13 +2,24 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <algorithm>
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/UiGhostPolicy.h"
 
-int EpubReaderChapterSelectionActivity::getTotalItems() const { return epub->getTocItemsCount(); }
+int EpubReaderChapterSelectionActivity::getTotalItems() const { return !epub?0:expanded_?int(sections_.size()):epub->getTocItemsCount(); }
+BookMetadataCache::TocEntry EpubReaderChapterSelectionActivity::selectedItem(int index) const {
+  if(!epub||index<0||index>=getTotalItems())return {};
+  if(!expanded_)return epub->getTocItem(index);
+  const auto entry=sections_.at(index);
+  if(entry.toc>=0)return epub->getTocItem(entry.toc);
+  BookMetadataCache::TocEntry item;item.spineIndex=entry.spine;item.level=1;
+  item.title=rivulet::sectionlabel::read(irDir_.c_str(),entry.spine);
+  if(item.title.empty())item.title=std::string(tr(STR_SECTION_PREFIX))+std::to_string(entry.spine+1);
+  return item;
+}
 
 void EpubReaderChapterSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -17,7 +28,14 @@ void EpubReaderChapterSelectionActivity::onEnter() {
     return;
   }
 
+  // A sparse publisher TOC must not make the omitted book sections unreachable.
+  // Preserve the original TOC behavior for ordinary comprehensive navigation.
+  if(epub->getTocItemsCount()*2<epub->getSpineItemsCount()) {
+    expanded_=sections_.build(epub->getSpineItemsCount(),epub->getTocItemsCount(),
+                             [this](int i){return epub->getTocItem(i).spineIndex;});
+  }
   selectorIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if(expanded_){selectorIndex=0;for(size_t i=0;i<sections_.size();++i)if(sections_.at(i).spine==currentSpineIndex){selectorIndex=int(i);break;}}
   if (selectorIndex == -1) {
     selectorIndex = 0;
   }
@@ -40,9 +58,11 @@ void EpubReaderChapterSelectionActivity::loop() {
     return;
   }
 
+  if(totalItems<=0)return;
+
   auto selectChapter = [this] {
-    const auto tocItem = epub->getTocItem(selectorIndex);
-    if (tocItem.spineIndex == -1) {
+    const auto tocItem = selectedItem(selectorIndex);
+    if (tocItem.spineIndex < 0 || tocItem.spineIndex >= epub->getSpineItemsCount()) {
       ActivityResult result;
       result.isCancelled = true;
       setResult(std::move(result));
@@ -119,8 +139,8 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   const int totalItems = getTotalItems();
   GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, totalItems, selectorIndex,
                [this](int index) {
-                 auto item = epub->getTocItem(index);
-                 std::string indent((item.level - 1) * 2, ' ');
+                 auto item = selectedItem(index);
+                 std::string indent(std::clamp(int(item.level) - 1,0,8) * 2, ' ');
                  return indent + item.title;
                });
 

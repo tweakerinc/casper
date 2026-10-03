@@ -19,7 +19,7 @@ struct jpeg_decoder_spill_io {
 bool jpgd_spill_begin(const jpeg_decoder_spill_io* io);
 bool jpgd_spill_active();
 void jpgd_spill_end();
-void jpgd_spill_flush();
+bool jpgd_spill_flush();
 
 // Bump-allocate a zero-on-first-touch region. Returns byte offset, or -1.
 int64_t jpgd_spill_alloc_region(size_t bytes);

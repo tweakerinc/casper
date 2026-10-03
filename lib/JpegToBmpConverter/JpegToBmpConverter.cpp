@@ -12,6 +12,8 @@
 #include <jpgd_spill.h>
 
 #include "CoverDecodePolicy.h"
+#include "SpillFileIo.h"
+#include "JpegHeader.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -667,19 +669,12 @@ class HalJpegStream final : public jpgd::jpeg_decoder_stream {
 
 static int spillPread(void* ctx, uint64_t offset, void* buf, int n) {
   auto* f = static_cast<HalFile*>(ctx);
-  if (!f || n <= 0) return 0;
-  if (!f->seek64(offset)) return 0;
-  const int r = f->read(buf, static_cast<size_t>(n));
-  return r < 0 ? 0 : r;
+  return f ? coverdecode::readSpill(*f, offset, buf, n) : -1;
 }
 
 static int spillPwrite(void* ctx, uint64_t offset, const void* buf, int n) {
   auto* f = static_cast<HalFile*>(ctx);
-  if (!f || n <= 0) return 0;
-  if (!f->seek64(offset)) return 0;
-  const int w = static_cast<int>(f->write(buf, static_cast<size_t>(n)));
-  f->flush();
-  return w;
+  return f ? coverdecode::writeSpill(*f, offset, buf, n, yieldDuringJpegIo) : -1;
 }
 
 static void finishCoverRows(BmpConvertCtx* ctx, const bool ok) {
@@ -914,6 +909,25 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     return false;
   }
 
+  coverdecode::JpegHeader header;
+  if (!coverdecode::readJpegHeader(jpegFile, header, yieldDuringJpegIo) ||
+      header.width > 2048 || header.height > 3072) {
+    LOG_ERR("JPG", "Invalid, unsupported or oversized JPEG header");
+    return false;
+  }
+  if (header.progressive) {
+    // Do not run progressive scan tables through JPEGDEC's baseline table
+    // builder. Its 1/8 fallback fails on the reported EPUB and has undefined
+    // shifts while building absent AC tables. Full progressive decoding uses
+    // bounded RAM and disposable coefficient storage on SD instead.
+    if (!coverdecode::useFullProgressiveDecode(ESP.getMaxAllocHeap(), ESP.getFreeHeap())) {
+      LOG_DBG("JPG", "Progressive cover deferred: free=%u maxA=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      return false;
+    }
+    bool wroteBmp = false;
+    return convertProgressiveJpegFull(jpegFile, bmpOut, header.width, header.height,
+                                     targetWidth, targetHeight, oneBit, crop, coverHighQuality, &wroteBmp);
+  }
   s_jpegFile = &jpegFile;
 
   auto jpeg = makeUniqueNoThrow<JPEGDEC>();
@@ -944,37 +958,6 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     LOG_DBG("JPG", "Image too large or invalid (%dx%d), max supported: %dx%d", srcWidth, srcHeight, MAX_IMAGE_WIDTH,
             MAX_IMAGE_HEIGHT);
     return false;
-  }
-
-  if (progressiveDecode) {
-    jpeg->close();
-    jpeg.reset();
-    bool wroteBmp = false;
-    const unsigned maxAlloc = static_cast<unsigned>(ESP.getMaxAllocHeap());
-    if (coverdecode::useFullProgressiveDecode(maxAlloc)) {
-      if (convertProgressiveJpegFull(jpegFile, bmpOut, srcWidth, srcHeight, targetWidth, targetHeight, oneBit, crop,
-                                     coverHighQuality, &wroteBmp)) {
-        return true;
-      }
-      if (wroteBmp) {
-        LOG_ERR("JPG", "Progressive full decode failed after BMP start; not falling back to 1/8");
-        return false;
-      }
-      LOG_INF("JPG", "Progressive JPEG full decode failed; 1/8 fallback");
-    } else {
-      LOG_INF("JPG", "Progressive JPEG skips jpgd (maxAlloc=%u < %u); 1/8 path", maxAlloc,
-              coverdecode::kJpgdMinMaxAllocBytes);
-    }
-    jpegFile.seek(0);
-    jpeg = makeUniqueNoThrow<JPEGDEC>();
-    if (!jpeg) {
-      LOG_ERR("JPG", "OOM: JPEG decoder fallback");
-      return false;
-    }
-    if (jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback) != 1) {
-      LOG_ERR("JPG", "JPEG reopen failed after progressive fallback (err=%d)", jpeg->getLastError());
-      return false;
-    }
   }
 
   // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG.

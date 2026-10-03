@@ -1,5 +1,6 @@
 #pragma once
 #include <Epub.h>
+#include <NavigationSections.h>
 
 #include <memory>
 
@@ -12,6 +13,10 @@ class EpubReaderChapterSelectionActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   int currentSpineIndex = 0;
   int selectorIndex = 0;
+  rivulet::NavigationSections sections_;
+  bool expanded_=false;
+  std::string irDir_;
+  BookMetadataCache::TocEntry selectedItem(int index) const;
 
   // Number of items that fit on a page, derived from logical screen height.
   // This adapts automatically when switching between portrait and landscape.
@@ -23,11 +28,11 @@ class EpubReaderChapterSelectionActivity final : public Activity {
  public:
   explicit EpubReaderChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                               const std::shared_ptr<Epub>& epub, const std::string& epubPath,
-                                              const int currentSpineIndex)
+                                              const int currentSpineIndex, std::string irDir = {})
       : Activity("EpubReaderChapterSelection", renderer, mappedInput),
         epub(epub),
         epubPath(epubPath),
-        currentSpineIndex(currentSpineIndex) {}
+        currentSpineIndex(currentSpineIndex),irDir_(std::move(irDir)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

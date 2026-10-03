@@ -26,7 +26,7 @@ class FsFile {
  size_t size()const{return fileSize();}
  size_t fileSize()const{return open_?bytes_->size():0;}
  size_t getName(char* out,size_t n){if(n)out[0]=0;return 0;}
- bool seekSet(uint64_t p){assert(storageTestLockDepth>0);if(!open_||p>SIZE_MAX)return false;pos_=size_t(p);return true;}
+ bool seekSet(uint64_t p){assert(storageTestLockDepth>0);if(!open_||p>SIZE_MAX||p>bytes_->size())return false;pos_=size_t(p);return true;}
  bool seekCur(int64_t n){return n>=0?seekSet(pos_+n):(uint64_t(-n)<=pos_&&seekSet(pos_+n));}
  size_t position()const{return pos_;}
  int available()const{return open_&&pos_<bytes_->size()?int(bytes_->size()-pos_):0;}

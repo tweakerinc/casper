@@ -18,12 +18,15 @@ inline constexpr int jpegDecDecodeOptions(const bool progressive) {
   return progressive ? kJpegScaleEighth : 0;
 }
 
-// jpgd+spill needs two ~15 KB AC rows plus decoder tables. X3 Home after a
-// FrameBufferLoan still reports maxAlloc≈69 KB — every field attempt OOMs.
-inline constexpr unsigned kJpgdMinMaxAllocBytes = 96u * 1024u;
+// Admission is based on the largest actual row allocation and TOTAL decoder
+// working memory, not a fictitious 96 KiB single allocation. The strict-SD
+// field fixture used <58 KiB decoder heap with a 15,104-byte largest request
+// on the host; reserve additional memory for BMP scaling and other tasks.
+inline constexpr unsigned kJpgdMinMaxAllocBytes = 32u * 1024u;
+inline constexpr unsigned kJpgdMinFreeBytes = 96u * 1024u;
 
-inline constexpr bool useFullProgressiveDecode(const unsigned maxAllocBytes) {
-  return maxAllocBytes >= kJpgdMinMaxAllocBytes;
+inline constexpr bool useFullProgressiveDecode(unsigned maxAllocBytes,unsigned freeBytes) {
+  return maxAllocBytes >= kJpgdMinMaxAllocBytes && freeBytes >= kJpgdMinFreeBytes;
 }
 
 // generateThumbBmp used to decode the same cover.jpg twice (book.bin href,

@@ -1,6 +1,7 @@
 #include "HtmlToIr.h"
 #include "../Memory/FallibleString.h"
 #include "HtmlInput.h"
+#include "ChapterStyles.h"
 #include "../Memory/BoundedUtf8.h"
 
 #include <Esp.h>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <new>
 #include <string>
@@ -158,10 +160,10 @@ size_t decodeEntity(const char* p, const char* end, casper_memory::FallibleStrin
     }
     return false;
   };
-  // Prefer ASCII punctuation so builtin faces always have the glyphs.
+  // Named and numeric entities preserve the same publisher punctuation as UTF-8.
   bool ok = match("amp", "&") || match("lt", "<") || match("gt", ">") || match("quot", "\"") || match("apos", "'") ||
-            match("nbsp", " ") || match("mdash", "-") || match("ndash", "-") || match("hellip", "...") ||
-            match("lsquo", "'") || match("rsquo", "'") || match("ldquo", "\"") || match("rdquo", "\"");
+            match("nbsp", " ") || match("mdash", "—") || match("ndash", "–") || match("hellip", "…") ||
+            match("lsquo", "‘") || match("rsquo", "’") || match("ldquo", "“") || match("rdquo", "”");
   if (e < end && *e == ';') ++e;
   if (!ok) {
     if (!safePushChar(out, '&')) {
@@ -213,6 +215,7 @@ bool appendCollapsedText(casper_memory::FallibleString& dst, const char* p, size
 }
 
 struct Tag {
+  const ChapterStyles* sheet = nullptr;
   const char* name = nullptr;
   size_t nameLen = 0;
   bool closing = false;
@@ -587,7 +590,60 @@ int parseStyleWidthPx(const Tag& tag) {
 }
 
 // Parse inline style= for weight / style / size / align (thin CSS).
+CssStyle resolvedStyle(const Tag& tag) {
+  size_t cn=0,in=0,sn=0;
+  const char* c=attrValue(tag,"class",&cn);
+  const char* id=attrValue(tag,"id",&in);
+  const char* st=attrValue(tag,"style",&sn);
+  CssStyle result;
+  if(tag.sheet) result=tag.sheet->resolve({tag.name,tag.nameLen},{c?c:"",cn},{id?id:"",in});
+  if(st&&sn)result.applyOver(CssParser::parseInlineStyle({st,sn}));
+  return result;
+}
+void applyCssTypography(const CssStyle& css,RunStyle& st,SizeStep& sz,Align* align) {
+  auto face=static_cast<uint8_t>(st);
+  if(css.defined.fontWeight)face=(face&~1u)|(css.fontWeight==CssFontWeight::Bold?1u:0u);
+  if(css.defined.fontStyle)face=(face&~2u)|(css.fontStyle==CssFontStyle::Italic?2u:0u);
+  if(css.defined.textDecoration){
+    face=(face&~kRunStyleDecorationMask)|((static_cast<uint8_t>(css.textDecoration)&3u)<<2);
+  }
+  if(css.defined.verticalAlign){
+    face&=~kRunStyleScriptMask;
+    if(css.verticalAlign==CssVerticalAlign::Super)face|=uint8_t(RunStyle::Superscript);
+    if(css.verticalAlign==CssVerticalAlign::Sub)face|=uint8_t(RunStyle::Subscript);
+  }
+  st=static_cast<RunStyle>(face);
+  // Sup/sub are scaled by the painter: do not also apply a small-font ladder.
+  if(css.defined.fontSize && !(face&kRunStyleScriptMask)){
+    float em=css.fontSize.toPixels(1.0f,1.0f);
+    if(css.fontSize.unit==CssUnit::Pixels||css.fontSize.unit==CssUnit::Points)em/=16.0f;
+    if(em>0)sz=em<0.7f?SizeStep::Minus2:em<0.9f?SizeStep::Minus1:em<1.15f?SizeStep::Body:em<1.5f?SizeStep::Plus1:SizeStep::Plus2;
+  }
+  if(align&&css.defined.textAlign){
+    switch(css.textAlign){case CssTextAlign::Center:*align=Align::Center;break;
+      case CssTextAlign::Right:*align=Align::Right;break;case CssTextAlign::Justify:*align=Align::Justify;break;
+      case CssTextAlign::Left:*align=Align::Left;break;default:break;}
+  }
+}
+int cssEmQ4(const CssLength& value) {
+  float em=value.toPixels(1.0f,1.0f);
+  if(value.unit==CssUnit::Pixels||value.unit==CssUnit::Points)em/=16.0f;
+  return std::isfinite(em)?static_cast<int>(std::clamp(em*16.0f,-127.0f,127.0f)):0;
+}
+void applyCssBlock(const Tag& tag,ChapterIr& out) {
+  if(out.blocks().empty())return;
+  const CssStyle css=resolvedStyle(tag);
+  auto& b=out.blocksMutable().back();
+  if(css.defined.textIndent){b.indentEmQ4=static_cast<uint8_t>(std::max(0,cssEmQ4(css.textIndent)));
+    if(b.indentEmQ4==0)b.flags|=kBlockNoIndent;else b.flags&=~kBlockNoIndent;}
+  if(css.defined.marginTop||css.defined.paddingTop)b.marginTopEmQ4=static_cast<int8_t>(std::clamp(
+    (css.defined.marginTop?cssEmQ4(css.marginTop):0)+(css.defined.paddingTop?cssEmQ4(css.paddingTop):0),-127,127));
+  if(css.defined.marginBottom||css.defined.paddingBottom)b.marginBottomEmQ4=static_cast<int8_t>(std::clamp(
+    (css.defined.marginBottom?cssEmQ4(css.marginBottom):0)+(css.defined.paddingBottom?cssEmQ4(css.paddingBottom):0),-127,127));
+}
+
 void applyInlineStyle(const Tag& tag, RunStyle& styleInOut, SizeStep& sizeInOut, Align* alignOut = nullptr) {
+  applyCssTypography(resolvedStyle(tag), styleInOut, sizeInOut, alignOut);
   size_t vlen = 0;
   const char* v = attrValue(tag, "style", &vlen);
   if (!v || vlen == 0) return;
@@ -871,12 +927,16 @@ struct ParserState {
   int styleFloor = 0;  // never pop below this (current block's base face)
   bool styleOverflowLogged = false;
 
+  struct DivFrame {RunStyle style=RunStyle::Regular;SizeStep size=SizeStep::Body;
+    Align align=Align::Justify;uint8_t indent=16;int8_t bottom=0;bool title=false;};
+  DivFrame divs[32];
+  unsigned divDepth=0;
   bool initialized=false;
   bool inBlock=false;
   casper_memory::FallibleString textAcc;
 };
 HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterIr& out,
-                                   const size_t byteBudget, const uint8_t imageRendering) {
+                                   const size_t byteBudget, const uint8_t imageRendering, const ChapterStyles* sheet=nullptr) {
   using Result=HtmlToIrSession::Result;
   if(!input.ok() || input.size()==0 || out.failed()) {out.markFailed();return Result::Failed;}
   if(!state.initialized) {
@@ -994,6 +1054,13 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
   auto closeBlock = [&]() {
     flushText();
     if (inBlock) {
+      if(!out.blocks().empty()){
+        const Block block=out.blocks().back();
+        if(block.kind==BlockKind::Paragraph&&!block.runCount){
+          if(block.flags&kBlockDropCap)dropCapArmed=true;
+          if(block.flags&kBlockNoIndent)noIndentNextParagraph=true;
+        }
+      }
       out.endBlock();
       inBlock = false;
     }
@@ -1017,6 +1084,7 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
         continue;
       }
       p += used;
+      tag.sheet=sheet;
       if (tag.nameLen == 0) continue;
 
       if (ieq(tag.name, tag.nameLen, "script") || ieq(tag.name, tag.nameLen, "style") ||
@@ -1040,21 +1108,20 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
         continue;
       }
 
-      // Skip visually-hidden hosts entirely (e.g. <h1 class="oculto">Chapter 1</h1>).
-      // Also HTML hidden= on <nav> (landmarks/page-list) and style=display:none spans.
-      if (!tag.closing && !tag.selfClose && isHiddenHost(tag)) {
-        inHidden = true;
-        hiddenDepth = 1;
+      // Hidden subtree nesting counts elements, not matching class names.
+      // Void elements never increase depth; a hidden img cannot swallow text.
+      const bool voidTag=tag.selfClose||ieq(tag.name,tag.nameLen,"img")||ieq(tag.name,tag.nameLen,"br")||
+        ieq(tag.name,tag.nameLen,"hr")||ieq(tag.name,tag.nameLen,"meta")||ieq(tag.name,tag.nameLen,"link")||
+        ieq(tag.name,tag.nameLen,"input")||ieq(tag.name,tag.nameLen,"wbr");
+      if(inHidden){
+        if(!tag.closing&&!voidTag)++hiddenDepth;
+        else if(tag.closing&&--hiddenDepth<=0){inHidden=false;hiddenDepth=0;}
         continue;
       }
-      if (inHidden) {
-        if (!tag.closing && !tag.selfClose)
-          ++hiddenDepth;
-        else if (tag.closing && --hiddenDepth <= 0) {
-          inHidden = false;
-          hiddenDepth = 0;
+      if(!tag.closing){const auto css=resolvedStyle(tag);
+        if(isHiddenHost(tag)||(css.defined.display&&css.display==CssDisplay::None)){
+          if(!voidTag){inHidden=true;hiddenDepth=1;}continue;
         }
-        continue;
       }
 
       // EPUB nav / HTML lists: each <li> is its own line (Isako Contents page uses
@@ -1278,11 +1345,11 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
         }
         uint16_t flags = 0;
         // Default justify — matches classic "book" feel; user force-align overrides in layouter.
-        Align align = Align::Justify;
+        Align align = state.divDepth?state.divs[state.divDepth-1].align:Align::Justify;
         BlockKind kind = BlockKind::Paragraph;
         // Body size for system/body paras — do not inherit a leftover heading size step.
-        RunStyle st = RunStyle::Regular;
-        SizeStep sz = SizeStep::Body;
+        RunStyle st = state.divDepth?state.divs[state.divDepth-1].style:RunStyle::Regular;
+        SizeStep sz = state.divDepth?state.divs[state.divDepth-1].size:SizeStep::Body;
         // Epigraph / citaini (Fourth Wing): center, slightly smaller, no indent.
         if (epigraphDepth > 0 || attrHasClass(tag, "firma") || attrHasClass(tag, "citaini")) {
           align = Align::Center;
@@ -1375,6 +1442,7 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
         if (flags & kBlockDropCap) out.markDropCapOnCurrent();
         // Always reset stack for this paragraph — never inherit a leaked heading Bold.
         beginBlockStyle(st, sz);
+        applyCssBlock(tag,out);
         continue;
       }
       if (tag.closing && ieq(tag.name, tag.nameLen, "p")) {
@@ -1383,65 +1451,45 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
         continue;
       }
 
-      // .alignment-block { margin-top/bottom: 1.4em } — group air around Views/Bounty.
-      // Scaled like other book-style spacers; collapses with neighboring breaks in layouter.
-      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") && attrHasClass(tag, "alignment-block")) {
-        closeBlock();
-        openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
-        out.setCurrentMarginsEmQ4(static_cast<int8_t>(scaleBookVSpaceQ4(22)), 0);
-        closeBlock();
-        alignmentBlockDepth = 1;
-        continue;
-      }
-      if (!tag.closing && !tag.selfClose && ieq(tag.name, tag.nameLen, "div") && alignmentBlockDepth > 0) {
-        ++alignmentBlockDepth;
-      }
-      if (tag.closing && ieq(tag.name, tag.nameLen, "div") && alignmentBlockDepth > 0) {
-        if (--alignmentBlockDepth <= 0) {
-          alignmentBlockDepth = 0;
-          closeBlock();
-          openBlock(BlockKind::Spacer, Align::Left, kBlockNoIndent);
-          out.setCurrentMarginsEmQ4(0, static_cast<int8_t>(scaleBookVSpaceQ4(22)));
-          closeBlock();
+      // A div is a block regardless of its class name. Publishers frequently
+      // use opaque/generated classes for ALL paragraphs and chapter headings.
+      if(ieq(tag.name,tag.nameLen,"div")||ieq(tag.name,tag.nameLen,"body")||
+         ieq(tag.name,tag.nameLen,"section")||ieq(tag.name,tag.nameLen,"article")){
+        if(!tag.closing&&!tag.selfClose){
+          closeBlock();endBlockStyle();
+          if(state.divDepth==32){out.markFailed();break;}
+          ParserState::DivFrame frame=state.divDepth?state.divs[state.divDepth-1]:ParserState::DivFrame{};
+          frame.bottom=0;frame.title=looksLikeTitleHost(tag)||classIsChapterLeftTitle(tag);
+          int top=0;
+          if(frame.title){frame.align=Align::Left;frame.indent=0;frame.size=SizeStep::Plus1;
+            frame.style=classIsChapterLeftTitle(tag)?RunStyle::Regular:RunStyle::Bold;top=4;frame.bottom=8;}
+          if(attrHasClass(tag,"alignment-block")){top=scaleBookVSpaceQ4(22);frame.bottom=scaleBookVSpaceQ4(22);}
+          if(classSaysNoIndent(tag)||unindentInherit)frame.indent=0;
+          const auto css=resolvedStyle(tag);
+          applyInlineStyle(tag,frame.style,frame.size,&frame.align);
+          Align htmlA;if(htmlAlignAttr(tag,htmlA)&&!css.defined.textAlign)frame.align=htmlA;
+          if(css.defined.textIndent)frame.indent=static_cast<uint8_t>(std::max(0,cssEmQ4(css.textIndent)));
+          if(css.defined.marginTop||css.defined.paddingTop)top=std::clamp(
+            (css.defined.marginTop?cssEmQ4(css.marginTop):0)+(css.defined.paddingTop?cssEmQ4(css.paddingTop):0),0,127);
+          if(css.defined.marginBottom||css.defined.paddingBottom)frame.bottom=static_cast<int8_t>(std::clamp(
+            (css.defined.marginBottom?cssEmQ4(css.marginBottom):0)+(css.defined.paddingBottom?cssEmQ4(css.paddingBottom):0),0,127));
+          state.divs[state.divDepth++]=frame;
+          if(top){openBlock(BlockKind::Spacer,Align::Left,kBlockNoIndent);out.setCurrentMarginsEmQ4(top,0);closeBlock();}
+          uint16_t divFlags=frame.indent?0:kBlockNoIndent;
+          if(classSaysDropCap(tag))divFlags|=kBlockDropCap|kBlockNoIndent;
+          if(noIndentNextParagraph){divFlags|=kBlockNoIndent;noIndentNextParagraph=false;}
+          if(dropCapArmed){divFlags|=kBlockDropCap|kBlockNoIndent;dropCapArmed=false;}
+          openBlock(BlockKind::Paragraph,frame.align,divFlags);
+          out.setCurrentIndentEmQ4(frame.indent);out.setCurrentMarginsEmQ4(0,0);
+          beginBlockStyle(frame.style,frame.size);
+        }else if(tag.closing){
+          closeBlock();endBlockStyle();
+          if(state.divDepth){const auto frame=state.divs[--state.divDepth];
+            if(frame.bottom){openBlock(BlockKind::Spacer,Align::Left,kBlockNoIndent);out.setCurrentMarginsEmQ4(0,frame.bottom);closeBlock();}
+            if(frame.title){noIndentNextParagraph=true;dropCapArmed=true;}
+          }
+          if(state.divDepth)beginBlockStyle(state.divs[state.divDepth-1].style,state.divs[state.divDepth-1].size);
         }
-        // Fall through — other div handlers may also apply.
-      }
-
-      // div as optional title host (block) — only narrow looksLikeTitleHost hits.
-      // Do NOT open blocks for title-page / heading wrappers (empty margin balloons).
-      if (!tag.closing && ieq(tag.name, tag.nameLen, "div") &&
-          (looksLikeTitleHost(tag) || classIsChapterLeftTitle(tag)) && !tag.selfClose) {
-        closeBlock();
-        // Alice .chapter is left + larger; other title hosts default center.
-        const Align divAlign = [&]() {
-          Align a = classIsChapterLeftTitle(tag) ? Align::Left : (styleSaysCenter(tag) ? Align::Center : Align::Left);
-          Align htmlA = Align::Left;
-          if (htmlAlignAttr(tag, htmlA)) a = htmlA;
-          return a;
-        }();
-        openBlock(BlockKind::Paragraph, divAlign, kBlockNoIndent);
-        out.setCurrentMarginsEmQ4(4, 8);
-        RunStyle st = RunStyle::Regular;
-        // 150% ≈ Plus1 on the user ladder (Literata 12 → 14).
-        SizeStep sz = SizeStep::Plus1;
-        if (classIsChapterLeftTitle(tag)) {
-          st = RunStyle::Regular;  // Alice chapter title is not bold in CSS
-        } else {
-          st = RunStyle::Bold;
-        }
-        applyInlineStyle(tag, st, sz, nullptr);
-        applyClassEmphasis(tag, st, sz);
-        if (sz > SizeStep::Plus2) sz = SizeStep::Plus2;
-        beginBlockStyle(st, sz);
-        ++titleDivDepth;
-        continue;
-      }
-      if (tag.closing && ieq(tag.name, tag.nameLen, "div") && titleDivDepth > 0) {
-        closeBlock();
-        endBlockStyle();
-        --titleDivDepth;
-        noIndentNextParagraph = true;
-        dropCapArmed = true;
         continue;
       }
 
@@ -1740,8 +1788,11 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
       uint16_t f = 0;
       if (dropCapArmed) f = static_cast<uint16_t>(f | kBlockDropCap | kBlockNoIndent);
       if (unindentInherit) f = static_cast<uint16_t>(f | kBlockNoIndent);
-      openBlock(BlockKind::Paragraph, Align::Justify, f);
-      out.setCurrentMarginsEmQ4(0, 4);
+      const auto frame=state.divDepth?state.divs[state.divDepth-1]:ParserState::DivFrame{};
+      if(state.divDepth&&frame.indent==0)f|=kBlockNoIndent;
+      openBlock(BlockKind::Paragraph, frame.align, f);
+      out.setCurrentIndentEmQ4(frame.indent);
+      out.setCurrentMarginsEmQ4(0, state.divDepth?0:4);
       if (dropCapArmed) {
         out.markDropCapOnCurrent();
         dropCapArmed = false;
@@ -1783,6 +1834,9 @@ HtmlToIrSession::Result stepInput(HtmlInput& input, ParserState& state, ChapterI
     }
     while (remain > 0 && !out.failed()) {
       if (textAcc.size() > 1536) flushText();
+      if(textAcc.empty()&&inBlock&&!out.blocks().empty()&&out.blocks().back().runCount && ChapterStyles::space(*chunk)){
+        if(!safePushChar(textAcc,' ')){out.markFailed();break;}
+      }
       const size_t take = std::max<size_t>(1, casper_memory::utf8Prefix(chunk, remain, std::min(remain, size_t(400))));
       if (!appendCollapsedText(textAcc, chunk, take, false)) {
         out.markFailed();
@@ -1805,28 +1859,29 @@ struct HtmlToIrSession::Impl {
   ParserState state;
   ChapterIr* chapter;
   uint8_t images;
+  const ChapterStyles* sheet=nullptr;
   Result result=Result::Working;
   Impl(HalFile& file,ChapterIr& out,bool arm,uint8_t mode,bool(*cancel)(void*),void*ctx)
       :input(file,cancel,ctx),chapter(&out),images(mode){state.dropCapArmed=arm;}
 };
 HtmlToIrSession::HtmlToIrSession(HalFile& file,const char* workPath,ChapterIr& out,bool arm,uint8_t images,
-                                 bool(*cancel)(void*),void*ctx) {
+                                 bool(*cancel)(void*),void*ctx,const ChapterStyles* sheet) {
   if(!out.beginPaged(workPath) || !casper_memory::allowAllocation()) {out.markFailed();return;}
   impl_.reset(new(std::nothrow) Impl(file,out,arm,images,cancel,ctx));
-  if(!impl_)out.markFailed();
+  if(!impl_)out.markFailed();else impl_->sheet=sheet;
 }
 HtmlToIrSession::~HtmlToIrSession()=default;
 HtmlToIrSession::Result HtmlToIrSession::step(size_t byteBudget) {
   if(!impl_)return Result::Failed;
   if(impl_->result!=Result::Working)return impl_->result;
-  impl_->result=stepInput(impl_->input,impl_->state,*impl_->chapter,std::max<size_t>(1,byteBudget),impl_->images);
+  impl_->result=stepInput(impl_->input,impl_->state,*impl_->chapter,std::max<size_t>(1,byteBudget),impl_->images,impl_->sheet);
   return impl_->result;
 }
 size_t HtmlToIrSession::consumed()const{return impl_?impl_->input.position():0;}
-bool HtmlToIr::convert(const char* html,size_t len,ChapterIr& out,bool arm,uint8_t images) {
+bool HtmlToIr::convert(const char* html,size_t len,ChapterIr& out,bool arm,uint8_t images,const ChapterStyles* sheet) {
   out.clear();if(!html||!len)return false;
   HtmlInput input(html,len);ParserState state;state.dropCapArmed=arm;
-  while(stepInput(input,state,out,8192,images)==HtmlToIrSession::Result::Working){}
+  while(stepInput(input,state,out,8192,images,sheet)==HtmlToIrSession::Result::Working){}
   return !out.empty(); // legacy helper exposes failed() for partial tests
 }
 bool HtmlToIr::convertFile(HalFile& file,const char* workPath,ChapterIr& out,bool arm,uint8_t images,

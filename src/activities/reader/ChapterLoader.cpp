@@ -4,6 +4,9 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <HtmlToIr.h>
+#include <ChapterStyles.h>
+#include <StylesheetHead.h>
+#include <FsHelpers.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <algorithm>
@@ -16,9 +19,14 @@ struct Session::Impl {
   Hooks hooks;
   Result result;
   Status status=Status::Working;
-  enum Phase {Init,Extract,BeginParse,Parse,BeginPublish,Publish,Geometry,Map,Finish} phase=Init;
+  enum Phase {Init,Extract,BeginParse,Head,Stylesheet,StartParse,Parse,BeginPublish,Publish,Geometry,Map,Finish} phase=Init;
   HalFile input,output;
   std::unique_ptr<rivulet::HtmlToIrSession> parser;
+  std::unique_ptr<rivulet::StylesheetHead> head;
+  std::unique_ptr<rivulet::ChapterStyles> styles;
+  std::string stylesheetHref;
+  unsigned stylesheetNumber=0;
+  char cssPath[240]{},cssTemp[248]{};
   std::string href;
   char ir[224]{},html[224]{},temp[240]{},map[224]{},irTemp[240]{};
   size_t writeOffset=0,geometryOffset=0;
@@ -27,7 +35,7 @@ struct Session::Impl {
   Impl(const Request& r,const Hooks& h):req(r),hooks(h){}
   ~Impl(){parser.reset();input.close();output.close();if(publishing)Storage.remove(irTemp);}
   bool abort() {resetTaskWatchdogIfSubscribed();return hooks.shouldAbort&&hooks.shouldAbort(hooks.ctx);}
-  Status fail(){LOG_ERR("CHLOAD","failed spine=%d phase=%d free=%u maxA=%u",req.spineIndex,int(phase),unsigned(ESP.getFreeHeap()),unsigned(ESP.getMaxAllocHeap()));status=Status::Failed;parser.reset();input.close();output.close();return status;}
+  Status fail(){LOG_ERR("CHLOAD","failed spine=%d phase=%d free=%u maxA=%u",req.spineIndex,int(phase),unsigned(ESP.getFreeHeap()),unsigned(ESP.getMaxAllocHeap()));status=Status::Failed;parser.reset();head.reset();styles.reset();input.close();output.close();return status;}
   Status step(){
     if(status!=Status::Working)return status;
     resetTaskWatchdogIfSubscribed();
@@ -48,7 +56,7 @@ struct Session::Impl {
            std::snprintf(map,sizeof(map),"%s/s%d_m%u.rvpm",req.irDir.c_str(),req.spineIndex,req.imageRendering)>=int(sizeof(map)))return fail();
         std::snprintf(temp,sizeof(temp),"%s.tmp",html);std::snprintf(irTemp,sizeof(irTemp),"%s.tmp",ir);
         if(hooks.prepareHeap)hooks.prepareHeap(hooks.ctx,false);
-        eng.clear();
+        eng.clear();eng.deferPageCacheWrites(true);
         if(req.bindPageCache){eng.setPageCacheDir((req.irDir+"/pages").c_str());eng.setPageCacheSpine(req.spineIndex);}
         else{eng.clearPageCacheDir();eng.setPageCacheSpine(-1);}
         result.fromCache=eng.loadIr(ir);
@@ -68,7 +76,7 @@ struct Session::Impl {
             size_t write(const uint8_t*d,size_t n)override {if(owner.abort()){cancelled=true;return 0;}return f.write(d,n);}
           } sink(f,*this);
           bool ok=false;
-          {GfxRenderer::FrameBufferLoan loan(*req.renderer,req.lendFrameBuffer);ok=epub.readItemContentsToStream(href,sink,4096);}
+          {GfxRenderer::FrameBufferLoan loan(*req.renderer,req.lendFrameBuffer);ok=epub.readItemContentsToStream(href,sink,1024);}
           const size_t size=f.size();f.flush();f.close();
           if(sink.cancelled){Storage.remove(temp);return Status::Working;}
           if(!ok){Storage.remove(temp);return fail();}
@@ -80,13 +88,65 @@ struct Session::Impl {
       case BeginParse:
         if(!Storage.openFileForRead("CHLOAD",html,input))return fail();
         if(!input.size()){result.empty=true;status=Status::Done;return status;}
-        parser=makeUniqueNoThrow<rivulet::HtmlToIrSession>(input,ir,eng.chapterMutable(),false,req.imageRendering);
+        styles=makeUniqueNoThrow<rivulet::ChapterStyles>();
+        head=makeUniqueNoThrow<rivulet::StylesheetHead>(input);
+        if(!styles||!head)return fail();
+        phase=Head;return Status::Working;
+      case Head: {
+        const auto state=head->step(4096);
+        if(state==rivulet::StylesheetHead::Result::Failed)return fail();
+        if(state==rivulet::StylesheetHead::Result::Working)return Status::Working;
+        if(state==rivulet::StylesheetHead::Result::Done){
+          head.reset();if(!input.seek(0))return fail();phase=StartParse;return Status::Working;
+        }
+        if(state==rivulet::StylesheetHead::Result::Inline){
+          struct View {std::string_view text;int read(char* p,size_t n){n=std::min(n,text.size());if(n)std::memcpy(p,text.data(),n);text.remove_prefix(n);return int(n);}} view{head->value()};
+          if(!styles->load(view))return fail();return Status::Working;
+        }
+        const auto ref=head->value();
+        // External/network styles must never cause a network request while reading.
+        if(ref.size()>512||ref.find(':')!=std::string_view::npos||ref.substr(0,2)=="//")return Status::Working;
+        if(++stylesheetNumber>16)return fail();
+        const auto slash=href.find_last_of('/');
+        std::string relative=FsHelpers::decodeUriEscapes(std::string(ref));
+        if(auto fragment=relative.find('#');fragment!=std::string::npos)relative.resize(fragment);
+        stylesheetHref=FsHelpers::normalisePath((slash==std::string::npos?std::string{}:href.substr(0,slash+1))+relative);
+        if(!relative.empty()&&relative.front()=='/')stylesheetHref=FsHelpers::normalisePath(relative);
+        if(std::snprintf(cssPath,sizeof(cssPath),"%s/css-s%d-%u.css",req.irDir.c_str(),req.spineIndex,stylesheetNumber)>=int(sizeof(cssPath))||
+           std::snprintf(cssTemp,sizeof(cssTemp),"%s.tmp",cssPath)>=int(sizeof(cssTemp)))return fail();
+        phase=Stylesheet;return Status::Working;
+      }
+      case Stylesheet: {
+        if(!Storage.exists(cssPath)) {
+          size_t expected=0;
+          if(!epub.getItemSize(stylesheetHref,&expected)||!expected){
+            LOG_DBG("CHLOAD","missing stylesheet %s",stylesheetHref.c_str());phase=Head;return Status::Working;
+          }
+          if(expected>512U*1024U){LOG_ERR("CHLOAD","stylesheet too large: %u",unsigned(expected));return fail();}
+          HalFile f;if(!Storage.openFileForWrite("CHCSS",cssTemp,f))return fail();
+          struct Sink:Print {HalFile& f;Impl& owner;bool cancelled=false;
+            Sink(HalFile&file,Impl&o):f(file),owner(o){}
+            size_t write(uint8_t b)override{return write(&b,1);}
+            size_t write(const uint8_t*p,size_t n)override{if(owner.abort()){cancelled=true;return 0;}return f.write(p,n);}
+          } sink(f,*this);
+          const bool ok=epub.readItemContentsToStream(stylesheetHref,sink,1024);
+          const size_t actual=f.size();f.flush();f.close();
+          if(sink.cancelled){Storage.remove(cssTemp);return Status::Working;}
+          if(!ok||actual!=expected||!Storage.rename(cssTemp,cssPath)){Storage.remove(cssTemp);return fail();}
+        }
+        HalFile f;if(!Storage.openFileForRead("CHCSS",cssPath,f))return fail();
+        const bool ok=styles->load(f);f.close();
+        if(!ok){LOG_ERR("CHLOAD","stylesheet parse/resource failure");return fail();}
+        phase=Head;return Status::Working;
+      }
+      case StartParse:
+        parser=makeUniqueNoThrow<rivulet::HtmlToIrSession>(input,ir,eng.chapterMutable(),false,req.imageRendering,nullptr,nullptr,styles.get());
         if(!parser)return fail();phase=Parse;return Status::Working;
       case Parse: {
         const auto parsed=parser->step(4096);
         if(parsed==rivulet::HtmlToIrSession::Result::Failed)return fail();
         if(parsed==rivulet::HtmlToIrSession::Result::Working)return Status::Working;
-        parser.reset();input.close();
+        parser.reset();styles.reset();input.close();
         if(!eng.adoptIngestedChapter(ir))return fail();
         if(eng.chapter().empty()){result.empty=true;status=Status::Done;return status;}
         phase=BeginPublish;return Status::Working;

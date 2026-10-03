@@ -29,3 +29,4 @@ class EspStub {
 };
 
 extern EspStub ESP;
+inline void yield() {}

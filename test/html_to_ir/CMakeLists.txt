@@ -1,5 +1,7 @@
 add_executable(HtmlToIrTest
+  FieldFormattingTest.cpp
   HtmlToIrTest.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/css/CssParser.cpp
   ${REPO_ROOT}/lib/Rivulet/HtmlToIr.cpp
   ${REPO_ROOT}/lib/Rivulet/ChapterIr.cpp
   ${REPO_ROOT}/lib/Rivulet/IrTokenizer.cpp
@@ -11,6 +13,7 @@ add_executable(HtmlToIrTest
 # Serialization.h is the real one — it only needs HalFile's read/write shape.
 target_include_directories(HtmlToIrTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${REPO_ROOT}/tools/field_regression/stubs
   ${REPO_ROOT}/lib/Rivulet
   ${REPO_ROOT}/lib/Utf8
   ${REPO_ROOT}/lib/Serialization

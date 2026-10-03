@@ -29,12 +29,13 @@ inline constexpr char kIrMagic[4] = {'R', 'V', 'I', 'R'};
 // box); first body para after a real chapter heading / span.dropcap is armed
 // for a drop-cap. DCC "[ 70 ]" headings still do not arm.
 //
+// v29: linked stylesheets, block-level divs and streaming whitespace preservation.
 // v28: bounded SD-backed records and 4 KiB word-aligned runs.
 // v27: complete-source publication and UTF-8-safe long-run splitting. Old IR
 // could contain an unmarked source prefix; rebuild it once from cached HTML.
-inline constexpr uint16_t kIrFormatVersion = 28;
-inline constexpr uint16_t kIrFormatVersionMin = 28;
-inline constexpr uint16_t kIrFormatVersionMax = 28;
+inline constexpr uint16_t kIrFormatVersion = 29;
+inline constexpr uint16_t kIrFormatVersionMin = 29;
+inline constexpr uint16_t kIrFormatVersionMax = 29;
 
 // Render-spec fingerprint: layout maps invalid when this changes.
 struct RenderKey {

@@ -7,11 +7,13 @@ TEST(CoverDecodePolicy, ProgressiveUsesJpegScaleEighth) {
   EXPECT_EQ(coverdecode::jpegDecDecodeOptions(/*progressive=*/false), 0);
 }
 
-TEST(CoverDecodePolicy, SkipsJpgdWhenC3MaxAllocIsFieldSized) {
-  EXPECT_FALSE(coverdecode::useFullProgressiveDecode(69620));
-  EXPECT_FALSE(coverdecode::useFullProgressiveDecode(coverdecode::kJpgdMinMaxAllocBytes - 1));
-  EXPECT_TRUE(coverdecode::useFullProgressiveDecode(coverdecode::kJpgdMinMaxAllocBytes));
-  EXPECT_TRUE(coverdecode::useFullProgressiveDecode(128u * 1024u));
+TEST(CoverDecodePolicy, DistinguishesTotalBudgetFromLargestAllocation) {
+  EXPECT_TRUE(coverdecode::useFullProgressiveDecode(63476,109924));
+  EXPECT_TRUE(coverdecode::useFullProgressiveDecode(45044,104272));
+  EXPECT_FALSE(coverdecode::useFullProgressiveDecode(16000,109924));
+  EXPECT_FALSE(coverdecode::useFullProgressiveDecode(63476,40000));
+  EXPECT_TRUE(coverdecode::useFullProgressiveDecode(coverdecode::kJpgdMinMaxAllocBytes,coverdecode::kJpgdMinFreeBytes));
+  EXPECT_FALSE(coverdecode::useFullProgressiveDecode(coverdecode::kJpgdMinMaxAllocBytes-1,coverdecode::kJpgdMinFreeBytes));
 }
 
 TEST(CoverDecodePolicy, SkipsSecondDecodeWhenHrefUnchanged) {

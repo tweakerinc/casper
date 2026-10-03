@@ -39,13 +39,8 @@ class HtmlInput {
           (p[3]=='d'||p[3]=='D') && (p[4]=='y'||p[4]=='Y') &&
           (end-p == 5 || p[5]=='>' || p[5]==' ' || p[5]=='\t' || p[5]=='\n' || p[5]=='\r')) {
         if(!fullTag()) return true;
-        char quote=0;
-        while(p<end) {
-          const char c=*p++;
-          if(quote) { if(c==quote)quote=0; }
-          else if(c=='\''||c=='"')quote=c;
-          else if(c=='>')break;
-        }
+        // Preserve the opening tag so the converter can apply body-level
+        // inherited CSS instead of silently dropping it with the head.
         bodyFound_=true; return true;
       }
       ++p;

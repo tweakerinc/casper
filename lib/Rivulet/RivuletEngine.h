@@ -158,6 +158,10 @@ class RivuletEngine {
   //
   // Returns true if it laid a page out (i.e. did real work this tick).
   bool warmAheadPage(const GfxRenderer& renderer);
+  // A background counter need not retain a paint page while walking its map.
+  void releasePaintPage() { laidOut_.release();laidOutValid_=false;releasePrefetch(); }
+  void deferPageCacheWrites(bool defer) { deferPageCacheWrites_=defer; }
+  bool flushPageCache();
   void releasePrefetch() { aheadValid_=behindValid_=false;ahead_.release();behind_.release(); }
   // Bidirectional indexing: keep the previous page's layout in RAM so page-back
   // is a move (same idea as ahead_ for forward). Warmed on idle.
@@ -213,6 +217,8 @@ class RivuletEngine {
   void clear();
 
  private:
+  bool deferPageCacheWrites_=false;
+  mutable bool pageCacheDirty_=false;
   LayoutParams makeParams(const GfxRenderer& renderer) const;
   // Same params with measureOnly set: for page-map walks, which read only the
   // resulting end cursor and discard the spans. See LayoutParams::measureOnly.
@@ -223,7 +229,7 @@ class RivuletEngine {
   // markComplete only if known page count is plausible vs IR estimate.
   void markMapCompleteIfPlausible(const GfxRenderer& renderer);
   bool tryLoadPageCache(int pageIndex);
-  void savePageCache(int pageIndex) const;
+  bool savePageCache(int pageIndex) const;
   bool pageCachePath(int pageIndex, char* out, size_t outSz) const;
   bool fillPageCachePath(int spineIndex, int pageIndex, char* out, size_t outSz) const;
   [[nodiscard]] uint32_t pageCacheKeyFp() const;

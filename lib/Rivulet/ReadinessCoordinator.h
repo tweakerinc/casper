@@ -34,6 +34,7 @@ class ReadinessCoordinator {
   bool recordCurrent(int spine,const RivuletEngine& engine);
   void focus(int spine){focus_=spine;if(index_.valid())index_.focus(spine);probeStage_=0;}
   const BookPageIndex& index()const{return index_;}
+  bool workerLoaded()const{return worker_&&loaded_;}
   bool hasWorker()const{return bool(worker_);}
   int workerSpine()const{return workerSpine_;}
  private:
@@ -56,7 +57,9 @@ class ReadinessCoordinator {
   RenderKey key_{};
   float lineCompression_=1;
   int spines_=0,focus_=0,workerSpine_=-1,requestedSpine_=-1,requestedPage_=0;
+  int lastTitleSpine_=-1;
   int probeStage_=0,crawl_=0,lastSavedKnown_=0,lastActiveSpine_=-1,lastActiveCount_=-1;
+  bool lastSavedComplete_=false;
   unsigned failureSlot_=0;
   struct Failure {int spine=-1;uint32_t until=0;} failures_[8];
   bool pending_=false,navigationReady_=false,firstPrepared_=false,lastPrepared_=false;

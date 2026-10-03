@@ -1,3 +1,4 @@
+#include <PreparationBudget.h>
 #include "RivuletReaderActivity.h"
 
 #include <Epub/blocks/ImageBlock.h>
@@ -1710,7 +1711,7 @@ void RivuletReaderActivity::commitChapter(rivulet::RivuletEngine&& target, const
   footnoteCacheSpine_=-1;footnoteScanDeferred_=true;chapterFootnotes_.clear();currentPageFootnotes_.clear();
   glyphCacheSpine_=glyphCachePage_=-1;
   lastIdleMapMs_=0;readinessAlternate_=false;
-  configureReadiness();readiness_.focus(spine);readiness_.recordCurrent(spine,engine_);
+  configureReadiness();readiness_.focus(spine);
   updateBookmarkFlag();
   LOG_INF("READY","commit spine=%d page=%d known=%d exact=%d disk=%d",spine,engine_.currentPage(),
           engine_.mapKnownPages(),engine_.mapComplete()?1:0,engine_.chapter().diskBacked()?1:0);
@@ -1969,16 +1970,20 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   if (gpio.isDebouncePending() || gpioPeekHeldForIdleMap() || futureIndexUserWantsControl()) return;
   const auto now=millis();
   const bool foreground=readiness_.pending();
-  if (!foreground && (aaCatchUpPending_ || now-lastPageTurnTime_<1000UL || now-firstInkAtMs_<1000UL)) return;
-  if (!foreground && lastFutureWorkMs_ && now-lastFutureWorkMs_<5UL) return;
+  if (!foreground && (aaCatchUpPending_ || !rivulet::preparationbudget::isQuiet(now,lastPageTurnTime_,firstInkAtMs_))) return;
+  if (!foreground && lastFutureWorkMs_ && now-lastFutureWorkMs_<rivulet::preparationbudget::kBetweenSlicesMs) return;
   if (!foreground && !readinessAlternate_) return;
   configureReadiness();readiness_.recordCurrent(spineIndex_,engine_);
   // Keep the current page. Reclaim only optional glyph/decode/prefetch storage.
-  if (ESP.getFreeHeap()<40U*1024U || ESP.getMaxAllocHeap()<16U*1024U) {
+  const bool needRoom = !readiness_.hasWorker();
+  if (needRoom && !rivulet::preparationbudget::canStart(ESP.getFreeHeap(),ESP.getMaxAllocHeap())) {
     if (auto* fcm=renderer.getFontCacheManager()) { if(!fcm->isScanning()) fcm->clearCache(); }
     engine_.releasePrefetch();
     PngToFramebufferConverter::releaseWarmIfHeapTight(48U*1024U);
     glyphCacheSpine_=glyphCachePage_=-1;
+  }
+  if(!foreground&&needRoom&&!rivulet::preparationbudget::canStart(ESP.getFreeHeap(),ESP.getMaxAllocHeap())) {
+    lastFutureWorkMs_=millis();return;
   }
   const auto result=readiness_.tickPrepared(renderer,spineIndex_,
     [](void* ctx,rivulet::RivuletEngine& target,int spine)->std::unique_ptr<rivulet::ReadinessCoordinator::Preparation>{
@@ -2003,7 +2008,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       if(pendingFootnoteReturn_){pendingFootnoteReturn_=false;if(footnoteDepth_>0)--footnoteDepth_;}
       forceFastAfterChapterNav_=true;lastPageTurnTime_=millis();
       if(forward){lastForwardTurnMs_=lastPageTurnTime_;noteForwardPageTurn();}
-      (void)saveProgress(ProgressFlush::Now);persistPageMapIfComplete();persistHomeProgress(true);
+      // The page is ready: optional map/cache/stat writes belong after ink.
+      // Exit/sleep retain their synchronous content-anchor commit.
+      (void)saveProgress(ProgressFlush::Deferred);persistHomeProgress(false);
       aaCatchUpPending_=false;requestUpdate();
     }
   }else if(result==rivulet::ReadinessCoordinator::Tick::NavigationFailed){
@@ -2314,6 +2321,11 @@ void RivuletReaderActivity::tickIdlePageMap() {
   }
   const unsigned long now = millis();
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
+  const bool quietForPreparation=rivulet::preparationbudget::isQuiet(now,lastPageTurnTime_,firstInkAtMs_);
+  if(quietForPreparation && engine_.flushPageCache())return;
+  // Do not reallocate two optional paint-ahead pages immediately after making
+  // room for the independently owned preparation engine. Resume them on input.
+  const bool counterOwnsBudget=quietForPreparation&&readiness_.hasWorker();
 
   static int s_lastLoggedKnown = -1;
   static int s_lastLoggedSpine = -1;
@@ -2327,7 +2339,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // If ahead is still cold, do NOT fall through to extendPageMap: a 1.5s measure
   // walk of the map tail (device log known=3→4) steals the next tap and the
   // user still pays a full paint layout on the turn.
-  if (!engine_.aheadWarm()) {
+  if (!counterOwnsBudget && !engine_.aheadWarm()) {
     const bool atChapterEnd = engine_.hasChapter() && engine_.page().atChapterEnd;
     if (!atChapterEnd) {
       if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
@@ -2348,7 +2360,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // Next page is laid out: decompress its glyphs so the coming tap skips scan.
   // Wait 2s after a turn — device e38a3a71 painted the next page for 4.1s
   // (prewarm_glyphs abort=0) 50ms after the tap and froze the following press.
-  if (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1) {
+  if (!counterOwnsBudget && (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1)) {
     if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL) {
       prewarmAheadGlyphs();
     }
@@ -2356,7 +2368,7 @@ void RivuletReaderActivity::tickIdlePageMap() {
 
   // Behind warm after a chapter land (PageBack onto last page). Not on the
   // turn path — that added SD/layout onto the 3.5s Back the user already felt.
-  if (!engine_.behindWarm() && engine_.currentPage() > 0 &&
+  if (!counterOwnsBudget && !engine_.behindWarm() && engine_.currentPage() > 0 &&
       (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL)) {
     engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
     const unsigned long tBehind = millis();
@@ -2966,7 +2978,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       const int spineIdx = spineIndex_;
       const std::string path = epub_->getPath();
       startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub_, path, spineIdx),
+          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub_, path, spineIdx, irDir_),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
               if (const auto* chapter = std::get_if<ChapterResult>(&result.data)) {

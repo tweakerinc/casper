@@ -376,10 +376,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     return coverrender::generateHero(classifyRecentCover(book, heroH));
   };
 
-  auto armRetry = [this, heroH](const bool fromGen) {
+  auto armRetry = [this, heroH](const bool fromGen, const bool failedWithoutProgress = false) {
     const auto disk =
         recentBooks.empty() ? thumbcache::DiskThumb::Missing : classifyRecentCover(recentBooks[0], heroH);
-    if (coverrender::keepRetrying(coverGenAttempts, disk, coverGrayOnPanel)) {
+    if (coverrender::retryGenerationPass(fromGen, failedWithoutProgress) &&
+        coverrender::keepRetrying(coverGenAttempts, disk, coverGrayOnPanel)) {
       coverNeedsRetry = true;
       const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *
                                static_cast<unsigned>(std::max<uint8_t>(1, coverGenAttempts));
@@ -503,8 +504,15 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoaded = true;
   recentsLoading = false;
   coverGenAttempts = static_cast<uint8_t>(std::min<int>(255, static_cast<int>(coverGenAttempts) + 1));
-  (void)anyTransientFail;
-  armRetry(true);
+  // A persistent unsupported JPEG is not a useful automatic retry. The RC2
+  // field log repeated the same failure eight times, blocking Home for minutes.
+  // Pause this entry's automatic work without deleting the EPUB or its caches.
+  const bool failedWithoutProgress = anyTransientFail && !anyNewThumb;
+  if (failedWithoutProgress) {
+    SystemLog::logTiming("HOME", "cover_gen paused after no-progress failure attempts=%u",
+                         static_cast<unsigned>(coverGenAttempts));
+  }
+  armRetry(true, failedWithoutProgress);
 
   if (anyNewThumb && coverrender::paintWhenHeroArrives()) {
     freeCoverBuffer();
@@ -982,14 +990,16 @@ void HomeActivity::multipassHomeCoverGrayscale() {
   }
   if (coverPath.empty()) {
     const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
-    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_no_path");
+    displayBw(coverrender::settleWhenNoCoverWork(recentsLoaded, coverNeedsRetry) ||
+                  coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_no_path");
     return;
   }
 
   HalFile file;
   if (!Storage.openFileForRead("HOME", coverPath, file)) {
     const bool missingHero = coverrender::generateHero(classifyRecentCover(book, heroH));
-    displayBw(coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_open_fail");
+    displayBw(coverrender::settleWhenNoCoverWork(recentsLoaded, coverNeedsRetry) ||
+                  coverrender::settleMissingCover(coverGenAttempts, missingHero), "bw_open_fail");
     return;
   }
 

@@ -265,7 +265,16 @@ size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
 bool HalFile::isDirectory() const { HAL_FILE_FORWARD_CALL(isDirectory, ); }  // already thread-safe, no need to wrap
 void HalFile::rewindDirectory() { HAL_FILE_WRAPPED_CALL(rewindDirectory, ); }
-bool HalFile::close() { HAL_FILE_WRAPPED_CALL(close, ); }
+bool HalFile::close() {
+  // Cleanup is allowed for a default-constructed or moved-from handle. In
+  // RC2 the readiness index is reset before its first open; asserting here
+  // panicked on every reader entry. Do not relax read/write/seek assertions.
+  if (!impl) return true;
+  HalStorage::StorageLock lock;
+  // An already-closed handle also satisfies the cleanup postcondition. Keep
+  // the actual filesystem error visible when closing an open file fails.
+  return !impl->file.isOpen() || impl->file.close();
+}
 HalFile HalFile::openNextFile() {
   HalStorage::StorageLock lock;
   assert(impl != nullptr);

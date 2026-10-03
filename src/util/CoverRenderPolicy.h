@@ -45,6 +45,19 @@ inline constexpr bool fullProgressiveCoverDecode() { return true; }
 // Cue / JPEG run only after HomeActivity::render has put chrome on glass.
 inline constexpr bool genWaitsForHomeShell() { return true; }
 
+// Stop a no-progress generation pass from automatically replaying the same
+// decoder failure. Re-entering Home or explicitly refreshing starts a new pass.
+// Deferral before generation (shell not ready) must still be allowed to retry.
+inline constexpr bool retryGenerationPass(const bool fromGeneration, const bool failedWithoutProgress) {
+  return !fromGeneration || !failedWithoutProgress;
+}
+
+// A missing-art shell may settle once automatic work is exhausted or paused.
+// Successful later generation explicitly invalidates the shell before repaint.
+inline constexpr bool settleWhenNoCoverWork(const bool recentsLoaded, const bool retryPending) {
+  return recentsLoaded && !retryPending;
+}
+
 inline constexpr uint8_t kMaxGenAttempts = 8;
 
 inline constexpr unsigned kRetryDelayMs = 800;

@@ -40,9 +40,12 @@ jobs:
           PY
           git apply --check --index /tmp/rc2-hotfix.patch
           git apply --index /tmp/rc2-hotfix.patch
+          # This runner has contents permission only; workflow edits are applied
+          # separately through the owner's connector, not this credential.
+          git restore --source=HEAD --staged --worktree .github/workflows/casper-candidate.yml
           git diff --cached --check
           python3 tools/rc2_hotfix_tests/run_tests.py
-          git rm .github/candidate-patches/rc2-hotfix.b64 .github/workflows/casper-rc2-hotfix.yml
+          git rm .github/candidate-patches/rc2-hotfix.b64
           git -c user.name='Casper candidate builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(candidate): RC2.1 safe storage cleanup and bounded cover failure retries' -m 'Fix the reported X3 HalFile::close assertion on reader entry. Retain real I/O error checks, test actual HAL plus paged/index owners, and stop repeated no-progress cover generation. UI geometry, Rivulet layout and indexing formats are unchanged. Specific failing JPEG remains unverified; device test candidate only.'
           git push origin HEAD:refs/heads/fix/casper-stability-v0.2.0-candidate
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

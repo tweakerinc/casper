@@ -374,19 +374,11 @@ void SleepActivity::renderCoverSleepScreen() const {
 
     coverBmpPath = lastTxt.getCoverBmpPath();
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
-    // Handle EPUB file
+    // A power request must not extract or decode a cold EPUB cover. Home can
+    // prepare both native-size artifacts in one decode; the cache filename is
+    // derivable without loading metadata. Keep the existing configured fallback
+    // when no completed artifact is available yet.
     Epub lastEpub(APP_STATE.openEpubPath, CrossPointPaths::kPackageCacheRoot);
-    // Skip loading css since we only need metadata here
-    if (!lastEpub.load(true, true)) {
-      LOG_ERR("SLP", "Failed to load last epub");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    if (!lastEpub.generateCoverBmp(cropped)) {
-      LOG_ERR("SLP", "Failed to generate cover bmp");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
     coverBmpPath = lastEpub.getCoverBmpPath(cropped);
   } else {
     return (this->*renderNoCoverSleepScreen)();

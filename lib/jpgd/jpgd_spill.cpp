@@ -1,90 +1,112 @@
 #include "jpgd_spill.h"
 
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 
 namespace jpgd {
 namespace {
 
-// Two slots: one AC row (~15 KB on a 1000-wide jacket) plus a small DC row.
-// Four 15 KB rows blew X3 maxAlloc (~69 KB) and jpgd longjmp'd NOTENOUGHMEM.
-constexpr int kSlots = 2;
+// AC scans are non-interleaved: one full coefficient row is sufficient.
+// Interleaved DC scans revisit small Y/Cb/Cr rows within the same MCU row.
+// Keep those rows in a separate bank so they cannot thrash the large AC row.
+constexpr int kSmallSlots = 8;
+constexpr int kSlots = kSmallSlots + 1;
+constexpr size_t kSmallRow = 1024;
+constexpr int kMaxRegions = JPGD_MAX_COMPONENTS * 2;
+constexpr uint64_t kMaxStore = 32ULL * 1024ULL * 1024ULL;
+constexpr uint32_t kUnwritten = std::numeric_limits<uint32_t>::max();
+
+struct Region {
+  int64_t logical = -1;
+  size_t bytes = 0;
+  int rows = 0;
+  size_t rowBytes = 0;
+  // Only the row directory is resident. Coefficients append to SD on first
+  // write instead of materializing megabytes of unused logical-address gaps.
+  std::unique_ptr<uint32_t[]> physicalRows;
+};
 
 struct Slot {
-  int64_t region_ofs = -1;
-  int block_y = -1;
-  int block_size = 0;
-  int nx = 0;
-  int row_bytes = 0;
+  int region = -1;
+  int row = -1;
   bool dirty = false;
+  uint64_t used = 0;
   std::unique_ptr<uint8_t[]> data;
-  int data_cap = 0;
+  size_t capacity = 0;
 };
 
 jpeg_decoder_spill_io g_io;
 bool g_active = false;
-uint64_t g_bump = 0;
+uint64_t g_logicalEnd = 0;
+uint64_t g_physicalEnd = 0;
+uint64_t g_clock = 0;
+int g_regionCount = 0;
+Region g_regions[kMaxRegions];
 Slot g_slots[kSlots];
-int g_clock = 0;
-
-bool io_read(uint64_t offset, void* buf, int n) {
-  if (!g_io.pread || n <= 0) return n == 0;
-  // New/partially materialized regions are initialized to zero by getp().
-  // Do not turn a failed SD read into an apparently valid all-zero block.
-  const int got = g_io.pread(g_io.ctx, offset, buf, n);
-  return got >= 0 && got <= n;
-}
-
-bool io_write(uint64_t offset, const void* buf, int n) {
-  if (!g_io.pwrite || n <= 0) return n == 0;
-  return g_io.pwrite(g_io.ctx, offset, buf, n) == n;
-}
 
 bool flush_slot(Slot& s) {
-  if (!s.dirty || s.region_ofs < 0 || !s.data) {
-    s.dirty = false;
-    return true;
+  if (!s.dirty || s.region < 0) return true;
+  Region& region = g_regions[s.region];
+  const uint32_t saved = region.physicalRows[s.row];
+  const uint64_t offset = saved == kUnwritten ? g_physicalEnd : saved;
+  if (offset > kMaxStore || region.rowBytes > kMaxStore - offset) return false;
+  if (g_io.pwrite(g_io.ctx, offset, s.data.get(), static_cast<int>(region.rowBytes)) !=
+      static_cast<int>(region.rowBytes)) return false;
+  // Publish only complete rows. Short/failed writes must not become valid data.
+  if (saved == kUnwritten) {
+    region.physicalRows[s.row] = static_cast<uint32_t>(offset);
+    g_physicalEnd += region.rowBytes;
   }
-  const uint64_t off = static_cast<uint64_t>(s.region_ofs) + static_cast<uint64_t>(s.block_y) * static_cast<uint64_t>(s.row_bytes);
-  if (!io_write(off, s.data.get(), s.row_bytes)) return false;
   s.dirty = false;
   return true;
 }
 
-Slot* find_slot(int64_t region_ofs, int block_y) {
-  for (int i = 0; i < kSlots; ++i) {
-    if (g_slots[i].region_ofs == region_ofs && g_slots[i].block_y == block_y) return &g_slots[i];
+int find_region(int64_t logical) {
+  for (int i = 0; i < g_regionCount; ++i) {
+    if (g_regions[i].logical == logical) return i;
   }
-  return nullptr;
+  return -1;
 }
 
-Slot* evict_slot(int needed_row_bytes) {
-  for (int i = 0; i < kSlots; ++i) {
-    if (g_slots[i].region_ofs < 0) return &g_slots[i];
-  }
-  // Interleaved DC needs 4 tiny rows (Y/Y/Cb/Cr). Y AC rows are ~16 KB on a
-  // 1000-wide jacket — keep at most two of those so C3 maxAlloc (~69 KB) holds.
-  constexpr int kLargeRow = 1024;
-  if (needed_row_bytes >= kLargeRow) {
-    int largeIdx[kSlots];
-    int nLarge = 0;
-    for (int i = 0; i < kSlots; ++i) {
-      if (g_slots[i].row_bytes >= kLargeRow) largeIdx[nLarge++] = i;
-    }
-    if (nLarge >= 2) {
-      Slot& s = g_slots[largeIdx[g_clock++ % nLarge]];
-      if (!flush_slot(s)) return nullptr;
-      s.region_ofs = -1;
-      s.block_y = -1;
+Slot* acquire_slot(int regionIndex, int row, size_t rowBytes) {
+  const int begin = rowBytes <= kSmallRow ? 0 : kSmallSlots;
+  const int end = rowBytes <= kSmallRow ? kSmallSlots : kSlots;
+  Slot* victim = nullptr;
+  for (int i = begin; i < end; ++i) {
+    Slot& s = g_slots[i];
+    if (s.region == regionIndex && s.row == row) {
+      s.used = ++g_clock;
       return &s;
     }
+    if (!victim || (s.region < 0 && victim->region >= 0) ||
+        (s.region >= 0 && victim->region >= 0 && s.used < victim->used)) victim = &s;
   }
-  Slot& s = g_slots[g_clock++ % kSlots];
-  if (!flush_slot(s)) return nullptr;
-  s.region_ofs = -1;
-  s.block_y = -1;
-  return &s;
+  if (!victim || !flush_slot(*victim)) return nullptr;
+  victim->region = -1;
+  victim->row = -1;
+  if (victim->capacity < rowBytes) {
+    victim->data.reset();
+    victim->capacity = 0;
+    victim->data.reset(new (std::nothrow) uint8_t[rowBytes]);
+    if (!victim->data) return nullptr;
+    victim->capacity = rowBytes;
+  }
+  Region& region = g_regions[regionIndex];
+  const uint32_t physical = region.physicalRows[row];
+  if (physical == kUnwritten) {
+    std::memset(victim->data.get(), 0, rowBytes);
+  } else if (g_io.pread(g_io.ctx, physical, victim->data.get(), static_cast<int>(rowBytes)) !=
+             static_cast<int>(rowBytes)) {
+    return nullptr;
+  }
+  victim->region = regionIndex;
+  victim->row = row;
+  victim->dirty = false;
+  victim->used = ++g_clock;
+  return victim;
 }
 
 }  // namespace
@@ -94,8 +116,6 @@ bool jpgd_spill_begin(const jpeg_decoder_spill_io* io) {
   if (!io || !io->pread || !io->pwrite || !io->ctx) return false;
   g_io = *io;
   g_active = true;
-  g_bump = 0;
-  g_clock = 0;
   return true;
 }
 
@@ -103,59 +123,56 @@ bool jpgd_spill_active() { return g_active; }
 
 bool jpgd_spill_flush() {
   bool ok = true;
-  for (int i = 0; i < kSlots; ++i) if (!flush_slot(g_slots[i])) ok = false;
+  for (auto& slot : g_slots) if (!flush_slot(slot)) ok = false;
   return ok;
 }
 
 void jpgd_spill_end() {
-  jpgd_spill_flush();
-  for (int i = 0; i < kSlots; ++i) {
-    g_slots[i] = Slot{};
-  }
+  if (g_active) (void)jpgd_spill_flush();
+  for (auto& slot : g_slots) slot = Slot{};
+  for (auto& region : g_regions) region = Region{};
   g_io = {};
   g_active = false;
-  g_bump = 0;
+  g_logicalEnd = g_physicalEnd = g_clock = 0;
+  g_regionCount = 0;
 }
 
 int64_t jpgd_spill_alloc_region(size_t bytes) {
-  if (!g_active) return -1;
-  constexpr uint64_t align = 256;
-  const uint64_t ofs = (g_bump + (align - 1)) & ~(align - 1);
-  g_bump = ofs + ((bytes + (align - 1)) & ~(align - 1));
-  return static_cast<int64_t>(ofs);
+  if (!g_active || !bytes || g_regionCount >= kMaxRegions || bytes > kMaxStore) return -1;
+  constexpr uint64_t alignment = 256;
+  const uint64_t rounded = (static_cast<uint64_t>(bytes) + alignment - 1) & ~(alignment - 1);
+  if (rounded > kMaxStore - g_logicalEnd) return -1;
+  Region& region = g_regions[g_regionCount++];
+  region.logical = static_cast<int64_t>(g_logicalEnd);
+  region.bytes = bytes;
+  g_logicalEnd += rounded;
+  return region.logical;
 }
 
-jpgd_block_coeff_t* jpgd_spill_getp(int64_t region_ofs, int block_size, int nx, int ny, int bx, int by, bool writable) {
-  if (!g_active || region_ofs < 0 || block_size <= 0 || nx <= 0 || ny <= 0) return nullptr;
-  if (bx < 0 || by < 0 || bx >= nx || by >= ny) return nullptr;
-
-  const int row_bytes = block_size * nx;
-  Slot* s = find_slot(region_ofs, by);
-  if (!s) {
-    s = evict_slot(row_bytes);
-    if (!s) return nullptr;
-    if (s->data_cap < row_bytes) {
-      s->data.reset(new (std::nothrow) uint8_t[static_cast<size_t>(row_bytes)]);
-      if (!s->data) return nullptr;
-      s->data_cap = row_bytes;
-    }
-    s->region_ofs = region_ofs;
-    s->block_y = by;
-    s->block_size = block_size;
-    s->nx = nx;
-    s->row_bytes = row_bytes;
-    s->dirty = false;
-    memset(s->data.get(), 0, static_cast<size_t>(row_bytes));
-    const uint64_t off = static_cast<uint64_t>(region_ofs) + static_cast<uint64_t>(by) * static_cast<uint64_t>(row_bytes);
-    if (!io_read(off, s->data.get(), row_bytes)) {
-      s->region_ofs = -1;
-      s->block_y = -1;
-      return nullptr;
-    }
+jpgd_block_coeff_t* jpgd_spill_getp(int64_t logical, int blockSize, int nx, int ny, int bx, int by, bool writable) {
+  if (!g_active || logical < 0 || blockSize <= 0 || nx <= 0 || ny <= 0 || bx < 0 || by < 0 || bx >= nx || by >= ny)
+    return nullptr;
+  const int ri = find_region(logical);
+  if (ri < 0) return nullptr;
+  Region& region = g_regions[ri];
+  // Validate geometry before multiplication, allocation, or a backing-store call.
+  if (static_cast<size_t>(nx) > region.bytes / static_cast<size_t>(blockSize)) return nullptr;
+  const size_t rowBytes = static_cast<size_t>(blockSize) * static_cast<size_t>(nx);
+  if (static_cast<size_t>(ny) != region.bytes / rowBytes || region.bytes % rowBytes ||
+      rowBytes > static_cast<size_t>(std::numeric_limits<int>::max())) return nullptr;
+  if (!region.physicalRows) {
+    region.physicalRows.reset(new (std::nothrow) uint32_t[static_cast<size_t>(ny)]);
+    if (!region.physicalRows) return nullptr;
+    region.rows = ny;
+    region.rowBytes = rowBytes;
+    std::fill_n(region.physicalRows.get(), ny, kUnwritten);
+  } else if (region.rows != ny || region.rowBytes != rowBytes) {
+    return nullptr;
   }
-
-  if (writable) s->dirty = true;
-  return reinterpret_cast<jpgd_block_coeff_t*>(s->data.get() + bx * s->block_size);
+  Slot* slot = acquire_slot(ri, by, rowBytes);
+  if (!slot) return nullptr;
+  if (writable) slot->dirty = true;
+  return reinterpret_cast<jpgd_block_coeff_t*>(slot->data.get() + static_cast<size_t>(bx) * blockSize);
 }
 
 }  // namespace jpgd

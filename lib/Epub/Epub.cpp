@@ -7,6 +7,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <PngToBmpConverter.h>
+#include <Print.h>
 #include <Utf8.h>
 #include <ZipFile.h>
 
@@ -25,6 +26,18 @@ Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::mo
 }
 
 namespace {
+
+class CoverOutputGate final : public Print {
+ public:
+  CoverOutputGate(Print& target, bool (*abortCheck)()) : target_(target), abort_(abortCheck) {}
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t* p, size_t n) override {
+    return abort_ && abort_() ? 0 : target_.write(p, n);
+  }
+ private:
+  Print& target_;
+  bool (*abort_)();
+};
 
 // Calibre / Kindle often pack series into one dc:title:
 //   "The Butcher's Masquerade: Dungeon Crawler Carl Book 5"
@@ -974,7 +987,8 @@ bool Epub::resolveCoverItemHrefFromOpf(std::string& outHref) const {
   return !outHref.empty();
 }
 
-bool Epub::generateThumbBmp(int height) const {
+bool Epub::generateThumbBmp(int height, bool (*abortCheck)(), bool prepareSleep, bool sleepCrop) const {
+  if (abortCheck && abortCheck()) return false;
   // Already generated — but only trust files that look like real BMPs.
   // A truncated/corrupt file (e.g. mid-write OOM) used to block regen forever.
   // Probe by open first: exists() false-negatives after the reader used to
@@ -1011,7 +1025,7 @@ bool Epub::generateThumbBmp(int height) const {
   }
 
   auto tryGenerateFromHref = [&](const std::string& coverImageHref) -> bool {
-    if (coverImageHref.empty()) {
+    if (coverImageHref.empty() || (abortCheck && abortCheck())) {
       return false;
     }
     // Skip stale book.bin paths that no longer exist inside the EPUB zip.
@@ -1029,7 +1043,8 @@ bool Epub::generateThumbBmp(int height) const {
       if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
         return false;
       }
-      if (!readItemContentsToStream(coverImageHref, coverJpg, 1024)) {
+      CoverOutputGate gate(coverJpg, abortCheck);
+      if (!readItemContentsToStream(coverImageHref, gate, 1024)) {
         coverJpg.close();
         Storage.remove(coverJpgTempPath.c_str());
         return false;
@@ -1041,8 +1056,9 @@ bool Epub::generateThumbBmp(int height) const {
         return false;
       }
 
+      const std::string thumbStage = getThumbBmpPath(height) + ".part";
       HalFile thumbBmp;
-      if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      if (!Storage.openFileForWrite("EBP", thumbStage, thumbBmp)) {
         coverJpg.close();
         Storage.remove(coverJpgTempPath.c_str());
         return false;
@@ -1052,16 +1068,31 @@ bool Epub::generateThumbBmp(int height) const {
       const int THUMB_TARGET_HEIGHT = height;
       const int THUMB_TARGET_WIDTH = std::max(1, (height * 3 + 1) / 4);
       LOG_DBG("EBP", "Thumb JPG free heap before decode: %u", static_cast<unsigned>(ESP.getFreeHeap()));
-      const bool success = JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(
-          coverJpg, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
+      HalFile sleepBmp;
+      const std::string sleepPath = getCoverBmpPath(sleepCrop);
+      const std::string sleepStage = sleepPath + ".part";
+      const bool needsSleep = prepareSleep && !bmpLooksValid(sleepPath);
+      const bool stageSleep = needsSleep && Storage.openFileForWrite("EBP", sleepStage, sleepBmp);
+      bool success = JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(
+          coverJpg, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT, abortCheck,
+          stageSleep ? &sleepBmp : nullptr, sleepCrop);
+      sleepBmp.close();
       coverJpg.close();
       thumbBmp.close();
       Storage.remove(coverJpgTempPath.c_str());
 
-      if (!success) {
-        LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image (heap=%u)",
-                static_cast<unsigned>(ESP.getFreeHeap()));
+      if (success) {
+        if (stageSleep) {
+          Storage.remove(sleepPath.c_str());
+          if (!Storage.rename(sleepStage.c_str(), sleepPath.c_str())) Storage.remove(sleepStage.c_str());
+        }
         Storage.remove(getThumbBmpPath(height).c_str());
+        success = Storage.rename(thumbStage.c_str(), getThumbBmpPath(height).c_str());
+      }
+      if (!success) {
+        LOG_DBG("EBP", "Cover preparation incomplete or cancelled; keeping installed cover");
+        Storage.remove(thumbStage.c_str());
+        if (stageSleep) Storage.remove(sleepStage.c_str());
       }
       return success;
     }
@@ -1074,7 +1105,8 @@ bool Epub::generateThumbBmp(int height) const {
       if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
         return false;
       }
-      if (!readItemContentsToStream(coverImageHref, coverPng, 1024)) {
+      CoverOutputGate gate(coverPng, abortCheck);
+      if (!readItemContentsToStream(coverImageHref, gate, 1024)) {
         coverPng.close();
         Storage.remove(coverPngTempPath.c_str());
         return false;
@@ -1120,6 +1152,7 @@ bool Epub::generateThumbBmp(int height) const {
 
   // 2) Re-parse live OPF — fixes caches that still point at cover.jpg after the
   //    EPUB was updated to cover.jpeg (e.g. Dungeon Crawler Carl, Gate of the Feral Gods).
+  if (abortCheck && abortCheck()) return false;
   std::string freshHref;
   if (resolveCoverItemHrefFromOpf(freshHref)) {
     LOG_DBG("EBP", "Cover href from OPF: %s (cached was: %s)", freshHref.c_str(), cachedHref.c_str());

@@ -58,7 +58,8 @@ class Epub {
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
-  bool generateThumbBmp(int height) const;
+  bool generateThumbBmp(int height, bool (*abortCheck)() = nullptr,
+                        bool prepareSleep = false, bool sleepCrop = false) const;
   // Full OPF parse for a current cover href (ignores possibly stale book.bin path).
   bool resolveCoverItemHrefFromOpf(std::string& outHref) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,

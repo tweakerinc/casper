@@ -88,6 +88,42 @@ int main(){
   { FallibleString s;CHECK(s.assign("small",5));allocationsBeforeFailure=0;CHECK(!s.assign(std::string(100,'x').c_str(),100));CHECK(s.view()=="small"&&s.failed());allocationsBeforeFailure=-1; }
   { const char raw[]={char(0xF0),char(0x9F)};const char*p=raw;CHECK(nextUtf8(p,raw+2)==0xFFFD);CHECK(p<=raw+2); }
   { ChapterIr ch;ch.beginBlock(BlockKind::Paragraph,Align::Left,0);std::string s(65534,'a');s+="\xe2\x80\x94";s+=std::string(6000,'b');CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,s));ch.endBlock();CHECK(flatten(ch)==s);CHECK(ch.runs().size()>2);for(const auto&run:ch.runs()) CHECK(run.textLen<=ChapterIr::kMaxRunBytes);CHECK(ch.saveToFile("/long.rvir"));ChapterIr r;CHECK(r.loadFromFile("/long.rvir"));CHECK(flatten(r)==s); }
+  // RC2 -> RC3 saved starts: a new heading boundary changes the hash length
+  // without changing which chapter the reader requested.
+  {
+    ChapterIr ch;
+    ch.beginBlock(BlockKind::Heading1, Align::Center, 0);
+    CHECK(ch.appendRun(RunStyle::Bold, SizeStep::Plus1, "Interlude", 9));
+    ch.endBlock();
+    ch.beginBlock(BlockKind::Paragraph, Align::Left, 0);
+    CHECK(ch.appendRun(RunStyle::Regular, SizeStep::Body, "A dragon followed the reader.", 29));
+    ch.endBlock();
+    ProgressAnchor old;
+    old.source=0x1234;old.spine=8;old.page=0;old.format=28;
+    old.textOffset=0;old.cursor={0,0,0};
+    old.context=ProgressAnchor::hash("InterludeA drago",16);
+    IrCursor recovered;
+    CHECK(old.resolve(ch,recovered));CHECK(recovered==IrCursor{});
+    CHECK(ProgressAnchor::save("/migration",old));
+    ProgressAnchor disk;CHECK(ProgressAnchor::load("/migration",0x1234,disk));
+    CHECK(disk.resolve(ch,recovered));
+    CHECK(disk.format==28); // resolving does not overwrite user state
+    old.format=kIrFormatVersion;CHECK(!old.resolve(ch,recovered));
+    old.format=kIrFormatVersion+1;CHECK(!old.resolve(ch,recovered));
+    old.format=28;old.page=4;old.textOffset=999999;CHECK(!old.resolve(ch,recovered));
+    ch.markFailed();old.page=0;old.textOffset=0;CHECK(!old.resolve(ch,recovered));
+  }
+  {
+    // Same text, more style runs after parser upgrade: old context spans the
+    // new boundary but must still match in full, at the exact saved offset.
+    ChapterIr ch;ch.beginBlock(BlockKind::Paragraph,Align::Left,0);
+    CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,"first ABC",9));
+    CHECK(ch.appendRun(RunStyle::Bold,SizeStep::Body,"DEFGHIJKLMNOPQRSTUV",19));ch.endBlock();
+    ProgressAnchor old;old.format=28;old.page=2;old.textOffset=6;old.cursor={0,0,6};
+    old.context=ProgressAnchor::hash("ABCDEFGHIJKLMNOP",16);
+    IrCursor found;CHECK(old.resolve(ch,found));CHECK(found.byteInRun==6);
+    old.context^=1;CHECK(!old.resolve(ch,found));
+  }
   // Rich structural cases exercise the same source through paint and measure.
   std::vector<std::string> fixtures={
     "<h1 align='center'>Chapter 1</h1><p><span class='dropcap'>A</span>lice followed the rabbit.</p>",
@@ -238,6 +274,22 @@ int main(){
     ticks=0;while(++ticks<300){status=jobs.tickPrepared(renderer,14,&PreparedTestBook::factory,&book,ticks*10,nullptr);if(status==ReadinessCoordinator::Tick::NavigationReady)break;CHECK(status!=ReadinessCoordinator::Tick::NavigationFailed);}
     CHECK(status==ReadinessCoordinator::Tick::NavigationReady);auto reflow=jobs.takeReady();
     CHECK(!(anchor.cursor<reflow->page().start));CHECK(anchor.cursor<reflow->page().end);CHECK(active->currentPage()==6);
+    // A saved RC2 chapter-start hash does not survive RC3 block boundaries.
+    // Exercise the actual coordinator, not just the anchor helper. The active
+    // page remains untouched until the destination is ready to commit.
+    ProgressAnchor legacyStart=anchor;
+    legacyStart.format=28;legacyStart.page=0;legacyStart.textOffset=0;
+    legacyStart.cursor={0,0,0};legacyStart.context=ProgressAnchor::hash("old joined title",16);
+    const auto heldStart=active->currentStartCursor();
+    jobs.requestAnchor(legacyStart);ticks=0;
+    while(++ticks<300){
+      status=jobs.tickPrepared(renderer,14,&PreparedTestBook::factory,&book,ticks*10,nullptr);
+      CHECK(active->currentStartCursor()==heldStart);
+      if(status==ReadinessCoordinator::Tick::NavigationReady)break;
+      CHECK(status!=ReadinessCoordinator::Tick::NavigationFailed);
+    }
+    CHECK(status==ReadinessCoordinator::Tick::NavigationReady);
+    auto migrated=jobs.takeReady();CHECK(bool(migrated));CHECK(migrated->currentPage()==0);
     // Exact percent navigation completes its own map while the active page stays intact.
     jobs.requestFraction(13,7500);ticks=0;const auto keep=active->currentStartCursor();
     while(++ticks<400){status=jobs.tickPrepared(renderer,14,&PreparedTestBook::factory,&book,ticks*10,nullptr);CHECK(active->currentStartCursor()==keep);if(status==ReadinessCoordinator::Tick::NavigationReady)break;CHECK(status!=ReadinessCoordinator::Tick::NavigationFailed);}

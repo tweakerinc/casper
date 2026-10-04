@@ -10,7 +10,8 @@ class ZipFile;
 class JpegToBmpConverter {
   // coverHighQuality: 2-bit balanced Atkinson + mild lift (home covers).
   static bool jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                          bool oneBit, bool crop = true, bool coverHighQuality = false);
+                                          bool oneBit, bool crop = true, bool coverHighQuality = false,
+                                          bool (*abortCheck)() = nullptr, Print* sleepOut = nullptr, bool sleepCrop = false);
 
  public:
   static bool jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, bool crop = true);
@@ -21,5 +22,6 @@ class JpegToBmpConverter {
                                               int targetMaxHeight);
   // Home/cover thumbs: 2-bit balanced Atkinson (use with home gray multipass).
   static bool jpegFileToHighQualityCoverThumbBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
-                                                               int targetMaxHeight);
+                                                               int targetMaxHeight, bool (*abortCheck)() = nullptr,
+                                                               Print* sleepOut = nullptr, bool sleepCrop = false);
 };

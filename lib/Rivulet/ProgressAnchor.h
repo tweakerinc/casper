@@ -29,7 +29,19 @@ struct ProgressAnchor {
     return !chapter.failed();
   }
   bool resolve(const ChapterIr& chapter,IrCursor& out)const{
-    if(chapter.failed())return false;
+    if(chapter.failed() || chapter.empty())return false;
+    // A verified source/spine beginning is a stable location even when a
+    // parser upgrade splits a formerly flattened heading/body into blocks.
+    // RC2 hashed the first 16 bytes of one long run; RC3 may end that heading
+    // run after 9 bytes. Rejecting that hash must not make the book unopenable.
+    // Never reinterpret a same-format mismatch or an unknown future format.
+    if(format >= 27 && format < kIrFormatVersion && page == 0 &&
+       cursor.blockIndex == 0 && cursor.runIndex == 0 && cursor.byteInRun == 0 &&
+       (textOffset == 0 || textOffset == UINT32_MAX)) {
+      const Block first = chapter.blocks()[0];
+      out = {0, first.runBegin, 0};
+      return !chapter.failed();
+    }
     if(format==kIrFormatVersion && cursor.blockIndex<chapter.blockCount()){
       const Block b=chapter.blocks()[cursor.blockIndex];
       if(cursor.runIndex>=b.runBegin && cursor.runIndex<=uint32_t(b.runBegin)+b.runCount){
@@ -48,7 +60,16 @@ struct ProgressAnchor {
       for(size_t ri=b.runBegin;ri<size_t(b.runBegin)+b.runCount;++ri){const Run run=chapter.runs()[ri];
         if(textOffset>=run.textOff && textOffset-run.textOff<run.textLen){
           const size_t offset=textOffset-run.textOff;
-          if(context==hash(chapter.runText(run)+offset,std::min<size_t>(16,run.textLen-offset))){out={uint16_t(bi),uint16_t(ri),uint16_t(offset)};return !chapter.failed();}
+          const bool localMatch = context == hash(chapter.runText(run)+offset,
+                                                    std::min<size_t>(16,run.textLen-offset));
+          // Old context may cross newly introduced style/run boundaries.
+          // Require all 16 bytes and contiguous physical text; do not guess
+          // from a short prefix, a page number or an unrelated repeated word.
+          if(localMatch || (format >= 27 && format < kIrFormatVersion &&
+                            matchesAcrossRuns(chapter, ri, offset))) {
+            out={uint16_t(bi),uint16_t(ri),uint16_t(offset)};
+            return !chapter.failed();
+          }
         }
       }
     }return false;
@@ -70,6 +91,24 @@ struct ProgressAnchor {
     ProgressAnchor check;return readSlot(dir,slot,check)&&check.sequence==value.sequence&&check.source==value.source;
   }
  private:
+  bool matchesAcrossRuns(const ChapterIr& chapter, size_t ri, size_t offset) const {
+    uint8_t bytes[16]{};
+    size_t copied = 0;
+    uint64_t nextOffset = textOffset;
+    while (ri < chapter.runs().size() && copied < sizeof(bytes)) {
+      const Run run = chapter.runs()[ri++];
+      if (chapter.failed() || offset > run.textLen ||
+          uint64_t(run.textOff) + offset != nextOffset) return false;
+      const size_t n = std::min(sizeof(bytes)-copied, size_t(run.textLen)-offset);
+      const char* text = chapter.runText(run);
+      if (chapter.failed()) return false;
+      std::memcpy(bytes+copied, text+offset, n);
+      copied += n;
+      nextOffset += n;
+      offset = 0;
+    }
+    return copied == sizeof(bytes) && context == hash(bytes, copied);
+  }
   static bool newer(uint32_t a,uint32_t b){return static_cast<int32_t>(a-b)>0;}
   static uint32_t get(const uint8_t*p){return uint32_t(p[0])|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24;}
   static void put(uint8_t*p,uint32_t n){for(int i=0;i<4;++i)p[i]=uint8_t(n>>(8*i));}

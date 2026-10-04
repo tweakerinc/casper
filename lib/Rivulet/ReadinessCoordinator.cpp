@@ -104,7 +104,13 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
   bool layoutFailed=false;
   if(pending_&&goal_==Goal::Anchor&&!anchorResolved_) {
     anchorResolved_=anchor_.resolve(worker_->chapter(),resolvedAnchor_);
-    if(!anchorResolved_){guard.e->setMapAbortCheck(nullptr);guard.e=nullptr;dropWorker();cancelNavigation();return Tick::NavigationFailed;}
+    if(!anchorResolved_){
+      LOG_ERR("READY", "resume anchor rejected spine=%d savedIR=%u currentIR=%u page=%u offset=%u io=%d",
+              workerSpine_, unsigned(anchor_.format), unsigned(kIrFormatVersion),
+              unsigned(anchor_.page), unsigned(anchor_.textOffset), worker_->chapter().failed() ? 1 : 0);
+      guard.e->setMapAbortCheck(nullptr);guard.e=nullptr;dropWorker();cancelNavigation();
+      return Tick::NavigationFailed;
+    }
   }
   if(pending_&&goal_==Goal::Fraction&&worker_->mapComplete()) {
     requestedPage_=std::min(worker_->mapKnownPages()-1,static_cast<int>(uint64_t(worker_->mapKnownPages())*fraction_/10000));

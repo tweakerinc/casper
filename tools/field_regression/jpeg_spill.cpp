@@ -46,7 +46,7 @@ std::vector<uint8_t> decode(const char*path,File* backing,bool legacy=false){
 int main(int argc,char**argv){
   if(argc<2)return 2;
   const auto expected=decode(argv[1],nullptr);if(expected.empty()){puts("reference decode FAILED");return 1;}
-  File before;const auto old=decode(argv[1],&before,true);if(!old.empty()){puts("legacy unexpectedly worked");return 1;}
+  File before;const auto old=decode(argv[1],&before,true);if(old!=expected || before.sparseRejected){puts("compact store requested sparse I/O");return 1;}
   File after;const auto got=decode(argv[1],&after);
   if(got!=expected||after.sparseRejected){puts("fixed luma comparison FAILED");return 1;}
   if(argc>2){FILE*f=fopen(argv[2],"wb");fwrite(got.data(),1,got.size(),f);fclose(f);}

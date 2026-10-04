@@ -18,6 +18,7 @@
 #include <functional>
 #include <initializer_list>
 #include <vector>
+#include <type_traits>
 
 #include "BookActions.h"
 #include "CrossPointSettings.h"
@@ -52,6 +53,15 @@ namespace {
 // Home long-press (Menu→Settings, Read→book menu).
 // Match FileBrowser / reader GO_HOME_MS. 200ms was a slow tap and opened the
 // book-action menu instead of Read.
+// Cover generation is optional. Peek raw input without consuming its edges;
+// latch cancellation so cleanup cannot start a second decode after a quick tap.
+// This context is owned only by Home's main-loop generation call.
+bool coverInputCancelled = false;
+bool cancelCoverForInput() {
+  if (!coverInputCancelled && gpio.peekRawHeld()) coverInputCancelled = true;
+  return coverInputCancelled;
+}
+
 constexpr unsigned long READ_LONG_PRESS_MS = 500;
 // Abort greys while still holding so ActivityManager idle wait is short.
 constexpr unsigned long LONG_PRESS_PRECANCEL_MS = 70;
@@ -364,8 +374,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   const bool shelfTheme = isDashboardRecentsTheme();
   const int shelfH = HomeCoverMetrics::homeShelfThumbHeight;
 
+  coverInputCancelled = false;
   auto ensureThumbs = [&](auto& bookFmt) -> bool {
-    bool anyOk = bookFmt.generateThumbBmp(heroH);
+    bool anyOk = false;
+    if constexpr (std::is_same_v<std::decay_t<decltype(bookFmt)>, Epub>) {
+      const bool wantsSleep = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER ||
+                              SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM;
+      const bool cropSleep = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+      anyOk = bookFmt.generateThumbBmp(heroH, cancelCoverForInput, wantsSleep, cropSleep);
+    } else {
+      anyOk = bookFmt.generateThumbBmp(heroH);
+    }
     if (shelfTheme && !thumbLooksValid(bookFmt.getThumbBmpPath(shelfH))) {
       anyOk = bookFmt.generateThumbBmp(shelfH) || anyOk;
     }
@@ -462,6 +481,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                          static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<int>(recentBooks.size()));
 
     for (RecentBook& book : recentBooks) {
+      if (cancelCoverForInput()) break;
       if (!bookNeedsHero(book)) {
         continue;
       }
@@ -512,7 +532,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     SystemLog::logTiming("HOME", "cover_gen paused after no-progress failure attempts=%u",
                          static_cast<unsigned>(coverGenAttempts));
   }
-  armRetry(true, failedWithoutProgress);
+  armRetry(true, failedWithoutProgress || coverInputCancelled);
+  if (coverInputCancelled) {
+    coverNeedsRetry = true;
+    coverRetryAtMs = millis() + 8000;  // wait for the UI to settle, not immediate restart
+    SystemLog::logTiming("HOME", "cover_work cancelled for input");
+  }
 
   if (anyNewThumb && coverrender::paintWhenHeroArrives()) {
     freeCoverBuffer();

@@ -182,6 +182,7 @@ constexpr uint32_t FP_ONE = 1UL << 16;
 // Static file pointer for JPEGDEC open callback.
 // Safe in single-threaded embedded context; never accessed concurrently.
 static HalFile* s_jpegFile = nullptr;
+static bool (*s_jpegAbort)() = nullptr;
 static uint8_t s_jpegIoSinceYield = 0;
 
 static void yieldToIdle() {
@@ -212,7 +213,7 @@ void bmpJpegClose(void* /*handle*/) {
 
 int32_t bmpJpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
   auto* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
+  if (!f || (s_jpegAbort && s_jpegAbort())) return 0;
   int32_t n = f->read(pBuf, len);
   if (n < 0) n = 0;
   pFile->iPos += n;
@@ -570,6 +571,7 @@ static bool emitSourceGrayRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int y) 
 // filled more rows. Using max height across the row avoids skipping source lines
 // (which produces a full-width horizontal seam after scale/dither).
 int bmpDrawCallback(JPEGDRAW* pDraw) {
+  if (s_jpegAbort && s_jpegAbort()) return 0;
   auto* ctx = reinterpret_cast<BmpConvertCtx*>(pDraw->pUser);
   if (!ctx || ctx->error) return 0;
   yieldDuringDecodeBlock(ctx);
@@ -633,9 +635,11 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 
 class HalJpegStream final : public jpgd::jpeg_decoder_stream {
  public:
-  explicit HalJpegStream(HalFile& file) : file_(&file), size_(file.size()) { file_->seek(0); }
+  explicit HalJpegStream(HalFile& file, bool (*abortCheck)())
+      : file_(&file), size_(file.size()), abort_(abortCheck) { file_->seek(0); }
 
   int read(jpgd::uint8* pBuf, int max_bytes_to_read, bool* pEOF_flag) override {
+    if (abort_ && abort_()) { if (pEOF_flag) *pEOF_flag = true; return -1; }
     if (!file_ || !pBuf || max_bytes_to_read <= 0) {
       if (pEOF_flag) *pEOF_flag = true;
       return 0;
@@ -665,16 +669,21 @@ class HalJpegStream final : public jpgd::jpeg_decoder_stream {
   HalFile* file_ = nullptr;
   size_t pos_ = 0;
   size_t size_ = 0;
+  bool (*abort_)() = nullptr;
 };
 
+struct CoverSpillContext { HalFile* file; bool (*abortCheck)(); };
+
 static int spillPread(void* ctx, uint64_t offset, void* buf, int n) {
-  auto* f = static_cast<HalFile*>(ctx);
-  return f ? coverdecode::readSpill(*f, offset, buf, n) : -1;
+  auto* work = static_cast<CoverSpillContext*>(ctx);
+  if (!work || (work->abortCheck && work->abortCheck())) return -1;
+  return work->file ? coverdecode::readSpill(*work->file, offset, buf, n) : -1;
 }
 
 static int spillPwrite(void* ctx, uint64_t offset, const void* buf, int n) {
-  auto* f = static_cast<HalFile*>(ctx);
-  return f ? coverdecode::writeSpill(*f, offset, buf, n, yieldDuringJpegIo) : -1;
+  auto* work = static_cast<CoverSpillContext*>(ctx);
+  if (!work || (work->abortCheck && work->abortCheck())) return -1;
+  return work->file ? coverdecode::writeSpill(*work->file, offset, buf, n, yieldDuringJpegIo) : -1;
 }
 
 static void finishCoverRows(BmpConvertCtx* ctx, const bool ok) {
@@ -707,52 +716,11 @@ static void finishCoverRows(BmpConvertCtx* ctx, const bool ok) {
   }
 }
 
-// Full-res progressive cover decode. JPEGDEC only keeps the DC scan (1/8).
-// Spill DCT coeffs to SD so a 1000×1504 jacket can IDCT at native size.
-static bool convertProgressiveJpegFull(HalFile& jpegFile, Print& bmpOut, int srcWidth, int srcHeight, int targetWidth,
-                                       int targetHeight, bool oneBit, bool crop, bool coverHighQuality, bool* wroteBmp) {
-  Storage.ensureDirectoryExists("/.crosspoint");
-  constexpr const char* kSpillPath = "/.crosspoint/.jpgd_coeff.tmp";
-  Storage.remove(kSpillPath);
-  HalFile spillFile = Storage.open(kSpillPath, O_RDWR | O_CREAT | O_TRUNC);
-  if (!spillFile) {
-    LOG_ERR("JPG", "Progressive spill file open failed");
-    return false;
-  }
-
-  jpgd::jpeg_decoder_spill_io io{};
-  io.ctx = &spillFile;
-  io.pread = spillPread;
-  io.pwrite = spillPwrite;
-  if (!jpgd::jpgd_spill_begin(&io)) {
-    spillFile.close();
-    Storage.remove(kSpillPath);
-    return false;
-  }
-
-  const ScopedCleanup spillCleanup{[&]() {
-    jpgd::jpgd_spill_end();
-    spillFile.close();
-    Storage.remove(kSpillPath);
-  }};
-
-  HalJpegStream stream(jpegFile);
-  auto decoder = makeUniqueNoThrow<jpgd::jpeg_decoder>(
-      &stream, jpgd::jpeg_decoder::cFlagDisableSIMD | jpgd::jpeg_decoder::cFlagCoverDecode);
-  if (!decoder || decoder->get_error_code() != jpgd::JPGD_SUCCESS) {
-    LOG_ERR("JPG", "Progressive jpgd open failed");
-    return false;
-  }
-  if (decoder->get_width() != srcWidth || decoder->get_height() != srcHeight) {
-    LOG_ERR("JPG", "Progressive jpgd size mismatch");
-    return false;
-  }
-  decoder->set_yield_callback(yieldToIdle);
-  if (decoder->begin_decoding() != jpgd::JPGD_SUCCESS) {
-    LOG_ERR("JPG", "Progressive jpgd decode failed (err=%d)", static_cast<int>(decoder->get_error_code()));
-    return false;
-  }
-
+// Emit at the requested native output geometry from one decoded source. A
+// second sleep artifact does not require re-extracting or re-decoding the JPEG.
+static bool emitProgressiveBmp(jpgd::jpeg_decoder& decoder, Print& bmpOut, int srcWidth, int srcHeight,
+                               int targetWidth, int targetHeight, bool oneBit, bool crop,
+                               bool coverHighQuality, bool (*abortCheck)()) {
   int outWidth = srcWidth;
   int outHeight = srcHeight;
   uint32_t scaleX_fp = 65536;
@@ -850,19 +818,20 @@ static bool convertProgressiveJpegFull(HalFile& jpegFile, Print& bmpOut, int src
   } else {
     writeBmpHeader2bit(bmpOut, outWidth, outHeight);
   }
-  if (wroteBmp) *wroteBmp = true;
+
 
   LOG_INF("JPG", "Progressive JPEG full decode %dx%d -> %dx%d (spill coeffs) free=%u maxAlloc=%u", srcWidth, srcHeight,
           outWidth, outHeight, static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
-  const int blocksX = decoder->luma_blocks_x();
-  const int blocksY = decoder->luma_blocks_y();
+  const int blocksX = decoder.luma_blocks_x();
+  const int blocksY = decoder.luma_blocks_y();
   uint8_t block[64];
   for (int by = 0; by < blocksY; ++by) {
+    if (abortCheck && abortCheck()) return false;
     memset(ctx.mcuBuf.get(), coverHighQuality ? 128 : 0, static_cast<size_t>(8) * static_cast<size_t>(srcWidth));
     for (int bx = 0; bx < blocksX; ++bx) {
-      if (!decoder->copy_luma_block(bx, by, block)) {
+      if (!decoder.copy_luma_block(bx, by, block)) {
         LOG_ERR("JPG", "Progressive luma block %d,%d failed", bx, by);
         return false;
       }
@@ -891,11 +860,70 @@ static bool convertProgressiveJpegFull(HalFile& jpegFile, Print& bmpOut, int src
   return true;
 }
 
+// Full-res progressive cover decode. JPEGDEC only keeps the DC scan (1/8).
+// Spill DCT coeffs to SD so a 1000×1504 jacket can IDCT at native size.
+static bool convertProgressiveJpegFull(HalFile& jpegFile, Print& bmpOut, int srcWidth, int srcHeight, int targetWidth,
+                                       int targetHeight, bool oneBit, bool crop, bool coverHighQuality, bool* wroteBmp,
+                                       bool (*abortCheck)(), Print* sleepOut, bool sleepCrop) {
+  Storage.ensureDirectoryExists("/.crosspoint");
+  constexpr const char* kSpillPath = "/.crosspoint/.jpgd_coeff.tmp";
+  Storage.remove(kSpillPath);
+  HalFile spillFile = Storage.open(kSpillPath, O_RDWR | O_CREAT | O_TRUNC);
+  if (!spillFile) {
+    LOG_ERR("JPG", "Progressive spill file open failed");
+    return false;
+  }
+
+  jpgd::jpeg_decoder_spill_io io{};
+  CoverSpillContext work{&spillFile, abortCheck};
+  io.ctx = &work;
+  io.pread = spillPread;
+  io.pwrite = spillPwrite;
+  if (!jpgd::jpgd_spill_begin(&io)) {
+    spillFile.close();
+    Storage.remove(kSpillPath);
+    return false;
+  }
+
+  const ScopedCleanup spillCleanup{[&]() {
+    jpgd::jpgd_spill_end();
+    spillFile.close();
+    Storage.remove(kSpillPath);
+  }};
+
+  HalJpegStream stream(jpegFile, abortCheck);
+  auto decoder = makeUniqueNoThrow<jpgd::jpeg_decoder>(
+      &stream, jpgd::jpeg_decoder::cFlagDisableSIMD | jpgd::jpeg_decoder::cFlagCoverDecode);
+  if (!decoder || decoder->get_error_code() != jpgd::JPGD_SUCCESS) {
+    LOG_ERR("JPG", "Progressive jpgd open failed");
+    return false;
+  }
+  if (decoder->get_width() != srcWidth || decoder->get_height() != srcHeight) {
+    LOG_ERR("JPG", "Progressive jpgd size mismatch");
+    return false;
+  }
+  decoder->set_yield_callback(yieldToIdle);
+  if (decoder->begin_decoding() != jpgd::JPGD_SUCCESS) {
+    LOG_ERR("JPG", "Progressive jpgd decode failed (err=%d)", static_cast<int>(decoder->get_error_code()));
+    return false;
+  }
+
+  if (!emitProgressiveBmp(*decoder, bmpOut, srcWidth, srcHeight, targetWidth, targetHeight,
+                          oneBit, crop, coverHighQuality, abortCheck)) return false;
+  if (wroteBmp) *wroteBmp = true;
+  if (sleepOut && !emitProgressiveBmp(*decoder, *sleepOut, srcWidth, srcHeight,
+                                     display.getDisplayHeight(), display.getDisplayWidth(),
+                                     false, sleepCrop, false, abortCheck)) return false;
+  return !(abortCheck && abortCheck());
+}
+
 }  // namespace
 
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop, bool coverHighQuality) {
+                                                     int targetHeight, bool oneBit, bool crop, bool coverHighQuality,
+                                                     bool (*abortCheck)(), Print* sleepOut, bool sleepCrop) {
+  if (abortCheck && abortCheck()) return false;
   // Home cover path (c22): 2-bit balanced Atkinson — far less visible dither than 1-bit.
   // Display uses grayscale multipass on home (same idea as sleep covers).
   if (coverHighQuality) {
@@ -926,9 +954,12 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     }
     bool wroteBmp = false;
     return convertProgressiveJpegFull(jpegFile, bmpOut, header.width, header.height,
-                                     targetWidth, targetHeight, oneBit, crop, coverHighQuality, &wroteBmp);
+                                     targetWidth, targetHeight, oneBit, crop, coverHighQuality, &wroteBmp,
+                                     abortCheck, sleepOut, sleepCrop);
   }
   s_jpegFile = &jpegFile;
+  s_jpegAbort = abortCheck;
+  const ScopedCleanup fileStateCleanup{[]() { s_jpegFile = nullptr; s_jpegAbort = nullptr; }};
 
   auto jpeg = makeUniqueNoThrow<JPEGDEC>();
   if (!jpeg) {
@@ -1191,7 +1222,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   }
 
   LOG_DBG("JPG", "Successfully converted JPEG to BMP");
-  return true;
+  return !(abortCheck && abortCheck());
 }
 
 // Core function: Convert JPEG file to 2-bit BMP (uses default target size)
@@ -1218,7 +1249,18 @@ bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Prin
 // Shared by Bare / Stats / Stats-Life. MCU max-height + empty-bin carry-forward.
 // Pair with home grayscale multipass for clean midtones (minimal dither grain).
 bool JpegToBmpConverter::jpegFileToHighQualityCoverThumbBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut,
-                                                                          int targetMaxWidth, int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, /*oneBit=*/false,
-                                     /*crop=*/false, /*coverHighQuality=*/true);
+                                                                          int targetMaxWidth, int targetMaxHeight,
+                                                                          bool (*abortCheck)(), Print* sleepOut, bool sleepCrop) {
+  coverdecode::JpegHeader header;
+  if (!coverdecode::readJpegHeader(jpegFile, header, yieldDuringJpegIo)) return false;
+  if (!jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, false, false, true,
+                                  abortCheck, header.progressive ? sleepOut : nullptr, sleepCrop)) return false;
+  // Baseline decoding is already bounded; release its buffers before making a
+  // separate output. Progressive images reused one coefficient decode above.
+  if (sleepOut && !header.progressive) {
+    if (!jpegFile.seek(0)) return false;
+    return jpegFileToBmpStreamInternal(jpegFile, *sleepOut, display.getDisplayHeight(), display.getDisplayWidth(),
+                                      false, sleepCrop, false, abortCheck);
+  }
+  return true;
 }

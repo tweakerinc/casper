@@ -22,6 +22,8 @@
 EspStub ESP;
 using namespace rivulet;
 static int tests=0;
+static int transientAbortPolls=0;
+static bool transientLayoutAbort(){return ++transientAbortPolls==2;}
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#x);std::abort();}++tests;}while(0)
 static std::string flatten(const ChapterIr& ch){std::string s;for(const auto&r:ch.runs())s.append(ch.runText(r),r.textLen);return s;}
 static std::vector<IrCursor> pages(const ChapterIr& ch, bool measure) {
@@ -84,6 +86,47 @@ struct PreparedTestBook {
 };
 int main(){
   using namespace casper_memory;
+  {
+    // A short GPIO pulse seen inside layout may be released before the
+    // coordinator polls again. It pauses work; it is not a broken chapter.
+    ReadinessCoordinator jobs;RenderKey key;key.fontId=-1128177077;
+    key.viewportW=240;key.viewportH=320;GfxRenderer renderer;
+    auto load=[](void*,RivuletEngine& e,int) {
+      return e.ingestHtml("<p>Alice followed the rabbit into a long hallway.</p>",nullptr)
+        ? ReadinessCoordinator::Load::Ready : ReadinessCoordinator::Load::Failed;
+    };
+    CHECK(jobs.configure("/transient-layout-abort",key,1,3));
+    CHECK(jobs.request(1,0));
+    CHECK(jobs.tick(renderer,0,load,nullptr,1000,nullptr)==ReadinessCoordinator::Tick::Working);
+    transientAbortPolls=0;
+    const auto paused=jobs.tick(renderer,0,load,nullptr,1001,transientLayoutAbort);
+    std::fprintf(stderr,"transient pulse status=%d polls=%d pending=%d\n",int(paused),transientAbortPolls,jobs.pending()?1:0);
+    CHECK(paused!=ReadinessCoordinator::Tick::NavigationFailed);CHECK(jobs.pending());
+    CHECK(jobs.tick(renderer,0,load,nullptr,1002,nullptr)==ReadinessCoordinator::Tick::NavigationReady);
+    CHECK(jobs.readyEngine() && jobs.readyEngine()->hasPreparedPage());
+  }
+  {
+    // Cancellation while extending an incomplete map must keep the target
+    // session and its verified prefix, even after the physical pulse ends.
+    ReadinessCoordinator jobs;RenderKey key;key.fontId=-1128177077;
+    key.viewportW=240;key.viewportH=320;GfxRenderer renderer;
+    auto load=[](void*,RivuletEngine& e,int) {
+      std::string html="<p>";for(int i=0;i<1200;++i)html+="rabbit ";html+="</p>";
+      return e.ingestHtml(html.data(),html.size(),nullptr)
+        ? ReadinessCoordinator::Load::Ready : ReadinessCoordinator::Load::Failed;
+    };
+    CHECK(jobs.configure("/transient-map-abort",key,1,3));CHECK(jobs.request(1,-1));
+    CHECK(jobs.tick(renderer,0,load,nullptr,1100,nullptr)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.tick(renderer,0,load,nullptr,1101,nullptr)==ReadinessCoordinator::Tick::Working);
+    transientAbortPolls=0;
+    CHECK(jobs.tick(renderer,0,load,nullptr,1102,transientLayoutAbort)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.pending());CHECK(jobs.workerLoaded());CHECK(jobs.lastFailure()==ReadinessCoordinator::Failure::None);
+    ReadinessCoordinator::Tick state=ReadinessCoordinator::Tick::Working;
+    for(int ticks=0;ticks<100 && state==ReadinessCoordinator::Tick::Working;++ticks)
+      state=jobs.tick(renderer,0,load,nullptr,1200+ticks,nullptr);
+    CHECK(state==ReadinessCoordinator::Tick::NavigationReady);
+    CHECK(jobs.readyEngine()->page().atChapterEnd);
+  }
   { FallibleVector<uint32_t> v;CHECK(v.reserve(8));for(int i=0;i<8;++i)CHECK(v.push_back(i));allocationsBeforeFailure=0;CHECK(!v.push_back(8));CHECK(v.size()==8&&v[7]==7&&v.failed());allocationsBeforeFailure=-1;v.release();CHECK(v.capacity()==0); }
   { FallibleString s;CHECK(s.assign("small",5));allocationsBeforeFailure=0;CHECK(!s.assign(std::string(100,'x').c_str(),100));CHECK(s.view()=="small"&&s.failed());allocationsBeforeFailure=-1; }
   { const char raw[]={char(0xF0),char(0x9F)};const char*p=raw;CHECK(nextUtf8(p,raw+2)==0xFFFD);CHECK(p<=raw+2); }

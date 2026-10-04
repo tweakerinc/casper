@@ -44,9 +44,17 @@ The owner is still testing RC4; do not label a development compile as RC5.
    light UI this avoids an extra soft-reinforcement pulse on every arrow press.
    No waveform constants, menu geometry, reader fonts or statistics policy changed.
 
+8. **A cancelled layout became a chapter error.** A short input pulse could be
+   observed inside the layouter and be gone when the coordinator polled again.
+   The second sample said no input, incorrectly classifying an intentional pause
+   as NavigationFailed. A deterministic one-shot pulse reproduced this failure.
+   Cancellation is now latched from the actual layout result for the whole tick.
+   First-page and map-extension interruption tests retain the pending request and
+   resume to the correct destination after the control is released.
+
 ## Evidence and limits
 
-The focused real-source suite passes 4,000 assertions, including an allocation-
+The focused real-source suite passes 4,017 assertions, including an allocation-
 failure sweep through background-to-foreground promotion. Actual HAL lifecycle
 and misuse checks pass. The publisher navigation parser suite passes against
 synthetic data and the privately supplied book.

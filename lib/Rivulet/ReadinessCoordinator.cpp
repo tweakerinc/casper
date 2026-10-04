@@ -115,6 +115,7 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
     return Tick::Working;
   }
   if(pending_&&workerSpine_!=requestedSpine_){dropWorker();return Tick::Working;}
+  worker_->resetLayoutCancellation();
   worker_->setMapAbortCheck(abort);
   struct ClearAbort {RivuletEngine* e;~ClearAbort(){if(e)e->setMapAbortCheck(nullptr);}} guard{worker_.get()};
   bool layoutFailed=false;
@@ -152,19 +153,19 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
       // background first page is stored once, then its strings are released.
       if(!pending_){(void)worker_->flushPageCache();checkpoint();worker_->releasePaintPage();}
     }
-    else layoutFailed=!(abort&&abort());
+    else layoutFailed=!(worker_->layoutCancelled() || (abort&&abort()));
   }else if(pending_&&goal_==Goal::Anchor&&worker_->mapCoversCursor(resolvedAnchor_)){
     if(worker_->resumeAtCursor(renderer,resolvedAnchor_,0))return publish();
-    layoutFailed=!(abort&&abort());
+    layoutFailed=!(worker_->layoutCancelled() || (abort&&abort()));
   }else if(pending_&&goal_==Goal::Page&&requestedPage_>=0&&worker_->mapKnownPages()>requestedPage_){
     if(worker_->goToPage(renderer,requestedPage_,0))return publish();
-    layoutFailed=!(abort&&abort());
+    layoutFailed=!(worker_->layoutCancelled() || (abort&&abort()));
   }else if(!worker_->mapComplete()){
     const int before=worker_->mapKnownPages();
     const bool progress=worker_->extendPageMap(renderer,1);
     if(worker_->mapKnownPages()-lastSavedKnown_>=8||worker_->mapComplete())checkpoint();
     if(!progress&&before==worker_->mapKnownPages()&&!worker_->mapComplete()) {
-      layoutFailed=!(abort&&abort());
+      layoutFailed=!(worker_->layoutCancelled() || (abort&&abort()));
       if(layoutFailed)lastFailure_=Failure::NoProgress;
     }
   }else if(!lastPrepared_){
@@ -174,7 +175,7 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
       if(!pending_){(void)worker_->flushPageCache();checkpoint();(void)index_.record(workerSpine_,worker_->mapKnownPages());worker_->releasePaintPage();}
       if(pending_&&goal_==Goal::Page&&requestedPage_<0)return publish();
       if(pending_&&requestedPage_>=worker_->mapKnownPages()){lastFailure_=Failure::PageOutOfRange;layoutFailed=true;} // never silently reset to page zero
-    }else layoutFailed=!(abort&&abort());
+    }else layoutFailed=!(worker_->layoutCancelled() || (abort&&abort()));
   }else if(pending_){
     // Complete map but unresolved/out-of-range destination: a terminal result,
     // not an endless Working loop. Never turn a bad anchor into page zero.

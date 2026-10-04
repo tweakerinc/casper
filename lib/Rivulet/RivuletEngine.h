@@ -73,6 +73,10 @@ class RivuletEngine {
   // Peek-GPIO abort for measure-only idle map. Null = never abort (turns / Loading).
   // Does not latch wasPressed — InputManager::getState() samples ADC without update().
   void setMapAbortCheck(bool (*fn)()) { mapAbortCheck_ = fn; }
+  // Latch the result observed inside layout, not a later GPIO sample. A quick
+  // press can end between those samples without becoming a chapter failure.
+  void resetLayoutCancellation() { layoutCancelled_ = false; }
+  [[nodiscard]] bool layoutCancelled() const { return layoutCancelled_; }
   // Ensure map has starts through currentPage + aheadPages (or complete).
   bool ensureMapAhead(const GfxRenderer& renderer, int aheadPages = kMapAheadPages);
 
@@ -226,6 +230,8 @@ class RivuletEngine {
   // Same params with measureOnly set: for page-map walks, which read only the
   // resulting end cursor and discard the spans. See LayoutParams::measureOnly.
   LayoutParams makeMeasureParams(const GfxRenderer& renderer) const;
+  bool layoutPage(const GfxRenderer& renderer, const LayoutParams& params,
+                  const IrCursor& from, LaidOutPage& out);
   bool layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c);
   void seedMapIfEmpty();
   void resetMapStorage();
@@ -240,6 +246,7 @@ class RivuletEngine {
   void ensurePageCacheDir() const;
 
   bool (*mapAbortCheck_)() = nullptr;
+  bool layoutCancelled_ = false;
   RenderKey key_{};
   float lineCompression_ = 1.0f;
   ChapterIr chapter_{};

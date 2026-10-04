@@ -18,6 +18,7 @@
 namespace rivulet {
 
 void RivuletEngine::clear() {
+  layoutCancelled_=false;
   pageCacheDirty_=false;
   chapter_.clear();
   mapWorkPath_.clear();
@@ -205,7 +206,7 @@ bool RivuletEngine::idlePrefetchPageCache(const GfxRenderer& renderer, const int
     }
 
     LaidOutPage tmp;
-    if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(target), tmp)) {
+    if (!layoutPage(renderer, makeParams(renderer), map_.pageStart(target), tmp)) {
       return false;
     }
     ensurePageCacheDir();
@@ -432,7 +433,7 @@ bool RivuletEngine::scrubStaleCompleteMap(const GfxRenderer& renderer) {
     return true;
   }
   LaidOutPage tmp;
-  if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
+  if (!layoutPage(renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
     LOG_DBG("RVEN", "scrubStaleCompleteMap: last page layout fail — incomplete");
     map_.markIncomplete();
     return true;
@@ -482,7 +483,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     const int last = map_.knownPages() - 1;
     if (last < 0) break;
     LaidOutPage tmp;
-    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
+    if (!layoutPage(renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
       break;  // OOM, cancellation and malformed content are not empty blocks
     }
     if (tmp.atChapterEnd) {
@@ -515,8 +516,17 @@ bool RivuletEngine::ensureMapAhead(const GfxRenderer& renderer, const int aheadP
   return map_.complete() || map_.knownPages() >= want;
 }
 
+bool RivuletEngine::layoutPage(const GfxRenderer& renderer, const LayoutParams& params,
+                              const IrCursor& from, LaidOutPage& out) {
+  const bool ok=PageLayouter::layoutPage(chapter_,renderer,params,from,out);
+  // Keep this sticky for the caller's entire navigation tick; a later
+  // successful suboperation must not erase a prior observed cancellation.
+  layoutCancelled_=layoutCancelled_ || out.aborted;
+  return ok;
+}
+
 bool RivuletEngine::layoutAtCursor(const GfxRenderer& renderer, const IrCursor& c) {
-  laidOutValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), c, laidOut_);
+  laidOutValid_ = layoutPage(renderer, makeParams(renderer), c, laidOut_);
   if (laidOutValid_) savePageCache(currentPage_);
   return laidOutValid_;
 }
@@ -551,7 +561,7 @@ bool RivuletEngine::warmAheadPage(const GfxRenderer& renderer) {
     }
   }
 
-  aheadValid_ = PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), laidOut_.end, ahead_);
+  aheadValid_ = layoutPage(renderer, makeParams(renderer), laidOut_.end, ahead_);
   if (!aheadValid_) {
     ahead_.clear();
     return false;
@@ -593,7 +603,7 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
   if (!map_.hasPage(currentPage_ - 1)) return false;
   // Full paint layout (not measure-only) — this page may be shown on prevPage.
   behindValid_ =
-      PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
+      layoutPage(renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
   if (!behindValid_)
     behind_.clear();
   else if (!deferPageCacheWrites_ && !pageCacheDir_.empty()) {
@@ -651,10 +661,11 @@ bool RivuletEngine::resumeAtCursor(const GfxRenderer& renderer,const IrCursor& c
     // Even the last known start may already cover this anchor. Verify its real
     // end instead of inventing a new page beginning at the anchor itself.
     LaidOutPage measured;
-    if(!PageLayouter::layoutPage(chapter_,renderer,makeMeasureParams(renderer),map_.pageStart(page),measured))return false;
+    if(!layoutPage(renderer, makeMeasureParams(renderer),map_.pageStart(page),measured))return false;
     if(!(cursor<measured.start) && (cursor<measured.end || (measured.atChapterEnd && cursor==measured.end)))
       return goToPage(renderer,page,0);
-    if(measured.atChapterEnd || walked>=budget || (mapAbortCheck_&&mapAbortCheck_()))return false;
+    if(measured.atChapterEnd || walked>=budget)return false;
+    if(mapAbortCheck_&&mapAbortCheck_()){layoutCancelled_=true;return false;}
     if(!extendPageMap(renderer,1))return false;
     if((walked&7)==7)yield();
   }
@@ -665,14 +676,15 @@ bool RivuletEngine::goToPage(const GfxRenderer& renderer,const int pageIndex,con
   if(pageIndex<0 || chapter_.failed() || !hasChapter())return false;
   seedMapIfEmpty();
   for(int walked=0;!map_.hasPage(pageIndex)&&!map_.complete()&&walked<std::max(0,maxWalkPages);++walked) {
-    if((mapAbortCheck_&&mapAbortCheck_()) || !extendPageMap(renderer,1))return false;
+    if(mapAbortCheck_&&mapAbortCheck_()){layoutCancelled_=true;return false;}
+    if(!extendPageMap(renderer,1))return false;
     if((walked&7)==7)yield();
   }
   if(map_.failed() || !map_.hasPage(pageIndex))return false;
   const IrCursor start=map_.pageStart(pageIndex);
   LaidOutPage candidate;char path[220];bool cached=false;
   if(pageCachePath(pageIndex,path,sizeof(path)))cached=candidate.loadFromFile(path,key_,pageIndex)&&candidate.start==start;
-  if(!cached && !PageLayouter::layoutPage(chapter_,renderer,makeParams(renderer),start,candidate))return false;
+  if(!cached && !layoutPage(renderer, makeParams(renderer),start,candidate))return false;
   if(candidate.failed() || chapter_.failed())return false;
   if(!candidate.atChapterEnd) {
     if(!map_.hasPage(pageIndex+1)){if(!map_.pushPageStart(candidate.end))return false;}
@@ -698,7 +710,7 @@ bool RivuletEngine::nextPage(const GfxRenderer& renderer) {
   else {
     char path[220];bool hit=false;
     if(pageCachePath(next,path,sizeof(path)))hit=candidate.loadFromFile(path,key_,next)&&candidate.start==start;
-    if(!hit && !PageLayouter::layoutPage(chapter_,renderer,makeParams(renderer),start,candidate))return false;
+    if(!hit && !layoutPage(renderer, makeParams(renderer),start,candidate))return false;
   }
   if(candidate.failed() || chapter_.failed())return false;
   // Commit metadata before moving the visible page. No early-return below may
@@ -727,7 +739,7 @@ bool RivuletEngine::prevPage(const GfxRenderer& renderer) {
   else {
     char path[220];bool hit=false;
     if(pageCachePath(previous,path,sizeof(path)))hit=candidate.loadFromFile(path,key_,previous)&&candidate.start==start&&candidate.end==requiredEnd;
-    if(!hit&&!PageLayouter::layoutPage(chapter_,renderer,makeParams(renderer),start,candidate))return false;
+    if(!hit&&!layoutPage(renderer, makeParams(renderer),start,candidate))return false;
   }
   // A supposedly complete map is not permission to duplicate/skip a line.
   if(candidate.failed() || chapter_.failed() || candidate.end!=requiredEnd)return false;
@@ -757,7 +769,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
   LaidOutPage measured;
   for (int i = 0; i < budget; ++i) {
     if ((i & 3) == 3) yield();
-    if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), cursor, measured)) {
+    if (!layoutPage(renderer, makeMeasureParams(renderer), cursor, measured)) {
       lastWalkStop_ = kWalkStopLayoutFail;
       return false;  // retain valid checkpoints; never skip source blocks
     }
@@ -765,7 +777,7 @@ bool RivuletEngine::goToLastPage(const GfxRenderer& renderer, const int maxWalkP
     lastWalkBlock_ = measured.end.blockIndex;
     if (measured.atChapterEnd) {
       LaidOutPage target;
-      if (!PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), cursor, target) ||
+      if (!layoutPage(renderer, makeParams(renderer), cursor, target) ||
           target.failed() || !target.atChapterEnd) return false;
       currentPage_ = pageIndex;
       laidOut_ = std::move(target);
@@ -798,7 +810,7 @@ bool RivuletEngine::tryCompleteMapAtEnd(const GfxRenderer& renderer) {
   const int last = map_.knownPages() - 1;
   if (last < 0) return false;
   LaidOutPage tmp;
-  if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
+  if (!layoutPage(renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
     return false;
   }
   if (tmp.atChapterEnd) {

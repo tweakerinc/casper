@@ -1,0 +1,119 @@
+name: Reader development integration
+on:
+  push:
+    branches: [fix/rc5-reader-navigation]
+    paths: [.github/workflows/rc5-reader-integration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.ref == 'refs/heads/fix/rc5-reader-navigation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.apply.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Verify reviewed source patch and commit only to development branch
+        id: apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,hashlib,lzma
+          encoded=''.join(Path(f'.github/reader-repairs/integration.{i:02d}.b64').read_text().strip() for i in range(1,4))
+          compressed=base64.b64decode(encoded,validate=True)
+          assert hashlib.sha256(compressed).hexdigest()=='08c62f9f813d212b24b1e5ef1ee3659d1be1f7a0f3db11b35aad387da03ed2ee'
+          patch=lzma.decompress(compressed)
+          assert len(patch)==100345
+          assert hashlib.sha256(patch).hexdigest()=='f3797edce53c08477aa507a3f5d932d553891880593c3db67f1ea7c0b9018f3b'
+          Path('/tmp/reader-integration.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/reader-integration.patch
+          git apply /tmp/reader-integration.patch
+          git diff --check
+          git rm .github/reader-repairs/integration.*.b64
+          git add lib src test tools docs
+          git -c user.name='Casper development builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(reader): validate prepared destinations and preserve active reading state' -m 'Development integration: reject false-ready background promotion, retain the active page through chapter selection, allow explicit recovery from an invalid resume, bound UTF-8 error popups, restore publisher chapter labels, and avoid repeated list-opening refreshes. Add complete forward/backward/chapter-end/resume component tests. Not RC5, not a stable release, and no main or RC4 candidate changes.'
+          git push origin HEAD:refs/heads/fix/rc5-reader-navigation
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  host-tests:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Install parser test dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y libexpat1-dev
+      - name: Run full suites against exact development source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reader-tests
+          git rev-parse HEAD > reader-tests/commit.txt
+          cmake -S test -B /tmp/casper-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/casper-tests -j2
+          ctest --test-dir /tmp/casper-tests --output-on-failure 2>&1 | tee reader-tests/ctest.log
+          python3 tools/casper_stability/run_tests.py 2>&1 | tee reader-tests/engine.log
+          python3 tools/rc2_hotfix_tests/run_tests.py 2>&1 | tee reader-tests/hal.log
+          python3 tools/navigation_regression/run_tests.py 2>&1 | tee reader-tests/toc.log
+          python3 tools/menu_regression/run_tests.py 2>&1 | tee reader-tests/menu.log
+          git init /tmp/JPEGDEC
+          git -C /tmp/JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
+          git -C /tmp/JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
+          git -C /tmp/JPEGDEC checkout --detach FETCH_HEAD
+          git -C /tmp/JPEGDEC rev-parse HEAD > reader-tests/decoder-commit.txt
+          for patch in "$PWD"/scripts/jpegdec_patches/*.patch; do git -C /tmp/JPEGDEC apply --check "$patch"; git -C /tmp/JPEGDEC apply "$patch"; done
+          python3 tools/field_regression/run_tests.py --jpegdec /tmp/JPEGDEC 2>&1 | tee reader-tests/field.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: reader-development-tests
+          path: reader-tests/
+          retention-days: 14
+  build:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: casper-c3-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_wolfssl.py') }}
+          restore-keys: casper-c3-pio-${{ runner.os }}-
+      - name: Install build tools
+        run: python3 -m pip install platformio==6.1.18
+      - name: Compile production application without publishing a release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reader-build
+          git rev-parse HEAD > reader-build/commit.txt
+          git submodule status --recursive > reader-build/submodules.txt
+          printf '%s\n' 'Development compile only; not RC5 and not approved for device testing.' > reader-build/NOT-A-RELEASE.txt
+          touch platformio.local.ini
+          pio run -e default 2>&1 | tee reader-build/build.log
+          cp .pio/build/default/firmware.bin reader-build/reader-development.bin
+          cp .pio/build/default/firmware.elf reader-build/reader-development.elf
+          sha256sum reader-build/reader-development.bin reader-build/reader-development.elf > reader-build/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: reader-development-build
+          path: reader-build/
+          retention-days: 14

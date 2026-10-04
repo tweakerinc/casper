@@ -1,0 +1,31 @@
+name: RC5 reader baseline
+on:
+  push:
+    branches: [fix/rc5-reader-navigation]
+    paths: [.github/workflows/rc5-reader-baseline.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: bdf774db35df5c141b6d9059f74134f8b130660d
+          persist-credentials: false
+      - name: Export pinned source without private fixtures or fonts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p export
+          git rev-parse HEAD > export/commit.txt
+          git ls-tree -r HEAD > export/tree.txt
+          tar --exclude='.git' --exclude='*.ttf' --exclude='*.otf' --exclude='*.woff*' --exclude='*.epub' -czf export/source.tar.gz src lib test tools scripts platformio.ini partitions.csv .gitmodules
+          sha256sum export/source.tar.gz > export/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rc4-reader-baseline
+          path: export/
+          retention-days: 7

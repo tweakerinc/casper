@@ -1,0 +1,117 @@
+name: Casper RC4 recovery validation
+on:
+  push:
+    branches: [fix/casper-stability-v0.2.0-candidate]
+    paths: [.github/workflows/casper-rc4-recovery.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.ref == 'refs/heads/fix/casper-stability-v0.2.0-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.apply.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: fix/casper-stability-v0.2.0-candidate
+          fetch-depth: 0
+      - name: Verify exact recovery source and publish candidate commit
+        id: apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma
+          from pathlib import Path
+          encoded = ''.join(Path(f'.github/candidate-patches/rc4-recovery.{i:02d}.b64').read_text().strip() for i in range(1,4))
+          packed = base64.b64decode(encoded, validate=True)
+          assert hashlib.sha256(packed).hexdigest() == '1204629a30dcd095bfff5fb9314f4988750672fe265643118b53ee2911bade1d', 'Compressed patch identity mismatch'
+          patch = lzma.decompress(packed)
+          assert len(patch) == 55283
+          assert hashlib.sha256(patch).hexdigest() == 'a811f91b17e8fedf7ba644ae35890b940cf24f97aa11ddd9e36a2a34c3bb68ea'
+          Path('/tmp/rc4-recovery.patch').write_bytes(patch)
+          PY
+          git apply --check --index /tmp/rc4-recovery.patch
+          git apply --index /tmp/rc4-recovery.patch
+          git diff --cached --check
+          python3 tools/casper_stability/run_tests.py
+          python3 tools/rc2_hotfix_tests/run_tests.py
+          git rm .github/candidate-patches/rc4-recovery.*.b64
+          git -c user.name='Casper candidate builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(candidate): RC4 saved-position recovery and interruptible paired cover preparation' -m 'Preserve source-verified chapter-start anchors across known parser versions; pack JPEG scratch rows; cancel optional Home JPEG work on raw input; prepare native sleep artwork from the same progressive decode; consume only ready EPUB cover data on sleep. Existing no-cover fallback applies to a cold sleep cache. UI geometry and Fit/Crop setting retained. Not the completed backend overhaul; hardware validation pending.'
+          git push origin HEAD:refs/heads/fix/casper-stability-v0.2.0-candidate
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  host-tests:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Run complete host and production-component suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          git rev-parse HEAD > results/commit.txt
+          cmake -S test -B /tmp/casper-tests -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/casper-tests -j2
+          ctest --test-dir /tmp/casper-tests --output-on-failure 2>&1 | tee results/ctest.log
+          python3 tools/casper_stability/run_tests.py 2>&1 | tee results/reader.log
+          python3 tools/rc2_hotfix_tests/run_tests.py 2>&1 | tee results/hal.log
+          git init /tmp/JPEGDEC
+          git -C /tmp/JPEGDEC remote add origin https://github.com/bitbank2/JPEGDEC.git
+          git -C /tmp/JPEGDEC fetch --depth=1 origin 86282979224c8a32fd51e091ed5a35b0c699a52b
+          git -C /tmp/JPEGDEC checkout --detach FETCH_HEAD
+          git -C /tmp/JPEGDEC rev-parse HEAD > results/decoder-commit.txt
+          for patch in "$PWD"/scripts/jpegdec_patches/*.patch; do git -C /tmp/JPEGDEC apply --check "$patch"; git -C /tmp/JPEGDEC apply "$patch"; done
+          python3 tools/field_regression/run_tests.py --jpegdec /tmp/JPEGDEC 2>&1 | tee results/field.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: casper-rc4-tests
+          path: results/
+          retention-days: 14
+  build:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: casper-c3-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_wolfssl.py') }}
+          restore-keys: casper-c3-pio-${{ runner.os }}-
+      - name: Install build tools
+        run: python3 -m pip install platformio==6.1.18
+      - name: Compile and package exact X3/X4 application
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          touch platformio.local.ini
+          git rev-parse HEAD > results/commit.txt
+          git submodule status --recursive > results/submodules.txt
+          pio run -e default 2>&1 | tee results/build.log
+          cp .pio/build/default/firmware.bin results/Casper-v0.2.0-rc4.bin
+          cp .pio/build/default/firmware.elf results/Casper-v0.2.0-rc4.elf
+          cp docs/releases/v0.2.0-rc4-test.md results/TESTING.md
+          sha256sum results/Casper-v0.2.0-rc4.bin results/Casper-v0.2.0-rc4.elf > results/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: casper-rc4-build
+          path: results/
+          retention-days: 14

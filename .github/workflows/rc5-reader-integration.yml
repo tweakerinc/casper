@@ -2,7 +2,7 @@ name: Reader development integration
 on:
   push:
     branches: [fix/rc5-reader-navigation]
-    paths: [.github/workflows/rc5-reader-integration.yml]
+    paths: ['.github/workflows/rc5-reader-integration.yml', 'src/**', 'lib/**', 'test/**', 'tools/**', 'scripts/**', 'platformio.ini', 'freeink-sdk']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,29 +19,30 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-      - name: Verify reviewed source patch and commit only to development branch
+      - name: Verify optional reviewed repair and pin exact development source
         id: apply
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          if test -f .github/reader-repairs/cancellation.b64; then
+            python3 - <<'PY'
           from pathlib import Path
           import base64,hashlib,lzma
-          encoded=''.join(Path(f'.github/reader-repairs/integration.{i:02d}.b64').read_text().strip() for i in range(1,4))
-          compressed=base64.b64decode(encoded,validate=True)
-          assert hashlib.sha256(compressed).hexdigest()=='08c62f9f813d212b24b1e5ef1ee3659d1be1f7a0f3db11b35aad387da03ed2ee'
+          compressed=base64.b64decode(Path('.github/reader-repairs/cancellation.b64').read_text().strip(),validate=True)
+          assert hashlib.sha256(compressed).hexdigest()=='5b73471089ce0151e7c0ff94695189bc32157916f64307e70c07a1985af77994'
           patch=lzma.decompress(compressed)
-          assert len(patch)==100345
-          assert hashlib.sha256(patch).hexdigest()=='f3797edce53c08477aa507a3f5d932d553891880593c3db67f1ea7c0b9018f3b'
-          Path('/tmp/reader-integration.patch').write_bytes(patch)
+          assert len(patch)==18567
+          assert hashlib.sha256(patch).hexdigest()=='a9e0acca578c7c3a6dbe0a8a936dc646ca83f1a9cabae5bc60765671c0d7eb68'
+          Path('/tmp/reader-cancellation.patch').write_bytes(patch)
           PY
-          git apply --check /tmp/reader-integration.patch
-          git apply /tmp/reader-integration.patch
-          git diff --check
-          git rm .github/reader-repairs/integration.*.b64
-          git add lib src test tools docs
-          git -c user.name='Casper development builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(reader): validate prepared destinations and preserve active reading state' -m 'Development integration: reject false-ready background promotion, retain the active page through chapter selection, allow explicit recovery from an invalid resume, bound UTF-8 error popups, restore publisher chapter labels, and avoid repeated list-opening refreshes. Add complete forward/backward/chapter-end/resume component tests. Not RC5, not a stable release, and no main or RC4 candidate changes.'
-          git push origin HEAD:refs/heads/fix/rc5-reader-navigation
+            git apply --check /tmp/reader-cancellation.patch
+            git apply /tmp/reader-cancellation.patch
+            git diff --check
+            git rm .github/reader-repairs/cancellation.b64
+            git add lib tools docs
+            git -c user.name='Casper development builder' -c user.email='github-actions[bot]@users.noreply.github.com' commit -m 'fix(reader): preserve cancellation observed during layout' -m 'A short input pulse must not become chapter failure after a later GPIO sample. Latch the actual layouter result for each preparation tick; retain the worker and valid map prefix. Regression tests reproduce the old failure and resume correctly after a one-shot pulse. Development only; no RC5 release.'
+            git push origin HEAD:refs/heads/fix/rc5-reader-navigation
+          fi
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   host-tests:
     needs: source

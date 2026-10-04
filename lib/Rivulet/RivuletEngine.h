@@ -174,6 +174,9 @@ class RivuletEngine {
   void paint(GfxRenderer& renderer, int originX, int originY, bool ahead = false) const;
 
   [[nodiscard]] bool hasChapter() const { return !chapter_.empty(); }
+  // A prepared chapter/map is not necessarily a paintable page. In particular,
+  // background indexing releases owned page strings after publishing a cache.
+  [[nodiscard]] bool hasPreparedPage() const { return laidOutValid_ && !laidOut_.failed(); }
   [[nodiscard]] int currentPage() const { return currentPage_; }
   // Exact if map complete; else estimate from IR (+ map extrapolation while walking).
   [[nodiscard]] int chapterPageCount(const GfxRenderer* rendererForEstimate = nullptr) const;

@@ -77,6 +77,7 @@ int RecentBooksActivity::bookIndexForSelector(const size_t sel) const {
 }
 
 void RecentBooksActivity::onEnter() {
+  openingPaint_ = true;
   Activity::onEnter();
 
   if (RECENT_BOOKS.pruneMissing()) {
@@ -94,6 +95,11 @@ void RecentBooksActivity::onEnter() {
   // FAST open (same as Library / Settings). Home HALF cleans residual later.
   UiGhostPolicy::clearHardScrub();
   requestUpdate();
+}
+
+void RecentBooksActivity::onResume() {
+  openingPaint_ = true;
+  Activity::onResume();
 }
 
 void RecentBooksActivity::onExit() {
@@ -346,5 +352,6 @@ void RecentBooksActivity::render(RenderLock&&) {
   // In Read view, Back returns to Recents (hint still says Home via mapLabels ΓÇö OK for hardware).
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  UiGhostPolicy::displayFastFull(renderer);
+  UiGhostPolicy::displayFastFull(renderer, openingPaint_);
+  openingPaint_ = false;
 }

@@ -17,6 +17,7 @@
 
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
+#include "Epub/TocSelectionPolicy.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
@@ -351,7 +352,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   return true;
 }
 
-bool Epub::parseTocNcxFile() const {
+bool Epub::parseTocNcxFile(epubnav::Targets* targets, const bool store) const {
   // the ncx file should have been specified in the content.opf file
   if (tocNcxItem.empty()) {
     LOG_DBG("EBP", "No ncx file specified");
@@ -366,7 +367,9 @@ bool Epub::parseTocNcxFile() const {
     return false;
   }
 
-  TocNcxParser ncxParser(contentBasePath, ncxSize, bookMetadataCache.get());
+  // NCX references are relative to the NCX, not necessarily to the OPF.
+  const std::string base = tocNcxItem.substr(0, tocNcxItem.find_last_of('/') + 1);
+  TocNcxParser ncxParser(base, ncxSize, store ? bookMetadataCache.get() : nullptr, targets);
 
   if (!ncxParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc ncx parser");
@@ -375,7 +378,7 @@ bool Epub::parseTocNcxFile() const {
 
   // Stream the decompressed NCX straight into the parser instead of round-tripping
   // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
-  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024)) {
+  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024) || !ncxParser.complete()) {
     LOG_ERR("EBP", "Could not read toc ncx file");
     return false;
   }
@@ -384,7 +387,7 @@ bool Epub::parseTocNcxFile() const {
   return true;
 }
 
-bool Epub::parseTocNavFile() const {
+bool Epub::parseTocNavFile(epubnav::Targets* targets, const bool store) const {
   // the nav file should have been specified in the content.opf file (EPUB 3)
   if (tocNavItem.empty()) {
     LOG_DBG("EBP", "No nav file specified");
@@ -402,7 +405,7 @@ bool Epub::parseTocNavFile() const {
   // Note: We can't use `contentBasePath` here as the nav file may be in a different folder to the content.opf
   // and the HTMLX nav file will have hrefs relative to itself
   const std::string navContentBasePath = tocNavItem.substr(0, tocNavItem.find_last_of('/') + 1);
-  TocNavParser navParser(navContentBasePath, navSize, bookMetadataCache.get());
+  TocNavParser navParser(navContentBasePath, navSize, store ? bookMetadataCache.get() : nullptr, targets);
 
   if (!navParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc nav parser");
@@ -411,7 +414,7 @@ bool Epub::parseTocNavFile() const {
 
   // Stream the decompressed nav document straight into the parser instead of round-tripping
   // through a temp file on the SD card (decompress -> write -> reopen -> reread -> delete).
-  if (!readItemContentsToStream(tocNavItem, navParser, 1024)) {
+  if (!readItemContentsToStream(tocNavItem, navParser, 1024) || !navParser.complete()) {
     LOG_ERR("EBP", "Could not read toc nav file");
     return false;
   }
@@ -656,30 +659,39 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
   LOG_DBG("EBP", "OPF pass completed in %lu ms", millis() - opfStart);
 
-  // TOC Pass - try EPUB 3 nav first, fall back to NCX
+  // Probe navigation documents before writing either candidate. Some EPUBs
+  // publish only part headings in nav.xhtml but full chapter labels in NCX.
+  // Retain nav unless NCX preserves all its targets in order and adds detail.
   const uint32_t tocStart = millis();
+  bool useNcx = false, navOk = false, ncxOk = false;
+  if (!tocNavItem.empty() && !tocNcxItem.empty()) {
+    epubnav::Targets nav, ncx;
+    navOk = parseTocNavFile(&nav, false);
+    ncxOk = parseTocNcxFile(&ncx, false);
+    useNcx = epubnav::preferNcx(nav, navOk, ncx, ncxOk);
+    LOG_INF("EBP", "TOC source=%s nav=%u ncx=%u", useNcx ? "NCX" : "NAV",
+            unsigned(nav.size()), unsigned(ncx.size()));
+  } else {
+    // No competing source: keep the existing single streaming pass.
+    navOk = !tocNavItem.empty();
+    ncxOk = !tocNcxItem.empty();
+    useNcx = ncxOk;
+  } // Release probe working memory before storing TOC entries.
   if (!bookMetadataCache->beginTocPass()) {
     LOG_ERR("EBP", "Could not begin writing toc pass");
     return false;
   }
-
-  bool tocParsed = false;
-
-  // Try EPUB 3 nav document first (preferred)
-  if (!tocNavItem.empty()) {
-    LOG_DBG("EBP", "Attempting to parse EPUB 3 nav document");
-    tocParsed = parseTocNavFile();
-  }
-
-  // Fall back to NCX if nav parsing failed or wasn't available
-  if (!tocParsed && !tocNcxItem.empty()) {
-    LOG_DBG("EBP", "Falling back to NCX TOC");
-    tocParsed = parseTocNcxFile();
+  bool tocParsed = useNcx ? parseTocNcxFile() : (navOk && parseTocNavFile());
+  // A failed second read must not leave a prefix mixed with the fallback TOC.
+  if (!tocParsed && (useNcx ? navOk : ncxOk)) {
+    if (!bookMetadataCache->endTocPass() || !bookMetadataCache->beginTocPass()) return false;
+    tocParsed = useNcx ? parseTocNavFile() : parseTocNcxFile();
   }
 
   if (!tocParsed) {
     LOG_ERR("EBP", "Warning: Could not parse any TOC format");
-    // Continue anyway - book will work without TOC
+    if (!bookMetadataCache->endTocPass() || !bookMetadataCache->beginTocPass()) return false;
+    // Continue without a fabricated or partially published TOC.
   }
 
   if (!bookMetadataCache->endTocPass()) {

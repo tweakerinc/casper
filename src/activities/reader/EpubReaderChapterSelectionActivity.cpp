@@ -1,6 +1,7 @@
 #include "EpubReaderChapterSelectionActivity.h"
 
 #include <GfxRenderer.h>
+#include <Epub/TocSelectionPolicy.h>
 #include <I18n.h>
 #include <algorithm>
 
@@ -28,9 +29,10 @@ void EpubReaderChapterSelectionActivity::onEnter() {
     return;
   }
 
-  // A sparse publisher TOC must not make the omitted book sections unreachable.
-  // Preserve the original TOC behavior for ordinary comprehensive navigation.
-  if(epub->getTocItemsCount()*2<epub->getSpineItemsCount()) {
+  // A valid publisher TOC is authoritative, even when it spans many files.
+  // Reading-order files are a last resort only when no TOC was supplied.
+  expanded_ = false;
+  if(epubnav::useSpineFallback(epub->getTocItemsCount())) {
     expanded_=sections_.build(epub->getSpineItemsCount(),epub->getTocItemsCount(),
                              [this](int i){return epub->getTocItem(i).spineIndex;});
   }

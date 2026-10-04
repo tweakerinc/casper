@@ -320,5 +320,70 @@ int main(){
     }
     storagefault::reads=0;CHECK(!sourceFingerprint("/source.epub",previous));storagefault::reset();
   }
+
+  {
+    // RC4: prefetch deliberately releases its paint page. Reusing that worker
+    // for an explicit first-page request must not publish a failed layout.
+    RenderKey key; key.fontId=-1128177077; key.viewportW=240; key.viewportH=320; key.flags=1;
+    GfxRenderer renderer; TestBook book; ReadinessCoordinator jobs;
+    CHECK(jobs.configure("/promotion-test", key, 1, 20)); jobs.focus(14);
+    CHECK(jobs.tick(renderer,14,&TestBook::load,&book,100000,nullptr)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.workerSpine()==13);
+    CHECK(jobs.tick(renderer,14,&TestBook::load,&book,100100,nullptr)==ReadinessCoordinator::Tick::Working);
+    jobs.request(13,0);
+    allocationsBeforeFailure=0;
+    const auto status=jobs.tick(renderer,14,&TestBook::load,&book,100200,nullptr);
+    allocationsBeforeFailure=-1;
+    std::fprintf(stderr,"promotion status=%d readyEngine=%d spans=%zu\n",int(status), jobs.readyEngine()!=nullptr, jobs.readyEngine()?jobs.readyEngine()->page().spans.size():0);
+    CHECK(status==ReadinessCoordinator::Tick::NavigationFailed);
+    CHECK(jobs.readyEngine()==nullptr);
+    CHECK(!jobs.pending());
+  }
+
+  {
+    RenderKey key;key.fontId=-1128177077;key.viewportW=240;key.viewportH=320;key.flags=1;
+    GfxRenderer renderer;TestBook book;ReadinessCoordinator jobs;
+    CHECK(jobs.configure("/promotion-ok",key,1,20));jobs.focus(14);
+    CHECK(jobs.tick(renderer,14,&TestBook::load,&book,100000,nullptr)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.tick(renderer,14,&TestBook::load,&book,100100,nullptr)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.request(13,0));
+    CHECK(jobs.tick(renderer,14,&TestBook::load,&book,100200,nullptr)==ReadinessCoordinator::Tick::NavigationReady);
+    CHECK(jobs.readyEngine()->hasPreparedPage());CHECK(!jobs.readyEngine()->page().spans.empty());
+    // The ownership API cannot return a paint page that was released afterwards.
+    jobs.readyEngine()->releasePaintPage();CHECK(jobs.readyEngine()==nullptr);CHECK(!jobs.takeReady());jobs.release();
+    CHECK(jobs.configure("/requests",key,1,20));CHECK(jobs.request(3));
+    ProgressAnchor bad;bad.spine=1000;CHECK(!jobs.requestAnchor(bad));CHECK(!jobs.pending());
+    CHECK(jobs.lastFailure()==ReadinessCoordinator::Failure::InvalidTarget);
+    CHECK(!jobs.request(0,-2));CHECK(!jobs.pending());
+    CHECK(jobs.request(0,100000));
+    auto state=ReadinessCoordinator::Tick::Idle;
+    for(int i=0;i<300&&state!=ReadinessCoordinator::Tick::NavigationFailed;++i)
+      state=jobs.tick(renderer,1,&TestBook::load,&book,200000+i*100,nullptr);
+    CHECK(state==ReadinessCoordinator::Tick::NavigationFailed);
+    CHECK(jobs.lastFailure()==ReadinessCoordinator::Failure::PageOutOfRange);
+    CHECK(!jobs.pending());CHECK(!jobs.readyEngine());
+    auto empty=[](void*,RivuletEngine&,int){return ReadinessCoordinator::Load::Empty;};
+    CHECK(jobs.request(7,0));CHECK(jobs.tick(renderer,6,empty,nullptr,300000,nullptr)==ReadinessCoordinator::Tick::NavigationFailed);
+    CHECK(jobs.lastFailure()==ReadinessCoordinator::Failure::EmptyDestination);
+    CHECK(jobs.request(7,0,true));CHECK(jobs.tick(renderer,6,empty,nullptr,300100,nullptr)==ReadinessCoordinator::Tick::Working);
+    CHECK(jobs.destination()==8);jobs.release();
+  }
+  {
+    // Sweep actual allocation sites in background-to-foreground promotion.
+    // Either the exact requested paint exists or navigation fails cleanly.
+    for(int failAt=0;failAt<48;++failAt){
+      RenderKey key;key.fontId=-1128177077;key.viewportW=240;key.viewportH=320;key.flags=1;
+      GfxRenderer renderer;TestBook book;ReadinessCoordinator jobs;
+      CHECK(jobs.configure("/promotion-sweep-"+std::to_string(failAt),key,1,20));jobs.focus(14);
+      CHECK(jobs.tick(renderer,14,&TestBook::load,&book,1,nullptr)==ReadinessCoordinator::Tick::Working);
+      CHECK(jobs.tick(renderer,14,&TestBook::load,&book,2,nullptr)==ReadinessCoordinator::Tick::Working);
+      CHECK(jobs.request(13));allocationsBeforeFailure=failAt;
+      const auto status=jobs.tick(renderer,14,&TestBook::load,&book,3,nullptr);allocationsBeforeFailure=-1;
+      if(status==ReadinessCoordinator::Tick::NavigationReady){
+        CHECK(jobs.readyEngine());CHECK(jobs.readyEngine()->hasPreparedPage());
+        CHECK(jobs.readyEngine()->currentPage()==0);CHECK(!jobs.readyEngine()->page().spans.empty());
+      }else{CHECK(status==ReadinessCoordinator::Tick::NavigationFailed);CHECK(!jobs.readyEngine());CHECK(!jobs.pending());}
+    }
+  }
   std::printf("PASS %d assertions (real Rivulet source; mocked display/storage)\n",tests);
 }

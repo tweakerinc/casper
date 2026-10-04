@@ -5,6 +5,7 @@
 #include <XmlParserUtils.h>
 
 #include "Epub/BookMetadataCache.h"
+#include "Epub/TocSelectionPolicy.h"
 
 bool TocNavParser::setup() {
   parser = XML_ParserCreate(nullptr);
@@ -136,6 +137,7 @@ void XMLCALL TocNavParser::endElement(void* userData, const XML_Char* name) {
         anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
       }
 
+      if (self->targets) self->targets->add(href, anchor);
       if (self->cache) {
         // olDepth gives us the nesting level (1-based from the outer ol)
         self->cache->createTocEntry(self->currentLabel, href, anchor, self->olDepth);

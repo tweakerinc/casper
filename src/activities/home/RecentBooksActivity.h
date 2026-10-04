@@ -15,6 +15,7 @@ class RecentBooksActivity final : public Activity {
   ButtonNavigator buttonNavigator;
 
   size_t selectorIndex = 0;
+  bool openingPaint_ = true;
 
   // Set when a long-press has fired; input is swallowed until Confirm is released
   // again so the release doesn't also open the book.
@@ -50,6 +51,7 @@ class RecentBooksActivity final : public Activity {
       : Activity("RecentBooks", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
+  void onResume() override;
   void loop() override;
   void render(RenderLock&&) override;
 };

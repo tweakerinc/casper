@@ -5,6 +5,7 @@
 #include <string>
 
 class BookMetadataCache;
+namespace epubnav { class Targets; }
 
 // Parser for EPUB 3 nav.xhtml navigation documents
 // Parses HTML5 nav elements with epub:type="toc" to extract table of contents
@@ -24,6 +25,7 @@ class TocNavParser final : public Print {
   XML_Parser parser = nullptr;
   ParserState state = START;
   BookMetadataCache* cache;
+  epubnav::Targets* targets = nullptr;
 
   // Track nesting depth for <ol> elements to determine TOC depth
   uint8_t olDepth = 0;
@@ -36,11 +38,13 @@ class TocNavParser final : public Print {
   static void endElement(void* userData, const XML_Char* name);
 
  public:
-  explicit TocNavParser(const std::string& baseContentPath, const size_t xmlSize, BookMetadataCache* cache)
-      : baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache) {}
+  explicit TocNavParser(const std::string& baseContentPath, const size_t xmlSize, BookMetadataCache* cache,
+                        epubnav::Targets* targets = nullptr)
+      : baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache), targets(targets) {}
   ~TocNavParser() override;
 
   bool setup();
+  bool complete() const { return parser && remainingSize == 0; }
 
   size_t write(uint8_t) override;
   size_t write(const uint8_t* buffer, size_t size) override;

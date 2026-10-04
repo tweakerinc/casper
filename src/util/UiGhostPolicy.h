@@ -119,7 +119,10 @@ inline void displayMenuFrame(const GfxRenderer& renderer) {
 // Down a HALF flash. X3 still gets the mid-bank settle; X4 cannot (no mid bank)
 // so this is one full FAST. Do not window: SSD1677 displayWindow uses the 0xFC
 // PART LUT on a strip and only resyncs RED for that strip, which ghosts the rest.
-inline void displayFastFull(const GfxRenderer& renderer) {
+inline void displayFastFull(const GfxRenderer& renderer, const bool newPlate = true) {
+  // An in-list move is not another screen opening. Keep the safe opening
+  // cleanup but do not pay its second X3 pulse for every arrow press.
+  if (!newPlate) { displayMenuFrame(renderer); return; }
   if (!renderer.panelPolarityMatchesInvertFlag()) {
     displayHalf(renderer);
     return;

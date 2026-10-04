@@ -1,0 +1,4 @@
+add_executable(PopupTextLayoutTest PopupTextLayoutTest.cpp)
+target_include_directories(PopupTextLayoutTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(PopupTextLayoutTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(PopupTextLayoutTest)

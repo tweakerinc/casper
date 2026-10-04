@@ -36,6 +36,7 @@ SOURCES = [
     'lib/jpgd/jpgd.cpp', 'lib/jpgd/jpgd_spill.cpp',
     'tools/field_regression/chapter_pipeline.cpp', 'tools/field_regression/cover_pipeline.cpp',
     'tools/field_regression/jpeg_spill.cpp',
+    'lib/Rivulet/ReadinessCoordinator.cpp','tools/field_regression/navigation_pipeline.cpp',
 ]
 
 def run(cmd: list[str]) -> None:
@@ -58,6 +59,7 @@ with tempfile.TemporaryDirectory(prefix='casper-field-') as temporary:
         run(FLAGS+[objects[n] for n in names]+(extra or [])+['-o',str(exe)])
         return exe
     chapter = link('chapter_pipeline', SOURCES[:12]+['tools/field_regression/chapter_pipeline.cpp'])
+    navigation=link('navigation_pipeline',SOURCES[:12]+['lib/Rivulet/ReadinessCoordinator.cpp','tools/field_regression/navigation_pipeline.cpp'])
     cover = link('cover_pipeline', ['lib/hal/HalStorage.cpp']+SOURCES[12:16]+['tools/field_regression/cover_pipeline.cpp'],[str(decoder)])
     spill = link('jpeg_spill', SOURCES[14:16]+['tools/field_regression/jpeg_spill.cpp'])
     fixtures = ROOT/'test/progressive_cover_jpeg/fixtures'
@@ -74,6 +76,7 @@ with tempfile.TemporaryDirectory(prefix='casper-field-') as temporary:
         (book/href).write_text(f"<html><head><link rel='stylesheet' href='../style/book.css'></head><body><div class='h'>[{i+1}]</div>{paragraphs}</body></html>",encoding='utf-8')
     manifest.write_text('\n'.join(spines)+'\n',encoding='utf-8')
     run([str(chapter),str(book),str(manifest)])
+    run([str(navigation),str(book),str(manifest)])
     if args.epub:
         # Reject unsafe archive entries and decompression bombs in the optional
         # local input. Do not extract bundled fonts or copy the book to CI.
@@ -95,6 +98,7 @@ with tempfile.TemporaryDirectory(prefix='casper-field-') as temporary:
         spines=[str(base/items[n.attrib['idref']]['href']) for n in opf.findall('.//o:spine/o:itemref',ns)]
         manifest.write_text('\n'.join(spines)+'\n',encoding='utf-8')
         run([str(chapter),str(private),str(manifest)])
+        run([str(navigation),str(private),str(manifest)])
         cover_item=next((i for i in items.values() if 'cover-image' in i.get('properties','').split()),None)
         if not cover_item:
             meta=next((n for n in opf.iter() if n.attrib.get('name')=='cover'),None)

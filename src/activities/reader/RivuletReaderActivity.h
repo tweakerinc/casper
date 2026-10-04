@@ -200,8 +200,8 @@ class RivuletReaderActivity final : public Activity {
   bool loadTargetChapter(rivulet::RivuletEngine& target, int spine, bool background, bool& empty);
   void prepareChapterImagesFor(rivulet::RivuletEngine& target, const std::string& href);
   void configureReadiness();
-  void requestChapterNavigation(int spine, int page);
-  void commitChapter(rivulet::RivuletEngine&& target, int spine);
+  void requestChapterNavigation(int spine, int page, bool skipEmpty = false);
+  bool commitChapter(rivulet::RivuletEngine&& target, int spine);
 
   int imageCounter_ = 0;
   // Spine/page whose glyph page-buffer was retained after last paint (skip rescan).

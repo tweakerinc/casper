@@ -145,17 +145,17 @@ bool RivuletEngine::tryLoadPageCache(const int pageIndex) {
     map_.setRenderKey(key_);
     if (!map_.resetWithStart(tmp.start)) return false;
   }
+  if (!tmp.atChapterEnd) {
+    const int nextIdx = pageIndex + 1;
+    if (!map_.hasPage(nextIdx)) {
+      if (!map_.pushPageStart(tmp.end)) return false;
+    } else if (map_.pageStart(nextIdx) != tmp.end) {
+      if (!map_.setPageStart(nextIdx, tmp.end)) return false;
+    }
+  }
   laidOut_ = std::move(tmp);
   laidOutValid_ = true;
   currentPage_ = pageIndex;
-  if (!laidOut_.atChapterEnd) {
-    const int nextIdx = pageIndex + 1;
-    if (!map_.hasPage(nextIdx)) {
-      if (!map_.pushPageStart(laidOut_.end)) return false;
-    } else if (map_.pageStart(nextIdx) != laidOut_.end) {
-      if (!map_.setPageStart(nextIdx, laidOut_.end)) return false;
-    }
-  }
   LOG_DBG("RVEN", "page cache HIT p=%d spans=%u", pageIndex, static_cast<unsigned>(laidOut_.spans.size()));
   return true;
 }
@@ -485,9 +485,9 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
     if (!PageLayouter::layoutPage(chapter_, renderer, makeMeasureParams(renderer), map_.pageStart(last), tmp)) {
       break;  // OOM, cancellation and malformed content are not empty blocks
     }
-    progressed = true;
     if (tmp.atChapterEnd) {
       markMapCompleteIfPlausible(renderer);
+      progressed = map_.complete();
       break;
     }
     if (tmp.end == map_.pageStart(last)) {
@@ -497,6 +497,7 @@ bool RivuletEngine::extendPageMap(const GfxRenderer& renderer, const int maxPage
       break;
     }
     if (!map_.pushPageStart(tmp.end)) return false;
+    progressed = true;
     if ((i & 3) == 3) yield();
   }
   return progressed;
@@ -595,7 +596,7 @@ bool RivuletEngine::warmBehindPage(const GfxRenderer& renderer) {
       PageLayouter::layoutPage(chapter_, renderer, makeParams(renderer), map_.pageStart(currentPage_ - 1), behind_);
   if (!behindValid_)
     behind_.clear();
-  else if (!pageCacheDir_.empty()) {
+  else if (!deferPageCacheWrites_ && !pageCacheDir_.empty()) {
     char path[220];
     const int behindIdx = currentPage_ - 1;
     if (pageCachePath(behindIdx, path, sizeof(path))) {
@@ -613,8 +614,11 @@ bool RivuletEngine::ensureLaidOut(const GfxRenderer& renderer) {
   IrCursor c{};
   if (map_.hasPage(currentPage_)) {
     c = map_.pageStart(currentPage_);
-  } else if (!chapter_.blocks().empty()) {
+  } else if (currentPage_ == 0 && !chapter_.blocks().empty()) {
     c.runIndex = chapter_.blocks()[0].runBegin;
+  } else {
+    // A missing index entry for page N cannot be replaced by chapter start.
+    return false;
   }
   return layoutAtCursor(renderer, c);
 }

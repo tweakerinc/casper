@@ -75,3 +75,5 @@ add_subdirectory(wifi_transfer_policy)
 add_subdirectory(sleep_hold_policy)
 add_subdirectory(music_note_fallback)
 add_subdirectory(xteink_display)
+
+add_subdirectory(popup_text_layout)

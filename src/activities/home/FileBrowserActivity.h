@@ -24,6 +24,7 @@ class FileBrowserActivity final : public Activity {
   ButtonNavigator buttonNavigator;
 
   size_t selectorIndex = 0;
+  bool openingPaint_ = true;
 
   bool lockLongPressBack = false;
   // Set when long-press Back already acted (toggle hidden); swallow the release.
@@ -56,6 +57,7 @@ class FileBrowserActivity final : public Activity {
         basepath(initialPath.empty() ? "/" : std::move(initialPath)) {}
   void onEnter() override;
   void onExit() override;
+  void onResume() override;
   void loop() override;
   void render(RenderLock&&) override;
 };

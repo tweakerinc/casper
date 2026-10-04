@@ -11,6 +11,7 @@
 #include "Epub/css/CssParser.h"
 
 class ZipFile;
+namespace epubnav { class Targets; }
 
 class Epub {
   // the ncx file (EPUB 2)
@@ -32,8 +33,8 @@ class Epub {
 
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true);
-  bool parseTocNcxFile() const;
-  bool parseTocNavFile() const;
+  bool parseTocNcxFile(epubnav::Targets* targets = nullptr, bool store = true) const;
+  bool parseTocNavFile(epubnav::Targets* targets = nullptr, bool store = true) const;
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
   // True when spine href looks like cover/title-page and the section is small.

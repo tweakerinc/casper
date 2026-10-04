@@ -1,12 +1,14 @@
 #pragma once
 
 #include <BufferedFile.h>
+#include <FallibleVector.h>
 #include <HalStorage.h>
 
 #include <algorithm>
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 class BookMetadataCache {
  public:
@@ -68,14 +70,14 @@ class BookMetadataCache {
     uint16_t hrefLen;   // length for collision reduction
     int16_t spineIndex;
   };
-  std::deque<SpineHrefIndexEntry> spineHrefIndex;
+  casper_memory::FallibleVector<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
   // 4 bytes per spine, filled once in load(). calculateProgress / status bar /
   // sleep persist used to deserialize the href string from book.bin on every
   // call; that raced the render task and abort()ed on a torn length prefix.
   std::vector<uint32_t> spineCumulative_;
 
-  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
+  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 64;
 
   // FNV-1a 64-bit hash function
   static uint64_t fnvHash64(const std::string& s) {

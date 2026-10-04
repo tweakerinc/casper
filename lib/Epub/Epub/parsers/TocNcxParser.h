@@ -5,6 +5,7 @@
 #include <string>
 
 class BookMetadataCache;
+namespace epubnav { class Targets; }
 
 class TocNcxParser final : public Print {
   enum ParserState { START, IN_NCX, IN_NAV_MAP, IN_NAV_POINT, IN_NAV_LABEL, IN_NAV_LABEL_TEXT, IN_CONTENT };
@@ -14,6 +15,7 @@ class TocNcxParser final : public Print {
   XML_Parser parser = nullptr;
   ParserState state = START;
   BookMetadataCache* cache;
+  epubnav::Targets* targets = nullptr;
 
   std::string currentLabel;
   std::string currentSrc;
@@ -24,11 +26,13 @@ class TocNcxParser final : public Print {
   static void endElement(void* userData, const XML_Char* name);
 
  public:
-  explicit TocNcxParser(const std::string& baseContentPath, const size_t xmlSize, BookMetadataCache* cache)
-      : baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache) {}
+  explicit TocNcxParser(const std::string& baseContentPath, const size_t xmlSize, BookMetadataCache* cache,
+                        epubnav::Targets* targets = nullptr)
+      : baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache), targets(targets) {}
   ~TocNcxParser() override;
 
   bool setup();
+  bool complete() const { return parser && remainingSize == 0; }
 
   size_t write(uint8_t) override;
   size_t write(const uint8_t* buffer, size_t size) override;

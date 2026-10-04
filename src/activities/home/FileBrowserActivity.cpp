@@ -96,6 +96,7 @@ void FileBrowserActivity::loadFiles() {
 }
 
 void FileBrowserActivity::onEnter() {
+  openingPaint_ = true;
   Activity::onEnter();
 
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
@@ -132,6 +133,11 @@ void FileBrowserActivity::onEnter() {
   }
 
   requestUpdate();
+}
+
+void FileBrowserActivity::onResume() {
+  openingPaint_ = true;
+  Activity::onResume();
 }
 
 void FileBrowserActivity::onExit() {
@@ -569,7 +575,8 @@ void FileBrowserActivity::render(RenderLock&&) {
     }
   }
 
-  UiGhostPolicy::displayFastFull(renderer);
+  UiGhostPolicy::displayFastFull(renderer, openingPaint_);
+  openingPaint_ = false;
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

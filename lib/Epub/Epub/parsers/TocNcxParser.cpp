@@ -5,6 +5,7 @@
 #include <XmlParserUtils.h>
 
 #include "Epub/BookMetadataCache.h"
+#include "Epub/TocSelectionPolicy.h"
 
 bool TocNcxParser::setup() {
   parser = XML_ParserCreate(nullptr);
@@ -155,6 +156,7 @@ void XMLCALL TocNcxParser::endElement(void* userData, const XML_Char* name) {
         anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
       }
 
+      if (self->targets) self->targets->add(href, anchor);
       if (self->cache) {
         self->cache->createTocEntry(self->currentLabel, href, anchor, self->currentDepth);
       }

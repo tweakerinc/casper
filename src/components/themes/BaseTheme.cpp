@@ -1,3 +1,4 @@
+#include "util/PopupTextLayout.h"
 #include "BaseTheme.h"
 
 #include <GfxRenderer.h>
@@ -1276,20 +1277,23 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, floa
   const int marginY = metrics.popupMarginY;
   const int frameThickness = metrics.popupFrameThickness;
   const EpdFontFamily::Style popupFontFamily = metrics.popupTextBold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-  const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, popupFontFamily);
-  const int textHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int w = textWidth + marginX * 2;
-  const int h = textHeight + marginY * 2;
-  const int x = (renderer.getScreenWidth() - w) / 2;
-  int y;
-  // kPopupCenterY (-2) or any value < -1.5 means vertical center.
-  if (topOffsetRatio < -1.5f) {
-    y = (renderer.getScreenHeight() - h) / 2;
-  } else if (topOffsetRatio >= 0.0f) {
-    y = static_cast<int>(renderer.getScreenHeight() * topOffsetRatio);
-  } else {
-    y = static_cast<int>(renderer.getScreenHeight() * metrics.popupTopOffsetRatio);
-  }
+  if(!message)message="";
+  const int screenW=renderer.getScreenWidth(),screenH=renderer.getScreenHeight();
+  const int edge=std::max(2,frameThickness+2);
+  const int textHeight=std::max(1,renderer.getLineHeight(UI_12_FONT_ID));
+  const int padX=std::min(marginX,std::max(0,(screenW-2*edge)/4));
+  const int padY=std::min(marginY,std::max(0,(screenH-2*edge)/4));
+  const int maxTextW=std::max(1,screenW-2*edge-2*padX);
+  const size_t maxLines=std::max(1,(screenH-2*edge-2*padY-std::abs(metrics.popupTextBaselineOffsetY))/textHeight);
+  const auto lines=popuptext::wrap(message,maxTextW,maxLines,[&](const char* text){
+    return renderer.getTextWidth(UI_12_FONT_ID,text,popupFontFamily);
+  });
+  const int w=std::min(screenW-2*edge,lines.width+2*padX);
+  const int h=std::min(screenH-2*edge,textHeight*int(std::max<size_t>(1,lines.count))+2*padY);
+  const int x=(screenW-w)/2;
+  int y=topOffsetRatio < -1.5f ? (screenH-h)/2 :
+    static_cast<int>(screenH*(topOffsetRatio>=0?topOffsetRatio:metrics.popupTopOffsetRatio));
+  y=std::clamp(y,edge,std::max(edge,screenH-edge-h));
 
   // Always: black frame + white fill + black text. Dark Mode invert flips the
   // whole FB so it becomes a dark glass with light text — still readable.
@@ -1305,12 +1309,14 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, floa
     renderer.fillRect(x, y, w, h, false);
   }
 
-  const int textX = x + (w - textWidth) / 2;
-  const int textY = y + marginY + metrics.popupTextBaselineOffsetY;
-  // Black ink on white pill. Ignore popupTextInverted for the body — that flag
-  // was overloaded and produced black-on-black on rounded themes.
+  char lineBuffer[popuptext::kLineBytes];
   (void)metrics.popupTextInverted;
-  renderer.drawText(UI_12_FONT_ID, textX, textY, message, /*black=*/true, popupFontFamily);
+  for(size_t i=0;i<lines.count;++i){
+    popuptext::copyLine(message,lines.lines[i],lineBuffer);
+    const int textX=x+(w-lines.lines[i].width)/2;
+    const int textY=y+padY+int(i)*textHeight+metrics.popupTextBaselineOffsetY;
+    renderer.drawText(UI_12_FONT_ID,textX,textY,lineBuffer,/*black=*/true,popupFontFamily);
+  }
   if (refresh) {
     // Prefer HALF for Loading/toasts: FAST over Bare multipass greys leaves the
     // pill ghosted into the next book page as salt-and-pepper "glyphs". Dark Mode

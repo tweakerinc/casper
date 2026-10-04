@@ -1699,7 +1699,12 @@ bool RivuletReaderActivity::loadTargetChapter(rivulet::RivuletEngine& target, co
   return result.ok;
 }
 
-void RivuletReaderActivity::commitChapter(rivulet::RivuletEngine&& target, const int spine) {
+bool RivuletReaderActivity::commitChapter(rivulet::RivuletEngine&& target, const int spine) {
+  if(!epub_||spine<0||spine>=epub_->getSpineItemsCount()||!target.hasChapter()||
+     target.chapter().failed()||!target.hasPreparedPage()){
+    LOG_ERR("READY","refusing incomplete destination spine=%d paint=%d",spine,target.hasPreparedPage()?1:0);
+    return false;
+  }
   const auto layout=readerkey::compute(renderer);
   marginX_=layout.marginL;marginY_=layout.marginT;marginR_=layout.marginR;marginB_=layout.marginB;
   // The old engine remains valid until this destination has a real laid-out
@@ -1715,16 +1720,22 @@ void RivuletReaderActivity::commitChapter(rivulet::RivuletEngine&& target, const
   updateBookmarkFlag();
   LOG_INF("READY","commit spine=%d page=%d known=%d exact=%d disk=%d",spine,engine_.currentPage(),
           engine_.mapKnownPages(),engine_.mapComplete()?1:0,engine_.chapter().diskBacked()?1:0);
+  return true;
 }
 
-void RivuletReaderActivity::requestChapterNavigation(const int spine,const int page) {
+void RivuletReaderActivity::requestChapterNavigation(const int spine,const int page,const bool skipEmpty) {
   RenderLock stateLock(*this);
   if(!epub_ || spine<0 || spine>=epub_->getSpineItemsCount())return;
   configureReadiness();
   if (readiness_.pending() && readiness_.destination()==spine && readiness_.requestedPage()==page) return;
   persistPageMapBestEffort();(void)saveProgress();
   engine_.releasePrefetch();
-  readiness_.request(spine,page);
+  if(!readiness_.request(spine,page,skipEmpty))return;
+  error_=false;
+  // Explicit navigation is not a retry of a stale saved anchor. Keep the
+  // persisted anchor until a new target has actually committed successfully.
+  restoreContentAnchor_=false;
+  if(!ready_||!engine_.hasChapter())initialLoadPending_=true;
   // Reuse the existing loading cue; the current chapter/reading anchor stays
   // intact while the coordinator prepares the destination over input-loop ticks.
   GUI.drawTopLeftStatus(renderer,tr(STR_LOADING_POPUP),true);
@@ -1734,10 +1745,11 @@ void RivuletReaderActivity::requestChapterNavigation(const int spine,const int p
 bool RivuletReaderActivity::loadTocChapter(const int tocSpineIndex,const int startPage) {
   RenderLock lock(*this);
   if (!epub_ || tocSpineIndex<0 || tocSpineIndex>=epub_->getSpineItemsCount()) return false;
-  if (ready_ && engine_.hasChapter() && !heavyReleasedForUi_) {
-    requestChapterNavigation(tocSpineIndex,std::max(0,startPage));return true;
-  }
-  return loadSpine(tocSpineIndex,std::max(0,startPage),true);
+  // Always use the same cooperative destination transaction, including
+  // recovery after a failed initial open. Never fall into loadSpine's blocking
+  // restore path with an unrelated saved-position intent still armed.
+  requestChapterNavigation(tocSpineIndex,std::max(0,startPage));
+  return readiness_.pending();
 }
 
 bool RivuletReaderActivity::loadSpine(const int spine,const int startPage,const bool /*requireCompleteIr*/) {
@@ -1759,7 +1771,7 @@ bool RivuletReaderActivity::loadSpine(const int spine,const int startPage,const 
                      : target->goToPage(renderer,std::max(0,startPage),std::max(128,startPage+1));
   }
   if (!laid || target->chapter().failed()) return false;
-  commitChapter(std::move(*target),spine);restoreContentAnchor_=false;
+  if(!commitChapter(std::move(*target),spine))return false;restoreContentAnchor_=false;
   return true;
 }
 
@@ -1965,7 +1977,8 @@ void RivuletReaderActivity::promoteFutureIndexToCurrent() {
 void RivuletReaderActivity::tickFutureChapterIndex() {
   if (RenderLock::peek() || activityManager.isRenderInProgress()) return;
   RenderLock lock(*this);
-  if (!epub_ || chapterNavBusy_ || heavyReleasedForUi_ || pendingChapterIrLoad_>=0) return;
+  if (!epub_ || chapterNavBusy_ || pendingChapterIrLoad_>=0) return;
+  if(heavyReleasedForUi_ && !readiness_.pending())return;
   if ((!ready_ || !firstInkDone_) && !readiness_.pending()) return;
   if (gpio.isDebouncePending() || gpioPeekHeldForIdleMap() || futureIndexUserWantsControl()) return;
   const auto now=millis();
@@ -1973,7 +1986,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
   if (!foreground && (aaCatchUpPending_ || !rivulet::preparationbudget::isQuiet(now,lastPageTurnTime_,firstInkAtMs_))) return;
   if (!foreground && lastFutureWorkMs_ && now-lastFutureWorkMs_<rivulet::preparationbudget::kBetweenSlicesMs) return;
   if (!foreground && !readinessAlternate_) return;
-  configureReadiness();readiness_.recordCurrent(spineIndex_,engine_);
+  configureReadiness();
+  // User navigation must not wait for optional title/count publication.
+  if(!foreground)readiness_.recordCurrent(spineIndex_,engine_);
   // Keep the current page. Reclaim only optional glyph/decode/prefetch storage.
   const bool needRoom = !readiness_.hasWorker();
   if (needRoom && !rivulet::preparationbudget::canStart(ESP.getFreeHeap(),ESP.getMaxAllocHeap())) {
@@ -2001,7 +2016,11 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       const bool forward=spine>spineIndex_;
       // Move out before configureReadiness can change coordinator state.
       auto landed=readiness_.takeReady();
-      commitChapter(std::move(*landed),spine);
+      if(!landed||!commitChapter(std::move(*landed),spine)){
+        if(initialLoadPending_){initialLoadPending_=false;showError("Destination unavailable. Press Select to choose a chapter.");}
+        else flashHeldReaderPopup("Destination unavailable; place preserved");
+        requestUpdate();return;
+      }
       restoreContentAnchor_=false;
       if(reflowPreviousOrientation_>=0){reflowPreviousOrientation_=-1;SETTINGS.saveToFile();}
       if(initialLoadPending_){initialLoadPending_=false;readingSessionStartMs_=millis();loadCachedBookmarks();}
@@ -2014,6 +2033,9 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       aaCatchUpPending_=false;requestUpdate();
     }
   }else if(result==rivulet::ReadinessCoordinator::Tick::NavigationFailed){
+    LOG_ERR("READY","navigation failed reason=%s active=%d/%d paint=%d held=%d",
+            rivulet::ReadinessCoordinator::failureName(readiness_.lastFailure()),
+            spineIndex_,engine_.currentPage(),engine_.hasPreparedPage()?1:0,heavyReleasedForUi_?1:0);
     // No restoration load: the original chapter/page was never evicted.
     readiness_.cancelNavigation();pendingFootnoteReturn_=false;
     if(reflowPreviousOrientation_>=0){
@@ -2021,7 +2043,7 @@ void RivuletReaderActivity::tickFutureChapterIndex() {
       SETTINGS.frontButtonFollowOrientation=reflowPreviousFollow_;
       ReaderUtils::applyOrientation(renderer,SETTINGS.orientation);configureReadiness();
     }
-    if(initialLoadPending_){initialLoadPending_=false;showError("Could not prepare saved chapter");}
+    if(initialLoadPending_){initialLoadPending_=false;showError("Could not open this location. Press Select to choose a chapter; Back to leave.");}
     else flashHeldReaderPopup("Chapter preparation failed; place preserved");
     requestUpdate();
   }
@@ -2939,11 +2961,10 @@ void RivuletReaderActivity::openReaderMenu() {
           return;
         }
 
-        // Fonts / Reader UI / chapter list need contiguous heap — release now.
-        // Chapter select then loads from .rvir / page cache instead of fighting
-        // the resident IR. Cancel restores the held place.
-        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI) ||
-            action == static_cast<int>(MA::SELECT_CHAPTER)) {
+        // Only heavy font/settings changes release the active chapter. The
+        // chapter picker must retain it: cancellation/failed selection cannot
+        // require a second reload or replace the visible page with a placeholder.
+        if (action == static_cast<int>(MA::MANAGE_FONTS) || action == static_cast<int>(MA::MANAGE_READER_UI)) {
           releaseHeavyForUi();
           onReaderMenuAction(action);
           return;
@@ -2975,7 +2996,11 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
       return;
     case MA::SELECT_CHAPTER: {
       if (!epub_) return;
-      const int spineIdx = spineIndex_;
+      // Drop speculative work, not the current reader/anchor. Metadata list
+      // browsing must not compete with a background conversion.
+      { RenderLock lock(*this);readiness_.cancelNavigation();readiness_.releaseWorker();engine_.releasePrefetch(); }
+      const int spineIdx = engine_.hasChapter()?spineIndex_:
+        (contentAnchorValid_?int(contentAnchor_.spine):heldSpineForUi_);
       const std::string path = epub_->getPath();
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub_, path, spineIdx, irDir_),
@@ -2988,7 +3013,7 @@ void RivuletReaderActivity::onReaderMenuAction(const int action) {
                 // later chapters when the target fails (that landed users on Ch 5).
                 if (loadTocChapter(chapter->spineIndex)) {
                   firstPaint_ = true;
-                  (void)saveProgress();
+                  // Saved progress changes only when the requested page commits.
                 } else {
                   firstPaint_ = true;
                   requestUpdate();
@@ -3265,7 +3290,7 @@ bool RivuletReaderActivity::turnNext(const int skipPages) {
     if(target>=epub_->getSpineItemsCount()){
       flashHeldReaderPopup(tr(STR_END_OF_BOOK));requestUpdate();return false;
     }
-    requestChapterNavigation(target,0);return true;
+    requestChapterNavigation(target,0,/*skipEmpty=*/true);return true;
   }
   lastPageTurnTime_=lastForwardTurnMs_=millis();pageTurnLatch_.waitingRelease=true;
   (void)saveProgress(ProgressFlush::Deferred);persistHomeProgress(false);updateBookmarkFlag();requestUpdate();return true;
@@ -3285,7 +3310,7 @@ bool RivuletReaderActivity::turnPrev(const int skipPages) {
     int target=spineIndex_-1;
     while(target>=0&&epub_->getSpineItem(target).href.empty())--target;
     if(target<0)return false;
-    requestChapterNavigation(target,-1);return true;
+    requestChapterNavigation(target,-1,/*skipEmpty=*/true);return true;
   }
   lastPageTurnTime_=millis();pageTurnLatch_.waitingRelease=true;
   (void)saveProgress(ProgressFlush::Deferred);persistHomeProgress(false);updateBookmarkFlag();requestUpdate();return true;
@@ -3586,9 +3611,14 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
+  // Foreground loading remains serviceable even when recovering from an
+  // earlier error. Cancellation/Back is processed above before doing any work.
+  if(readiness_.pending()){tickFutureChapterIndex();return;}
   if (error_) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      onGoHome();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::isTouchMenuGesture(mappedInput)) {
+      // A stale resume must not lock the whole book out. Reuse the existing
+      // chapter picker; don't erase progress or silently choose page zero.
+      onReaderMenuAction(static_cast<int>(EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER));
     }
     return;
   }
@@ -3600,7 +3630,6 @@ void RivuletReaderActivity::loop() {
     return;
   }
 
-  if(readiness_.pending()) {tickFutureChapterIndex();return;}
   if(openMenuAfterLoad_ && firstInkDone_){openMenuAfterLoad_=false;openReaderMenu();return;}
 
   // Deferred single Confirm after double-press window → menu (classic wiring).
@@ -3959,7 +3988,7 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
 
   // Corner cue only. Do not clearScreen + full FAST — that replaced Home or
   // the live page with white paper (exit Saving, book open, chapter Back).
-  if (chapterNavBusy_ || reflowPreviousOrientation_>=0 || error_ || !ready_) {
+  if (chapterNavBusy_ || readiness_.pending() || reflowPreviousOrientation_>=0 || error_ || !ready_) {
     if (error_) {
       renderer.clearScreen(0xFF);
       GUI.drawPopup(renderer, errorMsg_.c_str(), BaseTheme::kPopupCenterY, true);
@@ -3975,14 +4004,17 @@ void RivuletReaderActivity::render(RenderLock&& lock) {
     return;
   }
 
-  // 0xFF = white paper; clearScreen(false) is 0 = solid black (bug that ate all text).
-  renderer.clearScreen(0xFF);
-
+  // Resolve before clearing the displayed page. Allocation/I/O failure is
+  // not an empty chapter, and must not replace readable text with white paper.
   if (!engine_.ensureLaidOut(renderer)) {
-    renderer.drawText(UI_10_FONT_ID, marginX_, marginY_ + 40, "Empty page", true, EpdFontFamily::REGULAR);
-    ReaderUtils::displayWithDarkMode(renderer, HalDisplay::HALF_REFRESH);
+    error_=true;ready_=false;
+    errorMsg_="Page unavailable. Press Select to choose a chapter; Back to leave.";
+    LOG_ERR("RVR","paint unavailable spine=%d page=%d sourceFailed=%d",spineIndex_,engine_.currentPage(),engine_.chapter().failed()?1:0);
+    GUI.drawPopup(renderer,errorMsg_.c_str(),BaseTheme::kPopupCenterY,true);
     return;
   }
+  // 0xFF = white paper; clearScreen(false) is solid black.
+  renderer.clearScreen(0xFF);
 
   const size_t nSpans = engine_.page().spans.size();
   const size_t nImgs = engine_.page().images.size();

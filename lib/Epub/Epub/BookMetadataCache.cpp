@@ -12,7 +12,9 @@
 #include "FsHelpers.h"
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 8;  // v8: TOC/book titles stored NFC-composed
+// v9: select verified richer publisher navigation. Rebuild book.bin only;
+// derived Rivulet pages, covers, saved positions and statistics remain untouched.
+constexpr uint8_t BOOK_CACHE_VERSION = 9;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -99,6 +101,7 @@ bool BookMetadataCache::endContentOpfPass() {
 
 bool BookMetadataCache::beginTocPass() {
   LOG_DBG("BMC", "Beginning toc pass");
+  tocCount = 0;  // also resets an abandoned/truncated candidate before fallback
 
   if (!Storage.openFileForRead("BMC", cachePath + tmpSpineBinFile, spineFile)) {
     return false;
@@ -109,9 +112,8 @@ bool BookMetadataCache::beginTocPass() {
     return false;
   }
 
-  if (spineCount >= LARGE_SPINE_THRESHOLD) {
-    spineHrefIndex.clear();
-    spineHrefIndex.resize(spineCount);
+  spineHrefIndex.clear();
+  if (spineCount >= LARGE_SPINE_THRESHOLD && spineHrefIndex.resize(spineCount)) {
     spineFile.seek(0);
     for (int i = 0; i < spineCount; i++) {
       auto entry = readSpineEntry(spineFile);
@@ -148,7 +150,7 @@ bool BookMetadataCache::endTocPass() {
   spineFile.close();
 
   spineHrefIndex.clear();
-  spineHrefIndex.shrink_to_fit();
+  spineHrefIndex.release();
   useSpineHrefIndex = false;
 
   return flushed;

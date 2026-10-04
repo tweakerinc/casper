@@ -12,25 +12,41 @@ bool ReadinessCoordinator::configure(const std::string& dir,const RenderKey& key
   if(spines>0&&!dir.empty()){Storage.ensureDirectoryExists(dir.c_str());(void)index_.open(dir.c_str(),key,spines);}
   return spines>0&&!dir.empty();
 }
-void ReadinessCoordinator::request(int spine,int page){
-  if(spine<0||spine>=spines_)return;
+const char* ReadinessCoordinator::failureName(Failure failure) {
+  switch(failure) {
+    case Failure::None:return "none";
+    case Failure::InvalidTarget:return "invalid-target";
+    case Failure::Allocation:return "allocation";
+    case Failure::AcquireChapter:return "chapter-load";
+    case Failure::EmptyDestination:return "empty-destination";
+    case Failure::AnchorMismatch:return "anchor-mismatch";
+    case Failure::Layout:return "page-layout";
+    case Failure::PageOutOfRange:return "page-range";
+    case Failure::InvalidPreparedPage:return "no-paint-page";
+    case Failure::NoProgress:return "map-no-progress";
+  }
+  return "unknown";
+}
+bool ReadinessCoordinator::request(int spine,int page,bool skipEmpty){
+  if(spine<0||spine>=spines_||page < -1){cancelNavigation();lastFailure_=Failure::InvalidTarget;return false;}
+  lastFailure_=Failure::None;skipEmpty_=skipEmpty;
   if(worker_&&workerSpine_!=spine)dropWorker();
   goal_=Goal::Page;anchorResolved_=false;requestedSpine_=spine;requestedPage_=page;pending_=true;navigationReady_=false;if(page<0)lastPrepared_=false;
+  return true;
 }
-void ReadinessCoordinator::requestAnchor(const ProgressAnchor& anchor){
-  request(static_cast<int>(anchor.spine),0);
-  if(!pending_)return;
-  goal_=Goal::Anchor;anchor_=anchor;anchorResolved_=false;
+bool ReadinessCoordinator::requestAnchor(const ProgressAnchor& anchor){
+  if(!request(static_cast<int>(anchor.spine),0))return false;
+  goal_=Goal::Anchor;anchor_=anchor;anchorResolved_=false;return true;
 }
-void ReadinessCoordinator::requestFraction(int spine,uint16_t fraction10000){
-  request(spine,0);if(!pending_)return;
-  goal_=Goal::Fraction;fraction_=std::min<uint16_t>(fraction10000,10000);
+bool ReadinessCoordinator::requestFraction(int spine,uint16_t fraction10000){
+  if(!request(spine,0))return false;
+  goal_=Goal::Fraction;fraction_=std::min<uint16_t>(fraction10000,10000);return true;
 }
 void ReadinessCoordinator::cancelNavigation(){pending_=navigationReady_=false;requestedSpine_=-1;}
 void ReadinessCoordinator::checkpoint(){
   if(!worker_||!loaded_||workerSpine_<0||!worker_->hasChapter()||worker_->chapter().failed()||worker_->mapKnownPages()==0)return;
-  (void)sectionlabel::save(dir_.c_str(),workerSpine_,worker_->chapter());
   if(worker_->mapKnownPages()==lastSavedKnown_ && worker_->mapComplete()==lastSavedComplete_)return;
+  if(lastSavedKnown_==0)(void)sectionlabel::save(dir_.c_str(),workerSpine_,worker_->chapter());
   char path[256];
   if(std::snprintf(path,sizeof(path),"%s/s%d_m%u.rvpm%s",dir_.c_str(),workerSpine_,unsigned(key_.pad&15),worker_->mapComplete()?"":".part")>=int(sizeof(path)))return;
   if(worker_->savePageMap(path)){lastSavedKnown_=worker_->mapKnownPages();lastSavedComplete_=worker_->mapComplete();}
@@ -71,9 +87,9 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
   if(!worker_){
     const int target=pending_?requestedSpine_:choose(current,now);
     if(target<0)return Tick::Idle;
-    if(!casper_memory::allowAllocation()){failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
+    if(!casper_memory::allowAllocation()){lastFailure_=Failure::Allocation;failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
     worker_.reset(new(std::nothrow) RivuletEngine());
-    if(!worker_){failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
+    if(!worker_){lastFailure_=Failure::Allocation;failLater(target,now);const bool asked=pending_;if(asked)cancelNavigation();return asked?Tick::NavigationFailed:Tick::Idle;}
     workerSpine_=target;worker_->deferPageCacheWrites(true);worker_->setRenderKey(key_);worker_->setLineCompression(lineCompression_);
     loaded_=false;
     if(factory)preparation_=factory(ctx,*worker_,target);
@@ -84,14 +100,14 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
     if(loaded==Load::Working)return Tick::Working;
     if(loaded==Load::Empty){
       (void)index_.record(target,0);dropWorker();
-      if(pending_){if(goal_!=Goal::Page){cancelNavigation();return Tick::NavigationFailed;}const int step=requestedPage_<0?-1:1;requestedSpine_+=step;
-        if(requestedSpine_<0||requestedSpine_>=spines_){cancelNavigation();return Tick::NavigationFailed;}}
+      if(pending_){if(goal_!=Goal::Page||!skipEmpty_){lastFailure_=Failure::EmptyDestination;cancelNavigation();return Tick::NavigationFailed;}const int step=requestedPage_<0?-1:1;requestedSpine_+=step;
+        if(requestedSpine_<0||requestedSpine_>=spines_){lastFailure_=Failure::EmptyDestination;cancelNavigation();return Tick::NavigationFailed;}}
       return Tick::Working;
     }
     if(loaded!=Load::Ready||worker_->chapter().failed()){
       const bool failed=pending_&&loaded!=Load::Cancelled;
       dropWorker();if(loaded!=Load::Cancelled)failLater(target,now);
-      if(failed)cancelNavigation();
+      if(failed){lastFailure_=Failure::AcquireChapter;cancelNavigation();}
       return failed?Tick::NavigationFailed:Tick::Idle;
     }
     loaded_=true;preparation_.reset();
@@ -102,9 +118,21 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
   worker_->setMapAbortCheck(abort);
   struct ClearAbort {RivuletEngine* e;~ClearAbort(){if(e)e->setMapAbortCheck(nullptr);}} guard{worker_.get()};
   bool layoutFailed=false;
+  bool requestedPagePrepared=false;
+  auto publish=[&]() {
+    // Never infer paint readiness from firstPrepared_: background preparation
+    // intentionally releases that page, and a replacement layout can fail.
+    if(!worker_->hasChapter()||worker_->chapter().failed()||!worker_->hasPreparedPage()) {
+      lastFailure_=Failure::InvalidPreparedPage;
+      guard.e->setMapAbortCheck(nullptr);guard.e=nullptr;
+      dropWorker();cancelNavigation();return Tick::NavigationFailed;
+    }
+    navigationReady_=true;lastFailure_=Failure::None;return Tick::NavigationReady;
+  };
   if(pending_&&goal_==Goal::Anchor&&!anchorResolved_) {
     anchorResolved_=anchor_.resolve(worker_->chapter(),resolvedAnchor_);
     if(!anchorResolved_){
+      lastFailure_=Failure::AnchorMismatch;
       LOG_ERR("READY", "resume anchor rejected spine=%d savedIR=%u currentIR=%u page=%u offset=%u io=%d",
               workerSpine_, unsigned(anchor_.format), unsigned(kIrFormatVersion),
               unsigned(anchor_.page), unsigned(anchor_.textOffset), worker_->chapter().failed() ? 1 : 0);
@@ -119,42 +147,52 @@ ReadinessCoordinator::Tick ReadinessCoordinator::advance(const GfxRenderer& rend
   if(!firstPrepared_){
     if(worker_->goToStart(renderer)){
       firstPrepared_=true;
+      requestedPagePrepared=pending_&&goal_==Goal::Page&&requestedPage_==0;
       // User navigation must paint before optional cache publication. A
       // background first page is stored once, then its strings are released.
       if(!pending_){(void)worker_->flushPageCache();checkpoint();worker_->releasePaintPage();}
     }
     else layoutFailed=!(abort&&abort());
   }else if(pending_&&goal_==Goal::Anchor&&worker_->mapCoversCursor(resolvedAnchor_)){
-    if(worker_->resumeAtCursor(renderer,resolvedAnchor_,0)){navigationReady_=true;return Tick::NavigationReady;}
+    if(worker_->resumeAtCursor(renderer,resolvedAnchor_,0))return publish();
     layoutFailed=!(abort&&abort());
   }else if(pending_&&goal_==Goal::Page&&requestedPage_>=0&&worker_->mapKnownPages()>requestedPage_){
-    if(worker_->goToPage(renderer,requestedPage_,0)){navigationReady_=true;return Tick::NavigationReady;}
+    if(worker_->goToPage(renderer,requestedPage_,0))return publish();
     layoutFailed=!(abort&&abort());
   }else if(!worker_->mapComplete()){
     const int before=worker_->mapKnownPages();
     const bool progress=worker_->extendPageMap(renderer,1);
     if(worker_->mapKnownPages()-lastSavedKnown_>=8||worker_->mapComplete())checkpoint();
-    if(!progress&&before==worker_->mapKnownPages()&&!worker_->mapComplete())layoutFailed=!(abort&&abort());
+    if(!progress&&before==worker_->mapKnownPages()&&!worker_->mapComplete()) {
+      layoutFailed=!(abort&&abort());
+      if(layoutFailed)lastFailure_=Failure::NoProgress;
+    }
   }else if(!lastPrepared_){
     // Only one paint-layout at the verified tail. No reverse-pagination guess.
     if(worker_->goToLastPage(renderer,1,false)&&worker_->page().atChapterEnd){
       lastPrepared_=true;
       if(!pending_){(void)worker_->flushPageCache();checkpoint();(void)index_.record(workerSpine_,worker_->mapKnownPages());worker_->releasePaintPage();}
-      if(pending_&&requestedPage_<0){navigationReady_=true;return Tick::NavigationReady;}
-      if(pending_&&requestedPage_>=worker_->mapKnownPages())layoutFailed=true; // never silently reset to page zero
+      if(pending_&&goal_==Goal::Page&&requestedPage_<0)return publish();
+      if(pending_&&requestedPage_>=worker_->mapKnownPages()){lastFailure_=Failure::PageOutOfRange;layoutFailed=true;} // never silently reset to page zero
     }else layoutFailed=!(abort&&abort());
-  }else if(!pending_){
+  }else if(pending_){
+    // Complete map but unresolved/out-of-range destination: a terminal result,
+    // not an endless Working loop. Never turn a bad anchor into page zero.
+    lastFailure_=goal_==Goal::Anchor?Failure::AnchorMismatch:Failure::PageOutOfRange;
+    layoutFailed=true;
+  }else{
     // Guard holds a raw pointer; clear it before releasing the worker.
     guard.e->setMapAbortCheck(nullptr);guard.e=nullptr;
     dropWorker();return Tick::Working;
   }
-  if(firstPrepared_&&pending_&&goal_==Goal::Page&&requestedPage_==0){navigationReady_=true;return Tick::NavigationReady;}
   if(layoutFailed||worker_->chapter().failed()){
     const bool failed=pending_;const int target=workerSpine_;
+    if(lastFailure_==Failure::None)lastFailure_=Failure::Layout;
     guard.e->setMapAbortCheck(nullptr);guard.e=nullptr;
     dropWorker();failLater(target,now);if(failed)cancelNavigation();
     return failed?Tick::NavigationFailed:Tick::Idle;
   }
+  if(requestedPagePrepared)return publish();
   return Tick::Working;
 }
 } // namespace rivulet

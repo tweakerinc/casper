@@ -16,9 +16,17 @@ class ReadinessCoordinator {
   using Factory=std::unique_ptr<Preparation>(*)(void*,RivuletEngine&,int);
   Tick tickPrepared(const GfxRenderer& renderer,int currentSpine,Factory factory,void* ctx,uint32_t now,bool(*abort)());
   bool configure(const std::string& dir,const RenderKey& key,float lineCompression,int spines);
-  void request(int spine,int page=0); // page -1 means the verified final page
-  void requestAnchor(const ProgressAnchor& anchor);
-  void requestFraction(int spine, uint16_t fraction10000);
+  enum class Failure : uint8_t {
+    None, InvalidTarget, Allocation, AcquireChapter, EmptyDestination,
+    AnchorMismatch, Layout, PageOutOfRange, InvalidPreparedPage, NoProgress
+  };
+  [[nodiscard]] Failure lastFailure() const { return lastFailure_; }
+  [[nodiscard]] static const char* failureName(Failure failure);
+  // A TOC/bookmark request is exact. Only reading-order boundary traversal may
+  // skip a verified empty file, never a failed or unprepared chapter.
+  bool request(int spine,int page=0,bool skipEmpty=false); // -1 = verified last page
+  bool requestAnchor(const ProgressAnchor& anchor);
+  bool requestFraction(int spine, uint16_t fraction10000);
   void cancelNavigation();
   void release();
   void checkpoint();
@@ -28,9 +36,10 @@ class ReadinessCoordinator {
   int destination()const{return requestedSpine_;}
   int requestedPage()const{return requestedPage_;}
   // Caller can move this engine into its active slot after NavigationReady.
-  RivuletEngine* readyEngine(){return navigationReady_?worker_.get():nullptr;}
+  RivuletEngine* readyEngine(){return navigationReady_ && worker_ && worker_->hasChapter() &&
+      !worker_->chapter().failed() && worker_->hasPreparedPage() ? worker_.get() : nullptr;}
   void consumed();
-  std::unique_ptr<RivuletEngine> takeReady(){if(!navigationReady_)return {};auto result=std::move(worker_);consumed();return result;}
+  std::unique_ptr<RivuletEngine> takeReady(){if(!readyEngine())return {};auto result=std::move(worker_);consumed();return result;}
   bool recordCurrent(int spine,const RivuletEngine& engine);
   void focus(int spine){focus_=spine;if(index_.valid())index_.focus(spine);probeStage_=0;}
   const BookPageIndex& index()const{return index_;}
@@ -61,7 +70,9 @@ class ReadinessCoordinator {
   int probeStage_=0,crawl_=0,lastSavedKnown_=0,lastActiveSpine_=-1,lastActiveCount_=-1;
   bool lastSavedComplete_=false;
   unsigned failureSlot_=0;
-  struct Failure {int spine=-1;uint32_t until=0;} failures_[8];
+  struct RetryDelay {int spine=-1;uint32_t until=0;} failures_[8];
+  Failure lastFailure_=Failure::None;
+  bool skipEmpty_=false;
   bool pending_=false,navigationReady_=false,firstPrepared_=false,lastPrepared_=false;
 };
 } // namespace rivulet

@@ -40,6 +40,8 @@ inline constexpr bool idleUpgradeFallbackToHero() { return true; }
 // Progressive jackets: jpgd+spill when maxAlloc allows (see CoverDecodePolicy).
 // X3 field maxAlloc≈69 KB always NOTENOUGHMEM; JPEGDEC 1/8 is the working path
 // and must pass JPEG_SCALE_EIGHTH into decode() (cover path used 0 → err=2).
+// Tight heap must take that 1/8 path rather than returning false (RC3 deferred
+// forever, then Home paused retries as a no-progress decoder failure).
 inline constexpr bool fullProgressiveCoverDecode() { return true; }
 
 // Cue / JPEG run only after HomeActivity::render has put chrome on glass.
@@ -48,7 +50,10 @@ inline constexpr bool genWaitsForHomeShell() { return true; }
 // Stop a no-progress generation pass from automatically replaying the same
 // decoder failure. Re-entering Home or explicitly refreshing starts a new pass.
 // Deferral before generation (shell not ready) must still be allowed to retry.
-inline constexpr bool retryGenerationPass(const bool fromGeneration, const bool failedWithoutProgress) {
+inline constexpr bool retryGenerationPass(const bool fromGeneration, const bool failedWithoutProgress,
+                                          const thumbcache::DiskThumb disk = thumbcache::DiskThumb::Missing) {
+  // Unverified is SD-busy / unopened, not a persistent decoder failure.
+  if (disk == thumbcache::DiskThumb::Unverified) return true;
   return !fromGeneration || !failedWithoutProgress;
 }
 
@@ -66,7 +71,10 @@ inline constexpr bool skipJpegOnReturn(const thumbcache::DiskThumb state) { retu
 
 inline constexpr bool generateHero(const thumbcache::DiskThumb state) {
   if (state == thumbcache::DiskThumb::Hero) return false;
-  if (state == thumbcache::DiskThumb::Unverified) return false;  // exists; do not truncate
+  // Unverified: a path exists but was not a paintably valid BMP (SD busy, or
+  // exists() without open). Idle must retry the open — generateThumbBmp will
+  // not truncate a file it could not open.
+  if (state == thumbcache::DiskThumb::Unverified) return true;
   if (state == thumbcache::DiskThumb::Fallback) return idleUpgradeFallbackToHero();
   return true;  // Missing
 }

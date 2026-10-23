@@ -15,7 +15,7 @@ TEST(CoverRenderPolicy, IdleGeneratesMissingAndUpgradesFallback) {
   EXPECT_TRUE(coverrender::generateHero(DiskThumb::Missing));
   EXPECT_TRUE(coverrender::generateHero(DiskThumb::Fallback));
   EXPECT_FALSE(coverrender::generateHero(DiskThumb::Hero));
-  EXPECT_FALSE(coverrender::generateHero(DiskThumb::Unverified));
+  EXPECT_TRUE(coverrender::generateHero(DiskThumb::Unverified));
 }
 
 TEST(CoverRenderPolicy, CueHitsPanelOnceHomeIsVisible) {
@@ -39,6 +39,12 @@ TEST(CoverRenderPolicy, RetryUnverifiedWithoutTruncating) {
   EXPECT_TRUE(coverrender::keepRetrying(/*attempts=*/7, DiskThumb::Missing, false));
   EXPECT_FALSE(coverrender::keepRetrying(/*attempts=*/8, DiskThumb::Unverified, false));
   EXPECT_FALSE(coverrender::keepRetrying(/*attempts=*/1, DiskThumb::Hero, false));
+}
+
+TEST(CoverRenderPolicy, UnverifiedBusyIsNotANoProgressGiveUp) {
+  EXPECT_FALSE(coverrender::retryGenerationPass(true, true, DiskThumb::Missing));
+  EXPECT_TRUE(coverrender::retryGenerationPass(true, true, DiskThumb::Unverified));
+  EXPECT_TRUE(coverrender::retryGenerationPass(false, true, DiskThumb::Missing));
 }
 
 TEST(CoverRenderPolicy, MissingCoverDoesNotSettleWhileRetrying) {

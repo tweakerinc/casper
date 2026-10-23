@@ -19,7 +19,8 @@ int main(){
  require(attempts==1);
  // Valid covers, existing fallbacks and waiting-for-shell rules are retained.
  require(!coverrender::generateHero(DiskThumb::Hero));
- require(!coverrender::generateHero(DiskThumb::Unverified));
+ require(coverrender::generateHero(DiskThumb::Unverified));
+ require(coverrender::retryGenerationPass(true,true,DiskThumb::Unverified));
  require(coverrender::generateHero(DiskThumb::Fallback));
  require(coverrender::generateHero(DiskThumb::Missing));
  require(!coverrender::keepRetrying(1,DiskThumb::Hero,false));

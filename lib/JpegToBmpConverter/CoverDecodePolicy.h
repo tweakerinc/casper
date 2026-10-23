@@ -29,6 +29,16 @@ inline constexpr bool useFullProgressiveDecode(unsigned maxAllocBytes,unsigned f
   return maxAllocBytes >= kJpgdMinMaxAllocBytes && freeBytes >= kJpgdMinFreeBytes;
 }
 
+// RC3 routed every progressive jacket through jpgd+spill and returned false when
+// the 96 KB free gate missed. After reading, maxAlloc is often 30–73 KB even
+// with ~100 KB free — Home then treated that as a no-progress decoder failure
+// and stopped retrying, so covers never appeared. JPEGDEC 1/8 is the path that
+// actually ran on X3 (CoverRenderPolicy). Use it when jpgd cannot start.
+// jpegDecDecodeOptions(progressive)=8 so MCU coords match the 1/8 grid (err=2).
+inline constexpr bool jpegDecEighthFallback(unsigned maxAllocBytes, unsigned freeBytes) {
+  return !useFullProgressiveDecode(maxAllocBytes, freeBytes);
+}
+
 // generateThumbBmp used to decode the same cover.jpg twice (book.bin href,
 // then OPF). Skip the second pass when the path did not change.
 inline constexpr bool skipSameCoverHrefRetry(const char* cachedHref, const char* freshHref) {

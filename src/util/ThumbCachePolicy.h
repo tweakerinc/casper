@@ -18,6 +18,7 @@ inline constexpr bool validBmpProbe(const unsigned bytesRead, const char s0, con
 
 // generateThumbBmp: keep a file we could not open if exists() says it is there
 // (SD busy after the reader). Truncating that path would destroy a good jacket.
+// Do not treat that as a successful cache hit — return false so idle retries.
 // Paint/classify must still require an opened valid BMP — see DiskThumb::Unverified.
 inline constexpr bool keepExistingThumb(const bool exists, const bool opened, const bool validBmp) {
   if (opened) return validBmp;
@@ -44,6 +45,8 @@ inline constexpr DiskThumb classify(const bool heroValid, const bool fallbackVal
 // 1:1 hero (see coverrender::generateHero) with a "Rendering Cover" cue.
 inline constexpr bool skipJpeg(const DiskThumb state) { return state != DiskThumb::Missing; }
 
-inline constexpr bool jpegWhenIdle(const DiskThumb state) { return state == DiskThumb::Missing; }
+inline constexpr bool jpegWhenIdle(const DiskThumb state) {
+  return state == DiskThumb::Missing || state == DiskThumb::Unverified;
+}
 
 }  // namespace thumbcache

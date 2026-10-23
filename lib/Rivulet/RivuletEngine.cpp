@@ -876,7 +876,7 @@ int RivuletEngine::chapterPageCount(const GfxRenderer* rendererForEstimate) cons
   // / totalBytes) — same idea, IR cursors instead of HTML byte offsets.
   int extrapolated = 0;
   if (map_.knownPages() >= 3 && !chapter_.blocks().empty()) {
-    const IrCursor& last = map_.pageStart(map_.knownPages() - 1);
+    const IrCursor last = map_.lastStart();
     const int blocks = static_cast<int>(chapter_.blocks().size());
     const int reached = std::min(blocks, static_cast<int>(last.blockIndex) + 1);
     if (reached > 0 && reached < blocks) {

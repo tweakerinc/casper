@@ -8,7 +8,9 @@ class RenderLock {
 
  public:
   explicit RenderLock();
-  explicit RenderLock(Activity&);  // unused for now, but keep for compatibility
+  // Same mutex as the default ctor. Activities pass *this so the lock is
+  // visibly tied to the activity whose engine/renderer it protects.
+  explicit RenderLock(Activity&);
   RenderLock(const RenderLock&) = delete;
   RenderLock& operator=(const RenderLock&) = delete;
   ~RenderLock();

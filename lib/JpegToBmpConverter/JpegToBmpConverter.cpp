@@ -944,18 +944,18 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     return false;
   }
   if (header.progressive) {
-    // Do not run progressive scan tables through JPEGDEC's baseline table
-    // builder. Its 1/8 fallback fails on the reported EPUB and has undefined
-    // shifts while building absent AC tables. Full progressive decoding uses
-    // bounded RAM and disposable coefficient storage on SD instead.
-    if (!coverdecode::useFullProgressiveDecode(ESP.getMaxAllocHeap(), ESP.getFreeHeap())) {
-      LOG_DBG("JPG", "Progressive cover deferred: free=%u maxA=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-      return false;
+    // Full-res jpgd+spill when the heap can take it (paired sleep from the same
+    // coeff store). Otherwise JPEGDEC 1/8 — the working X3 path — so Home still
+    // publishes a cacheable thumb instead of deferring forever.
+    if (!coverdecode::jpegDecEighthFallback(ESP.getMaxAllocHeap(), ESP.getFreeHeap())) {
+      bool wroteBmp = false;
+      return convertProgressiveJpegFull(jpegFile, bmpOut, header.width, header.height,
+                                       targetWidth, targetHeight, oneBit, crop, coverHighQuality, &wroteBmp,
+                                       abortCheck, sleepOut, sleepCrop);
     }
-    bool wroteBmp = false;
-    return convertProgressiveJpegFull(jpegFile, bmpOut, header.width, header.height,
-                                     targetWidth, targetHeight, oneBit, crop, coverHighQuality, &wroteBmp,
-                                     abortCheck, sleepOut, sleepCrop);
+    LOG_INF("JPG", "Progressive 1/8 fallback free=%u maxA=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    // Fall through to JPEGDEC. Do not pair a sleep BMP from 1/8 pixels.
   }
   s_jpegFile = &jpegFile;
   s_jpegAbort = abortCheck;

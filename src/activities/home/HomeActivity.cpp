@@ -398,7 +398,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   auto armRetry = [this, heroH](const bool fromGen, const bool failedWithoutProgress = false) {
     const auto disk =
         recentBooks.empty() ? thumbcache::DiskThumb::Missing : classifyRecentCover(recentBooks[0], heroH);
-    if (coverrender::retryGenerationPass(fromGen, failedWithoutProgress) &&
+    if (coverrender::retryGenerationPass(fromGen, failedWithoutProgress, disk) &&
         coverrender::keepRetrying(coverGenAttempts, disk, coverGrayOnPanel)) {
       coverNeedsRetry = true;
       const unsigned delayMs = static_cast<unsigned>(coverrender::kRetryDelayMs) *

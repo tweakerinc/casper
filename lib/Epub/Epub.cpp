@@ -1026,9 +1026,11 @@ bool Epub::generateThumbBmp(int height, bool (*abortCheck)(), bool prepareSleep,
     LOG_ERR("EBP", "Removing corrupt thumb: %s", existingPath.c_str());
     Storage.remove(existingPath.c_str());
   } else if (!opened && Storage.exists(existingPath.c_str())) {
-    // Open-fail after the reader is SD-busy, not a missing file.
-    LOG_DBG("EBP", "thumb cache hit %s opened=0", existingPath.c_str());
-    return true;
+    // Keep the file (do not decode over a jacket we could not open). Return
+    // false so Home retries once SD is idle — claiming a cache hit here left
+    // Unverified thumbs unpainted forever (generateHero used to skip them).
+    LOG_DBG("EBP", "thumb busy (exists, open failed) %s", existingPath.c_str());
+    return false;
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
@@ -1130,8 +1132,9 @@ bool Epub::generateThumbBmp(int height, bool (*abortCheck)(), bool prepareSleep,
         return false;
       }
 
+      const std::string thumbStage = getThumbBmpPath(height) + ".part";
       HalFile thumbBmp;
-      if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      if (!Storage.openFileForWrite("EBP", thumbStage, thumbBmp)) {
         coverPng.close();
         Storage.remove(coverPngTempPath.c_str());
         return false;
@@ -1139,15 +1142,19 @@ bool Epub::generateThumbBmp(int height, bool (*abortCheck)(), bool prepareSleep,
       const int THUMB_TARGET_HEIGHT = height;
       const int THUMB_TARGET_WIDTH = std::max(1, (height * 3 + 1) / 4);
       LOG_DBG("EBP", "Thumb PNG free heap before decode: %u", static_cast<unsigned>(ESP.getFreeHeap()));
-      const bool success = PngToBmpConverter::pngFileToCoverThumbBmpStreamWithSize(
+      bool success = PngToBmpConverter::pngFileToCoverThumbBmpStreamWithSize(
           coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
       coverPng.close();
       thumbBmp.close();
       Storage.remove(coverPngTempPath.c_str());
 
+      if (success) {
+        Storage.remove(getThumbBmpPath(height).c_str());
+        success = Storage.rename(thumbStage.c_str(), getThumbBmpPath(height).c_str());
+      }
       if (!success) {
         LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image");
-        Storage.remove(getThumbBmpPath(height).c_str());
+        Storage.remove(thumbStage.c_str());
       }
       return success;
     }

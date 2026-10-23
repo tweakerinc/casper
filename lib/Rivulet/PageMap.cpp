@@ -21,10 +21,20 @@ bool PageMap::enablePaging(const char* basePath) {
   return starts_.create(work);
 }
 
+void PageMap::rememberLastStart() {
+  if (starts_.empty() || starts_.failed()) {
+    lastStart_ = {};
+    return;
+  }
+  lastStart_ = starts_[starts_.size() - 1];
+  if (starts_.failed()) lastStart_ = {};
+}
+
 void PageMap::clear() {
   starts_.release();
   complete_ = false;
   knownTotal_ = 0;
+  lastStart_ = {};
   key_ = {};
   pagingBase_[0]=0;
 }
@@ -34,11 +44,14 @@ bool PageMap::resetWithStart(const IrCursor& firstPageStart) {
   const bool ok = starts_.push_back(firstPageStart);
   complete_ = false;
   knownTotal_ = 0;
+  if (ok) lastStart_ = firstPageStart;
+  else lastStart_ = {};
   return ok;
 }
 
 bool PageMap::pushPageStart(const IrCursor& c) {
-  if (!starts_.push_back(c)) { markIncomplete(); return false; }
+  if (!starts_.push_back(c)) { markIncomplete(); lastStart_ = {}; return false; }
+  lastStart_ = c;
   // Extending past a "complete" map means that total was wrong (stale .rvpm or
   // false end==start complete). Drop complete so counts/idle walk resume.
   if (complete_ && static_cast<int>(starts_.size()) > knownTotal_) {
@@ -56,6 +69,7 @@ void PageMap::truncateFrom(const int pageIndex) {
   }
   complete_ = false;
   knownTotal_ = 0;
+  rememberLastStart();
 }
 
 bool PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
@@ -65,7 +79,7 @@ bool PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
     return false;
   }
   if (pageIndex == static_cast<int>(starts_.size())) {
-    if (!starts_.push_back(c)) { markIncomplete(); return false; }
+    if (!starts_.push_back(c)) { markIncomplete(); lastStart_ = {}; return false; }
   } else {
     starts_[static_cast<size_t>(pageIndex)] = c;
     // Later starts are no longer valid relative to this re-break.
@@ -75,7 +89,12 @@ bool PageMap::setPageStart(const int pageIndex, const IrCursor& c) {
   }
   complete_ = false;
   knownTotal_ = 0;
-  return !failed();
+  if (failed()) {
+    lastStart_ = {};
+    return false;
+  }
+  lastStart_ = c;
+  return true;
 }
 
 IrCursor PageMap::pageStart(const int pageIndex) const {
@@ -183,6 +202,7 @@ bool PageMap::loadFromFile(const char* path) {
     previous=current;
   }
   complete_ = completeU8 != 0;
+  rememberLastStart();
   f.close();
   return true;
 }

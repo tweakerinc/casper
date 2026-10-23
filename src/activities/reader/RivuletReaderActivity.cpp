@@ -40,6 +40,7 @@
 #include "EpubReaderPercentSelectionActivity.h"
 #include "FutureChapterIndex.h"
 #include "IdlePageMap.h"
+#include "ReaderRenderSync.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
@@ -1935,6 +1936,7 @@ bool RivuletReaderActivity::futureIndexBackHeld() const {
 
 void RivuletReaderActivity::promoteFutureIndexToCurrent() {
   if (!futureIndexActive_) return;
+  RenderLock lock(*this);
   persistFutureMap(/*completeOnly=*/engine_.mapComplete());
   const int target = futureIndexSpine_;
   futureIndexActive_ = false;
@@ -2332,11 +2334,12 @@ void RivuletReaderActivity::paintCurrentPageToFramebuffer() {
 }
 
 void RivuletReaderActivity::tickIdlePageMap() {
-  if (RenderLock::peek()) return;
-  RenderLock stateLock(*this);
+  // Cheap gates first. Layout still takes RenderLock below: GfxRenderer,
+  // ChapterIr windows, and PageMap are shared with the paint task, and ESP32
+  // time-slices equal-priority tasks even without yield().
+  if (!readersync::idleWorkMayUseEngine({RenderLock::peek(), activityManager.isRenderInProgress()})) return;
   if (futureIndexActive_ || pendingChapterIrLoad_ >= 0 || readiness_.pending()) return;
-  if (activityManager.isRenderInProgress()) return;
-  if (!ready_ || !epub_ || !firstInkDone_ || !engine_.hasChapter()) return;
+  if (!ready_ || !epub_ || !firstInkDone_) return;
   if (ReaderUtils::anyPageTurnControlHeld(mappedInput) || mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
       mappedInput.isPressed(MappedInputManager::Button::Back)) {
     return;
@@ -2344,7 +2347,6 @@ void RivuletReaderActivity::tickIdlePageMap() {
   const unsigned long now = millis();
   if (ESP.getMaxAllocHeap() < 20 * 1024 || ESP.getFreeHeap() < 28 * 1024) return;
   const bool quietForPreparation=rivulet::preparationbudget::isQuiet(now,lastPageTurnTime_,firstInkAtMs_);
-  if(quietForPreparation && engine_.flushPageCache())return;
   // Do not reallocate two optional paint-ahead pages immediately after making
   // room for the independently owned preparation engine. Resume them on input.
   const bool counterOwnsBudget=quietForPreparation&&readiness_.hasWorker();
@@ -2356,13 +2358,18 @@ void RivuletReaderActivity::tickIdlePageMap() {
   // Failed work is retried after a delay, not disabled for this entire sitting.
   if (currentIndexRetryAt_ && static_cast<long>(now-currentIndexRetryAt_)<0) return;
 
+  RenderLock stateLock(*this);
+  if (activityManager.isRenderInProgress()) return;
+  if (!engine_.hasChapter()) return;
+  if(quietForPreparation && engine_.flushPageCache())return;
+
   // Turn speed first: warm next page in RAM ASAP (no SD). Only 50ms after a turn.
   // 0029 disabled this and every forward turn paid a full layout — felt unusable.
   // If ahead is still cold, do NOT fall through to extendPageMap: a 1.5s measure
   // walk of the map tail (device log known=3→4) steals the next tap and the
   // user still pays a full paint layout on the turn.
   if (!counterOwnsBudget && !engine_.aheadWarm()) {
-    const bool atChapterEnd = engine_.hasChapter() && engine_.page().atChapterEnd;
+    const bool atChapterEnd = engine_.page().atChapterEnd;
     if (!atChapterEnd) {
       if (lastPageTurnTime_ == 0UL || (now - lastPageTurnTime_) >= 50UL) {
         engine_.setMapAbortCheck(&gpioPeekHeldForIdleMap);
@@ -2379,14 +2386,16 @@ void RivuletReaderActivity::tickIdlePageMap() {
     }
   }
 
-  // Next page is laid out: decompress its glyphs so the coming tap skips scan.
-  // Wait 2s after a turn — device e38a3a71 painted the next page for 4.1s
-  // (prewarm_glyphs abort=0) 50ms after the tap and froze the following press.
-  if (!counterOwnsBudget && (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1)) {
-    if (lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL) {
-      prewarmAheadGlyphs();
-    }
-  }
+  // Glyph prewarm takes its own lock and can run for seconds. Drop this lock
+  // so a requested paint is not stuck behind SD-font decompress.
+  const bool wantGlyphPrewarm =
+      !counterOwnsBudget && (glyphCacheSpine_ != spineIndex_ || glyphCachePage_ != engine_.currentPage() + 1) &&
+      lastPageTurnTime_ != 0UL && (now - lastPageTurnTime_) >= 2000UL;
+  stateLock.unlock();
+  if (wantGlyphPrewarm) prewarmAheadGlyphs();
+  if (!readersync::idleWorkMayUseEngine({RenderLock::peek(), activityManager.isRenderInProgress()})) return;
+  RenderLock mapLock(*this);
+  if (activityManager.isRenderInProgress() || !engine_.hasChapter()) return;
 
   // Behind warm after a chapter land (PageBack onto last page). Not on the
   // turn path — that added SD/layout onto the 3.5s Back the user already felt.

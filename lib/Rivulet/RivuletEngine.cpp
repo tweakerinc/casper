@@ -92,7 +92,7 @@ uint32_t RivuletEngine::pageCacheKeyFp() const {
   // images must not survive a parser/style repair just because font is equal.
   uint32_t hash = 2166136261u;
   auto mix = [&hash](uint32_t n) {for (unsigned i=0;i<4;++i){hash^=uint8_t(n>>(i*8));hash*=16777619u;}};
-  mix(kIrFormatVersion);mix(static_cast<uint32_t>(key_.fontId));
+  mix(kIrFormatVersion);mix(kMapFormatVersion);mix(static_cast<uint32_t>(key_.fontId));
   mix(key_.viewportW);mix(key_.viewportH);mix(key_.marginL);mix(key_.marginR);
   mix(key_.marginT);mix(key_.marginB);mix(key_.lineCompressionQ8);mix(key_.flags);mix(key_.pad);
   return hash;

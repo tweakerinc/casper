@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "DropCapPolicy.h"
+#include "KeepWithNextPolicy.h"
 #include "Epub/hyphenation/Hyphenator.h"
 #include "FontLadder.h"
 #include "IrTokenizer.h"
@@ -317,6 +318,48 @@ void advancePastBlock(const ChapterIr& ch, IrCursor& c) {
   c.byteInRun = 0;
 }
 
+bool isHeadingKind(const BlockKind k) {
+  return k >= BlockKind::Heading1 && k <= BlockKind::Heading6;
+}
+
+bool isOrnamentBlock(const Block& b) {
+  return b.kind == BlockKind::Image && (b.flags & kBlockOrnament) != 0;
+}
+
+bool isTitleClusterBlock(const Block& b) {
+  return isHeadingKind(b.kind) || isOrnamentBlock(b) || b.kind == BlockKind::Spacer;
+}
+
+bool followingHasHeading(const ChapterIr& ch, const uint16_t blockIndex) {
+  for (size_t i = static_cast<size_t>(blockIndex) + 1; i < ch.blocks().size(); ++i) {
+    const Block n = ch.blocks()[i];
+    if (n.kind == BlockKind::Spacer || isOrnamentBlock(n)) continue;
+    return isHeadingKind(n.kind);
+  }
+  return false;
+}
+
+bool startsTitleCluster(const ChapterIr& ch, const Block& b, const uint16_t blockIndex) {
+  if (isHeadingKind(b.kind)) return true;
+  return isOrnamentBlock(b) && followingHasHeading(ch, blockIndex);
+}
+
+struct KeepCheckpoint {
+  IrCursor cur{};
+  int y = 0;
+  int trailingCollapsePx = 0;
+  int dropW = 0;
+  int dropBottom = 0;
+  bool dropIsRight = false;
+  bool pageHasProse = false;
+  size_t spans = 0;
+  size_t images = 0;
+  size_t rules = 0;
+  int16_t dropZoneW = 0;
+  int16_t dropZoneH = 0;
+  bool hasDropZone = false;
+};
+
 }  // namespace
 
 static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer, const LayoutParams& params,
@@ -341,6 +384,8 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
   int y = 0;
   bool pageHasProse = false;
   IrCursor cur = from;
+  bool keepActive = false;
+  KeepCheckpoint keep{};
 
   int dropW = 0;
   int dropBottom = 0;
@@ -348,6 +393,9 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
   // CSS-style vertical margin collapse for book-style spacers: adjacent trailing
   // and leading margins collapse to max(a,b), not a+b (was stacking 1.4+1.4+2.8em).
   int trailingCollapsePx = 0;
+  char lastImgHref[96]{};
+  int lastImgY = -9999;
+  int lastImgW = 0;
 
   auto xBase = [&](const int lineTop) -> int {
     if (dropW <= 0) return 0;
@@ -417,6 +465,26 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
     if (!out.spans.reserve(spanEstimate)) { out.allocationFailed = true; return false; }
   }
 
+  auto restoreKeep = [&]() {
+    cur = keep.cur;
+    y = keep.y;
+    trailingCollapsePx = keep.trailingCollapsePx;
+    dropW = keep.dropW;
+    dropBottom = keep.dropBottom;
+    dropIsRight = keep.dropIsRight;
+    pageHasProse = keep.pageHasProse;
+    while (out.spans.size() > keep.spans) out.spans.pop_back();
+    while (out.images.size() > keep.images) out.images.pop_back();
+    while (out.rules.size() > keep.rules) out.rules.pop_back();
+    out.hasDropZone = keep.hasDropZone;
+    out.dropZoneW = keep.dropZoneW;
+    out.dropZoneH = keep.dropZoneH;
+    keepActive = false;
+  };
+  auto rewindKeepOnPageFull = [&]() {
+    if (keepActive && keep.y > 0) restoreKeep();
+  };
+
   // Process blocks until page full or chapter ends.
   while (!atEnd(chapter, cur) && y < viewH) {
     if (params.shouldAbort && params.shouldAbort()) {
@@ -441,6 +509,34 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
     const bool atBlockStart = (cur.runIndex == block.runBegin && cur.byteInRun == 0);
     const bool isHeading = (block.kind >= BlockKind::Heading1 && block.kind <= BlockKind::Heading6);
     const bool isChapterHead = block.kind == BlockKind::Heading1 || block.kind == BlockKind::Heading2;
+    if (keepActive && atBlockStart && !isTitleClusterBlock(block)) {
+      if (block.kind == BlockKind::Paragraph) {
+        if (headingClusterMovesToNextPage(keep.y == 0, y - keep.y, viewH - y, bodyLine, viewH)) {
+          restoreKeep();
+          break;
+        }
+        // Stay armed until a body line actually emits. Heading bottom margin
+        // can make remaining-px look like two lines and still overflow the probe.
+      } else {
+        keepActive = false;
+      }
+    }
+    if (!keepActive && atBlockStart && y > 0 && startsTitleCluster(chapter, block, cur.blockIndex)) {
+      keep.cur = cur;
+      keep.y = y;
+      keep.trailingCollapsePx = trailingCollapsePx;
+      keep.dropW = dropW;
+      keep.dropBottom = dropBottom;
+      keep.dropIsRight = dropIsRight;
+      keep.pageHasProse = pageHasProse;
+      keep.spans = out.spans.size();
+      keep.images = out.images.size();
+      keep.rules = out.rules.size();
+      keep.dropZoneW = out.dropZoneW;
+      keep.dropZoneH = out.dropZoneH;
+      keep.hasDropZone = out.hasDropZone;
+      keepActive = true;
+    }
     // Book's Style: per-block IR align (CSS/heuristics from HtmlToIr).
     // Force L/C/R/J applies to body paragraphs only. Headings stay at IR align —
     // classic engine always defaulted h1–h6 to center (e-reader convention).
@@ -453,12 +549,14 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
     const bool sceneBreak = isSceneBreakRun(chapter, block);
 
     if ((block.flags & kBlockForcePageBreak) != 0 && y > 0 && atBlockStart) {
+      rewindKeepOnPageFull();
       break;
     }
 
     // Drop-cap after leftover prose starts a new page. After a chapter heading
     // on this page it stays — title + opening paragraph belong together.
     if ((block.flags & kBlockDropCap) != 0 && dropCapStartsNewPage(atBlockStart, y > 0, pageHasProse)) {
+      rewindKeepOnPageFull();
       break;
     }
 
@@ -523,7 +621,10 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
         applyTop = std::max(0, marginTop - trailingCollapsePx);
       }
       y += applyTop;
-      if (y >= viewH && block.kind != BlockKind::Spacer) break;
+      if (y >= viewH && block.kind != BlockKind::Spacer) {
+        rewindKeepOnPageFull();
+        break;
+      }
     }
 
     // A scene-break fallback ("* * *") is the publisher's stand-in for a graphic
@@ -531,7 +632,10 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
     // our own rule and drop the characters entirely — same treatment as <hr>.
     if (block.kind == BlockKind::HorizontalRule || sceneBreak) {
       trailingCollapsePx = 0;
-      if (y + bodyLine > viewH && y > 0) break;
+      if (y + bodyLine > viewH && y > 0) {
+        rewindKeepOnPageFull();
+        break;
+      }
       // Typeset rule: a short centred hairline with air either side, the way a
       // print book sets a section break. This used to be a literal row of em-dash
       // glyphs, which reads as typed-out punctuation and disappears entirely on a
@@ -601,12 +705,20 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
 
       if (!letterGlyph && !figureFloat) {
         // Centered plate or ornament — need room for the box.
-        if (y > 0 && !isOrnament && (ih > viewH / 2 || y + ih + marginBottom > viewH)) break;
-        if (y + ih > viewH && y > 0) break;
+        if (y > 0 && !isOrnament && (ih > viewH / 2 || y + ih + marginBottom > viewH)) {
+          rewindKeepOnPageFull();
+          break;
+        }
+        if (y + ih > viewH && y > 0) {
+          rewindKeepOnPageFull();
+          break;
+        }
       } else if (letterGlyph && y + 2 * bodyLine > viewH && y > 0) {
+        rewindKeepOnPageFull();
         break;
       } else if (figureFloat && y > 0 && y + std::min(ih, bodyLine * 3) > viewH) {
         // Need room for at least a few wrap lines beside a tall figure.
+        rewindKeepOnPageFull();
         break;
       }
 
@@ -616,26 +728,41 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
       }
       // Illuminae / experimental EPUBs often emit the same <img> twice (wrapper +
       // inner). Drop consecutive identical hrefs at the same vertical band.
-      if (!href.empty() && !out.images.empty()) {
-        const ImagePlate& prev = out.images.back();
-        if (prev.href == href && std::abs(static_cast<int>(prev.y) - y) <= bodyLine &&
-            std::abs(static_cast<int>(prev.w) - iw) <= 4) {
-          advancePastBlock(chapter, cur);
-          continue;
+      bool duplicateImg = false;
+      if (!href.empty()) {
+        if (!params.measureOnly && !out.images.empty()) {
+          const ImagePlate& prev = out.images.back();
+          duplicateImg = prev.href == href && std::abs(static_cast<int>(prev.y) - y) <= bodyLine &&
+                         std::abs(static_cast<int>(prev.w) - iw) <= 4;
+        } else if (params.measureOnly && lastImgHref[0] != '\0' && href.size() < sizeof(lastImgHref)) {
+          duplicateImg = std::strcmp(lastImgHref, href.c_str()) == 0 && std::abs(lastImgY - y) <= bodyLine &&
+                         std::abs(lastImgW - iw) <= 4;
         }
       }
-
-      ImagePlate plate;
-      plate.w = static_cast<int16_t>(iw);
-      plate.h = static_cast<int16_t>(ih);
-      plate.href = href;
-      if (plate.href.failed()) { out.clear(); out.allocationFailed = true; return false; }
+      if (duplicateImg) {
+        advancePastBlock(chapter, cur);
+        continue;
+      }
 
       if (letterGlyph || figureFloat) {
         dropIsRight = rightFloat;
-        plate.x = static_cast<int16_t>(rightFloat ? std::max(0, viewW - iw) : 0);
-        plate.y = static_cast<int16_t>(y);
-        if (!out.images.push_back(std::move(plate))) { out.clear(); out.allocationFailed = true; return false; }
+        if (!params.measureOnly) {
+          ImagePlate plate;
+          plate.w = static_cast<int16_t>(iw);
+          plate.h = static_cast<int16_t>(ih);
+          plate.href = href;
+          plate.x = static_cast<int16_t>(rightFloat ? std::max(0, viewW - iw) : 0);
+          plate.y = static_cast<int16_t>(y);
+          if (plate.href.failed() || !out.images.push_back(std::move(plate))) {
+            out.clear();
+            out.allocationFailed = true;
+            return false;
+          }
+        } else if (href.size() < sizeof(lastImgHref)) {
+          std::memcpy(lastImgHref, href.c_str(), href.size() + 1);
+          lastImgY = y;
+          lastImgW = iw;
+        }
         const int gap = letterGlyph ? std::max(2, bodyLine / 8) : std::max(4, bodyLine / 6);
         dropW = std::min(viewW * 55 / 100, iw + gap);
         const int zoneH = letterGlyph ? std::max(ih, 2 * bodyLine) : ih;
@@ -650,9 +777,23 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
       }
 
       // Centered plate / ornament (CSS text-align center on h1 ornaments).
-      plate.x = static_cast<int16_t>(std::max(0, (viewW - iw) / 2));
-      plate.y = static_cast<int16_t>(y);
-      if (!out.images.push_back(std::move(plate))) { out.clear(); out.allocationFailed = true; return false; }
+      if (!params.measureOnly) {
+        ImagePlate plate;
+        plate.w = static_cast<int16_t>(iw);
+        plate.h = static_cast<int16_t>(ih);
+        plate.href = href;
+        plate.x = static_cast<int16_t>(std::max(0, (viewW - iw) / 2));
+        plate.y = static_cast<int16_t>(y);
+        if (plate.href.failed() || !out.images.push_back(std::move(plate))) {
+          out.clear();
+          out.allocationFailed = true;
+          return false;
+        }
+      } else if (href.size() < sizeof(lastImgHref)) {
+        std::memcpy(lastImgHref, href.c_str(), href.size() + 1);
+        lastImgY = y;
+        lastImgW = iw;
+      }
       // Ornaments: tight air under the graphic so CHAPTER ONE sits just below.
       const int after = isOrnament ? std::max(2, bodyLine / 4) : marginBottom;
       y += ih + after;
@@ -871,7 +1012,15 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
       const int probeLineH =
           lineH(renderer, baseFontId, headingFloor > SizeStep::Body ? headingFloor : SizeStep::Body, lc);
       if (y + probeLineH > viewH) {
-        // Page full mid-block.
+        // Page full mid-block. A heading cluster that started below y=0 moves
+        // with its ornaments rather than splitting "CHAPTER" onto this page.
+        if (keepActive && keep.y > 0) {
+          restoreKeep();
+          out.end = cur;
+          out.contentH = static_cast<int16_t>(y);
+          out.atChapterEnd = false;
+          return !out.spans.empty() || !out.images.empty() || (out.end != from);
+        }
         cur.runIndex = toks[ti].runIndex;
         cur.byteInRun = toks[ti].byteOff;
         out.end = cur;
@@ -1052,6 +1201,13 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
       const int thisLineH = lineH(renderer, baseFontId, lineStep, lc);
       if (maxAscOnLine < 8) maxAscOnLine = std::max(8, renderer.getFontAscenderSize(baseFontId));
       if (y + thisLineH > viewH && lineCursor != from) {
+        if (keepActive && keep.y > 0) {
+          restoreKeep();
+          out.end = cur;
+          out.contentH = static_cast<int16_t>(y);
+          out.atChapterEnd = false;
+          return !out.spans.empty() || !out.images.empty() || (out.end != from);
+        }
         out.end = lineCursor;
         out.contentH = static_cast<int16_t>(y);
         out.atChapterEnd = false;
@@ -1123,6 +1279,7 @@ static bool layoutPageImpl(const ChapterIr& chapter, const GfxRenderer& renderer
       y += thisLineH;
       firstLine = false;
       indent = 0;
+      if (keepActive && block.kind == BlockKind::Paragraph) keepActive = false;
     }
 
     // Finished block content — minimal extra after headings (classic is dense).

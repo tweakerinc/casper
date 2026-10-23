@@ -141,10 +141,9 @@ inline constexpr uint16_t kBlockOrnament = 1u << 5;        // small chapter orna
 
 // Page map magic
 inline constexpr char kMapMagic[4] = {'R', 'V', 'P', 'M'};
-// v2: drop-cap after a chapter heading stays on the same page (not a title plate).
-// Load still accepts v1 so a format bump does not force a full map rebuild (and
-// a heap-starved convert) before the chapter can be shown.
-inline constexpr uint16_t kMapFormatVersion = 4;
-inline constexpr uint16_t kMapFormatVersionMin = 4;
+// v5: headings keep-with-next (ornament / chapter-number / title stay with body).
+// v4 maps paginated headings at the page floor; reject them so idle rebuilds.
+inline constexpr uint16_t kMapFormatVersion = 5;
+inline constexpr uint16_t kMapFormatVersionMin = 5;
 
 }  // namespace rivulet

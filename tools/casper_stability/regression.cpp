@@ -26,12 +26,46 @@ static int transientAbortPolls=0;
 static bool transientLayoutAbort(){return ++transientAbortPolls==2;}
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#x);std::abort();}++tests;}while(0)
 static std::string flatten(const ChapterIr& ch){std::string s;for(const auto&r:ch.runs())s.append(ch.runText(r),r.textLen);return s;}
-static std::vector<IrCursor> pages(const ChapterIr& ch, bool measure) {
-  GfxRenderer renderer; LayoutParams p; p.key.fontId=-1128177077;p.key.viewportW=240;p.key.viewportH=320;p.key.flags=1;p.measureOnly=measure;
+static std::vector<IrCursor> pagesAt(const ChapterIr& ch, int w, int h, bool measure) {
+  GfxRenderer renderer; LayoutParams p; p.key.fontId=-1128177077;p.key.viewportW=w;p.key.viewportH=h;p.key.flags=1;p.measureOnly=measure;
   IrCursor c{};if(ch.blocks().size())c.runIndex=ch.blocks()[0].runBegin;
   std::vector<IrCursor> out;
   for(int i=0;i<4000;++i) { LaidOutPage page;CHECK(PageLayouter::layoutPage(ch,renderer,p,c,page)); CHECK(!page.failed());out.push_back(c);if(page.atChapterEnd)return out;CHECK(c<page.end);c=page.end; }
   CHECK(false);return out;
+}
+static std::vector<IrCursor> pages(const ChapterIr& ch, bool measure) { return pagesAt(ch,240,320,measure); }
+static int firstBlockOfKind(const ChapterIr& ch, BlockKind kind) {
+  for (size_t i=0;i<ch.blocks().size();++i) if (ch.blocks()[i].kind==kind) return int(i);
+  return -1;
+}
+static bool blockOverlapsPage(const ChapterIr& ch, int idx, const IrCursor& start, const IrCursor& end) {
+  if (idx<0 || idx>=int(ch.blocks().size())) return false;
+  const Block b=ch.blocks()[idx];
+  const IrCursor blockStart{uint16_t(idx),b.runBegin,0};
+  IrCursor blockEnd{uint16_t(idx+1),0,0};
+  if (idx+1<int(ch.blocks().size())) {
+    const Block n=ch.blocks()[idx+1];
+    blockEnd={uint16_t(idx+1),n.runBegin,0};
+  }
+  return !(blockEnd<start || blockEnd==start) && (blockStart<end);
+}
+static void checkHeadingKeepsBody(const ChapterIr& ch, int w, int h) {
+  GfxRenderer renderer; LayoutParams p; p.key.fontId=-1128177077;p.key.viewportW=w;p.key.viewportH=h;p.key.flags=1;p.measureOnly=true;
+  const int heading=firstBlockOfKind(ch,BlockKind::Heading1);
+  CHECK(heading>=0);
+  int body=-1;
+  for (size_t i=size_t(heading)+1;i<ch.blocks().size();++i) if (ch.blocks()[i].kind==BlockKind::Paragraph){body=int(i);break;}
+  CHECK(body>=0);
+  IrCursor c{};if(ch.blocks().size())c.runIndex=ch.blocks()[0].runBegin;
+  for (int i=0;i<4000;++i) {
+    LaidOutPage page;CHECK(PageLayouter::layoutPage(ch,renderer,p,c,page));CHECK(!page.failed());
+    const bool headingOn=blockOverlapsPage(ch,heading,page.start,page.end);
+    const bool bodyOn=blockOverlapsPage(ch,body,page.start,page.end);
+    if (headingOn && page.start.blockIndex < heading) CHECK(bodyOn);
+    if (page.atChapterEnd) return;
+    CHECK(c<page.end);c=page.end;
+  }
+  CHECK(false);
 }
 
 struct TestBook {
@@ -176,7 +210,47 @@ int main(){
     "<p>日本語の文章。漢字（かな）混在！</p>"};
   for(const auto&html:fixtures){ChapterIr ch;CHECK(HtmlToIr::convert(html.data(),html.size(),ch));CHECK(pages(ch,false)==pages(ch,true));}
   { ChapterIr ch;ch.beginBlock(BlockKind::Paragraph,Align::Justify,0);std::string text;for(int i=0;i<12000;++i)text+="word ";CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,text));ch.endBlock();auto full=pages(ch,false),measure=pages(ch,true);CHECK(full==measure);CHECK(full.size()>=90);std::printf("long-paragraph pages=%zu; paint/measure match\n",full.size());IrTokenCursor cur(ch,0,ch.runs().size(),0,0);IrTok t;size_t bytes=0;while(cur.next(t))bytes+=t.byteLen;CHECK(bytes==text.size()); }
-  { RenderKey a,b;b.pad=0x20;CHECK(a!=b);PageMap m;m.setRenderKey(a);CHECK(m.resetWithStart({0,0,0}));CHECK(m.pushPageStart({0,0,5}));m.markComplete(2);CHECK(m.saveToFile("/map"));PageMap n;CHECK(n.loadFromFile("/map"));CHECK(n.complete()&&n.knownPages()==2);allocationsBeforeFailure=0;PageMap oom;CHECK(oom.loadFromFile("/map"));CHECK(oom.diskBacked());CHECK(Storage.exists("/map"));allocationsBeforeFailure=-1; }
+  { RenderKey a,b;b.pad=0x20;CHECK(a!=b);PageMap m;m.setRenderKey(a);CHECK(m.resetWithStart({0,0,0}));CHECK(m.pushPageStart({0,0,5}));CHECK(m.lastStart().byteInRun==5);m.markComplete(2);CHECK(m.saveToFile("/map"));PageMap n;CHECK(n.loadFromFile("/map"));CHECK(n.complete()&&n.knownPages()==2);CHECK(n.lastStart().byteInRun==5);allocationsBeforeFailure=0;PageMap oom;CHECK(oom.loadFromFile("/map"));CHECK(oom.diskBacked());CHECK(Storage.exists("/map"));allocationsBeforeFailure=-1; }
+  {
+    // Heading after a nearly-full page must take its first body lines with it.
+    std::string html="<p>";
+    for(int i=0;i<90;++i) html+="word ";
+    html+="</p><h1 align='center'>Chapter Two</h1><p>The next morning Alice woke up early and followed the white rabbit down the hole again for tea.</p>";
+    ChapterIr ch;CHECK(HtmlToIr::convert(html.data(),html.size(),ch));
+    checkHeadingKeepsBody(ch,240,320);
+    checkHeadingKeepsBody(ch,800,480);  // X4
+    checkHeadingKeepsBody(ch,792,528);  // X3
+    CHECK(pagesAt(ch,800,480,false)==pagesAt(ch,800,480,true));
+    CHECK(pagesAt(ch,792,528,false)==pagesAt(ch,792,528,true));
+  }
+  {
+    // Ornament + heading + body: the graphic moves with the title.
+    ChapterIr ch;
+    ch.beginBlock(BlockKind::Paragraph,Align::Justify,0);
+    std::string fill;for(int i=0;i<90;++i) fill+="word ";
+    CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,fill));ch.endBlock();
+    ch.beginBlock(BlockKind::Image,Align::Center,kBlockOrnament|kBlockNoIndent);
+    CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,"orn.png"));
+    ch.blocksMutable().back().imageW=40;ch.blocksMutable().back().imageH=20;ch.endBlock();
+    ch.beginBlock(BlockKind::Heading1,Align::Center,kBlockNoIndent);
+    CHECK(ch.appendRun(RunStyle::Bold,SizeStep::Plus2,"CHAPTER TWO"));ch.endBlock();
+    ch.beginBlock(BlockKind::Paragraph,Align::Left,kBlockNoIndent);
+    CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,"The next morning Alice woke up early and followed the rabbit."));ch.endBlock();
+    checkHeadingKeepsBody(ch,240,320);
+    CHECK(pagesAt(ch,240,320,false)==pagesAt(ch,240,320,true));
+  }
+  {
+    // Heading taller than a page must still advance (no infinite loop).
+    ChapterIr ch;
+    ch.beginBlock(BlockKind::Heading1,Align::Center,kBlockNoIndent);
+    std::string tall;for(int i=0;i<400;++i) tall+="HeadingWord ";
+    CHECK(ch.appendRun(RunStyle::Bold,SizeStep::Plus2,tall));ch.endBlock();
+    ch.beginBlock(BlockKind::Paragraph,Align::Left,0);
+    CHECK(ch.appendRun(RunStyle::Regular,SizeStep::Body,"Body after a tall heading."));ch.endBlock();
+    auto tiny=pagesAt(ch,240,80,true);
+    CHECK(tiny.size()>=2);
+    CHECK(pagesAt(ch,240,80,false)==tiny);
+  }
   { std::map<int,EpdFontFamily> fonts;fonts[-17]=EpdFontFamily{};fonts[22]=EpdFontFamily{};std::map<int,SdCardFont*> sd;FontDecompressor fd;FontCacheManager f(fonts,sd);f.setFontDecompressor(&fd);{auto scope=f.createPrewarmScope(false,false);std::string repeated(20000,'a');f.recordText(repeated.c_str(),-17,EpdFontFamily::REGULAR);f.recordText("b",22,EpdFontFamily::ITALIC);CHECK(!scope.endScanAndPrewarm());}CHECK(fd.calls.size()==2);CHECK(fd.calls[0].text=="a");CHECK(fd.calls[0].data==fonts[-17].getData()); }
   { RivuletEngine e;RenderKey k;k.fontId=-1128177077;k.viewportW=240;k.viewportH=320;k.flags=1;e.setRenderKey(k);std::string html="<p>";for(int i=0;i<3000;++i)html+="word ";html+="</p>";CHECK(e.ingestHtml(html.data(),html.size(),nullptr,false,0));GfxRenderer r;CHECK(e.goToStart(r));CHECK(e.extendPageMap(r,8));int known=e.mapKnownPages();CHECK(known>=8);CHECK(e.goToLastPage(r,4096,false));CHECK(e.mapComplete()&&e.page().atChapterEnd);CHECK(e.lastWalkPages()<e.mapKnownPages());int last=e.currentPage();CHECK(e.prevPage(r));CHECK(e.currentPage()==last-1);CHECK(e.nextPage(r));CHECK(e.currentPage()==last);e.chapterMutable().markFailed();CHECK(!e.goToLastPage(r,4096,true)); }
   {

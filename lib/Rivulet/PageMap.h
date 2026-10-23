@@ -92,6 +92,9 @@ class PageMap {
     return n;
   }
   [[nodiscard]] IrCursor pageStart(int pageIndex) const;
+  // Copy of the last start cursor. Status-bar estimates use this instead of
+  // pageStart(knownPages()-1), which would slide the disk-backed window.
+  [[nodiscard]] IrCursor lastStart() const { return lastStart_; }
   [[nodiscard]] bool hasPage(int pageIndex) const {
     return pageIndex >= 0 && pageIndex < static_cast<int>(starts_.size());
   }
@@ -108,8 +111,11 @@ class PageMap {
   bool loadFromFile(const char* path);
 
  private:
+  void rememberLastStart();
+
   RenderKey key_{};
   mutable PagedRecords<IrCursor,128,1000000> starts_;
+  IrCursor lastStart_{};
   char pagingBase_[224]{};
   bool complete_ = false;
   int knownTotal_ = 0;

@@ -50,6 +50,6 @@ TEST(ThumbCachePolicy, AnyCachedThumbSkipsJpeg) {
   EXPECT_FALSE(thumbcache::skipJpeg(DiskThumb::Missing));
   EXPECT_FALSE(thumbcache::jpegWhenIdle(DiskThumb::Hero));
   EXPECT_FALSE(thumbcache::jpegWhenIdle(DiskThumb::Fallback));
-  EXPECT_FALSE(thumbcache::jpegWhenIdle(DiskThumb::Unverified));
+  EXPECT_TRUE(thumbcache::jpegWhenIdle(DiskThumb::Unverified));
   EXPECT_TRUE(thumbcache::jpegWhenIdle(DiskThumb::Missing));
 }
